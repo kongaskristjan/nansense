@@ -207,6 +207,19 @@ class Session:
             layers = list(self._watched_layers)
         return self._watch_accumulator.snapshot(layers=layers)
 
+    def current_weights(self) -> dict[str, Tensor]:
+        """CPU clones of the model's parameters, read live at call time.
+
+        Unlike `snapshot.weights` (captured at a pause), this reads the
+        parameters whenever it's called — so the UI can show current weights
+        mid-training, including in `detach` / `step_run` where no snapshot is
+        published. The read races with the training thread's in-place updates;
+        for a visualisation that's benign — a torn read at worst, never a
+        crash. Keys match `named_parameters()`, the same keys
+        `layer_weights` indexes into.
+        """
+        return {n: self._cpu_clone(p) for n, p in self.model.named_parameters()}
+
     def set_schedule(
         self,
         *,

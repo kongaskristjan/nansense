@@ -123,8 +123,11 @@ across the input channels, with the output channel pinned by index), a
 2D weight as a single image, and a 1D weight as a single heatmap row.
 Per-dimension selects let you remap which axes become the X, Y, and
 tiling (third horizontal) axes; every remaining axis is pinned to a
-single index chosen by number. `session.layer_weights` exposes the
-underlying `layer name -> parameter names` map.
+single index chosen by number. A Refresh button in the top bar reads
+the model's current weights on demand — so it updates even mid-training
+in `detach` / `step until end`, where no snapshot is being published.
+`session.layer_weights` exposes the underlying
+`layer name -> parameter names` map.
 
 The `/watch` page renders one card per watched layer with two plotly
 histograms (activations + activation gradients) overlaid by phase

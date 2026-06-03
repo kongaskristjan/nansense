@@ -564,6 +564,34 @@ def test_layer_weights_keys_index_into_snapshot_weights() -> None:
     thread.join(timeout=5)
 
 
+def test_current_weights_reads_live_params_without_a_snapshot() -> None:
+    """current_weights() works before any batch runs (no snapshot needed) and
+    returns independent CPU clones of every parameter."""
+    session, model = _make_session()
+    assert session.snapshot is None  # nothing captured yet
+
+    weights = session.current_weights()
+    expected = dict(model.named_parameters())
+    assert set(weights) == set(expected)
+    for name, tensor in weights.items():
+        assert tensor.device.type == "cpu"
+        assert not tensor.requires_grad
+        torch.testing.assert_close(tensor, expected[name].detach().cpu())
+        # A clone, not a view onto the live parameter.
+        assert tensor.data_ptr() != expected[name].data_ptr()
+
+
+def test_current_weights_tracks_parameter_updates() -> None:
+    """A fresh call reflects in-place parameter changes (e.g. an optimizer
+    step), so the weights view can refresh mid-training."""
+    session, model = _make_session()
+    before = session.current_weights()["fc1.weight"]
+    with torch.no_grad():
+        model.fc1.weight.add_(1.0)
+    after = session.current_weights()["fc1.weight"]
+    torch.testing.assert_close(after, before + 1.0)
+
+
 def test_snapshot_tensors_are_cpu_and_independent() -> None:
     session, model = _make_session(epochs=1, phases={"train": 1})
 

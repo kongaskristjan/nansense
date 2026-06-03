@@ -1100,6 +1100,13 @@ def _build_weights_page(session: Session, layer: str) -> None:
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
             position_label = _add_step_controls(session, step_until_custom)
+            ui.button(
+                icon="refresh",
+                on_click=lambda: do_refresh(),
+                color="slate-500",
+            ).classes("ml-auto").props("dense size=md flat").tooltip(
+                "Show the model's current weights (works while training)"
+            )
 
         with ui.column().classes(
             "w-full grow min-h-0 overflow-auto p-4 gap-4 bg-slate-200"
@@ -1115,6 +1122,14 @@ def _build_weights_page(session: Session, layer: str) -> None:
                     panels.append(
                         _WeightPanel(name=name, shape=shapes[name], session=session)
                     )
+
+    def do_refresh() -> None:
+        # Read the model's live parameters instead of the last snapshot, so the
+        # weights update even mid-training (detach / run modes never publish a
+        # snapshot). The live view then persists until the next captured batch.
+        weights = session.current_weights()
+        for panel in panels:
+            panel.show_weights(weights)
 
     def tick() -> None:
         live = session.live_position
@@ -1151,7 +1166,8 @@ class _WeightPanel:
         self._ndim = len(shape)
         self._roles: list[str] = _default_roles(self._ndim)
         self._indices: dict[int, int] = {d: 0 for d in range(self._ndim)}
-        self._snapshot: BatchSnapshot | None = None
+        self._last_snapshot: BatchSnapshot | None = None
+        self._weights: dict[str, Tensor] | None = None
         self._role_selects: list[ui.select] = []
         self._index_numbers: dict[int, ui.number] = {}
 
@@ -1221,17 +1237,28 @@ class _WeightPanel:
             number.set_visibility(self._roles[d] == "index")
 
     def maybe_render(self, snap: BatchSnapshot) -> None:
-        if snap is self._snapshot:
+        """Render snapshot weights, but only when the snapshot is new.
+
+        A manual refresh (`show_weights` with live weights) leaves
+        `_last_snapshot` untouched, so the live view persists until the next
+        captured batch publishes a genuinely fresh snapshot.
+        """
+        if snap is self._last_snapshot:
             return
-        self._snapshot = snap
-        self._render(snap)
+        self._last_snapshot = snap
+        self.show_weights(snap.weights)
+
+    def show_weights(self, weights: dict[str, Tensor]) -> None:
+        """Display `weights` for this panel's parameter (snapshot or live)."""
+        self._weights = weights
+        self._render()
 
     def _render_current(self) -> None:
-        if self._snapshot is not None:
-            self._render(self._snapshot)
+        if self._weights is not None:
+            self._render()
 
-    def _render(self, snap: BatchSnapshot) -> None:
-        tensor = snap.weights.get(self.name)
+    def _render(self) -> None:
+        tensor = self._weights.get(self.name) if self._weights is not None else None
         if tensor is None:
             self._show_error("no weights captured yet")
             return
