@@ -37,6 +37,7 @@ from typing import Self
 from torch import Tensor, fx, nn
 from torch.utils.hooks import RemovableHandle
 
+from playgrad.fx_names import friendly_names
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.watch import WatchAccumulator, WatchSnapshot
 
@@ -85,6 +86,7 @@ class Session:
         self._activations: dict[str, Tensor] = {}
         self._hook_handles: list[RemovableHandle] = []
         self._snapshot: BatchSnapshot | None = None
+        self._live_position: BatchPosition | None = None
         self._fx_graph: fx.GraphModule | None = _try_trace(model)
         self._input_names: list[str] = self._compute_input_names()
         self._layer_names: list[str] = self._compute_layer_names()
@@ -107,6 +109,20 @@ class Session:
         return self._snapshot
 
     @property
+    def live_position(self) -> BatchPosition | None:
+        """Position of the batch the training thread is currently on.
+
+        Updated on *every* batch's `__enter__` regardless of capture mode, so
+        the UI can show live epoch/batch progress during `step_epoch`,
+        `step_until_position`, `step_run`, and `detach` — modes that publish a
+        snapshot only at boundaries (or never), leaving `snapshot.position`
+        frozen in between. Written by the training thread, read point-in-time
+        by the UI thread: a single atomic reference assignment under the GIL,
+        no lock needed (same contract as `snapshot`).
+        """
+        return self._live_position
+
+    @property
     def closed(self) -> bool:
         with self._cv:
             return self._closed
@@ -120,7 +136,8 @@ class Session:
         """Ordered list of every per-batch tensor key the snapshot may carry.
 
         In fx mode, this is the friendly name of every non-output node in the
-        traced graph (inputs, module outputs, function/method results). In the
+        traced graph: inputs (`x`), module outputs (`stage1.0.bn1`), and
+        scope-qualified function/method results (`stage1.0.relu1`). In the
         hook fallback, it's `input_names + named_modules`.
         """
         return list(self._layer_names)
@@ -351,8 +368,9 @@ class Session:
 
     def _compute_layer_names(self) -> list[str]:
         if self._fx_graph is not None:
+            names = friendly_names(self._fx_graph.graph)
             return [
-                _fx_friendly_name(n)
+                names[n]
                 for n in self._fx_graph.graph.nodes
                 if n.op != "output"
             ]
@@ -409,6 +427,10 @@ class _BatchContext:
         if self._session.closed:
             return self
         self._position = self._session._schedule.advance(self._phase, self._epoch)
+        # Publish the live position before the forward pass so the UI top bar
+        # tracks progress on every batch, even in modes that don't capture
+        # snapshots here (step_epoch, step_until_position, step_run, detach).
+        self._session._live_position = self._position
         self._captured = self._session._should_capture(self._position)
         self._stats_only = (
             not self._captured and bool(self._session._watched_layers)
@@ -463,18 +485,6 @@ def _try_trace(model: nn.Module) -> fx.GraphModule | None:
         return None
 
 
-def _fx_friendly_name(node: fx.Node) -> str:
-    """The user-facing key for the value produced by an fx node.
-
-    For module calls we use the dotted target ("stem.0") so the UI label
-    matches how the user writes the module. Everything else uses fx's
-    auto-assigned node name ("x", "relu", "relu_1", "add", "mean").
-    """
-    if node.op == "call_module":
-        return str(node.target)
-    return node.name
-
-
 class _CaptureInterpreter(fx.Interpreter):
     """fx interpreter that snapshots every node's tensor output.
 
@@ -487,6 +497,7 @@ class _CaptureInterpreter(fx.Interpreter):
     def __init__(self, gm: fx.GraphModule, capture: dict[str, Tensor]) -> None:
         super().__init__(gm)
         self._capture = capture
+        self._names = friendly_names(gm.graph)
 
     def run_node(self, n: fx.Node) -> object:
         result = super().run_node(n)
@@ -495,7 +506,7 @@ class _CaptureInterpreter(fx.Interpreter):
         if isinstance(result, Tensor):
             if result.requires_grad:
                 result.retain_grad()
-            self._capture[_fx_friendly_name(n)] = result
+            self._capture[self._names[n]] = result
         return result
 
 

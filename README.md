@@ -120,8 +120,9 @@ bar — **Log x** and **Log y** — toggle the value and count axes between
 the log-based default and a linear scale. Above each histogram a
 one-line summary shows `n`, `mean`, `std`, histogram-derived
 `median`, and `min`/`max`. Any layer in `session.layer_names` is
-watchable — named modules, fx-traced intermediates (`relu`, `add`,
-`mean`), and the graph input itself (`x`). While at least one layer
+watchable — named modules, fx-traced intermediates (scope-qualified by
+their submodule, e.g. `stage1.0.relu1`, `stage1.0.add`), and the graph
+input itself (`x`). While at least one layer
 is watched, every batch runs through the full capture machinery (fx
 interpreter when traceable, root pre-hook plus per-module hooks
 otherwise), which roughly doubles activation memory and adds Python

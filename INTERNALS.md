@@ -80,12 +80,19 @@ resulting `fx.GraphModule` and `_install_hooks` monkey-patches
 subclass against that graph. The interpreter overrides `run_node` so that
 after every node executes — placeholders, `call_module`, `call_function`,
 `call_method` — it stores the returned tensor in `Session._activations`
-under a friendly key (the dotted target for module calls, the fx node
-name for everything else: `x`, `relu`, `relu_1`, `add`). Each captured
-tensor gets `retain_grad()` so the user's `loss.backward()` populates
-`.grad`. This is what lets `torch.relu(...)`, `out + shortcut(x)`, and
-similar non-module operations show up in the UI on equal footing with
-named modules. `_remove_hooks` restores the original `forward`.
+under a friendly key built by `playgrad.fx_names.friendly_names`. Module
+calls use the dotted target (`stage1.0.bn1`); function/method ops are
+prefixed with the innermost submodule scope fx records in
+`node.meta["nn_module_stack"]`, so `torch.relu(...)` inside a block becomes
+`stage1.0.relu1` (numbered only when a scope holds more than one op of that
+name) rather than the uninformative `relu`, `relu_1`, ... fx auto-names.
+Root-scope ops keep a bare name (`relu`, `flatten`), and inputs stay `x`.
+Each captured tensor gets `retain_grad()` so the user's `loss.backward()`
+populates `.grad`. This is what lets `torch.relu(...)`, `out + shortcut(x)`,
+and similar non-module operations show up in the UI on equal footing with
+named modules — and the Mermaid graph builder reuses the same map, so each
+node's id and label line up with its layer card. `_remove_hooks` restores
+the original `forward`.
 
 **Hook fallback.** When `fx.symbolic_trace` raises (data-dependent
 control flow, tracing-unfriendly ops, etc.), the session falls back to:
@@ -305,6 +312,15 @@ It does not touch tensors directly until they need to be rendered.
   it has advanced since the last render, every layer view re-renders
   against the new snapshot, slicing each tensor at the current
   `sample_idx` (driven by a single `ui.number` input in the top bar).
+- The same timer also refreshes the top-bar position label from
+  `session.live_position` — the position recorded on *every* batch's
+  `__enter__`, independent of capture. This is what keeps the displayed
+  epoch/batch advancing during `step_epoch`, `step_until_position`,
+  `step_run`, and `detach`, where `snapshot.position` would otherwise stay
+  frozen until the next boundary capture (or never, under `detach`). It is
+  a single label write per tick, decoupled from the strip rendering; the
+  200 ms timer is the natural throttle for the rapid batch advances those
+  modes produce.
 - Rendering is intentionally eager when a new snapshot lands — for
   ResNet-20 it takes well under a second, and during `RUN` / `DETACH`
   modes no snapshots are produced so the UI is idle. For larger models

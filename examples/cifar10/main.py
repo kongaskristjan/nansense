@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import io
+import sys
 import time
 from pathlib import Path
 
@@ -47,6 +49,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def enable_line_buffering() -> None:
+    """Flush stdout on every newline so progress prints appear immediately.
+
+    Python block-buffers stdout when it is not a TTY (e.g. redirected to a
+    file or pipe), which can hide progress output until the buffer fills or
+    the process exits. Reconfiguring to line buffering restores TTY-like
+    behaviour regardless of how the script is launched.
+    """
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
+
+
 def select_device(name: str | None) -> torch.device:
     if name is not None:
         return torch.device(name)
@@ -58,6 +72,7 @@ def select_device(name: str | None) -> torch.device:
 
 
 def main() -> None:
+    enable_line_buffering()
     args = parse_args()
     torch.manual_seed(args.seed)
 
