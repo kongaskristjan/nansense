@@ -315,11 +315,15 @@ It does not touch tensors directly until they need to be rendered.
   with two `ui.plotly` figures (activations and gradients) and a
   one-line stats summary above each. A 2-second `ui.timer` calls
   `session.watch_snapshot()` and updates the figures in place via
-  `plot.figure = new_fig; plot.update()`. The figures use signed-log
-  x-axis tick positions computed once by `_x_tick_layout` (powers of
-  10 labelled, intermediate edges unlabelled), `barmode="overlay"`
-  with per-phase opacity so train/val sit on the same axes, and a
-  log y-axis so distribution tails stay visible.
+  `plot.figure = new_fig; plot.update()`. Because each tick rebuilds the
+  figure from scratch (which would otherwise reset client-side legend
+  toggles), the panel tracks which phases the user clicked off in the
+  legend — via the `plotly_legendclick` event — and re-emits those traces
+  as `visible="legendonly"` so a hidden series stays hidden. The figures
+  use signed-log x-axis tick positions computed once by `_x_tick_layout`
+  (powers of 10 labelled, intermediate edges unlabelled),
+  `barmode="overlay"` with per-phase opacity so train/val sit on the same
+  axes, and a log y-axis so distribution tails stay visible.
 
 ## Lifecycle summary
 
