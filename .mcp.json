@@ -5,7 +5,9 @@
       "command": "npx",
       "args": [
         "@playwright/mcp@0.0.75",
-        "--headless"
+        "--headless",
+        "--browser",
+        "chromium"
       ],
       "env": {}
     }
