@@ -9,6 +9,7 @@ from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
     _curve_number,
+    _linear_x_range,
     _make_histogram_figure,
     _validate_step_until_target,
 )
@@ -169,3 +170,50 @@ def test_histogram_hidden_phase_is_legendonly() -> None:
 )
 def test_curve_number_parsing(args: object, expected: int | None) -> None:
     assert _curve_number(args) == expected
+
+
+# --- Watching histogram: log/linear axis toggles (task 1) ------------------
+
+
+@pytest.mark.parametrize("log_y", [True, False])
+def test_histogram_log_y_toggles_count_axis(log_y: bool) -> None:
+    per_phase = {"train": _layer_snap("train")}
+    fig, _ = _make_histogram_figure(
+        per_phase, "activation", "activations", log_y=log_y
+    )
+    assert fig.layout.yaxis.type == ("log" if log_y else "linear")
+
+
+def test_histogram_log_x_uses_bin_indices() -> None:
+    per_phase = {"train": _layer_snap("train")}
+    fig, _ = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=True
+    )
+    # Log mode: evenly spaced bin indices, default (uniform) bar width.
+    assert fig.data[0].x[0] == 0
+    assert fig.data[0].width is None
+
+
+def test_histogram_linear_x_uses_value_positions_and_widths() -> None:
+    per_phase = {"train": _layer_snap("train")}
+    fig, _ = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=False
+    )
+    # Linear mode: bars positioned at true bin centres with per-bin widths.
+    assert fig.data[0].x[0] < 0  # first bin centre is far negative
+    assert isinstance(fig.data[0].width, tuple)
+    assert len(fig.data[0].width) == N_BINS
+
+
+def test_linear_x_range_none_when_empty() -> None:
+    assert _linear_x_range({}, "activation") is None
+
+
+def test_linear_x_range_brackets_populated_bins() -> None:
+    # Counts only in the zero band → a tight range straddling zero.
+    per_phase = {"train": _layer_snap("train", n=7)}
+    rng = _linear_x_range(per_phase, "activation")
+    assert rng is not None
+    lo, hi = rng
+    assert lo < 0 < hi
+    assert hi - lo < 1.0  # zoomed in, not the full +/-1e6 span

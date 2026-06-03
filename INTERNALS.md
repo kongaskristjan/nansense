@@ -323,7 +323,12 @@ It does not touch tensors directly until they need to be rendered.
   use signed-log x-axis tick positions computed once by `_x_tick_layout`
   (powers of 10 labelled, intermediate edges unlabelled),
   `barmode="overlay"` with per-phase opacity so train/val sit on the same
-  axes, and a log y-axis so distribution tails stay visible.
+  axes, and a log y-axis so distribution tails stay visible. The top-bar
+  **Log x** / **Log y** checkboxes flip each axis to linear: **Log y**
+  swaps the count axis `type`; **Log x** redraws the bars at their true
+  linear bin centres (`_BIN_CENTERS`) with per-bin widths (`_BIN_WIDTHS`),
+  auto-zoomed by `_linear_x_range` to the populated bins since the full
+  ±1e6 span is mostly empty.
 
 ## Lifecycle summary
 
