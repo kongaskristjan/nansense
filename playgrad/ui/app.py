@@ -1435,15 +1435,6 @@ class _LayerView:
                 # when a header button is clicked. Quasar's q-btn doesn't
                 # reliably pass arbitrary `data-*` attrs through to its
                 # rendered DOM, so the attribute lives on these divs.
-                with ui.element("div").props("data-card-action"):
-                    self._eye_btn = ui.button(
-                        "Watch",
-                        icon="visibility",
-                        on_click=lambda: on_toggle_watch(name),
-                        color="green",
-                    ).props("dense no-caps").style(
-                        "min-height: 0; padding: 1px 6px; font-size: 11px"
-                    ).tooltip("Watch this layer (toggle)")
                 # The Weights button only appears for layers that actually own
                 # parameters; relu/add/input nodes have nothing to show.
                 if weights:
@@ -1460,6 +1451,15 @@ class _LayerView:
                         ).tooltip(
                             f"Inspect this layer's weights ({len(weights)})"
                         )
+                with ui.element("div").props("data-card-action"):
+                    self._eye_btn = ui.button(
+                        "Watch",
+                        icon="visibility",
+                        on_click=lambda: on_toggle_watch(name),
+                        color="green",
+                    ).props("dense no-caps").style(
+                        "min-height: 0; padding: 1px 6px; font-size: 11px"
+                    ).tooltip("Watch this layer (toggle)")
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
                 self.act_html = ui.html("")
                 ui.element("div").classes("h-1")
