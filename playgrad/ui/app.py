@@ -31,13 +31,12 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 from urllib.parse import quote
 
 import plotly.graph_objects as go
 import uvicorn
 from fastapi import FastAPI
-from nicegui import events, ui
+from nicegui import ui
 from torch import Tensor
 
 from playgrad.schedule import BatchPosition, Schedule
@@ -259,8 +258,12 @@ def serve(
     log_level: str = "warning",
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
-) -> threading.Thread:
+) -> threading.Thread | None:
     """Start the NiceGUI app on a background thread and return that thread.
+
+    Returns `None` without starting anything when `session` is disabled
+    (`playgrad.start(..., enabled=False)`), so a training script can call
+    `serve()` unconditionally and pay nothing when the UI is turned off.
 
     NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is
     then served by uvicorn from a non-main thread, with signal handlers
@@ -271,6 +274,8 @@ def serve(
     sample is denormalized (`x * std + mean`) before display. When either
     is `None`, the renderer assumes the input is already in `[0, 1]`.
     """
+    if not session.enabled:
+        return None
     mermaid_src = build_mermaid(session.model)
     layer_names = session.layer_names
     input_name = session.input_names[0] if session.input_names else None
@@ -643,6 +648,23 @@ _BIN_WIDTHS: list[float] = [
 ]
 
 
+def _kind_stats(layer_snap: LayerStatsSnapshot, kind: str) -> TensorStatsSnapshot:
+    """The activation or gradient stats of a layer snapshot, by `kind`."""
+    return layer_snap.activations if kind == "activation" else layer_snap.gradients
+
+
+def _phases_with_data(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str
+) -> list[str]:
+    """Phases that have at least one sample for `kind`, in render order.
+
+    This is exactly the set (and order) of traces `_make_histogram_figure`
+    draws, so it doubles as the signature the panel uses to decide whether a
+    refresh can restyle in place or must rebuild the figure.
+    """
+    return [p for p, snap in per_phase.items() if _kind_stats(snap, kind).n > 0]
+
+
 def _linear_x_range(
     per_phase: dict[str, LayerStatsSnapshot], kind: str
 ) -> list[float] | None:
@@ -656,10 +678,7 @@ def _linear_x_range(
     lo_idx = N_BINS
     hi_idx = -1
     for layer_snap in per_phase.values():
-        stats = (
-            layer_snap.activations if kind == "activation" else layer_snap.gradients
-        )
-        for i, count in enumerate(stats.hist):
+        for i, count in enumerate(_kind_stats(layer_snap, kind).hist):
             if count > 0:
                 lo_idx = min(lo_idx, i)
                 hi_idx = max(hi_idx, i)
@@ -678,8 +697,7 @@ def _make_histogram_figure(
     *,
     log_x: bool = True,
     log_y: bool = True,
-    hidden: frozenset[str] = frozenset(),
-) -> tuple[go.Figure, list[str]]:
+) -> go.Figure:
     """Plotly bar chart of the signed-log histogram, one trace per phase.
 
     `kind` selects which of the two histograms on each `LayerStatsSnapshot`
@@ -689,23 +707,18 @@ def _make_histogram_figure(
 
     `log_x` / `log_y` toggle the value (x) and count (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
-    Watching page). `hidden` lists phases the user has toggled off via the
-    legend; those traces are kept in the figure as `visible="legendonly"` so
-    the selection survives the periodic refresh instead of reappearing.
+    Watching page).
 
-    Returns the figure together with the ordered list of phases for the traces
-    that were added, so the caller can map a legend `curveNumber` back to a
-    phase.
+    This builds the *whole* figure. Routine data refreshes don't call it —
+    they restyle the existing figure in place (see `_HistPlot`) so client-side
+    state like legend toggles survives; the figure is only rebuilt when the
+    set of phases or the axis scale changes.
     """
     x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
     fig = go.Figure()
-    trace_phases: list[str] = []
+    phases = _phases_with_data(per_phase, kind)
     for i, (phase, layer_snap) in enumerate(per_phase.items()):
-        stats = (
-            layer_snap.activations
-            if kind == "activation"
-            else layer_snap.gradients
-        )
+        stats = _kind_stats(layer_snap, kind)
         if stats.n == 0:
             continue
         fig.add_trace(
@@ -716,7 +729,6 @@ def _make_histogram_figure(
                 name=f"{phase} (ep {layer_snap.epoch})",
                 marker_color=_phase_color(phase, i),
                 opacity=0.55 if len(per_phase) > 1 else 0.85,
-                visible="legendonly" if phase in hidden else True,
                 hovertemplate=(
                     "bin %{x}<br>count %{y}<extra></extra>"
                     if log_x
@@ -724,8 +736,7 @@ def _make_histogram_figure(
                 ),
             )
         )
-        trace_phases.append(phase)
-    has_data = bool(trace_phases)
+    has_data = bool(phases)
     fig.update_layout(
         title=dict(text=title, x=0.0, font=dict(size=12)),
         barmode="overlay",
@@ -768,7 +779,7 @@ def _make_histogram_figure(
         tickfont=dict(size=9),
         title=dict(text="count", font=dict(size=10)),
     )
-    return fig, trace_phases
+    return fig
 
 
 def _build_watch_page(session: Session, layer_names: list[str]) -> None:
@@ -872,22 +883,73 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
     ui.timer(2.0, refresh)
 
 
-def _curve_number(args: object) -> int | None:
-    """Extract Plotly's `curveNumber` from a forwarded legend-click event.
+def _plotly_restyle(
+    plot: ui.plotly, update: dict[str, object], indices: list[int]
+) -> None:
+    """Update trace attributes of an existing figure in place.
 
-    NiceGUI delivers the requested event field either as a dict keyed by name
-    or, depending on version, as the bare value; handle both defensively.
+    Calls `Plotly.restyle` on the live graph div instead of replacing the
+    figure, so client-side state (legend visibility toggles, zoom/pan) is left
+    untouched. `update` maps each attribute to a list of per-trace values
+    (e.g. `{"y": [y0, y1]}`) aligned with `indices`.
+
+    The guard makes this a no-op until Plotly's module has loaded and drawn the
+    graph (a just-connected client can fire a timer tick before then); the next
+    refresh re-applies the data, so nothing is lost.
     """
-    value: object
-    if isinstance(args, dict):
-        value = cast("dict[str, object]", args).get("curveNumber")
-    elif isinstance(args, (list, tuple)) and args:
-        value = args[0]
-    else:
-        value = args
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return int(value)
+    ui.run_javascript(
+        f"const gd = getHtmlElement({plot.id}); "
+        f"if (gd && gd.data && window.Plotly) "
+        f"window.Plotly.restyle(gd, {json.dumps(update)}, {json.dumps(indices)});"
+    )
+
+
+class _HistPlot:
+    """One Plotly histogram that refreshes its data in place.
+
+    The figure is built once and rebuilt only when the set of phases or the
+    axis scale changes. Routine per-tick updates go through `Plotly.restyle`,
+    which leaves client-side state — legend toggles, zoom — untouched, so a
+    series the user clicked off the legend stays hidden across refreshes.
+    """
+
+    def __init__(self, kind: str, title: str, axis_log: dict[str, bool]) -> None:
+        self._kind = kind
+        self._title = title
+        self._axis_log = axis_log
+        # Signature of what's currently drawn, so `update` can tell a plain
+        # data refresh (restyle) from a structural change (rebuild).
+        self._phases: list[str] = []
+        self._axis = self._current_axis()
+        self.element = ui.plotly(
+            _make_histogram_figure(
+                {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
+            )
+        ).classes("w-full")
+
+    def _current_axis(self) -> tuple[bool, bool]:
+        return self._axis_log["x"], self._axis_log["y"]
+
+    def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
+        phases = _phases_with_data(per_phase, self._kind)
+        axis = self._current_axis()
+        if phases != self._phases or axis != self._axis:
+            # A phase appeared/disappeared or an axis-scale checkbox flipped —
+            # rebuild the whole figure.
+            self.element.figure = _make_histogram_figure(
+                per_phase, self._kind, self._title, log_x=axis[0], log_y=axis[1]
+            )
+            self.element.update()
+            self._phases = phases
+            self._axis = axis
+        elif phases:
+            # Same traces and axes — only counts (and the epoch label) moved.
+            # Restyle in place so legend toggles and zoom survive.
+            ys = [list(_kind_stats(per_phase[p], self._kind).hist) for p in phases]
+            names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+            _plotly_restyle(
+                self.element, {"y": ys, "name": names}, list(range(len(phases)))
+            )
 
 
 class _WatchLayerPanel:
@@ -903,15 +965,6 @@ class _WatchLayerPanel:
     ) -> None:
         self.name = name
         self._session = session
-        self._axis_log = axis_log
-        # Phases the user has toggled off in each legend, and the phase order
-        # of the currently rendered traces (to map a legend `curveNumber` back
-        # to a phase). Tracking this lets a hidden series stay hidden across
-        # the periodic refresh instead of reappearing.
-        self._act_hidden: set[str] = set()
-        self._grad_hidden: set[str] = set()
-        self._act_trace_phases: list[str] = []
-        self._grad_trace_phases: list[str] = []
         with ui.card().classes("w-full p-4 gap-2"):
             with ui.row().classes("w-full items-center gap-2 no-wrap"):
                 ui.label(name).classes("font-mono text-base font-bold grow")
@@ -927,83 +980,21 @@ class _WatchLayerPanel:
                 self._act_stats = ui.label("no data yet").classes(
                     "font-mono text-xs text-slate-500"
                 )
-                act_fig, self._act_trace_phases = self._figure(
-                    {}, "activation", "activations"
-                )
-                self._act_plot = ui.plotly(act_fig).classes("w-full")
-                self._act_plot.on(
-                    "plotly_legendclick",
-                    lambda e: self._on_legend_click(
-                        self._act_hidden, self._act_trace_phases, e
-                    ),
-                    args=["curveNumber"],
-                )
+                self._act = _HistPlot("activation", "activations", axis_log)
                 ui.label("Gradients").classes(
                     "font-mono text-sm text-slate-600"
                 )
                 self._grad_stats = ui.label("no data yet").classes(
                     "font-mono text-xs text-slate-500"
                 )
-                grad_fig, self._grad_trace_phases = self._figure(
-                    {}, "gradient", "gradients"
-                )
-                self._grad_plot = ui.plotly(grad_fig).classes("w-full")
-                self._grad_plot.on(
-                    "plotly_legendclick",
-                    lambda e: self._on_legend_click(
-                        self._grad_hidden, self._grad_trace_phases, e
-                    ),
-                    args=["curveNumber"],
-                )
-
-    def _figure(
-        self,
-        per_phase: dict[str, LayerStatsSnapshot],
-        kind: str,
-        title: str,
-        hidden: frozenset[str] = frozenset(),
-    ) -> tuple[go.Figure, list[str]]:
-        return _make_histogram_figure(
-            per_phase,
-            kind,
-            title,
-            log_x=self._axis_log["x"],
-            log_y=self._axis_log["y"],
-            hidden=hidden,
-        )
-
-    def _on_legend_click(
-        self,
-        hidden: set[str],
-        trace_phases: list[str],
-        e: events.GenericEventArguments,
-    ) -> None:
-        """Mirror a legend click into `hidden` so the toggle survives refresh.
-
-        Plotly already hides/shows the trace client-side; we only record the
-        new state (keyed by phase) so the next rebuilt figure reapplies it.
-        """
-        idx = _curve_number(e.args)
-        if idx is None or not 0 <= idx < len(trace_phases):
-            return
-        phase = trace_phases[idx]
-        if phase in hidden:
-            hidden.discard(phase)
-        else:
-            hidden.add(phase)
+                self._grad = _HistPlot("gradient", "gradients", axis_log)
 
     def update(self, snap: WatchSnapshot) -> None:
         per_phase = snap.latest_per_phase(self.name)
         self._act_stats.text = _combined_summary(per_phase, "activation")
         self._grad_stats.text = _combined_summary(per_phase, "gradient")
-        self._act_plot.figure, self._act_trace_phases = self._figure(
-            per_phase, "activation", "activations", frozenset(self._act_hidden)
-        )
-        self._act_plot.update()
-        self._grad_plot.figure, self._grad_trace_phases = self._figure(
-            per_phase, "gradient", "gradients", frozenset(self._grad_hidden)
-        )
-        self._grad_plot.update()
+        self._act.update(per_phase)
+        self._grad.update(per_phase)
 
 
 def _combined_summary(
@@ -1013,11 +1004,7 @@ def _combined_summary(
         return "no data yet"
     parts: list[str] = []
     for phase, layer_snap in per_phase.items():
-        stats = (
-            layer_snap.activations
-            if kind == "activation"
-            else layer_snap.gradients
-        )
+        stats = _kind_stats(layer_snap, kind)
         parts.append(f"[{phase} ep{layer_snap.epoch}] {_stats_summary(stats)}")
     return "    ".join(parts)
 

@@ -74,8 +74,10 @@ class Session:
         *,
         epochs: int,
         phases: dict[str, int],
+        enabled: bool = True,
     ) -> None:
         self.model = model
+        self._enabled = enabled
         self._schedule = Schedule(epochs=epochs, phases=phases)
         self._mode: Mode = Mode.STEP
         self._target_position: tuple[str, int, int] | None = None
@@ -87,10 +89,17 @@ class Session:
         self._hook_handles: list[RemovableHandle] = []
         self._snapshot: BatchSnapshot | None = None
         self._live_position: BatchPosition | None = None
-        self._fx_graph: fx.GraphModule | None = _try_trace(model)
-        self._input_names: list[str] = self._compute_input_names()
-        self._layer_names: list[str] = self._compute_layer_names()
-        self._layer_weights: dict[str, list[str]] = self._compute_layer_weights()
+        # When disabled, skip the up-front fx trace and all name/weight
+        # discovery entirely — symbolic_trace runs a proxy forward pass and is
+        # the only expensive part of construction. A disabled session never
+        # installs hooks, so these stay empty and every per-batch path
+        # short-circuits.
+        self._fx_graph: fx.GraphModule | None = _try_trace(model) if enabled else None
+        self._input_names: list[str] = self._compute_input_names() if enabled else []
+        self._layer_names: list[str] = self._compute_layer_names() if enabled else []
+        self._layer_weights: dict[str, list[str]] = (
+            self._compute_layer_weights() if enabled else {}
+        )
         self._original_forward: object | None = None
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
@@ -127,6 +136,17 @@ class Session:
     def closed(self) -> bool:
         with self._cv:
             return self._closed
+
+    @property
+    def enabled(self) -> bool:
+        """Whether this session captures anything. Set once at `start()`.
+
+        A disabled session is fully inert: `batch()` is a no-op context
+        manager, `serve()` does nothing, and no model hooks are ever
+        installed — the intended near-zero-overhead off switch for leaving
+        playgrad wiring in place in a training script.
+        """
+        return self._enabled
 
     @property
     def input_names(self) -> list[str]:
@@ -488,7 +508,11 @@ class _BatchContext:
         self._stats_only = False
 
     def __enter__(self) -> Self:
-        if self._session.closed:
+        # `_enabled` is a plain attribute read (no lock), checked first so a
+        # disabled session pays nothing per batch: no schedule advance, no
+        # capture decision, no hook install. `_position` stays None, so
+        # `__exit__` also returns immediately.
+        if not self._session._enabled or self._session.closed:
             return self
         self._position = self._session._schedule.advance(self._phase, self._epoch)
         # Publish the live position before the forward pass so the UI top bar
@@ -538,8 +562,16 @@ def start(
     *,
     epochs: int,
     phases: dict[str, int],
+    enabled: bool = True,
 ) -> Session:
-    return Session(model, epochs=epochs, phases=phases)
+    """Create a `Session` for `model`.
+
+    With `enabled=False` the session is a near-zero-overhead no-op: no fx
+    trace at construction, `batch()` does nothing, and `serve()` is skipped.
+    This lets a training script keep its playgrad wiring in place and turn
+    the whole UI off with a single flag.
+    """
+    return Session(model, epochs=epochs, phases=phases, enabled=enabled)
 
 
 def _try_trace(model: nn.Module) -> fx.GraphModule | None:
