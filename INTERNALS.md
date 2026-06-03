@@ -103,6 +103,20 @@ control flow, tracing-unfriendly ops, etc.), the session falls back to:
 In both paths `Session.layer_names` is computed once at construction and
 exposes the same key set the UI later reads from each `BatchSnapshot`.
 
+`Session.layer_weights` is computed alongside it — a `layer name ->
+parameter names` map keyed identically to `layer_names`, with an empty
+list for weightless layers (graph inputs, `relu`, `add`, …). Its values
+are qualified parameter names that index straight into a snapshot's
+`weights` / `weight_gradients` dicts. In fx mode the mapping is exact: a
+`call_module` node owns every parameter under its dotted target, and any
+node that uses a parameter functionally (e.g. `F.conv2d(x, self.weight)`)
+picks it up through its `get_attr` input nodes — so on a traced model a
+parameter maps to nothing only if the forward pass genuinely never uses
+it. In the hook fallback a module maps to every parameter in its subtree
+(prefix match on the dotted name), the set of weights that contributed to
+the output the forward hook captured. For ResNet-20 every one of the 61
+parameters is covered by a `call_module` node.
+
 At `__exit__`:
 
 1. `_remove_hooks()` removes every registered hook.
@@ -291,6 +305,23 @@ It does not touch tensors directly until they need to be rendered.
   sample is denormalized (`x * std + mean`) before being clamped and
   scaled to 8-bit. Anything other than `C == 1` or `C == 3` returns
   `None`.
+- `playgrad.ui.render.render_weight(tensor, x_dim=, y_dim=, tile_dim=,
+  fixed=)` renders an arbitrary-rank weight under a chosen axis layout.
+  Unlike `render_strip`, a weight has no batch axis, so instead of slicing
+  a sample it pins every axis not assigned to X/Y/tile to a single index
+  (`fixed`, clamped into range), permutes the survivors into
+  `[tile, y, x]`, then funnels through the same `_render_chw` /
+  `_render_1d` tile machinery (diverging colormap by default, to match
+  gradients). `default_weight_dims(ndim)` gives the default assignment —
+  last axis X, second-to-last Y, third-to-last the tile axis, the rest
+  fixed — which renders 4D conv weights as kernels, 2D as one image, 1D as
+  one row. Duplicate or out-of-range axes return `None`.
+- The top-bar control row is shared via `_top_bar_row()` (the row
+  container) and `_add_step_controls(session, dialog)` (the five stepping
+  buttons + a live-position label, returned for the page's timer to
+  refresh through `_format_live_position`). The main page, `/watch`, and
+  `/weights` all build their bars from these, differing only in the
+  leading/trailing widgets they add around the shared controls.
 - `playgrad.ui.app.serve(session, port=..., host=...)` runs the NiceGUI
   app on a background thread. NiceGUI is mounted onto a bare FastAPI
   app via `ui.run_with`, which is then served by `uvicorn.Server` from
@@ -329,6 +360,20 @@ It does not touch tensors directly until they need to be rendered.
   10 labelled, intermediate edges unlabelled), `barmode="overlay"`
   with per-phase opacity so train/val sit on the same axes, and a
   log y-axis so distribution tails stay visible.
+- The `/weights` page (one `?layer=` query param) is the per-layer weight
+  viewer. It reuses the shared stepping controls (no sample spinner) and
+  builds one `_WeightPanel` per name in `session.layer_weights[layer]`,
+  reading the parameter shape from `model.named_parameters()` so the
+  controls exist before any snapshot has been captured. Each panel holds a
+  per-dimension role select (X / Y / Tile / Index, scaled to the weight's
+  rank) plus an index spinner per axis; picking a role auto-demotes
+  whichever other axis held it, keeping X/Y/Tile unique, then re-renders
+  against the last snapshot via `render_weight`. New snapshots re-render
+  through the page's `ui.timer` (`maybe_render`). Because NiceGUI
+  suppresses `.value` writes made from inside a value-change handler, the
+  select/visibility sync after a demotion is deferred one event-loop tick
+  with `ui.timer(0.0, …, once=True)` — the same workaround the main page's
+  sample spinner uses.
 
 ## Lifecycle summary
 
