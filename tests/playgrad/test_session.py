@@ -476,6 +476,94 @@ def test_fx_failure_falls_back_to_hooks() -> None:
     assert session.layer_names == ["x", "fc"]
 
 
+def test_layer_weights_maps_modules_to_their_parameters_fx() -> None:
+    """fx mode maps each call_module node to the params under its target and
+    leaves weightless nodes (relu, input) with an empty list."""
+
+    class ConvBlock(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv1 = nn.Conv2d(3, 4, kernel_size=3, padding=1)
+            self.bn1 = nn.BatchNorm2d(4)
+
+        def forward(self, x: Tensor) -> Tensor:
+            return torch.relu(self.bn1(self.conv1(x)))
+
+    session = playgrad.start(ConvBlock(), epochs=1, phases={"train": 1})
+    assert session.fx_traced
+    lw = session.layer_weights
+    # Every layer name has an entry; weightless ones map to [].
+    assert set(lw) == set(session.layer_names)
+    assert lw["conv1"] == ["conv1.bias", "conv1.weight"]
+    assert lw["bn1"] == ["bn1.bias", "bn1.weight"]
+    assert lw["relu"] == []
+    assert lw["x"] == []
+
+
+def test_layer_weights_covers_every_parameter_exactly() -> None:
+    """In fx mode the per-layer mapping accounts for all of the model's
+    parameters (TinyNet's two Linear layers, weight + bias each)."""
+    session, model = _make_session()
+    mapped = {p for params in session.layer_weights.values() for p in params}
+    assert mapped == {n for n, _ in model.named_parameters()}
+    assert session.layer_weights["fc1"] == ["fc1.bias", "fc1.weight"]
+    assert session.layer_weights["fc2"] == ["fc2.bias", "fc2.weight"]
+
+
+def test_layer_weights_detects_functional_parameter_use() -> None:
+    """A parameter used through F.conv2d (not a submodule call) is picked up
+    via the get_attr node feeding the call_function node."""
+
+    class Functional(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.randn(4, 3, 3, 3))
+
+        def forward(self, x: Tensor) -> Tensor:
+            return nn.functional.conv2d(x, self.weight, padding=1)
+
+    session = playgrad.start(Functional(), epochs=1, phases={"train": 1})
+    assert session.fx_traced
+    assert session.layer_weights["conv2d"] == ["weight"]
+
+
+def test_layer_weights_uses_module_subtree_in_hook_fallback() -> None:
+    """When fx tracing fails, a module maps to every parameter in its subtree."""
+
+    class Dynamic(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fc = nn.Linear(4, 2)
+
+        def forward(self, x: Tensor) -> Tensor:
+            if x.sum() > 0:
+                return self.fc(x)
+            return self.fc(-x)
+
+    session = playgrad.start(Dynamic(), epochs=1, phases={"train": 1})
+    assert not session.fx_traced
+    assert session.layer_weights == {"x": [], "fc": ["fc.bias", "fc.weight"]}
+
+
+def test_layer_weights_keys_index_into_snapshot_weights() -> None:
+    """Every parameter named by layer_weights is present in a snapshot."""
+    session, model = _make_session(epochs=1, phases={"train": 1})
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            _train_step(model)
+
+    thread = _run_in_thread(loop)
+    assert session.wait_until_paused(timeout=5)
+    snap = session.snapshot
+    assert snap is not None
+    for params in session.layer_weights.values():
+        for name in params:
+            assert name in snap.weights
+    session.detach()
+    thread.join(timeout=5)
+
+
 def test_snapshot_tensors_are_cpu_and_independent() -> None:
     session, model = _make_session(epochs=1, phases={"train": 1})
 
@@ -747,6 +835,7 @@ def test_disabled_session_skips_trace_and_name_discovery() -> None:
     assert session.fx_traced is False  # would be True if we had traced
     assert session.input_names == []
     assert session.layer_names == []
+    assert session.layer_weights == {}
     # Nothing is watchable on a disabled session.
     assert session.watch("anything") is False
     assert session.watched_layers == frozenset()

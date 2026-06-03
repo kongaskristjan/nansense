@@ -16,6 +16,7 @@ WebSocket, so wire size is irrelevant.
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -61,6 +62,87 @@ def render_strip(
     if sample.ndim == 1:
         return _render_1d(sample, kind=kind)
     return None
+
+
+@dataclass(frozen=True)
+class WeightDims:
+    """How an N-D weight tensor maps onto the strip's visual axes.
+
+    `x_dim` is the within-tile horizontal axis, `y_dim` the within-tile
+    vertical axis, and `tile_dim` the axis laid out as separate side-by-side
+    tiles. `fixed_dims` are every remaining axis — each pinned to a single
+    index (chosen by number in the UI) so the result collapses to at most a
+    3-D `[tile, y, x]` view.
+    """
+
+    x_dim: int
+    y_dim: int | None
+    tile_dim: int | None
+    fixed_dims: tuple[int, ...]
+
+
+def default_weight_dims(ndim: int) -> WeightDims:
+    """Default axis assignment for a weight of rank `ndim`.
+
+    4-D conv weights `[out, in, kH, kW]` become conv kernels (kH×kW tiles laid
+    out across `in`, the leading `out` axis pinned by index); 2-D weights are a
+    single `[out, in]` image; 1-D weights a single heatmap row. The last axis
+    is always X, the second-to-last Y, the third-to-last the tile axis, and any
+    further leading axes are fixed.
+    """
+    if ndim <= 0:
+        raise ValueError(f"weight must have at least one dimension, got {ndim}")
+    x_dim = ndim - 1
+    y_dim = ndim - 2 if ndim >= 2 else None
+    tile_dim = ndim - 3 if ndim >= 3 else None
+    fixed_dims = tuple(range(ndim - 3)) if ndim >= 4 else ()
+    return WeightDims(x_dim=x_dim, y_dim=y_dim, tile_dim=tile_dim, fixed_dims=fixed_dims)
+
+
+def render_weight(
+    tensor: Tensor | None,
+    *,
+    x_dim: int,
+    y_dim: int | None,
+    tile_dim: int | None,
+    fixed: dict[int, int],
+    kind: ColormapKind = "gradient",
+) -> bytes | None:
+    """Render a weight tensor as a horizontal strip under a chosen axis layout.
+
+    `x_dim` / `y_dim` / `tile_dim` pick the axes shown within and across tiles
+    (`y_dim`/`tile_dim` may be `None` for lower-rank views). Every other axis
+    is reduced to a single slice via `fixed` (axis -> index, clamped into
+    range, defaulting to 0). Returns `None` for a `None`/scalar tensor or an
+    invalid axis selection (out-of-range or duplicated axes).
+    """
+    if tensor is None or tensor.ndim == 0:
+        return None
+    ndim = tensor.ndim
+    kept = [d for d in (tile_dim, y_dim, x_dim) if d is not None]
+    if any(not 0 <= d < ndim for d in kept) or len(set(kept)) != len(kept):
+        return None
+
+    index: list[int | slice] = []
+    for d in range(ndim):
+        if d in kept:
+            index.append(slice(None))
+        else:
+            i = fixed.get(d, 0)
+            index.append(max(0, min(i, tensor.shape[d] - 1)))
+    selected = tensor[tuple(index)]
+
+    # After integer-indexing the fixed axes, the surviving axes keep their
+    # original order; map each kept axis to its position so we can permute
+    # into (tile, y, x) order.
+    pos = {d: i for i, d in enumerate(sorted(kept))}
+    if y_dim is None:
+        return _render_1d(selected.reshape(-1), kind=kind)
+    if tile_dim is None:
+        yx = selected.permute(pos[y_dim], pos[x_dim]).contiguous()
+        return _render_chw(yx.unsqueeze(0), kind=kind)
+    chw = selected.permute(pos[tile_dim], pos[y_dim], pos[x_dim]).contiguous()
+    return _render_chw(chw, kind=kind)
 
 
 def _render_chw(tensor: Tensor, *, kind: ColormapKind) -> bytes:
@@ -137,8 +219,8 @@ def _render_1d(tensor: Tensor, *, kind: ColormapKind) -> bytes:
     f = values.shape[0]
     if f > LINEAR_MAX_BINS:
         values = F.adaptive_avg_pool1d(
-            values.view(1, 1, f), LINEAR_MAX_BINS
-        ).view(-1)
+            values.reshape(1, 1, f), LINEAR_MAX_BINS
+        ).reshape(-1)
         f = LINEAR_MAX_BINS
     rgb_row = _apply_colormap(values.numpy(), kind=kind, abs_max=abs_max)
     image = np.broadcast_to(rgb_row[None, :, :], (LINEAR_TILE_HEIGHT, f, 3)).copy()

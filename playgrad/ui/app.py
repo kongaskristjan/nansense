@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 
 import plotly.graph_objects as go
 import uvicorn
@@ -39,10 +40,15 @@ from fastapi import FastAPI
 from nicegui import events, ui
 from torch import Tensor
 
-from playgrad.schedule import Schedule
+from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
-from playgrad.ui.render import render_image, render_strip
+from playgrad.ui.render import (
+    default_weight_dims,
+    render_image,
+    render_strip,
+    render_weight,
+)
 from playgrad.watch import (
     BINS_PER_DECADE,
     LOG10_MAX,
@@ -185,8 +191,9 @@ _ARCHITECTURE_CLICK_JS: str = """
 
   document.addEventListener('click', function(e) {
     if (!e.target.closest) return;
-    // The eye toggle inside a card handles its own click; don't navigate.
-    if (e.target.closest('[data-watch-toggle]')) return;
+    // Header action buttons (Watch, Weights) handle their own click; the
+    // document-level navigation must not fire on top of them.
+    if (e.target.closest('[data-card-action]')) return;
     const node = e.target.closest('g.node');
     if (node) {
       const slug = slugFromMermaidId(node.id);
@@ -292,6 +299,10 @@ def serve(
     def watch_page() -> None:
         _build_watch_page(session, layer_names)
 
+    @ui.page("/weights", favicon=str(favicon_path))
+    def weights_page(layer: str = "") -> None:
+        _build_weights_page(session, layer)
+
     ui.run_with(fastapi_app, storage_secret="playgrad")
 
     config = uvicorn.Config(
@@ -317,6 +328,48 @@ class _PageState:
     spinner_max: int | None = None
 
 
+_TOP_BAR_CLASSES: str = (
+    "w-full items-center gap-x-3 gap-y-0 px-3 py-2 shrink-0 "
+    "border-b-2 border-slate-300 bg-slate-100 shadow-sm z-10"
+)
+
+
+def _top_bar_row() -> ui.row:
+    """The shared top-bar row container used by every page."""
+    return ui.row().classes(_TOP_BAR_CLASSES)
+
+
+def _add_step_controls(session: Session, step_until_custom: ui.dialog) -> ui.label:
+    """Add the five stepping buttons + a live-position label to the open row.
+
+    Shared by the main page and the weights page so both drive the session
+    identically. The returned label is refreshed from `session.live_position`
+    by each page's timer (see `_format_live_position`).
+    """
+    ui.button("Stop", on_click=session.stop, color="red").props(
+        "dense size=md"
+    ).tooltip("Pause at the next batch boundary")
+    ui.button("Step Batch", on_click=session.step_batch, color="orange").props(
+        "dense size=md"
+    ).tooltip("Advance one batch, then pause")
+    ui.button("Step Epoch", on_click=session.step_epoch, color="orange").props(
+        "dense size=md"
+    ).tooltip("Run until the epoch changes, then pause")
+    ui.button(
+        "Step Custom", on_click=step_until_custom.open, color="orange"
+    ).props("dense size=md").tooltip("Pick a phase/epoch/batch to pause at")
+    ui.button("Detach", on_click=session.detach, color="green").props(
+        "dense size=md"
+    ).tooltip("Release the training loop and stop capturing snapshots")
+    return ui.label("(waiting for first snapshot)").classes(
+        "ml-3 font-mono text-sm"
+    )
+
+
+def _format_live_position(live: BatchPosition) -> str:
+    return f"epoch {live.epoch} | {live.phase} batch {live.batch_idx}"
+
+
 def _build_page(
     session: Session,
     mermaid_src: str,
@@ -339,29 +392,11 @@ def _build_page(
     step_until_custom = _build_step_until_custom_dialog(session)
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
-        with ui.row().classes(
-            "w-full items-center gap-x-3 gap-y-0 px-3 py-2 shrink-0 "
-            "border-b-2 border-slate-300 bg-slate-100 shadow-sm z-10"
-        ):
+        with _top_bar_row():
             architecture_toggle = ui.button(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
-            ui.button("Stop", on_click=session.stop, color="red").props(
-                "dense size=md"
-            ).tooltip("Pause at the next batch boundary")
-            ui.button("Step Batch", on_click=session.step_batch, color="orange").props(
-                "dense size=md"
-            ).tooltip("Advance one batch, then pause")
-            ui.button("Step Epoch", on_click=session.step_epoch, color="orange").props(
-                "dense size=md"
-            ).tooltip("Run until the epoch changes, then pause")
-            ui.button(
-                "Step Custom", on_click=step_until_custom.open, color="orange"
-            ).props("dense size=md").tooltip("Pick a phase/epoch/batch to pause at")
-            ui.button("Detach", on_click=session.detach, color="green").props(
-                "dense size=md"
-            ).tooltip("Release the training loop and stop capturing snapshots")
-            position_label = ui.label("(waiting for first snapshot)").classes("ml-3 font-mono text-sm")
+            position_label = _add_step_controls(session, step_until_custom)
             ui.label("Viewing sample:").classes("ml-3 text-sm")
             sample_input = ui.number(value=0, min=0, step=1, format="%d").classes("w-20").props("dense")
             watch_chip = ui.button(
@@ -459,6 +494,7 @@ def _build_page(
             )
             with architecture_pane:
                 ui.mermaid(mermaid_src).classes("w-full")
+            layer_weights = session.layer_weights
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-3 bg-slate-200 gap-3"
             ):
@@ -466,6 +502,7 @@ def _build_page(
                     layer_views[name] = _LayerView(
                         name,
                         session=session,
+                        weights=layer_weights.get(name, []),
                         on_toggle_watch=toggle_layer,
                     )
             input_pane = ui.column().classes(
@@ -509,9 +546,7 @@ def _build_page(
         # unchanged. The strips still re-render only when a new snapshot lands.
         live = session.live_position
         if live is not None:
-            position_label.text = (
-                f"epoch {live.epoch} | {live.phase} batch {live.batch_idx}"
-            )
+            position_label.text = _format_live_position(live)
         snap = session.snapshot
         if snap is None:
             return
@@ -771,10 +806,7 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
         refresh()
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
-        with ui.row().classes(
-            "w-full items-center gap-x-3 gap-y-0 px-3 py-2 shrink-0 "
-            "border-b-2 border-slate-300 bg-slate-100 shadow-sm z-10"
-        ):
+        with _top_bar_row():
             ui.button(
                 icon="arrow_back",
                 on_click=lambda: ui.navigate.to("/"),
@@ -996,6 +1028,244 @@ def _combined_summary(
     return "    ".join(parts)
 
 
+_ROLE_LABELS: dict[str, str] = {"x": "X", "y": "Y", "tile": "Tile", "index": "Index"}
+
+
+def _role_options(ndim: int) -> dict[str, str]:
+    """Role choices offered per dimension, scaled to the weight's rank.
+
+    A rank-1 weight can only map an axis to X; rank-2 adds Y; rank-3+ adds the
+    tiling axis. Every rank can pin an axis to a single index.
+    """
+    roles = ["x"]
+    if ndim >= 2:
+        roles.append("y")
+    if ndim >= 3:
+        roles.append("tile")
+    roles.append("index")
+    return {r: _ROLE_LABELS[r] for r in roles}
+
+
+def _dims_from_roles(roles: list[str]) -> tuple[int | None, int | None, int | None]:
+    """Resolve a per-dimension role list to (x_dim, y_dim, tile_dim) axes."""
+    x = y = tile = None
+    for d, role in enumerate(roles):
+        if role == "x":
+            x = d
+        elif role == "y":
+            y = d
+        elif role == "tile":
+            tile = d
+    return x, y, tile
+
+
+def _default_roles(ndim: int) -> list[str]:
+    """Per-dimension role list matching `render.default_weight_dims`."""
+    dims = default_weight_dims(ndim)
+    roles = ["index"] * ndim
+    roles[dims.x_dim] = "x"
+    if dims.y_dim is not None:
+        roles[dims.y_dim] = "y"
+    if dims.tile_dim is not None:
+        roles[dims.tile_dim] = "tile"
+    return roles
+
+
+def _build_weights_page(session: Session, layer: str) -> None:
+    """Per-layer weight viewer: kernel/image strips with selectable axes.
+
+    Reuses the main page's stepping controls (minus the sample spinner — a
+    weight has no batch axis) so the displayed weights track the same paused
+    batch. One panel per parameter the layer owns; each panel lets the user
+    remap which tensor axes become the X / Y / tiling axes and pins the rest
+    by index.
+    """
+    title = f"Weights · {layer}" if layer else "Weights"
+    ui.page_title(f"PlayGrad — {title}")
+    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
+    ui.query("body").classes("overflow-hidden")
+    ui.query("html").classes("overflow-hidden")
+
+    weight_names = session.layer_weights.get(layer, [])
+    shapes = {
+        name: tuple(p.shape)
+        for name, p in session.model.named_parameters()
+        if name in set(weight_names)
+    }
+    step_until_custom = _build_step_until_custom_dialog(session)
+    panels: list[_WeightPanel] = []
+
+    with ui.column().classes("w-full h-screen no-wrap gap-0"):
+        with _top_bar_row():
+            ui.button(
+                icon="arrow_back",
+                on_click=lambda: ui.navigate.to("/"),
+                color="slate-500",
+            ).props("dense size=md").tooltip("Back to the main page")
+            ui.label(title).classes(
+                "font-mono text-base font-bold ml-2 truncate max-w-64"
+            )
+            position_label = _add_step_controls(session, step_until_custom)
+
+        with ui.column().classes(
+            "w-full grow min-h-0 overflow-auto p-4 gap-4 bg-slate-200"
+        ):
+            if layer not in session.layer_names:
+                _weights_placeholder(f"Unknown layer {layer!r}.")
+            elif not weight_names:
+                _weights_placeholder(
+                    f"Layer {layer!r} has no weights to show."
+                )
+            else:
+                for name in weight_names:
+                    panels.append(
+                        _WeightPanel(name=name, shape=shapes[name], session=session)
+                    )
+
+    def tick() -> None:
+        live = session.live_position
+        if live is not None:
+            position_label.text = _format_live_position(live)
+        snap = session.snapshot
+        if snap is None:
+            return
+        for panel in panels:
+            panel.maybe_render(snap)
+
+    ui.timer(0.2, tick)
+
+
+def _weights_placeholder(message: str) -> None:
+    with ui.column().classes("items-center gap-2 py-12 w-full"):
+        ui.icon("grid_off", size="lg").classes("text-slate-400")
+        ui.label(message).classes("text-slate-600")
+
+
+class _WeightPanel:
+    """One card per parameter — an axis-remappable kernel/image strip.
+
+    The weight's rank is fixed, so the per-dimension role selects and index
+    spinners are built once. Changing a role auto-demotes whichever other axis
+    held that role (roles X/Y/Tile stay unique), then re-renders against the
+    last snapshot; new snapshots re-render via `maybe_render`.
+    """
+
+    def __init__(self, *, name: str, shape: tuple[int, ...], session: Session) -> None:
+        self.name = name
+        self._shape = shape
+        self._session = session
+        self._ndim = len(shape)
+        self._roles: list[str] = _default_roles(self._ndim)
+        self._indices: dict[int, int] = {d: 0 for d in range(self._ndim)}
+        self._snapshot: BatchSnapshot | None = None
+        self._role_selects: list[ui.select] = []
+        self._index_numbers: dict[int, ui.number] = {}
+
+        options = _role_options(self._ndim)
+        with ui.card().classes("w-full p-4 gap-3"):
+            with ui.row().classes("w-full items-baseline gap-3 no-wrap"):
+                ui.label(name).classes("font-mono text-base font-bold")
+                ui.label(f"shape {tuple(shape)}").classes(
+                    "font-mono text-xs text-slate-500"
+                )
+            with ui.row().classes("items-end gap-4 flex-wrap"):
+                for d in range(self._ndim):
+                    with ui.column().classes("gap-1"):
+                        ui.label(f"dim {d} · {shape[d]}").classes(
+                            "text-xs text-slate-500 font-mono"
+                        )
+                        with ui.row().classes("items-center gap-1 no-wrap"):
+                            select = ui.select(
+                                options=options,
+                                value=self._roles[d],
+                                on_change=lambda e, d=d: self._on_role(
+                                    d, getattr(e, "value", None)
+                                ),
+                            ).props("dense outlined").classes("w-24")
+                            self._role_selects.append(select)
+                            number = ui.number(
+                                value=0,
+                                min=0,
+                                max=shape[d] - 1,
+                                step=1,
+                                format="%d",
+                                on_change=lambda e, d=d: self._on_index(
+                                    d, getattr(e, "value", None)
+                                ),
+                            ).props("dense outlined").classes("w-20")
+                            self._index_numbers[d] = number
+            self._error = ui.label("").classes("text-amber-700 text-xs min-h-4")
+            with ui.element("div").classes("w-full overflow-x-auto"):
+                self._img = ui.html("")
+        self._sync_index_visibility()
+
+    def _on_role(self, dim: int, value: object) -> None:
+        role = str(value) if value is not None else "index"
+        if role in ("x", "y", "tile"):
+            for other in range(self._ndim):
+                if other != dim and self._roles[other] == role:
+                    self._roles[other] = "index"
+        self._roles[dim] = role
+        # Writes to widget `.value` made from inside a value-change handler are
+        # suppressed by NiceGUI; defer the select/visibility sync one loop tick
+        # so demotions actually reach the client.
+        ui.timer(0.0, self._apply_control_state, once=True)
+        self._render_current()
+
+    def _on_index(self, dim: int, value: float | None) -> None:
+        idx = int(value) if value is not None else 0
+        self._indices[dim] = max(0, min(idx, self._shape[dim] - 1))
+        self._render_current()
+
+    def _apply_control_state(self) -> None:
+        for d, select in enumerate(self._role_selects):
+            select.value = self._roles[d]
+        self._sync_index_visibility()
+
+    def _sync_index_visibility(self) -> None:
+        for d, number in self._index_numbers.items():
+            number.set_visibility(self._roles[d] == "index")
+
+    def maybe_render(self, snap: BatchSnapshot) -> None:
+        if snap is self._snapshot:
+            return
+        self._snapshot = snap
+        self._render(snap)
+
+    def _render_current(self) -> None:
+        if self._snapshot is not None:
+            self._render(self._snapshot)
+
+    def _render(self, snap: BatchSnapshot) -> None:
+        tensor = snap.weights.get(self.name)
+        if tensor is None:
+            self._show_error("no weights captured yet")
+            return
+        x_dim, y_dim, tile_dim = _dims_from_roles(self._roles)
+        if x_dim is None:
+            self._show_error("select an X dimension")
+            return
+        # A tiling axis only makes sense once a Y axis exists.
+        tile = tile_dim if y_dim is not None else None
+        fixed = {
+            d: self._indices.get(d, 0)
+            for d in range(self._ndim)
+            if self._roles[d] == "index"
+        }
+        png = render_weight(
+            tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
+        )
+        if png is None:
+            self._show_error("invalid axis selection")
+            return
+        self._error.text = ""
+        self._img.set_content(_img_tag(png))
+
+    def _show_error(self, message: str) -> None:
+        self._error.text = message
+        self._img.set_content("")
+
+
 def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
     schedule = session.schedule
     phase_names = list(schedule.phases)
@@ -1148,6 +1418,7 @@ class _LayerView:
         name: str,
         *,
         session: Session,
+        weights: list[str],
         on_toggle_watch: Callable[[str], None],
     ) -> None:
         self.name = name
@@ -1165,12 +1436,12 @@ class _LayerView:
                 ui.label(name).classes(
                     "font-mono text-sm grow min-w-0 truncate"
                 )
-                # The wrapper carries `data-watch-toggle` so the
-                # document-level click handler skips card→diagram
-                # navigation when the eye button is clicked. Quasar's q-btn
-                # doesn't reliably pass arbitrary `data-*` attrs through to
-                # its rendered DOM, so the attribute lives on this div.
-                with ui.element("div").props("data-watch-toggle"):
+                # Each wrapper carries `data-card-action` so the
+                # document-level click handler skips card→diagram navigation
+                # when a header button is clicked. Quasar's q-btn doesn't
+                # reliably pass arbitrary `data-*` attrs through to its
+                # rendered DOM, so the attribute lives on these divs.
+                with ui.element("div").props("data-card-action"):
                     self._eye_btn = ui.button(
                         "Watch",
                         icon="visibility",
@@ -1179,6 +1450,22 @@ class _LayerView:
                     ).props("dense no-caps").style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip("Watch this layer (toggle)")
+                # The Weights button only appears for layers that actually own
+                # parameters; relu/add/input nodes have nothing to show.
+                if weights:
+                    with ui.element("div").props("data-card-action"):
+                        ui.button(
+                            "Weights",
+                            icon="grid_on",
+                            on_click=lambda: ui.navigate.to(
+                                f"/weights?layer={quote(name)}"
+                            ),
+                            color="blue",
+                        ).props("dense no-caps").style(
+                            "min-height: 0; padding: 1px 6px; font-size: 11px"
+                        ).tooltip(
+                            f"Inspect this layer's weights ({len(weights)})"
+                        )
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
                 self.act_html = ui.html("")
                 ui.element("div").classes("h-1")

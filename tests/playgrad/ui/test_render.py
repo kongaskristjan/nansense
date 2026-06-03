@@ -17,8 +17,10 @@ from playgrad.ui.render import (
     TILE_GAP,
     TILE_SIZE,
     ColormapKind,
+    default_weight_dims,
     render_image,
     render_strip,
+    render_weight,
 )
 
 
@@ -148,3 +150,86 @@ def test_input_image_returns_none_for_out_of_range_sample() -> None:
 def test_input_image_returns_none_when_mean_std_size_mismatched() -> None:
     tensor = torch.rand(1, 3, 8, 8)
     assert render_image(tensor, sample_idx=0, mean=(0.5,), std=(0.2,)) is None
+
+
+@pytest.mark.parametrize(
+    "ndim, x, y, tile, fixed",
+    [
+        (1, 0, None, None, ()),
+        (2, 1, 0, None, ()),
+        (3, 2, 1, 0, ()),
+        (4, 3, 2, 1, (0,)),
+    ],
+)
+def test_default_weight_dims(
+    ndim: int, x: int, y: int | None, tile: int | None, fixed: tuple[int, ...]
+) -> None:
+    dims = default_weight_dims(ndim)
+    assert (dims.x_dim, dims.y_dim, dims.tile_dim, dims.fixed_dims) == (
+        x,
+        y,
+        tile,
+        fixed,
+    )
+
+
+def test_render_weight_4d_default_lays_kernels_across_in_channels() -> None:
+    # [out=8, in=3, kH=3, kW=3] default: kH×kW tiles across `in` (3 tiles),
+    # `out` pinned by index.
+    w = torch.randn(8, 3, 3, 3)
+    d = default_weight_dims(4)
+    png = render_weight(
+        w,
+        x_dim=d.x_dim,
+        y_dim=d.y_dim,
+        tile_dim=d.tile_dim,
+        fixed={f: 0 for f in d.fixed_dims},
+    )
+    assert png is not None
+    assert _decode(png).size == (_chw_strip_width(3), TILE_SIZE)
+
+
+def test_render_weight_2d_is_single_image_tile() -> None:
+    w = torch.randn(10, 4)
+    d = default_weight_dims(2)
+    png = render_weight(w, x_dim=d.x_dim, y_dim=d.y_dim, tile_dim=d.tile_dim, fixed={})
+    assert png is not None
+    assert _decode(png).size == (_chw_strip_width(1), TILE_SIZE)
+
+
+def test_render_weight_1d_is_single_row() -> None:
+    w = torch.randn(16)
+    png = render_weight(w, x_dim=0, y_dim=None, tile_dim=None, fixed={})
+    assert png is not None
+    assert _decode(png).size == (_1d_strip_width(16), LINEAR_TILE_HEIGHT)
+
+
+def test_render_weight_custom_tile_axis_changes_tile_count() -> None:
+    # Tile across `out`=8 instead of the default `in`, pinning `in` by index.
+    w = torch.randn(8, 3, 3, 3)
+    png = render_weight(w, x_dim=3, y_dim=2, tile_dim=0, fixed={1: 1})
+    assert png is not None
+    assert _decode(png).size == (_chw_strip_width(8), TILE_SIZE)
+
+
+def test_render_weight_clamps_out_of_range_fixed_index() -> None:
+    w = torch.randn(8, 3, 3, 3)
+    d = default_weight_dims(4)
+    png = render_weight(
+        w, x_dim=d.x_dim, y_dim=d.y_dim, tile_dim=d.tile_dim, fixed={0: 999}
+    )
+    assert png is not None  # index clamped into range rather than crashing
+
+
+def test_render_weight_returns_none_for_none_tensor() -> None:
+    assert render_weight(None, x_dim=0, y_dim=None, tile_dim=None, fixed={}) is None
+
+
+def test_render_weight_returns_none_for_duplicate_axes() -> None:
+    w = torch.randn(8, 3, 3, 3)
+    assert render_weight(w, x_dim=2, y_dim=2, tile_dim=0, fixed={1: 0}) is None
+
+
+def test_render_weight_returns_none_for_out_of_range_axis() -> None:
+    w = torch.randn(4, 4)
+    assert render_weight(w, x_dim=5, y_dim=0, tile_dim=None, fixed={}) is None

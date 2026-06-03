@@ -89,13 +89,17 @@ class Session:
         self._hook_handles: list[RemovableHandle] = []
         self._snapshot: BatchSnapshot | None = None
         self._live_position: BatchPosition | None = None
-        # When disabled, skip the up-front fx trace and name discovery entirely
-        # — symbolic_trace runs a proxy forward pass and is the only expensive
-        # part of construction. A disabled session never installs hooks, so
-        # these stay empty and every per-batch path short-circuits.
+        # When disabled, skip the up-front fx trace and all name/weight
+        # discovery entirely — symbolic_trace runs a proxy forward pass and is
+        # the only expensive part of construction. A disabled session never
+        # installs hooks, so these stay empty and every per-batch path
+        # short-circuits.
         self._fx_graph: fx.GraphModule | None = _try_trace(model) if enabled else None
         self._input_names: list[str] = self._compute_input_names() if enabled else []
         self._layer_names: list[str] = self._compute_layer_names() if enabled else []
+        self._layer_weights: dict[str, list[str]] = (
+            self._compute_layer_weights() if enabled else {}
+        )
         self._original_forward: object | None = None
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
@@ -158,6 +162,23 @@ class Session:
         hook fallback, it's `input_names + named_modules`.
         """
         return list(self._layer_names)
+
+    @property
+    def layer_weights(self) -> dict[str, list[str]]:
+        """Map each layer name to the parameter names it uses.
+
+        Keys match `layer_names`; every layer has an entry, with an empty
+        list for layers that consume no weights (graph inputs, `relu`, `add`,
+        …). Values are qualified parameter names that index into a
+        `BatchSnapshot.weights` / `.weight_gradients` dict.
+
+        In fx mode the mapping is exact: a `call_module` node owns the
+        parameters under its dotted target, and any node that references a
+        parameter functionally pulls it in via a `get_attr` input. In the
+        hook fallback a module maps to every parameter in its subtree (the
+        weights that contributed to the output the hook captured).
+        """
+        return {name: list(params) for name, params in self._layer_weights.items()}
 
     @property
     def fx_traced(self) -> bool:
@@ -395,6 +416,39 @@ class Session:
             name for name, m in self.model.named_modules() if m is not self.model
         ]
 
+    def _compute_layer_weights(self) -> dict[str, list[str]]:
+        param_names = [name for name, _ in self.model.named_parameters()]
+        if self._fx_graph is not None:
+            return self._fx_layer_weights(param_names)
+        return self._hook_layer_weights(param_names)
+
+    def _fx_layer_weights(self, param_names: list[str]) -> dict[str, list[str]]:
+        assert self._fx_graph is not None
+        param_set = set(param_names)
+        names = friendly_names(self._fx_graph.graph)
+        result: dict[str, list[str]] = {}
+        for node in self._fx_graph.graph.nodes:
+            if node.op == "output":
+                continue
+            used: set[str] = set()
+            if node.op == "call_module":
+                used.update(_params_under(param_names, str(node.target)))
+            # Parameters used functionally (e.g. F.conv2d(x, self.weight)) reach
+            # the node through a get_attr input whose target is the param name.
+            for inp in node.all_input_nodes:
+                if inp.op == "get_attr" and inp.target in param_set:
+                    used.add(str(inp.target))
+            result[names[node]] = sorted(used)
+        return result
+
+    def _hook_layer_weights(self, param_names: list[str]) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {name: [] for name in self._input_names}
+        for name, module in self.model.named_modules():
+            if module is self.model:
+                continue
+            result[name] = _params_under(param_names, name)
+        return result
+
     @staticmethod
     def _cpu_clone(t: Tensor) -> Tensor:
         return t.detach().to("cpu", copy=True)
@@ -512,6 +566,17 @@ def _try_trace(model: nn.Module) -> fx.GraphModule | None:
         return fx.symbolic_trace(model)
     except Exception:
         return None
+
+
+def _params_under(param_names: list[str], target: str) -> list[str]:
+    """Qualified parameter names owned by the module at dotted path `target`.
+
+    Matches `target.*` (the params the module and its descendants hold). The
+    bare `target` is included too for the degenerate case of a parameter
+    registered directly under that name.
+    """
+    prefix = f"{target}."
+    return sorted(p for p in param_names if p == target or p.startswith(prefix))
 
 
 class _CaptureInterpreter(fx.Interpreter):
