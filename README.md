@@ -38,6 +38,9 @@ Useful flags:
 - `--playgrad-port 8080` — launch the playgrad UI on this port. Training
   pauses on the first batch; open the URL to drive it with the step / detach
   controls.
+- `--disable-playgrad` — turn playgrad off entirely (`enabled=False`). The
+  session becomes a near-zero-overhead no-op, so the loop runs as plain
+  training with no UI and no capture machinery.
 
 The script uses SGD with Nesterov momentum, cosine LR annealing, and the
 standard CIFAR10 augmentations (random crop with 4-pixel padding + horizontal
@@ -65,7 +68,12 @@ He et al. 2016) with ResNet-D-style downsampling shortcuts (He et al. 2018):
 ```python
 import playgrad
 
-session = playgrad.start(model, epochs=50, phases={"train": 196, "val": 40})
+# enabled=False (default True) makes the session a near-zero-overhead no-op:
+# no fx trace, batch() does nothing, and serve() is skipped. This lets you
+# leave the wiring below in place and toggle the whole UI off with one flag.
+session = playgrad.start(
+    model, epochs=50, phases={"train": 196, "val": 40}, enabled=True
+)
 playgrad.serve(
     session,
     port=8080,
@@ -103,13 +111,28 @@ strips for the selected sample; the right pane shows the input image for
 that sample (RGB or grayscale), denormalized with the `input_mean` /
 `input_std` passed to `serve()` if any.
 
-Each layer card has an eye-icon toggle in its header that marks the
+Each layer card has a "Watch" toggle in its header that marks the
 layer as "watched". Watched cards (and the matching architecture
 node) get a stronger amber outline that persists across hover. The
 top bar carries a small watch chip showing how many layers are
 currently selected; clicking it opens a menu with a link to the
 deep-dive `/watch` page and shortcuts that scroll the centre pane to
 each watched card.
+
+Cards for layers that own parameters also carry a "Weights" button
+that opens a per-layer weight viewer at `/weights?layer=...`. The
+weight page reuses the main page's stepping controls and epoch/batch
+readout — minus the "Viewing sample" spinner, since a weight has no
+batch axis — so the displayed weights track the currently paused
+batch. It renders one panel per parameter the layer uses, drawn with
+the same diverging colormap as gradients. By default a 4D conv weight
+`[out, in, kH, kW]` is shown as conv kernels (kH×kW tiles laid out
+across the input channels, with the output channel pinned by index), a
+2D weight as a single image, and a 1D weight as a single heatmap row.
+Per-dimension selects let you remap which axes become the X, Y, and
+tiling (third horizontal) axes; every remaining axis is pinned to a
+single index chosen by number. `session.layer_weights` exposes the
+underlying `layer name -> parameter names` map.
 
 The `/watch` page renders one card per watched layer with two plotly
 histograms (activations + activation gradients) overlaid by phase
