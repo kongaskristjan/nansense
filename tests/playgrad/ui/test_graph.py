@@ -63,6 +63,40 @@ def test_fx_labels_modules_with_class_name() -> None:
     assert "Linear" in src
 
 
+class TwoBlocks(nn.Module):
+    """Functional relus inside repeated submodules, like a ResNet block."""
+
+    class Block(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.bn1 = nn.BatchNorm2d(4)
+            self.bn2 = nn.BatchNorm2d(4)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.relu(self.bn2(torch.relu(self.bn1(x))))
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stem = nn.Conv2d(3, 4, kernel_size=3, padding=1)
+        self.b0 = TwoBlocks.Block()
+        self.b1 = TwoBlocks.Block()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.b1(self.b0(self.stem(x)))
+
+
+def test_fx_scopes_repeated_function_nodes_by_submodule() -> None:
+    src = build_mermaid(TwoBlocks())
+    # Each block's two relus get scope-qualified ids and labels, so they are
+    # distinguishable instead of a wall of identical "relu" circles.
+    assert 'b0_relu1(("b0.relu1"))' in src
+    assert 'b0_relu2(("b0.relu2"))' in src
+    assert 'b1_relu1(("b1.relu1"))' in src
+    assert 'b1_relu2(("b1.relu2"))' in src
+    # Edges reference the same scoped ids, so graph nodes still link to cards.
+    assert "b0_bn1 --> b0_relu1" in src
+
+
 def test_falls_back_to_hierarchy_for_untraceable_model() -> None:
     src = build_mermaid(DynamicShape())
     # The hierarchy fallback always emits a synthetic root and parent->child edges.

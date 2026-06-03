@@ -371,6 +371,55 @@ def test_fx_mode_captures_function_call_outputs() -> None:
     thread.join(timeout=5)
 
 
+def test_fx_mode_scopes_repeated_function_ops_by_submodule() -> None:
+    """Two relus in a submodule capture under distinct scope-qualified keys."""
+
+    class Block(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.bn1 = nn.BatchNorm2d(4)
+            self.bn2 = nn.BatchNorm2d(4)
+
+        def forward(self, x: Tensor) -> Tensor:
+            return torch.relu(self.bn2(torch.relu(self.bn1(x))))
+
+    class Wrapper(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = nn.Conv2d(3, 4, kernel_size=3, padding=1)
+            self.block = Block()
+
+        def forward(self, x: Tensor) -> Tensor:
+            return self.block(self.conv(x))
+
+    model = Wrapper()
+    session = playgrad.start(model, epochs=1, phases={"train": 1})
+    assert session.fx_traced
+    # The two functional relus are disambiguated by their submodule scope.
+    assert "block.relu1" in session.layer_names
+    assert "block.relu2" in session.layer_names
+    assert "relu" not in session.layer_names  # the bare fx name is gone
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            x = torch.randn(2, 3, 4, 4)
+            y = torch.randint(0, 2, (2, 4, 4))
+            model.zero_grad(set_to_none=True)
+            loss = nn.functional.cross_entropy(model(x), y)
+            loss.backward()
+
+    thread = _run_in_thread(loop)
+    assert session.wait_until_paused(timeout=5)
+    snap = session.snapshot
+    assert snap is not None
+    assert "block.relu1" in snap.activations
+    assert "block.relu2" in snap.activations
+    assert session.watch("block.relu2") is True
+
+    session.detach()
+    thread.join(timeout=5)
+
+
 def test_fx_mode_restores_original_forward_after_batch() -> None:
     """The interpreter patch is reverted before the worker pauses, so the
     user's original forward is the live one whenever the batch isn't actively

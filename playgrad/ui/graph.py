@@ -15,6 +15,8 @@ from collections.abc import Iterator
 import torch
 from torch import fx, nn
 
+from playgrad.fx_names import friendly_names
+
 CONFIG_HEADER: str = """---
 config:
   layout: elk
@@ -43,17 +45,21 @@ def build_mermaid(model: nn.Module, *, root_label: str = "model") -> str:
 
 
 def _build_from_fx(model: nn.Module, traced: fx.GraphModule) -> str:
+    # Friendly names key the node ids so each Mermaid node lines up with the
+    # matching layer card (`data-layer=slug(layer_name)`); scope-qualified
+    # function names also give relus etc. a unique, locatable label.
+    names = friendly_names(traced.graph)
     lines: list[str] = [CONFIG_HEADER, "flowchart TD"]
     for node in traced.graph.nodes:
-        lines.append(_node_def(node, model))
+        lines.append(_node_def(node, model, names))
     for node in traced.graph.nodes:
         for arg in _node_inputs(node):
-            lines.append(f"  {slug(arg.name)} --> {slug(node.name)}")
+            lines.append(f"  {slug(names[arg])} --> {slug(names[node])}")
     return "\n".join(lines)
 
 
-def _node_def(node: fx.Node, model: nn.Module) -> str:
-    node_id = slug(node.name)
+def _node_def(node: fx.Node, model: nn.Module, names: dict[fx.Node, str]) -> str:
+    node_id = slug(names[node])
     if node.op == "placeholder":
         return f'  {node_id}(["in: {node.name}"])'
     if node.op == "output":
@@ -63,11 +69,10 @@ def _node_def(node: fx.Node, model: nn.Module) -> str:
         label = f"{node.target}<br/>{type(sub).__name__}"
         return f'  {node_id}["{label}"]'
     if node.op == "call_function":
-        name = getattr(node.target, "__name__", str(node.target))
-        return f'  {node_id}(("{name}"))'
+        return f'  {node_id}(("{names[node]}"))'
     if node.op == "call_method":
-        return f'  {node_id}((".{node.target}"))'
-    return f'  {node_id}["{node.name}"]'
+        return f'  {node_id}(("{names[node]}"))'
+    return f'  {node_id}["{names[node]}"]'
 
 
 def _node_inputs(node: fx.Node) -> Iterator[fx.Node]:
