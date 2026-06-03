@@ -9,9 +9,9 @@ from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
     _PLOT_HEIGHT,
-    _curve_number,
     _linear_x_range,
     _make_histogram_figure,
+    _phases_with_data,
     _validate_step_until_target,
 )
 from playgrad.watch import N_BINS, ZERO_BIN, LayerStatsSnapshot, TensorStatsSnapshot
@@ -128,49 +128,26 @@ def test_validate_rejects_batch_out_of_range(schedule: Schedule) -> None:
     assert "Batch" in msg
 
 
-# --- Watching histogram: legend-selection persistence (task 2) -------------
+# --- Watching histogram: trace structure / restyle signature --------------
 
 
-def test_histogram_returns_traces_in_phase_order() -> None:
+def test_phases_with_data_in_render_order() -> None:
     per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val")}
-    fig, phases = _make_histogram_figure(per_phase, "activation", "activations")
-    assert phases == ["train", "val"]
-    assert [t.name for t in fig.data] == ["train (ep 0)", "val (ep 0)"]
-    # No hidden phases → every trace is visible.
-    assert all(t.visible in (True, None) for t in fig.data)
+    assert _phases_with_data(per_phase, "activation") == ["train", "val"]
 
 
-def test_histogram_skips_empty_phases() -> None:
+def test_phases_with_data_skips_empty_phases() -> None:
     per_phase = {"train": _layer_snap("train", n=5), "val": _layer_snap("val", n=0)}
-    _fig, phases = _make_histogram_figure(per_phase, "activation", "activations")
-    assert phases == ["train"]
+    assert _phases_with_data(per_phase, "activation") == ["train"]
 
 
-def test_histogram_hidden_phase_is_legendonly() -> None:
-    per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val")}
-    fig, _phases = _make_histogram_figure(
-        per_phase, "activation", "activations", hidden=frozenset({"train"})
-    )
-    by_phase = {t.name.split(" ")[0]: t.visible for t in fig.data}
-    assert by_phase["train"] == "legendonly"  # stays hidden across refresh
-    assert by_phase["val"] in (True, None)
-
-
-@pytest.mark.parametrize(
-    "args, expected",
-    [
-        ({"curveNumber": 0}, 0),
-        ({"curveNumber": 2}, 2),
-        ([1], 1),
-        (3, 3),
-        ({}, None),
-        ({"curveNumber": True}, None),  # bool is not a curve index
-        ("nope", None),
-        (None, None),
-    ],
-)
-def test_curve_number_parsing(args: object, expected: int | None) -> None:
-    assert _curve_number(args) == expected
+def test_histogram_traces_match_phases_with_data() -> None:
+    per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val", n=0)}
+    fig = _make_histogram_figure(per_phase, "activation", "activations")
+    # Only phases with data get a trace, in order; all visible by default so a
+    # rebuild never silently hides a series.
+    assert [t.name for t in fig.data] == ["train (ep 0)"]
+    assert all(t.visible in (True, None) for t in fig.data)
 
 
 # --- Watching histogram: log/linear axis toggles (task 1) ------------------
@@ -179,7 +156,7 @@ def test_curve_number_parsing(args: object, expected: int | None) -> None:
 @pytest.mark.parametrize("log_y", [True, False])
 def test_histogram_log_y_toggles_count_axis(log_y: bool) -> None:
     per_phase = {"train": _layer_snap("train")}
-    fig, _ = _make_histogram_figure(
+    fig = _make_histogram_figure(
         per_phase, "activation", "activations", log_y=log_y
     )
     assert fig.layout.yaxis.type == ("log" if log_y else "linear")
@@ -187,7 +164,7 @@ def test_histogram_log_y_toggles_count_axis(log_y: bool) -> None:
 
 def test_histogram_log_x_uses_bin_indices() -> None:
     per_phase = {"train": _layer_snap("train")}
-    fig, _ = _make_histogram_figure(
+    fig = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=True
     )
     # Log mode: evenly spaced bin indices, default (uniform) bar width.
@@ -197,7 +174,7 @@ def test_histogram_log_x_uses_bin_indices() -> None:
 
 def test_histogram_linear_x_uses_value_positions_and_widths() -> None:
     per_phase = {"train": _layer_snap("train")}
-    fig, _ = _make_histogram_figure(
+    fig = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False
     )
     # Linear mode: bars positioned at true bin centres with per-bin widths.
@@ -224,6 +201,6 @@ def test_linear_x_range_brackets_populated_bins() -> None:
 
 
 def test_histogram_height_is_doubled() -> None:
-    fig, _ = _make_histogram_figure({}, "activation", "activations")
+    fig = _make_histogram_figure({}, "activation", "activations")
     assert _PLOT_HEIGHT == 440  # 2x the original 220
     assert fig.layout.height == _PLOT_HEIGHT

@@ -327,15 +327,20 @@ It does not touch tensors directly until they need to be rendered.
   this is the natural point to add viewport-aware lazy rendering, but
   the current code path keeps the wiring simple.
 - The `/watch` page is its own NiceGUI page handler keyed to the same
-  `Session`. It builds one `_WatchLayerPanel` per watched module, each
-  with two `ui.plotly` figures (activations and gradients) and a
-  one-line stats summary above each. A 2-second `ui.timer` calls
-  `session.watch_snapshot()` and updates the figures in place via
-  `plot.figure = new_fig; plot.update()`. Because each tick rebuilds the
-  figure from scratch (which would otherwise reset client-side legend
-  toggles), the panel tracks which phases the user clicked off in the
-  legend — via the `plotly_legendclick` event — and re-emits those traces
-  as `visible="legendonly"` so a hidden series stays hidden. The figures
+  `Session`. It builds one `_WatchLayerPanel` per watched module; each
+  holds two `_HistPlot`s (activations and gradients) and a one-line stats
+  summary above each. A 2-second `ui.timer` calls
+  `session.watch_snapshot()` and hands the per-phase stats to every
+  `_HistPlot.update`. Routine ticks only change the bar counts (and the
+  epoch label), so the plot **restyles the existing figure in place** —
+  `Plotly.restyle(getHtmlElement(id), {y, name}, indices)` run via
+  `ui.run_javascript` — rather than replacing it. Restyle leaves the rest
+  of the client-side state alone, so legend toggles (a series you clicked
+  off) and any zoom/pan survive the refresh for free. The figure is only
+  rebuilt (`plot.figure = new_fig; plot.update()`) when the *structure*
+  changes — a phase appears/disappears, or a **Log x** / **Log y**
+  checkbox flips an axis scale — which `_HistPlot` detects by comparing the
+  current `(phases, axis)` signature against the last render. The figures
   use signed-log x-axis tick positions computed once by `_x_tick_layout`
   (powers of 10 labelled, intermediate edges unlabelled),
   `barmode="overlay"` with per-phase opacity so train/val sit on the same
