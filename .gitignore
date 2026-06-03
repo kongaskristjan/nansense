@@ -11,4 +11,3 @@ data/
 *.pt
 *.pth
 playgrad-*.png
-port_number.txt
