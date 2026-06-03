@@ -376,7 +376,7 @@ def _build_page(
                     with ui.element("div").classes("min-w-64"):
                         ui.menu_item(
                             "Open watch view  →",
-                            on_click=lambda: ui.navigate.to("/watch"),
+                            on_click=lambda: ui.navigate.to("/watch", new_tab=True),
                         ).classes("font-medium")
                         ui.separator()
                         watch_list_container = ui.element("div").classes("py-1")
