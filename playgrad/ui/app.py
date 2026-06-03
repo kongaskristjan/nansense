@@ -579,6 +579,10 @@ def _stats_summary(stats: TensorStatsSnapshot) -> str:
     )
 
 
+# Plot height in px. Doubled from the original 220 so the distributions are
+# easier to read.
+_PLOT_HEIGHT: int = 440
+
 # Linear-space geometry of the signed-log bins, used when the x-axis is
 # switched to a linear scale: each bar is drawn at the centre of its bin and
 # given the bin's true (linear) width so the bars tile the value axis.
@@ -679,7 +683,7 @@ def _make_histogram_figure(
         barmode="overlay",
         bargap=0,
         margin=dict(l=50, r=20, t=40, b=40),
-        height=220,
+        height=_PLOT_HEIGHT,
         plot_bgcolor="#f8fafc",
         paper_bgcolor="white",
         showlegend=has_data,

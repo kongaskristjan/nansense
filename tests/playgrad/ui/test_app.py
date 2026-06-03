@@ -8,6 +8,7 @@ import torch
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
+    _PLOT_HEIGHT,
     _curve_number,
     _linear_x_range,
     _make_histogram_figure,
@@ -217,3 +218,12 @@ def test_linear_x_range_brackets_populated_bins() -> None:
     lo, hi = rng
     assert lo < 0 < hi
     assert hi - lo < 1.0  # zoomed in, not the full +/-1e6 span
+
+
+# --- Watching histogram: plot height (task 3) ------------------------------
+
+
+def test_histogram_height_is_doubled() -> None:
+    fig, _ = _make_histogram_figure({}, "activation", "activations")
+    assert _PLOT_HEIGHT == 440  # 2x the original 220
+    assert fig.layout.height == _PLOT_HEIGHT
