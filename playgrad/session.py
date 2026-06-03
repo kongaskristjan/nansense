@@ -37,6 +37,7 @@ from typing import Self
 from torch import Tensor, fx, nn
 from torch.utils.hooks import RemovableHandle
 
+from playgrad.fx_names import friendly_names
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.watch import WatchAccumulator, WatchSnapshot
 
@@ -136,7 +137,8 @@ class Session:
         """Ordered list of every per-batch tensor key the snapshot may carry.
 
         In fx mode, this is the friendly name of every non-output node in the
-        traced graph (inputs, module outputs, function/method results). In the
+        traced graph: inputs (`x`), module outputs (`stage1.0.bn1`), and
+        scope-qualified function/method results (`stage1.0.relu1`). In the
         hook fallback, it's `input_names + named_modules`.
         """
         return list(self._layer_names)
@@ -384,8 +386,9 @@ class Session:
 
     def _compute_layer_names(self) -> list[str]:
         if self._fx_graph is not None:
+            names = friendly_names(self._fx_graph.graph)
             return [
-                _fx_friendly_name(n)
+                names[n]
                 for n in self._fx_graph.graph.nodes
                 if n.op != "output"
             ]
@@ -402,6 +405,7 @@ class Session:
     def _fx_layer_weights(self, param_names: list[str]) -> dict[str, list[str]]:
         assert self._fx_graph is not None
         param_set = set(param_names)
+        names = friendly_names(self._fx_graph.graph)
         result: dict[str, list[str]] = {}
         for node in self._fx_graph.graph.nodes:
             if node.op == "output":
@@ -414,7 +418,7 @@ class Session:
             for inp in node.all_input_nodes:
                 if inp.op == "get_attr" and inp.target in param_set:
                     used.add(str(inp.target))
-            result[_fx_friendly_name(node)] = sorted(used)
+            result[names[node]] = sorted(used)
         return result
 
     def _hook_layer_weights(self, param_names: list[str]) -> dict[str, list[str]]:
@@ -543,18 +547,6 @@ def _params_under(param_names: list[str], target: str) -> list[str]:
     return sorted(p for p in param_names if p == target or p.startswith(prefix))
 
 
-def _fx_friendly_name(node: fx.Node) -> str:
-    """The user-facing key for the value produced by an fx node.
-
-    For module calls we use the dotted target ("stem.0") so the UI label
-    matches how the user writes the module. Everything else uses fx's
-    auto-assigned node name ("x", "relu", "relu_1", "add", "mean").
-    """
-    if node.op == "call_module":
-        return str(node.target)
-    return node.name
-
-
 class _CaptureInterpreter(fx.Interpreter):
     """fx interpreter that snapshots every node's tensor output.
 
@@ -567,6 +559,7 @@ class _CaptureInterpreter(fx.Interpreter):
     def __init__(self, gm: fx.GraphModule, capture: dict[str, Tensor]) -> None:
         super().__init__(gm)
         self._capture = capture
+        self._names = friendly_names(gm.graph)
 
     def run_node(self, n: fx.Node) -> object:
         result = super().run_node(n)
@@ -575,7 +568,7 @@ class _CaptureInterpreter(fx.Interpreter):
         if isinstance(result, Tensor):
             if result.requires_grad:
                 result.retain_grad()
-            self._capture[_fx_friendly_name(n)] = result
+            self._capture[self._names[n]] = result
         return result
 
 

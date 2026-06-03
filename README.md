@@ -130,11 +130,14 @@ The `/watch` page renders one card per watched layer with two plotly
 histograms (activations + activation gradients) overlaid by phase
 (train / val) for the most recent epoch. Each histogram has 211
 signed-log bins covering `(-1e6, 1e6)` with bin edges on powers of 10
-and at six log-spaced points between them. Above each histogram a
+and at six log-spaced points between them. Two checkboxes in the top
+bar — **Log x** and **Log y** — toggle the value and count axes between
+the log-based default and a linear scale. Above each histogram a
 one-line summary shows `n`, `mean`, `std`, histogram-derived
 `median`, and `min`/`max`. Any layer in `session.layer_names` is
-watchable — named modules, fx-traced intermediates (`relu`, `add`,
-`mean`), and the graph input itself (`x`). While at least one layer
+watchable — named modules, fx-traced intermediates (scope-qualified by
+their submodule, e.g. `stage1.0.relu1`, `stage1.0.add`), and the graph
+input itself (`x`). While at least one layer
 is watched, every batch runs through the full capture machinery (fx
 interpreter when traceable, root pre-hook plus per-module hooks
 otherwise), which roughly doubles activation memory and adds Python

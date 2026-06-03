@@ -80,12 +80,19 @@ resulting `fx.GraphModule` and `_install_hooks` monkey-patches
 subclass against that graph. The interpreter overrides `run_node` so that
 after every node executes — placeholders, `call_module`, `call_function`,
 `call_method` — it stores the returned tensor in `Session._activations`
-under a friendly key (the dotted target for module calls, the fx node
-name for everything else: `x`, `relu`, `relu_1`, `add`). Each captured
-tensor gets `retain_grad()` so the user's `loss.backward()` populates
-`.grad`. This is what lets `torch.relu(...)`, `out + shortcut(x)`, and
-similar non-module operations show up in the UI on equal footing with
-named modules. `_remove_hooks` restores the original `forward`.
+under a friendly key built by `playgrad.fx_names.friendly_names`. Module
+calls use the dotted target (`stage1.0.bn1`); function/method ops are
+prefixed with the innermost submodule scope fx records in
+`node.meta["nn_module_stack"]`, so `torch.relu(...)` inside a block becomes
+`stage1.0.relu1` (numbered only when a scope holds more than one op of that
+name) rather than the uninformative `relu`, `relu_1`, ... fx auto-names.
+Root-scope ops keep a bare name (`relu`, `flatten`), and inputs stay `x`.
+Each captured tensor gets `retain_grad()` so the user's `loss.backward()`
+populates `.grad`. This is what lets `torch.relu(...)`, `out + shortcut(x)`,
+and similar non-module operations show up in the UI on equal footing with
+named modules — and the Mermaid graph builder reuses the same map, so each
+node's id and label line up with its layer card. `_remove_hooks` restores
+the original `forward`.
 
 **Hook fallback.** When `fx.symbolic_trace` raises (data-dependent
 control flow, tracing-unfriendly ops, etc.), the session falls back to:
@@ -355,11 +362,20 @@ It does not touch tensors directly until they need to be rendered.
   with two `ui.plotly` figures (activations and gradients) and a
   one-line stats summary above each. A 2-second `ui.timer` calls
   `session.watch_snapshot()` and updates the figures in place via
-  `plot.figure = new_fig; plot.update()`. The figures use signed-log
-  x-axis tick positions computed once by `_x_tick_layout` (powers of
-  10 labelled, intermediate edges unlabelled), `barmode="overlay"`
-  with per-phase opacity so train/val sit on the same axes, and a
-  log y-axis so distribution tails stay visible.
+  `plot.figure = new_fig; plot.update()`. Because each tick rebuilds the
+  figure from scratch (which would otherwise reset client-side legend
+  toggles), the panel tracks which phases the user clicked off in the
+  legend — via the `plotly_legendclick` event — and re-emits those traces
+  as `visible="legendonly"` so a hidden series stays hidden. The figures
+  use signed-log x-axis tick positions computed once by `_x_tick_layout`
+  (powers of 10 labelled, intermediate edges unlabelled),
+  `barmode="overlay"` with per-phase opacity so train/val sit on the same
+  axes, and a log y-axis so distribution tails stay visible. The top-bar
+  **Log x** / **Log y** checkboxes flip each axis to linear: **Log y**
+  swaps the count axis `type`; **Log x** redraws the bars at their true
+  linear bin centres (`_BIN_CENTERS`) with per-bin widths (`_BIN_WIDTHS`),
+  auto-zoomed by `_linear_x_range` to the populated bins since the full
+  ±1e6 span is mostly empty.
 - The `/weights` page (one `?layer=` query param) is the per-layer weight
   viewer. It reuses the shared stepping controls (no sample spinner) and
   builds one `_WeightPanel` per name in `session.layer_weights[layer]`,
