@@ -192,6 +192,64 @@ def test_until_epoch_change_captures_only_epoch_end() -> None:
     assert captured_positions == [("val", 0, 1)]
 
 
+def test_live_position_starts_none_and_tracks_every_batch_under_detach() -> None:
+    """Detach never captures a snapshot, yet `live_position` advances on every
+    batch — this is what keeps the UI top bar moving when nothing is paused."""
+    session, model = _make_session(epochs=1, phases={"train": 3})
+    session.detach()
+    assert session.live_position is None  # nothing has entered a batch yet
+
+    seen: list[tuple[str, int, int]] = []
+    for _ in range(3):
+        with session.batch(phase="train", epoch=0) as ctx:
+            _train_step(model)
+            assert ctx.captured is False  # detach: no capture
+        assert session.snapshot is None  # ...and no snapshot ever published
+        lp = session.live_position
+        assert lp is not None
+        seen.append((lp.phase, lp.epoch, lp.batch_idx))
+
+    assert seen == [("train", 0, 0), ("train", 0, 1), ("train", 0, 2)]
+
+
+def test_live_position_tracks_non_captured_batches_during_step_epoch() -> None:
+    """STEP EPOCH captures only the epoch's last batch, but `live_position` is
+    recorded for every batch the worker passes through — including the
+    non-captured ones, so the top bar advances batch-by-batch."""
+    session, model = _make_session(epochs=1, phases={"train": 2, "val": 2})
+
+    observed: list[tuple[tuple[str, int, int], bool]] = []
+
+    def loop() -> None:
+        for phase, n in [("train", 2), ("val", 2)]:
+            for _ in range(n):
+                with session.batch(phase=phase, epoch=0) as ctx:
+                    _train_step(model)
+                lp = session.live_position
+                assert lp is not None
+                observed.append(((lp.phase, lp.epoch, lp.batch_idx), ctx.captured))
+
+    session.step_epoch()
+    thread = _run_in_thread(loop)
+
+    assert session.wait_until_paused(timeout=5)
+    session.detach()  # release the worker paused at the epoch boundary
+
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+    positions = [pos for pos, _ in observed]
+    captured = [cap for _, cap in observed]
+    assert positions == [
+        ("train", 0, 0),
+        ("train", 0, 1),
+        ("val", 0, 0),
+        ("val", 0, 1),
+    ]
+    # Only the epoch's final batch was captured; live_position tracked all four.
+    assert captured == [False, False, False, True]
+
+
 def test_snapshot_contains_all_four_tensor_categories() -> None:
     session, model = _make_session(epochs=1, phases={"train": 1})
 

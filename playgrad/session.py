@@ -85,6 +85,7 @@ class Session:
         self._activations: dict[str, Tensor] = {}
         self._hook_handles: list[RemovableHandle] = []
         self._snapshot: BatchSnapshot | None = None
+        self._live_position: BatchPosition | None = None
         self._fx_graph: fx.GraphModule | None = _try_trace(model)
         self._input_names: list[str] = self._compute_input_names()
         self._layer_names: list[str] = self._compute_layer_names()
@@ -105,6 +106,20 @@ class Session:
     @property
     def snapshot(self) -> BatchSnapshot | None:
         return self._snapshot
+
+    @property
+    def live_position(self) -> BatchPosition | None:
+        """Position of the batch the training thread is currently on.
+
+        Updated on *every* batch's `__enter__` regardless of capture mode, so
+        the UI can show live epoch/batch progress during `step_epoch`,
+        `step_until_position`, `step_run`, and `detach` — modes that publish a
+        snapshot only at boundaries (or never), leaving `snapshot.position`
+        frozen in between. Written by the training thread, read point-in-time
+        by the UI thread: a single atomic reference assignment under the GIL,
+        no lock needed (same contract as `snapshot`).
+        """
+        return self._live_position
 
     @property
     def closed(self) -> bool:
@@ -409,6 +424,10 @@ class _BatchContext:
         if self._session.closed:
             return self
         self._position = self._session._schedule.advance(self._phase, self._epoch)
+        # Publish the live position before the forward pass so the UI top bar
+        # tracks progress on every batch, even in modes that don't capture
+        # snapshots here (step_epoch, step_until_position, step_run, detach).
+        self._session._live_position = self._position
         self._captured = self._session._should_capture(self._position)
         self._stats_only = (
             not self._captured and bool(self._session._watched_layers)

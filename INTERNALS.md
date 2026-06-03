@@ -305,6 +305,15 @@ It does not touch tensors directly until they need to be rendered.
   it has advanced since the last render, every layer view re-renders
   against the new snapshot, slicing each tensor at the current
   `sample_idx` (driven by a single `ui.number` input in the top bar).
+- The same timer also refreshes the top-bar position label from
+  `session.live_position` — the position recorded on *every* batch's
+  `__enter__`, independent of capture. This is what keeps the displayed
+  epoch/batch advancing during `step_epoch`, `step_until_position`,
+  `step_run`, and `detach`, where `snapshot.position` would otherwise stay
+  frozen until the next boundary capture (or never, under `detach`). It is
+  a single label write per tick, decoupled from the strip rendering; the
+  200 ms timer is the natural throttle for the rapid batch advances those
+  modes produce.
 - Rendering is intentionally eager when a new snapshot lands — for
   ResNet-20 it takes well under a second, and during `RUN` / `DETACH`
   modes no snapshots are produced so the UI is idle. For larger models

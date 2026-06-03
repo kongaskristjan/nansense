@@ -14,7 +14,11 @@ disabled so it survives being started from a non-main thread). Layout:
 
 A `ui.timer` in each connection polls `session.snapshot`; when a new
 snapshot is published, the page re-renders all per-layer strips against
-it.
+it. The same timer also refreshes the top-bar position label from
+`session.live_position` on every tick, so the displayed epoch/batch keeps
+advancing during modes that don't publish a snapshot every batch
+(step-epoch, step-custom, run, detach) — a cheap label write, decoupled
+from the heavier strip rendering.
 """
 
 from __future__ import annotations
@@ -489,11 +493,20 @@ def _build_page(
         )
 
     async def tick() -> None:
+        # Top-bar position tracks the *live* training position, refreshed on
+        # every tick independently of the (possibly much heavier) strip
+        # rendering below. The 0.2s timer is the throttle: rapid batches in
+        # step_epoch / step_run / detach coalesce into at most ~5 cheap label
+        # updates per second, and NiceGUI skips the write when text is
+        # unchanged. The strips still re-render only when a new snapshot lands.
+        live = session.live_position
+        if live is not None:
+            position_label.text = (
+                f"epoch {live.epoch} | {live.phase} batch {live.batch_idx}"
+            )
         snap = session.snapshot
         if snap is None:
             return
-        pos = snap.position
-        position_label.text = f"epoch {pos.epoch} | {pos.phase} batch {pos.batch_idx}"
         _sync_spinner_max(snap, state, sample_input)
         if state.rendering:
             return
