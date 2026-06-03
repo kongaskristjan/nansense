@@ -38,6 +38,9 @@ Useful flags:
 - `--playgrad-port 8080` — launch the playgrad UI on this port. Training
   pauses on the first batch; open the URL to drive it with the step / detach
   controls.
+- `--disable-playgrad` — turn playgrad off entirely (`enabled=False`). The
+  session becomes a near-zero-overhead no-op, so the loop runs as plain
+  training with no UI and no capture machinery.
 
 The script uses SGD with Nesterov momentum, cosine LR annealing, and the
 standard CIFAR10 augmentations (random crop with 4-pixel padding + horizontal
@@ -65,7 +68,12 @@ He et al. 2016) with ResNet-D-style downsampling shortcuts (He et al. 2018):
 ```python
 import playgrad
 
-session = playgrad.start(model, epochs=50, phases={"train": 196, "val": 40})
+# enabled=False (default True) makes the session a near-zero-overhead no-op:
+# no fx trace, batch() does nothing, and serve() is skipped. This lets you
+# leave the wiring below in place and toggle the whole UI off with one flag.
+session = playgrad.start(
+    model, epochs=50, phases={"train": 196, "val": 40}, enabled=True
+)
 playgrad.serve(
     session,
     port=8080,

@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 import torch
 
+import playgrad
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
-from playgrad.ui.app import _validate_step_until_target
+from playgrad.ui.app import _validate_step_until_target, serve
 
 
 def _snapshot_at(phase: str, epoch: int, batch_idx: int) -> BatchSnapshot:
@@ -101,5 +102,12 @@ def test_validate_rejects_batch_out_of_range(schedule: Schedule) -> None:
     )
     assert msg is not None
     assert "Batch" in msg
+
+
+def test_serve_on_disabled_session_is_noop() -> None:
+    """`serve()` returns None without starting a server for a disabled session."""
+    model = torch.nn.Linear(4, 2)
+    session = playgrad.start(model, epochs=1, phases={"train": 1}, enabled=False)
+    assert serve(session) is None
 
 

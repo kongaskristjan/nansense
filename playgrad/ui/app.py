@@ -250,8 +250,12 @@ def serve(
     log_level: str = "warning",
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
-) -> threading.Thread:
+) -> threading.Thread | None:
     """Start the NiceGUI app on a background thread and return that thread.
+
+    Returns `None` without starting anything when `session` is disabled
+    (`playgrad.start(..., enabled=False)`), so a training script can call
+    `serve()` unconditionally and pay nothing when the UI is turned off.
 
     NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is
     then served by uvicorn from a non-main thread, with signal handlers
@@ -262,6 +266,8 @@ def serve(
     sample is denormalized (`x * std + mean`) before display. When either
     is `None`, the renderer assumes the input is already in `[0, 1]`.
     """
+    if not session.enabled:
+        return None
     mermaid_src = build_mermaid(session.model)
     layer_names = session.layer_names
     input_name = session.input_names[0] if session.input_names else None

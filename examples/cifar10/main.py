@@ -42,9 +42,9 @@ def parse_args() -> argparse.Namespace:
         help="Port for the playgrad UI (default 8080).",
     )
     parser.add_argument(
-        "--no-playgrad",
+        "--disable-playgrad",
         action="store_true",
-        help="Disable the playgrad UI (run as plain training).",
+        help="Disable playgrad with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
 
@@ -97,13 +97,15 @@ def main() -> None:
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-    session: playgrad.Session | None = None
-    if not args.no_playgrad:
-        session = playgrad.start(
-            model,
-            epochs=args.epochs,
-            phases={"train": len(train_loader), "val": len(test_loader)},
-        )
+    # Always create the session; `enabled=False` makes it a near-zero-overhead
+    # no-op so the training loop below needs no playgrad-specific branching.
+    session = playgrad.start(
+        model,
+        epochs=args.epochs,
+        phases={"train": len(train_loader), "val": len(test_loader)},
+        enabled=not args.disable_playgrad,
+    )
+    if session.enabled:
         playgrad.serve(
             session,
             port=args.playgrad_port,
@@ -144,8 +146,7 @@ def main() -> None:
 
     print(f"Best test accuracy: {best_acc:.4f}")
 
-    if session is not None:
-        session.close()
+    session.close()
 
 
 if __name__ == "__main__":
