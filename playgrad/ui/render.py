@@ -5,11 +5,11 @@ slice and produces one horizontal strip per layer for the right pane of the
 UI. Conv-style activations become a row of square channel tiles; 1D
 activations become a single short heatmap row.
 
-Sequential (grayscale) colormap for activations; diverging (blue-white-red)
-for gradients. Both colormaps use a symmetric `[-x, +x]` scale where `x` is
-the per-strip absolute maximum; a vertical colorbar with `+x` / `0` / `-x`
-labels is rendered into the left edge of each strip. PNGs are encoded with
-`compress_level=1` to favour speed over size — bytes travel a local
+Every strip — activations, gradients, and weights alike — uses the same
+diverging (blue-white-red) colormap on a symmetric `[-x, +x]` scale where
+`x` is the per-strip absolute maximum; a vertical colorbar with `+x` / `0` /
+`-x` labels is rendered into the left edge of each strip. PNGs are encoded
+with `compress_level=1` to favour speed over size — bytes travel a local
 WebSocket, so wire size is irrelevant.
 """
 
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from typing import Literal
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -37,15 +36,8 @@ LEGEND_GAP: int = 4
 LEGEND_WIDTH: int = LEGEND_LABEL_WIDTH + LEGEND_GAP + LEGEND_BAR_WIDTH + LEGEND_GAP
 LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 
-ColormapKind = Literal["activation", "gradient"]
 
-
-def render_strip(
-    tensor: Tensor | None,
-    sample_idx: int,
-    *,
-    kind: ColormapKind,
-) -> bytes | None:
+def render_strip(tensor: Tensor | None, sample_idx: int) -> bytes | None:
     """Render a per-channel horizontal strip as PNG bytes.
 
     Returns `None` if the tensor is `None`, `sample_idx` is out of range, or
@@ -58,9 +50,9 @@ def render_strip(
         return None
     sample = tensor[sample_idx]
     if sample.ndim == 3:
-        return _render_chw(sample, kind=kind)
+        return _render_chw(sample)
     if sample.ndim == 1:
-        return _render_1d(sample, kind=kind)
+        return _render_1d(sample)
     return None
 
 
@@ -106,7 +98,6 @@ def render_weight(
     y_dim: int | None,
     tile_dim: int | None,
     fixed: dict[int, int],
-    kind: ColormapKind = "gradient",
 ) -> bytes | None:
     """Render a weight tensor as a horizontal strip under a chosen axis layout.
 
@@ -137,15 +128,15 @@ def render_weight(
     # into (tile, y, x) order.
     pos = {d: i for i, d in enumerate(sorted(kept))}
     if y_dim is None:
-        return _render_1d(selected.reshape(-1), kind=kind)
+        return _render_1d(selected.reshape(-1))
     if tile_dim is None:
         yx = selected.permute(pos[y_dim], pos[x_dim]).contiguous()
-        return _render_chw(yx.unsqueeze(0), kind=kind)
+        return _render_chw(yx.unsqueeze(0))
     chw = selected.permute(pos[tile_dim], pos[y_dim], pos[x_dim]).contiguous()
-    return _render_chw(chw, kind=kind)
+    return _render_chw(chw)
 
 
-def _render_chw(tensor: Tensor, *, kind: ColormapKind) -> bytes:
+def _render_chw(tensor: Tensor) -> bytes:
     c, h, w = tensor.shape
     abs_max = float(tensor.detach().abs().max())
     mode = "nearest" if max(h, w) <= TILE_SIZE else "area"
@@ -154,9 +145,9 @@ def _render_chw(tensor: Tensor, *, kind: ColormapKind) -> bytes:
         size=(TILE_SIZE, TILE_SIZE),
         mode=mode,
     )[0]
-    rgb = _apply_colormap(resized.numpy(), kind=kind, abs_max=abs_max)
+    rgb = _apply_colormap(resized.numpy(), abs_max=abs_max)
     strip = _concat_tiles_with_gaps(list(rgb), TILE_GAP)
-    legend = _render_legend(TILE_SIZE, abs_max=abs_max, kind=kind)
+    legend = _render_legend(TILE_SIZE, abs_max=abs_max)
     return _encode_png(np.concatenate([legend, strip], axis=1))
 
 
@@ -213,7 +204,7 @@ def render_image(
     return _pil_to_png(pil)
 
 
-def _render_1d(tensor: Tensor, *, kind: ColormapKind) -> bytes:
+def _render_1d(tensor: Tensor) -> bytes:
     values = tensor.float()
     abs_max = float(values.abs().max())
     f = values.shape[0]
@@ -222,30 +213,21 @@ def _render_1d(tensor: Tensor, *, kind: ColormapKind) -> bytes:
             values.reshape(1, 1, f), LINEAR_MAX_BINS
         ).reshape(-1)
         f = LINEAR_MAX_BINS
-    rgb_row = _apply_colormap(values.numpy(), kind=kind, abs_max=abs_max)
+    rgb_row = _apply_colormap(values.numpy(), abs_max=abs_max)
     image = np.broadcast_to(rgb_row[None, :, :], (LINEAR_TILE_HEIGHT, f, 3)).copy()
     strip = np.asarray(
         Image.fromarray(image, mode="RGB").resize(
             (f * LINEAR_BIN_WIDTH, LINEAR_TILE_HEIGHT), Image.Resampling.NEAREST
         )
     )
-    legend = _render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max, kind=kind)
+    legend = _render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)
     return _encode_png(np.concatenate([legend, strip], axis=1))
 
 
-def _apply_colormap(
-    values: np.ndarray, *, kind: ColormapKind, abs_max: float
-) -> np.ndarray:
+def _apply_colormap(values: np.ndarray, *, abs_max: float) -> np.ndarray:
     scale = max(abs_max, 1e-12)
     norm = (values / scale).clip(-1.0, 1.0)
-    if kind == "activation":
-        return _sequential_colormap(norm)
     return _diverging_colormap(norm)
-
-
-def _sequential_colormap(norm: np.ndarray) -> np.ndarray:
-    gray = (((norm + 1.0) * 0.5) * 255).astype(np.uint8)
-    return np.stack([gray, gray, gray], axis=-1)
 
 
 def _diverging_colormap(norm: np.ndarray) -> np.ndarray:
@@ -261,9 +243,7 @@ def _diverging_colormap(norm: np.ndarray) -> np.ndarray:
     return rgb
 
 
-def _render_legend(
-    height: int, *, abs_max: float, kind: ColormapKind
-) -> np.ndarray:
+def _render_legend(height: int, *, abs_max: float) -> np.ndarray:
     """Vertical colorbar with `+x` / `0` / `-x` labels.
 
     `+x` sits at the top of the bar, `-x` at the bottom; the middle `0`
@@ -271,7 +251,7 @@ def _render_legend(
     top/bottom labels.
     """
     values = np.linspace(abs_max, -abs_max, height, dtype=np.float32)
-    bar_col = _apply_colormap(values, kind=kind, abs_max=abs_max)
+    bar_col = _apply_colormap(values, abs_max=abs_max)
     bar = np.broadcast_to(bar_col[:, None, :], (height, LEGEND_BAR_WIDTH, 3)).copy()
 
     labels_img = Image.new("RGB", (LEGEND_LABEL_WIDTH, height), (255, 255, 255))

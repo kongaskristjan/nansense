@@ -104,6 +104,9 @@ def main() -> None:
         epochs=args.epochs,
         phases={"train": len(train_loader), "val": len(test_loader)},
         enabled=not args.disable_playgrad,
+        # Optional: lets the weights page show per-parameter optimizer state
+        # (momentum buffers) and the group's live hyperparameters (lr, ...).
+        optimizer=optimizer,
     )
     if session.enabled:
         playgrad.serve(

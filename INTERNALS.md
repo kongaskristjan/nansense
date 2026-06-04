@@ -135,6 +135,20 @@ At `__exit__`:
      that has one, cloned to CPU.
    - `weights`: every `param` from `named_parameters()`, cloned to CPU.
    - `weight_gradients`: `param.grad` where non-`None`, cloned to CPU.
+   When the session was given an optimizer at `start()`, two more fields
+   are filled in (otherwise they default to empty dicts):
+   - `optimizer_state`: per-parameter optimizer variables, resolved by
+     identity — `optimizer.state` is keyed by the parameter object, so
+     `{id(param): name}` from `named_parameters()` maps every entry back
+     to its qualified name with no per-optimizer code (SGD's
+     `momentum_buffer`, Adam's `step`/`exp_avg`/`exp_avg_sq`, custom
+     optimizers alike). Tensor entries are CPU-cloned; plain int/float
+     entries become 0-dim tensors. Empty until the first
+     `optimizer.step()` — state is lazily initialised.
+   - `optimizer_hyperparams`: each parameter's group's plain-numeric
+     knobs (`lr`, `momentum`, `weight_decay`, …) as floats, captured at
+     the same instant — so a scheduler-mutated `lr` is the batch's
+     actual one. Available from batch 0 (groups are not lazy).
    Every clone goes through `tensor.detach().to("cpu", copy=True)`, so the
    snapshot is fully independent of the live computation graph — the next
    batch can free / overwrite all of its source tensors without affecting
@@ -293,7 +307,7 @@ It does not touch tensors directly until they need to be rendered.
   use different Mermaid shapes per fx op (rectangles for `call_module`,
   ovals/stadiums for `call_function` / `call_method`, circles for
   `placeholder` / `output`).
-- `playgrad.ui.render.render_strip(tensor, sample_idx, kind=...)` is the
+- `playgrad.ui.render.render_strip(tensor, sample_idx)` is the
   function that turns per-layer CPU tensors into PNG bytes:
   - For per-sample shape `[C, H, W]` it interpolates each channel to a
     `TILE_SIZE × TILE_SIZE` tile and concatenates horizontally with a
@@ -301,9 +315,12 @@ It does not touch tensors directly until they need to be rendered.
     don't smear together.
   - For `[F]` it builds a single short heatmap row, downsampled to at
     most `LINEAR_MAX_BINS` bins when `F` is large.
-  - Sequential grayscale colormap for activations, diverging
-    blue-white-red for gradients. PNG `compress_level=1` — wire size
-    doesn't matter, encode speed does.
+  - Every strip — activations, gradients, and weights alike — uses the
+    same diverging blue-white-red colormap; strips are told apart by a
+    labelled colored marker bar on each one's left edge (emerald
+    ACTIVATIONS / violet GRADIENTS on the layer cards, sky WEIGHT /
+    violet GRADIENT on the weights page). PNG `compress_level=1`
+    — wire size doesn't matter, encode speed does.
   - Other per-sample shapes return `None`; the UI hides those images.
 - `playgrad.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
   renders the model input as a natural RGB or grayscale PNG (upscaled to
@@ -318,8 +335,8 @@ It does not touch tensors directly until they need to be rendered.
   a sample it pins every axis not assigned to X/Y/tile to a single index
   (`fixed`, clamped into range), permutes the survivors into
   `[tile, y, x]`, then funnels through the same `_render_chw` /
-  `_render_1d` tile machinery (diverging colormap by default, to match
-  gradients). `default_weight_dims(ndim)` gives the default assignment —
+  `_render_1d` tile machinery and shared diverging colormap.
+  `default_weight_dims(ndim)` gives the default assignment —
   last axis X, second-to-last Y, third-to-last the tile axis, the rest
   fixed — which renders 4D conv weights as kernels, 2D as one image, 1D as
   one row. Duplicate or out-of-range axes return `None`.
@@ -338,8 +355,10 @@ It does not touch tensors directly until they need to be rendered.
   even after the training script's main thread returns — the user
   closes the browser / Ctrl-Cs when they're done browsing post-mortem.
 - The page handler creates one `_LayerView` per submodule (a card with
-  two `ui.image` strips inside a shared horizontal scroll container)
-  and a `ui.timer` that, every 200 ms, checks `session.pause_count`. If
+  two strips inside a shared horizontal scroll container, each flanked by
+  a sticky marker bar with a vertical label — emerald ACTIVATIONS, violet
+  GRADIENTS) and a `ui.timer` that, every 200 ms, checks
+  `session.pause_count`. If
   it has advanced since the last render, every layer view re-renders
   against the new snapshot, slicing each tensor at the current
   `sample_idx` (driven by a single `ui.number` input in the top bar).
@@ -364,7 +383,7 @@ It does not touch tensors directly until they need to be rendered.
   `session.watch_snapshot()` and hands the per-phase stats to every
   `_HistPlot.update`. Routine ticks only change the bar counts (and the
   epoch label), so the plot **restyles the existing figure in place** —
-  `Plotly.restyle(getHtmlElement(id), {y, name}, indices)` run via
+  `Plotly.update(getHtmlElement(id), {y, name}, layout, indices)` run via
   `ui.run_javascript` — rather than replacing it. Restyle leaves the rest
   of the client-side state alone, so legend toggles (a series you clicked
   off) and any zoom/pan survive the refresh for free. The figure is only
@@ -380,7 +399,14 @@ It does not touch tensors directly until they need to be rendered.
   swaps the count axis `type`; **Log x** redraws the bars at their true
   linear bin centres (`_BIN_CENTERS`) with per-bin widths (`_BIN_WIDTHS`),
   auto-zoomed by `_linear_x_range` to the populated bins since the full
-  ±1e6 span is mostly empty.
+  ±1e6 span is mostly empty. With *both* off (`_use_density`), bar
+  heights become densities (`count / bin width`, `_density_heights`) so
+  bar area stays proportional to count on linear axes, and the y-axis is
+  capped by `_density_y_range` at the 20th-tallest bar (`_DENSITY_TOP_BINS`)
+  — the near-zero bins are so narrow that a few stray values would
+  otherwise stretch the scale by orders of magnitude. Refresh ticks in
+  density mode restyle `y` + `customdata` (the raw counts shown on hover)
+  and push a `yaxis.range` relayout only when the cap actually moved.
 - The `/weights` page (one `?layer=` query param) is the per-layer weight
   viewer. It reuses the shared stepping controls (no sample spinner) and
   builds one `_WeightPanel` per name in `session.layer_weights[layer]`,
@@ -389,12 +415,33 @@ It does not touch tensors directly until they need to be rendered.
   per-dimension role select (X / Y / Tile / Index, scaled to the weight's
   rank) plus an index spinner per axis; picking a role auto-demotes
   whichever other axis held it, keeping X/Y/Tile unique, then re-renders
-  against the last snapshot via `render_weight`. New snapshots re-render
+  against the last snapshot via `render_weight`. Each panel stacks its
+  strips in one horizontal scroll container, each flanked by a labelled
+  marker bar (`_strip_marker`) — the weight (sky WEIGHT), then its
+  gradient (violet GRADIENT; same shape, so the same axis layout applies;
+  sourced from `snapshot.weight_gradients`, a placeholder note before the
+  first backward), then one amber-marked strip per tensor-valued
+  optimizer state entry when the session has an optimizer (labelled with
+  the state key). State entries matching the weight's
+  shape reuse the panel's axis controls; differently-shaped ones (e.g.
+  factored second moments) fall back to their own rank's defaults.
+  0-dim entries (Adam's `step`) join the group hyperparameters on a
+  scalar line below the strips. Without an optimizer the container and
+  line stay empty, leaving the page exactly as before. New snapshots
+  re-render
   through the page's `ui.timer` (`maybe_render`). Because NiceGUI
   suppresses `.value` writes made from inside a value-change handler, the
   select/visibility sync after a demotion is deferred one event-loop tick
   with `ui.timer(0.0, …, once=True)` — the same workaround the main page's
-  sample spinner uses.
+  sample spinner uses. A top-bar Refresh button calls
+  `session.current_weights()` / `current_weight_gradients()` /
+  `current_optimizer_state()` / `current_optimizer_hyperparams()`
+  (live CPU clones read at call time rather than at a pause) and pushes
+  them through each panel's `show_weights`, so every strip updates
+  mid-training even in `detach` / `step_run` where no snapshot is
+  published. Because `maybe_render` only redraws on a *new* snapshot,
+  the manually-refreshed live view persists until the next captured
+  batch.
 
 ## Enabled flag (zero-overhead off switch)
 

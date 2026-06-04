@@ -390,6 +390,7 @@ def _build_page(
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
     ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
+    ui.add_head_html(_STRIP_MARKER_CSS)
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
 
     step_until_custom = _build_step_until_custom_dialog(session)
@@ -651,6 +652,57 @@ _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
 
+# Density mode (both axes linear) caps the y-axis at the height of the
+# N-th tallest bar; see `_density_y_range`.
+_DENSITY_TOP_BINS: int = 20
+
+
+def _use_density(log_x: bool, log_y: bool) -> bool:
+    """Whether bars show density (count / bin width) instead of raw counts.
+
+    On a linear value axis with a linear count axis, raw counts are
+    misleading: the signed-log bins differ in linear width by orders of
+    magnitude, so a wide bin towers over a narrow one holding the same
+    share of values. Density makes bar *area* proportional to count, the
+    honest reading of a distribution on linear axes. With either log axis
+    the area intuition is gone anyway, so raw counts are kept there.
+    """
+    return not log_x and not log_y
+
+
+def _density_heights(hist: tuple[int, ...]) -> list[float]:
+    """Per-bin density: count divided by the bin's linear width."""
+    return [c / w for c, w in zip(hist, _BIN_WIDTHS)]
+
+
+def _density_y_range(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str
+) -> list[float] | None:
+    """Y-axis range for density mode, capped at the 20th-tallest bar.
+
+    The bins near zero are extremely narrow (the zero band is 2e-9 wide), so
+    even a handful of near-zero values produce densities that dwarf the rest
+    of the distribution; autoranging to the global max would flatten
+    everything else. Instead the axis tops out at the smallest of the
+    `_DENSITY_TOP_BINS` tallest bars across the drawn traces (the tallest
+    populated-bar height that the scale must still accommodate), letting the
+    taller spikes clip. Returns `None` (Plotly autorange) when there's no
+    data.
+    """
+    heights = sorted(
+        (
+            h
+            for phase in _phases_with_data(per_phase, kind)
+            for h in _density_heights(_kind_stats(per_phase[phase], kind).hist)
+            if h > 0
+        ),
+        reverse=True,
+    )
+    if not heights:
+        return None
+    cap = heights[min(_DENSITY_TOP_BINS - 1, len(heights) - 1)]
+    return [0.0, cap * 1.05]
+
 
 def _kind_stats(layer_snap: LayerStatsSnapshot, kind: str) -> TensorStatsSnapshot:
     """The activation or gradient stats of a layer snapshot, by `kind`."""
@@ -711,7 +763,8 @@ def _make_histogram_figure(
 
     `log_x` / `log_y` toggle the value (x) and count (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
-    Watching page).
+    Watching page). With both off, bars show density instead of counts
+    (see `_use_density`) and the y-axis is capped (see `_density_y_range`).
 
     This builds the *whole* figure. Routine data refreshes don't call it —
     they restyle the existing figure in place (see `_HistPlot`) so client-side
@@ -719,6 +772,16 @@ def _make_histogram_figure(
     set of phases or the axis scale changes.
     """
     x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
+    density = _use_density(log_x, log_y)
+    if log_x:
+        hover = "bin %{x}<br>count %{y}<extra></extra>"
+    elif density:
+        hover = (
+            "value %{x:.2e}<br>density %{y:.3g}"
+            "<br>count %{customdata}<extra></extra>"
+        )
+    else:
+        hover = "value %{x:.2e}<br>count %{y}<extra></extra>"
     fig = go.Figure()
     phases = _phases_with_data(per_phase, kind)
     for i, (phase, layer_snap) in enumerate(per_phase.items()):
@@ -728,16 +791,13 @@ def _make_histogram_figure(
         fig.add_trace(
             go.Bar(
                 x=x_values,
-                y=list(stats.hist),
+                y=_density_heights(stats.hist) if density else list(stats.hist),
+                customdata=list(stats.hist) if density else None,
                 width=None if log_x else _BIN_WIDTHS,
                 name=f"{phase} (ep {layer_snap.epoch})",
                 marker_color=_phase_color(phase, i),
                 opacity=0.55 if len(per_phase) > 1 else 0.85,
-                hovertemplate=(
-                    "bin %{x}<br>count %{y}<extra></extra>"
-                    if log_x
-                    else "value %{x:.2e}<br>count %{y}<extra></extra>"
-                ),
+                hovertemplate=hover,
             )
         )
     has_data = bool(phases)
@@ -778,10 +838,11 @@ def _make_histogram_figure(
         )
     fig.update_yaxes(
         type="log" if log_y else "linear",
+        range=_density_y_range(per_phase, kind) if density else None,
         showgrid=True,
         gridcolor="#e2e8f0",
         tickfont=dict(size=9),
-        title=dict(text="count", font=dict(size=10)),
+        title=dict(text="density" if density else "count", font=dict(size=10)),
     )
     return fig
 
@@ -888,14 +949,20 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
 
 
 def _plotly_restyle(
-    plot: ui.plotly, update: dict[str, object], indices: list[int]
+    plot: ui.plotly,
+    update: dict[str, object],
+    indices: list[int],
+    layout: dict[str, object] | None = None,
 ) -> None:
     """Update trace attributes of an existing figure in place.
 
-    Calls `Plotly.restyle` on the live graph div instead of replacing the
+    Calls `Plotly.update` on the live graph div instead of replacing the
     figure, so client-side state (legend visibility toggles, zoom/pan) is left
     untouched. `update` maps each attribute to a list of per-trace values
-    (e.g. `{"y": [y0, y1]}`) aligned with `indices`.
+    (e.g. `{"y": [y0, y1]}`) aligned with `indices`. `layout` optionally
+    carries relayout-style updates (e.g. `{"yaxis.range": [0, 5]}`) applied in
+    the same call; note an explicit axis-range write does reset any user zoom
+    on that axis.
 
     The guard makes this a no-op until Plotly's module has loaded and drawn the
     graph (a just-connected client can fire a timer tick before then); the next
@@ -904,7 +971,8 @@ def _plotly_restyle(
     ui.run_javascript(
         f"const gd = getHtmlElement({plot.id}); "
         f"if (gd && gd.data && window.Plotly) "
-        f"window.Plotly.restyle(gd, {json.dumps(update)}, {json.dumps(indices)});"
+        f"window.Plotly.update(gd, {json.dumps(update)}, "
+        f"{json.dumps(layout or {})}, {json.dumps(indices)});"
     )
 
 
@@ -925,6 +993,9 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
+        # Last y-range applied in density mode, so refreshes only push a
+        # relayout when the cap actually moved (a range write resets zoom).
+        self._y_range: list[float] | None = None
         self.element = ui.plotly(
             _make_histogram_figure(
                 {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
@@ -946,13 +1017,31 @@ class _HistPlot:
             self.element.update()
             self._phases = phases
             self._axis = axis
+            self._y_range = (
+                _density_y_range(per_phase, self._kind)
+                if _use_density(*axis)
+                else None
+            )
         elif phases:
             # Same traces and axes — only counts (and the epoch label) moved.
             # Restyle in place so legend toggles and zoom survive.
-            ys = [list(_kind_stats(per_phase[p], self._kind).hist) for p in phases]
+            hists = [_kind_stats(per_phase[p], self._kind).hist for p in phases]
             names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+            update: dict[str, object] = {"name": names}
+            layout: dict[str, object] | None = None
+            if _use_density(*axis):
+                update["y"] = [_density_heights(h) for h in hists]
+                update["customdata"] = [list(h) for h in hists]
+                # The cap follows the data; re-apply it only when it moved so
+                # an idle refresh doesn't keep snapping the user's zoom back.
+                y_range = _density_y_range(per_phase, self._kind)
+                if y_range != self._y_range:
+                    self._y_range = y_range
+                    layout = {"yaxis.range": y_range}
+            else:
+                update["y"] = [list(h) for h in hists]
             _plotly_restyle(
-                self.element, {"y": ys, "name": names}, list(range(len(phases)))
+                self.element, update, list(range(len(phases))), layout
             )
 
 
@@ -1070,6 +1159,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
+    ui.add_head_html(_STRIP_MARKER_CSS)
 
     weight_names = session.layer_weights.get(layer, [])
     shapes = {
@@ -1091,6 +1181,13 @@ def _build_weights_page(session: Session, layer: str) -> None:
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
             position_label = _add_step_controls(session, step_until_custom)
+            ui.button(
+                icon="refresh",
+                on_click=lambda: do_refresh(),
+                color="slate-500",
+            ).classes("ml-auto").props("dense size=md flat").tooltip(
+                "Show the model's current weights (works while training)"
+            )
 
         with ui.column().classes(
             "w-full grow min-h-0 overflow-auto p-4 gap-4 bg-slate-200"
@@ -1106,6 +1203,22 @@ def _build_weights_page(session: Session, layer: str) -> None:
                     panels.append(
                         _WeightPanel(name=name, shape=shapes[name], session=session)
                     )
+
+    def do_refresh() -> None:
+        # Read the model's live parameters instead of the last snapshot, so the
+        # weights update even mid-training (detach / run modes never publish a
+        # snapshot). The live view then persists until the next captured batch.
+        weights = session.current_weights()
+        gradients = session.current_weight_gradients()
+        optimizer_state = session.current_optimizer_state()
+        optimizer_hyperparams = session.current_optimizer_hyperparams()
+        for panel in panels:
+            panel.show_weights(
+                weights,
+                gradients,
+                optimizer_state=optimizer_state,
+                optimizer_hyperparams=optimizer_hyperparams,
+            )
 
     def tick() -> None:
         live = session.live_position
@@ -1126,6 +1239,26 @@ def _weights_placeholder(message: str) -> None:
         ui.label(message).classes("text-slate-600")
 
 
+# Shown next to the GRADIENT marker before any backward pass has populated
+# the parameter's gradient.
+_NO_GRADIENT_HTML: str = (
+    '<div class="text-xs text-slate-400 italic py-1">no gradient captured yet</div>'
+)
+
+# The marker's vertical label is hidden on strips too short to fit it
+# (1D heatmap rows, the no-gradient placeholder); the tallest label is
+# ~75px, so anything under 88px can't show it cleanly. The 128px conv
+# tiles clear the threshold comfortably.
+_STRIP_MARKER_CSS: str = """
+<style>
+  .playgrad-marker { container-type: size; }
+  @container (max-height: 88px) {
+    .playgrad-marker-label { display: none; }
+  }
+</style>
+"""
+
+
 class _WeightPanel:
     """One card per parameter — an axis-remappable kernel/image strip.
 
@@ -1142,7 +1275,11 @@ class _WeightPanel:
         self._ndim = len(shape)
         self._roles: list[str] = _default_roles(self._ndim)
         self._indices: dict[int, int] = {d: 0 for d in range(self._ndim)}
-        self._snapshot: BatchSnapshot | None = None
+        self._last_snapshot: BatchSnapshot | None = None
+        self._weights: dict[str, Tensor] | None = None
+        self._gradients: dict[str, Tensor] | None = None
+        self._opt_state: dict[str, dict[str, Tensor]] = {}
+        self._opt_hparams: dict[str, dict[str, float]] = {}
         self._role_selects: list[ui.select] = []
         self._index_numbers: dict[int, ui.number] = {}
 
@@ -1180,8 +1317,27 @@ class _WeightPanel:
                             ).props("dense outlined").classes("w-20")
                             self._index_numbers[d] = number
             self._error = ui.label("").classes("text-amber-700 text-xs min-h-4")
+            # Both strips share one horizontal scrollbar so they pan together,
+            # and carry the same kind of labelled marker bars as the
+            # activation/gradient pair on the main page's layer cards.
             with ui.element("div").classes("w-full overflow-x-auto"):
-                self._img = ui.html("")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-sky-500", "WEIGHT")
+                    self._img = ui.html("")
+                ui.element("div").classes("h-1")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-violet-500", "GRADIENT")
+                    self._grad_img = ui.html("")
+                # One marker-barred strip per tensor-valued optimizer state
+                # entry (momentum_buffer, exp_avg, …); rebuilt on each render.
+                # Stays empty — invisible — when the session has no optimizer.
+                self._opt_container = ui.element("div").classes("w-full")
+            # Scalar optimizer values: 0-dim state entries (Adam's `step`) and
+            # the param group's numeric hyperparameters (`lr`, …).
+            self._opt_scalars = ui.label("").classes(
+                "text-xs text-slate-500 font-mono"
+            )
+            self._opt_scalars.set_visibility(False)
         self._sync_index_visibility()
 
     def _on_role(self, dim: int, value: object) -> None:
@@ -1212,17 +1368,43 @@ class _WeightPanel:
             number.set_visibility(self._roles[d] == "index")
 
     def maybe_render(self, snap: BatchSnapshot) -> None:
-        if snap is self._snapshot:
+        """Render snapshot weights, but only when the snapshot is new.
+
+        A manual refresh (`show_weights` with live weights) leaves
+        `_last_snapshot` untouched, so the live view persists until the next
+        captured batch publishes a genuinely fresh snapshot.
+        """
+        if snap is self._last_snapshot:
             return
-        self._snapshot = snap
-        self._render(snap)
+        self._last_snapshot = snap
+        self.show_weights(
+            snap.weights,
+            snap.weight_gradients,
+            optimizer_state=snap.optimizer_state,
+            optimizer_hyperparams=snap.optimizer_hyperparams,
+        )
+
+    def show_weights(
+        self,
+        weights: dict[str, Tensor],
+        gradients: dict[str, Tensor],
+        *,
+        optimizer_state: dict[str, dict[str, Tensor]],
+        optimizer_hyperparams: dict[str, dict[str, float]],
+    ) -> None:
+        """Display weight, gradient, and optimizer values (snapshot or live)."""
+        self._weights = weights
+        self._gradients = gradients
+        self._opt_state = optimizer_state
+        self._opt_hparams = optimizer_hyperparams
+        self._render()
 
     def _render_current(self) -> None:
-        if self._snapshot is not None:
-            self._render(self._snapshot)
+        if self._weights is not None:
+            self._render()
 
-    def _render(self, snap: BatchSnapshot) -> None:
-        tensor = snap.weights.get(self.name)
+    def _render(self) -> None:
+        tensor = self._weights.get(self.name) if self._weights is not None else None
         if tensor is None:
             self._show_error("no weights captured yet")
             return
@@ -1245,10 +1427,76 @@ class _WeightPanel:
             return
         self._error.text = ""
         self._img.set_content(_img_tag(png))
+        # The gradient shares the weight's shape, so the same axis layout
+        # applies; it's simply absent before the first backward pass.
+        grad = self._gradients.get(self.name) if self._gradients is not None else None
+        grad_png = (
+            render_weight(grad, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed)
+            if grad is not None
+            else None
+        )
+        self._grad_img.set_content(
+            _img_tag(grad_png) if grad_png is not None else _NO_GRADIENT_HTML
+        )
+        self._render_optimizer_values(x_dim=x_dim, y_dim=y_dim, tile=tile, fixed=fixed)
+
+    def _render_optimizer_values(
+        self,
+        *,
+        x_dim: int,
+        y_dim: int | None,
+        tile: int | None,
+        fixed: dict[int, int],
+    ) -> None:
+        """Rebuild the optimizer strips + scalar line below the gradient.
+
+        Tensor state entries matching the weight's shape (momentum buffers,
+        Adam moments) reuse the panel's axis layout; differently-shaped ones
+        (e.g. factored second moments) fall back to their own rank's default
+        axes. 0-dim entries (Adam's `step`) join the group hyperparameters
+        (`lr`, …) on a single scalar line. With no optimizer attached both
+        stay empty, leaving the panel exactly as before.
+        """
+        entries = dict(sorted(self._opt_state.get(self.name, {}).items()))
+        self._opt_container.clear()
+        scalar_parts: list[str] = []
+        with self._opt_container:
+            for key, tensor in entries.items():
+                if tensor.ndim == 0:
+                    scalar_parts.append(f"{key} = {_format_stat(float(tensor))}")
+                    continue
+                if tuple(tensor.shape) == self._shape:
+                    png = render_weight(
+                        tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
+                    )
+                else:
+                    dims = default_weight_dims(tensor.ndim)
+                    png = render_weight(
+                        tensor,
+                        x_dim=dims.x_dim,
+                        y_dim=dims.y_dim,
+                        tile_dim=dims.tile_dim,
+                        fixed={d: 0 for d in dims.fixed_dims},
+                    )
+                if png is None:
+                    continue
+                ui.element("div").classes("h-1")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-amber-600", key.upper())
+                    ui.html(_img_tag(png))
+        scalar_parts += [
+            f"{key} = {_format_stat(value)}"
+            for key, value in sorted(self._opt_hparams.get(self.name, {}).items())
+        ]
+        self._opt_scalars.text = "  ·  ".join(scalar_parts)
+        self._opt_scalars.set_visibility(bool(scalar_parts))
 
     def _show_error(self, message: str) -> None:
         self._error.text = message
         self._img.set_content("")
+        self._grad_img.set_content("")
+        self._opt_container.clear()
+        self._opt_scalars.set_visibility(False)
 
 
 def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
@@ -1396,6 +1644,11 @@ class _LayerView:
     `ui.image` uses Quasar's responsive q-img instead, which squishes the
     strip to the card width — not what we want here. The card has
     `min-w-0` so a wide strip doesn't push the column wider.
+
+    Both strips use the same diverging colormap, so each one carries a
+    labelled colored marker bar on its left edge to tell them apart
+    (emerald ACTIVATIONS, violet GRADIENTS). The markers are `sticky
+    left-0` so they stay visible while the strips are panned horizontally.
     """
 
     def __init__(
@@ -1426,6 +1679,22 @@ class _LayerView:
                 # when a header button is clicked. Quasar's q-btn doesn't
                 # reliably pass arbitrary `data-*` attrs through to its
                 # rendered DOM, so the attribute lives on these divs.
+                # The Weights button only appears for layers that actually own
+                # parameters; relu/add/input nodes have nothing to show.
+                if weights:
+                    with ui.element("div").props("data-card-action"):
+                        ui.button(
+                            "Weights",
+                            icon="grid_on",
+                            on_click=lambda: ui.navigate.to(
+                                f"/weights?layer={quote(name)}", new_tab=True
+                            ),
+                            color="blue",
+                        ).props("dense no-caps").style(
+                            "min-height: 0; padding: 1px 6px; font-size: 11px"
+                        ).tooltip(
+                            f"Inspect this layer's weights ({len(weights)})"
+                        )
                 with ui.element("div").props("data-card-action"):
                     self._eye_btn = ui.button(
                         "Watch",
@@ -1435,26 +1704,14 @@ class _LayerView:
                     ).props("dense no-caps").style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip("Watch this layer (toggle)")
-                # The Weights button only appears for layers that actually own
-                # parameters; relu/add/input nodes have nothing to show.
-                if weights:
-                    with ui.element("div").props("data-card-action"):
-                        ui.button(
-                            "Weights",
-                            icon="grid_on",
-                            on_click=lambda: ui.navigate.to(
-                                f"/weights?layer={quote(name)}"
-                            ),
-                            color="blue",
-                        ).props("dense no-caps").style(
-                            "min-height: 0; padding: 1px 6px; font-size: 11px"
-                        ).tooltip(
-                            f"Inspect this layer's weights ({len(weights)})"
-                        )
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
-                self.act_html = ui.html("")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-emerald-500", "ACTIVATIONS")
+                    self.act_html = ui.html("")
                 ui.element("div").classes("h-1")
-                self.grad_html = ui.html("")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-violet-500", "GRADIENTS")
+                    self.grad_html = ui.html("")
         # Sync the icon now in case the page is being rebuilt with a layer
         # that's already in the watched set (e.g. after navigating from
         # `/watch` back to `/`).
@@ -1469,13 +1726,39 @@ class _LayerView:
     def compute(
         self, activation: Tensor | None, gradient: Tensor | None, sample_idx: int
     ) -> tuple[str, str]:
-        act_png = render_strip(activation, sample_idx, kind="activation")
-        grad_png = render_strip(gradient, sample_idx, kind="gradient")
+        act_png = render_strip(activation, sample_idx)
+        grad_png = render_strip(gradient, sample_idx)
         return _img_tag(act_png), _img_tag(grad_png)
 
     def apply(self, act_html: str, grad_html: str) -> None:
         self.act_html.set_content(act_html)
         self.grad_html.set_content(grad_html)
+
+
+def _strip_marker(color_class: str, label: str) -> None:
+    """A labelled colored bar marking which kind of strip sits next to it.
+
+    Stretches to the strip's height via the flex row (and collapses to
+    nothing when the strip is empty); `sticky left-0` keeps it pinned to the
+    card's left edge while the strip scrolls underneath. The label is drawn
+    vertically, reading bottom-up, and is absolutely positioned so it adds
+    no intrinsic height — otherwise a missing strip would leave a floating
+    bar instead of an empty row. On strips too short to fit it the label is
+    hidden via the container query in `_STRIP_MARKER_CSS`; the tooltip
+    carries the full name regardless.
+    """
+    with ui.element("div").classes(
+        f"playgrad-marker w-5 shrink-0 rounded mr-2 sticky left-0 z-10 "
+        f"relative overflow-hidden {color_class}"
+    ).tooltip(label.capitalize()):
+        ui.label(label).classes(
+            "playgrad-marker-label absolute text-white font-bold select-none"
+        ).style(
+            "writing-mode: vertical-rl; top: 50%; left: 50%; "
+            "transform: translate(-50%, -50%) rotate(180deg); "
+            "font-size: 9px; letter-spacing: 0.12em; line-height: 1; "
+            "white-space: nowrap;"
+        )
 
 
 def _img_tag(png: bytes | None) -> str:

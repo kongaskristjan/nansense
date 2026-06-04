@@ -72,7 +72,15 @@ import playgrad
 # no fx trace, batch() does nothing, and serve() is skipped. This lets you
 # leave the wiring below in place and toggle the whole UI off with one flag.
 session = playgrad.start(
-    model, epochs=50, phases={"train": 196, "val": 40}, enabled=True
+    model,
+    epochs=50,
+    phases={"train": 196, "val": 40},
+    enabled=True,
+    # Optional: with an optimizer attached, the weights page also shows each
+    # parameter's optimizer state (momentum buffers, Adam moments, ...) and
+    # its param group's numeric hyperparameters (live lr, ...). Omit it and
+    # the UI looks exactly as without this feature.
+    optimizer=optimizer,
 )
 playgrad.serve(
     session,
@@ -107,9 +115,12 @@ node or a layer card highlights both ends of the pair, and clicking
 either side scrolls the *other* pane so the matching element lands at
 the top. The centre pane shows one card per
 submodule with horizontally-scrollable activation and activation-gradient
-strips for the selected sample; the right pane shows the input image for
-that sample (RGB or grayscale), denormalized with the `input_mean` /
-`input_std` passed to `serve()` if any.
+strips for the selected sample, both drawn with the same diverging
+red/blue colormap and told apart by the labelled marker bar on each
+strip's left edge (emerald ACTIVATIONS, violet GRADIENTS); the right
+pane shows the input image for that sample (RGB or grayscale),
+denormalized with the `input_mean` / `input_std` passed to `serve()` if
+any.
 
 Each layer card has a "Watch" toggle in its header that marks the
 layer as "watched". Watched cards (and the matching architecture
@@ -124,15 +135,31 @@ that opens a per-layer weight viewer at `/weights?layer=...`. The
 weight page reuses the main page's stepping controls and epoch/batch
 readout — minus the "Viewing sample" spinner, since a weight has no
 batch axis — so the displayed weights track the currently paused
-batch. It renders one panel per parameter the layer uses, drawn with
-the same diverging colormap as gradients. By default a 4D conv weight
+batch. It renders one panel per parameter the layer uses — the weight
+strip with its gradient strip directly below, both drawn with the same
+diverging colormap, marked by the same kind of labelled bars as the
+main page (sky WEIGHT, violet GRADIENT), and sharing the panel's axis
+controls (the gradient strip shows a placeholder note until a backward
+pass has run). When an `optimizer=` was passed to `start()`, each panel
+additionally shows one amber-marked strip per tensor-valued optimizer
+state entry for that parameter (SGD's `momentum_buffer`, Adam's
+`exp_avg` / `exp_avg_sq`, …) using the same axis controls, plus a scalar
+line combining 0-dim state entries (Adam's `step`) with the param
+group's numeric hyperparameters — `lr` there is the live,
+scheduler-driven value. Any optimizer following the `torch.optim` state
+convention works; no per-optimizer code is involved. By default a 4D
+conv weight
 `[out, in, kH, kW]` is shown as conv kernels (kH×kW tiles laid out
 across the input channels, with the output channel pinned by index), a
 2D weight as a single image, and a 1D weight as a single heatmap row.
 Per-dimension selects let you remap which axes become the X, Y, and
 tiling (third horizontal) axes; every remaining axis is pinned to a
-single index chosen by number. `session.layer_weights` exposes the
-underlying `layer name -> parameter names` map.
+single index chosen by number. A Refresh button in the top bar reads
+the model's current weights and gradients on demand — so it updates
+even mid-training in `detach` / `step until end`, where no snapshot is
+being published.
+`session.layer_weights` exposes the underlying
+`layer name -> parameter names` map.
 
 The `/watch` page renders one card per watched layer with two plotly
 histograms (activations + activation gradients) overlaid by phase
@@ -140,7 +167,12 @@ histograms (activations + activation gradients) overlaid by phase
 signed-log bins covering `(-1e6, 1e6)` with bin edges on powers of 10
 and at six log-spaced points between them. Two checkboxes in the top
 bar — **Log x** and **Log y** — toggle the value and count axes between
-the log-based default and a linear scale. Above each histogram a
+the log-based default and a linear scale. With both unchecked, bars
+show density (count / bin width) instead of raw counts — on linear axes
+that makes bar area proportional to count despite the wildly different
+linear bin widths — and the y-axis is capped at the 20th-tallest bar so
+the ultra-narrow near-zero bins can't blow out the scale. Above each
+histogram a
 one-line summary shows `n`, `mean`, `std`, histogram-derived
 `median`, and `min`/`max`. Any layer in `session.layer_names` is
 watchable — named modules, fx-traced intermediates (scope-qualified by
