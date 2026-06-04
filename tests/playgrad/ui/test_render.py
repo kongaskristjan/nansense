@@ -16,7 +16,6 @@ from playgrad.ui.render import (
     LINEAR_TILE_HEIGHT,
     TILE_GAP,
     TILE_SIZE,
-    ColormapKind,
     default_weight_dims,
     render_image,
     render_strip,
@@ -37,19 +36,17 @@ def _decode(png: bytes) -> Image.Image:
     return Image.open(io.BytesIO(png)).convert("RGB")
 
 
-@pytest.mark.parametrize("kind", ["activation", "gradient"])
-def test_chw_strip_dimensions(kind: ColormapKind) -> None:
+def test_chw_strip_dimensions() -> None:
     tensor = torch.randn(4, 8, 32, 32)
-    png = render_strip(tensor, sample_idx=2, kind=kind)
+    png = render_strip(tensor, sample_idx=2)
     assert png is not None
     img = _decode(png)
     assert img.size == (_chw_strip_width(8), TILE_SIZE)
 
 
-@pytest.mark.parametrize("kind", ["activation", "gradient"])
-def test_1d_strip_dimensions(kind: ColormapKind) -> None:
+def test_1d_strip_dimensions() -> None:
     tensor = torch.randn(4, 10)
-    png = render_strip(tensor, sample_idx=0, kind=kind)
+    png = render_strip(tensor, sample_idx=0)
     assert png is not None
     img = _decode(png)
     assert img.size == (_1d_strip_width(10), LINEAR_TILE_HEIGHT)
@@ -57,41 +54,48 @@ def test_1d_strip_dimensions(kind: ColormapKind) -> None:
 
 def test_1d_strip_caps_at_max_bins() -> None:
     tensor = torch.randn(4, LINEAR_MAX_BINS * 4)
-    png = render_strip(tensor, sample_idx=0, kind="activation")
+    png = render_strip(tensor, sample_idx=0)
     assert png is not None
     img = _decode(png)
     assert img.size == (_1d_strip_width(LINEAR_MAX_BINS), LINEAR_TILE_HEIGHT)
 
 
 def test_returns_none_for_none_tensor() -> None:
-    assert render_strip(None, sample_idx=0, kind="activation") is None
+    assert render_strip(None, sample_idx=0) is None
 
 
 def test_returns_none_for_out_of_range_sample() -> None:
     tensor = torch.randn(4, 8, 32, 32)
-    assert render_strip(tensor, sample_idx=10, kind="activation") is None
-    assert render_strip(tensor, sample_idx=-1, kind="activation") is None
+    assert render_strip(tensor, sample_idx=10) is None
+    assert render_strip(tensor, sample_idx=-1) is None
 
 
 def test_returns_none_for_unsupported_shape() -> None:
     # Per-sample shape would be [3, 4, 5, 6] — 4D, not supported.
     tensor = torch.randn(2, 3, 4, 5, 6)
-    assert render_strip(tensor, sample_idx=0, kind="activation") is None
+    assert render_strip(tensor, sample_idx=0) is None
 
 
 def test_zero_variance_tensor_renders() -> None:
+    # All-zero input must not crash the diverging colormap (abs_max=0 edge).
     tensor = torch.zeros(2, 4, 8, 8)
-    png = render_strip(tensor, sample_idx=0, kind="activation")
+    png = render_strip(tensor, sample_idx=0)
     assert png is not None
     img = _decode(png)
     assert img.size == (_chw_strip_width(4), TILE_SIZE)
 
 
-def test_gradient_zero_center_renders() -> None:
-    # All-zero gradient must not crash the diverging colormap (abs_max=0 edge).
-    tensor = torch.zeros(2, 4, 8, 8)
-    png = render_strip(tensor, sample_idx=0, kind="gradient")
+def test_strip_uses_diverging_colormap() -> None:
+    # Tile 0 is all +max → pure red at its centre; tile 1 all -max → pure blue.
+    sample = torch.stack([torch.ones(8, 8), -torch.ones(8, 8)])
+    png = render_strip(sample.unsqueeze(0), sample_idx=0)
     assert png is not None
+    img = _decode(png)
+    y = TILE_SIZE // 2
+    pos_x = LEGEND_WIDTH + TILE_SIZE // 2
+    neg_x = LEGEND_WIDTH + TILE_SIZE + TILE_GAP + TILE_SIZE // 2
+    assert _rgb_at(img, pos_x, y) == (255, 0, 0)
+    assert _rgb_at(img, neg_x, y) == (0, 0, 255)
 
 
 @pytest.mark.parametrize("channels", [1, 3])
