@@ -224,9 +224,13 @@ _ARCHITECTURE_CLICK_JS: str = """
     const node = findMermaidNode(slug);
     if (node) node.classList.toggle('playgrad-watched', on);
   };
-  window.playgradScrollCardToTop = function(slug) {
+  // Jump both panes to a layer: the right pane's card and the architecture
+  // pane's mermaid node each scroll within their own container.
+  window.playgradScrollToLayer = function(slug) {
     const card = findCard(slug);
     if (card) scrollTargetToTop(card);
+    const node = findMermaidNode(slug);
+    if (node) scrollTargetToTop(node);
   };
 
   // Re-apply watched classes to any matching mermaid node / card that
@@ -405,7 +409,7 @@ def _build_page(
             ).classes(
                 "ml-auto text-amber-700 font-mono"
             ).props("dense size=md no-caps").tooltip(
-                "Watched layers — click to open the watch view or jump to a card"
+                "Watched layers — click to open the watch view or jump to a layer"
             )
             watch_list_container: ui.element
             with watch_chip:
@@ -464,7 +468,7 @@ def _build_page(
                     ui.menu_item(
                         layer,
                         on_click=lambda n=layer: ui.run_javascript(
-                            f"window.playgradScrollCardToTop({json.dumps(slug(n))})"
+                            f"window.playgradScrollToLayer({json.dumps(slug(n))})"
                         ),
                     ).classes("font-mono text-sm")
 

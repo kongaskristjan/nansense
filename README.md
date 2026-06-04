@@ -116,8 +116,8 @@ layer as "watched". Watched cards (and the matching architecture
 node) get a stronger amber outline that persists across hover. The
 top bar carries a small watch chip showing how many layers are
 currently selected; clicking it opens a menu with a link to the
-deep-dive `/watch` page and shortcuts that scroll the centre pane to
-each watched card.
+deep-dive `/watch` page and shortcuts that scroll both the architecture
+pane and the centre pane to each watched layer.
 
 Cards for layers that own parameters also carry a "Weights" button
 that opens a per-layer weight viewer at `/weights?layer=...`. The
