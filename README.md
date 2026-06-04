@@ -72,7 +72,15 @@ import playgrad
 # no fx trace, batch() does nothing, and serve() is skipped. This lets you
 # leave the wiring below in place and toggle the whole UI off with one flag.
 session = playgrad.start(
-    model, epochs=50, phases={"train": 196, "val": 40}, enabled=True
+    model,
+    epochs=50,
+    phases={"train": 196, "val": 40},
+    enabled=True,
+    # Optional: with an optimizer attached, the weights page also shows each
+    # parameter's optimizer state (momentum buffers, Adam moments, ...) and
+    # its param group's numeric hyperparameters (live lr, ...). Omit it and
+    # the UI looks exactly as without this feature.
+    optimizer=optimizer,
 )
 playgrad.serve(
     session,
@@ -127,7 +135,15 @@ batch axis — so the displayed weights track the currently paused
 batch. It renders one panel per parameter the layer uses — the weight
 strip with its gradient strip directly below, both drawn with the same
 diverging colormap and sharing the panel's axis controls (the gradient
-strip is empty until a backward pass has run). By default a 4D conv weight
+strip is empty until a backward pass has run). When an `optimizer=` was
+passed to `start()`, each panel additionally shows one strip per
+tensor-valued optimizer state entry for that parameter (SGD's
+`momentum_buffer`, Adam's `exp_avg` / `exp_avg_sq`, …) using the same
+axis controls, plus a scalar line combining 0-dim state entries (Adam's
+`step`) with the param group's numeric hyperparameters — `lr` there is
+the live, scheduler-driven value. Any optimizer following the
+`torch.optim` state convention works; no per-optimizer code is
+involved. By default a 4D conv weight
 `[out, in, kH, kW]` is shown as conv kernels (kH×kW tiles laid out
 across the input channels, with the output channel pinned by index), a
 2D weight as a single image, and a 1D weight as a single heatmap row.

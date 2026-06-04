@@ -1116,8 +1116,15 @@ def _build_weights_page(session: Session, layer: str) -> None:
         # snapshot). The live view then persists until the next captured batch.
         weights = session.current_weights()
         gradients = session.current_weight_gradients()
+        optimizer_state = session.current_optimizer_state()
+        optimizer_hyperparams = session.current_optimizer_hyperparams()
         for panel in panels:
-            panel.show_weights(weights, gradients)
+            panel.show_weights(
+                weights,
+                gradients,
+                optimizer_state=optimizer_state,
+                optimizer_hyperparams=optimizer_hyperparams,
+            )
 
     def tick() -> None:
         live = session.live_position
@@ -1157,6 +1164,8 @@ class _WeightPanel:
         self._last_snapshot: BatchSnapshot | None = None
         self._weights: dict[str, Tensor] | None = None
         self._gradients: dict[str, Tensor] | None = None
+        self._opt_state: dict[str, dict[str, Tensor]] = {}
+        self._opt_hparams: dict[str, dict[str, float]] = {}
         self._role_selects: list[ui.select] = []
         self._index_numbers: dict[int, ui.number] = {}
 
@@ -1204,6 +1213,16 @@ class _WeightPanel:
                     "text-xs text-slate-500 font-mono mt-1"
                 )
                 self._grad_img = ui.html("")
+                # One captioned strip per tensor-valued optimizer state entry
+                # (momentum_buffer, exp_avg, …); rebuilt on each render. Stays
+                # empty — invisible — when the session has no optimizer.
+                self._opt_container = ui.element("div").classes("w-full")
+            # Scalar optimizer values: 0-dim state entries (Adam's `step`) and
+            # the param group's numeric hyperparameters (`lr`, …).
+            self._opt_scalars = ui.label("").classes(
+                "text-xs text-slate-500 font-mono"
+            )
+            self._opt_scalars.set_visibility(False)
         self._sync_index_visibility()
 
     def _on_role(self, dim: int, value: object) -> None:
@@ -1243,16 +1262,26 @@ class _WeightPanel:
         if snap is self._last_snapshot:
             return
         self._last_snapshot = snap
-        self.show_weights(snap.weights, snap.weight_gradients)
+        self.show_weights(
+            snap.weights,
+            snap.weight_gradients,
+            optimizer_state=snap.optimizer_state,
+            optimizer_hyperparams=snap.optimizer_hyperparams,
+        )
 
     def show_weights(
         self,
         weights: dict[str, Tensor],
         gradients: dict[str, Tensor],
+        *,
+        optimizer_state: dict[str, dict[str, Tensor]],
+        optimizer_hyperparams: dict[str, dict[str, float]],
     ) -> None:
-        """Display weight + gradient for this panel's parameter (snapshot or live)."""
+        """Display weight, gradient, and optimizer values (snapshot or live)."""
         self._weights = weights
         self._gradients = gradients
+        self._opt_state = optimizer_state
+        self._opt_hparams = optimizer_hyperparams
         self._render()
 
     def _render_current(self) -> None:
@@ -1295,12 +1324,64 @@ class _WeightPanel:
             "gradient" if grad_png is not None else "gradient — none captured"
         )
         self._grad_img.set_content(_img_tag(grad_png) if grad_png is not None else "")
+        self._render_optimizer_values(x_dim=x_dim, y_dim=y_dim, tile=tile, fixed=fixed)
+
+    def _render_optimizer_values(
+        self,
+        *,
+        x_dim: int,
+        y_dim: int | None,
+        tile: int | None,
+        fixed: dict[int, int],
+    ) -> None:
+        """Rebuild the optimizer strips + scalar line below the gradient.
+
+        Tensor state entries matching the weight's shape (momentum buffers,
+        Adam moments) reuse the panel's axis layout; differently-shaped ones
+        (e.g. factored second moments) fall back to their own rank's default
+        axes. 0-dim entries (Adam's `step`) join the group hyperparameters
+        (`lr`, …) on a single scalar line. With no optimizer attached both
+        stay empty, leaving the panel exactly as before.
+        """
+        entries = dict(sorted(self._opt_state.get(self.name, {}).items()))
+        self._opt_container.clear()
+        scalar_parts: list[str] = []
+        with self._opt_container:
+            for key, tensor in entries.items():
+                if tensor.ndim == 0:
+                    scalar_parts.append(f"{key} = {_format_stat(float(tensor))}")
+                    continue
+                if tuple(tensor.shape) == self._shape:
+                    png = render_weight(
+                        tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
+                    )
+                else:
+                    dims = default_weight_dims(tensor.ndim)
+                    png = render_weight(
+                        tensor,
+                        x_dim=dims.x_dim,
+                        y_dim=dims.y_dim,
+                        tile_dim=dims.tile_dim,
+                        fixed={d: 0 for d in dims.fixed_dims},
+                    )
+                if png is None:
+                    continue
+                ui.label(key).classes("text-xs text-slate-500 font-mono mt-1")
+                ui.html(_img_tag(png))
+        scalar_parts += [
+            f"{key} = {_format_stat(value)}"
+            for key, value in sorted(self._opt_hparams.get(self.name, {}).items())
+        ]
+        self._opt_scalars.text = "  ·  ".join(scalar_parts)
+        self._opt_scalars.set_visibility(bool(scalar_parts))
 
     def _show_error(self, message: str) -> None:
         self._error.text = message
         self._img.set_content("")
         self._grad_img.set_content("")
         self._grad_caption.text = "gradient"
+        self._opt_container.clear()
+        self._opt_scalars.set_visibility(False)
 
 
 def _build_step_until_custom_dialog(session: Session) -> ui.dialog:

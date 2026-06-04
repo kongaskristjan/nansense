@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 
 import pytest
 import torch
@@ -274,6 +275,10 @@ def test_snapshot_contains_all_four_tensor_categories() -> None:
     for name in param_names:
         assert snap.weights[name].shape == expected_param_shapes[name]
         assert snap.weight_gradients[name].shape == expected_param_shapes[name]
+
+    # No optimizer was passed to start(): the optimizer fields stay empty.
+    assert snap.optimizer_state == {}
+    assert snap.optimizer_hyperparams == {}
 
     session.detach()
     thread.join(timeout=5)
@@ -609,6 +614,105 @@ def test_current_weight_gradients_empty_before_backward_then_live() -> None:
 
     model.zero_grad(set_to_none=True)
     assert session.current_weight_gradients() == {}
+
+
+def _opt_step(model: TinyNet, optimizer: torch.optim.Optimizer) -> None:
+    x = torch.randn(2, 4)
+    y = torch.randint(0, 3, (2,))
+    optimizer.zero_grad()
+    loss = nn.functional.cross_entropy(model(x), y)
+    loss.backward()
+    optimizer.step()
+
+
+@pytest.mark.parametrize(
+    "make_optimizer, expected_keys",
+    [
+        (
+            lambda m: torch.optim.SGD(m.parameters(), lr=0.1, momentum=0.9),
+            {"momentum_buffer"},
+        ),
+        (
+            lambda m: torch.optim.AdamW(m.parameters(), lr=1e-3),
+            {"step", "exp_avg", "exp_avg_sq"},
+        ),
+    ],
+)
+def test_current_optimizer_state_gathers_per_parameter_entries(
+    make_optimizer: Callable[[TinyNet], torch.optim.Optimizer],
+    expected_keys: set[str],
+) -> None:
+    """State is keyed back to parameter names generically — SGD and AdamW
+    need no per-optimizer code. Empty before the first step (lazy init)."""
+    model = TinyNet()
+    optimizer = make_optimizer(model)
+    session = playgrad.start(
+        model, epochs=1, phases={"train": 1}, optimizer=optimizer
+    )
+    assert session.current_optimizer_state() == {}
+
+    _opt_step(model, optimizer)
+    state = session.current_optimizer_state()
+    assert set(state) == {n for n, _ in model.named_parameters()}
+    entry = state["fc1.weight"]
+    assert set(entry) == expected_keys
+    for tensor in entry.values():
+        assert tensor.device.type == "cpu"
+        if tensor.ndim > 0:
+            assert tensor.shape == model.fc1.weight.shape
+    # Clones, independent of the live optimizer state.
+    live = optimizer.state[model.fc1.weight]
+    for key, tensor in entry.items():
+        if isinstance(live[key], Tensor) and live[key].ndim > 0:
+            assert tensor.data_ptr() != live[key].data_ptr()
+
+
+def test_current_optimizer_hyperparams_numeric_only_and_eager() -> None:
+    """Group hyperparams are available before any step, contain only the
+    numeric knobs, and map per parameter name."""
+    model = TinyNet()
+    optimizer = torch.optim.SGD(
+        model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4, nesterov=True
+    )
+    session = playgrad.start(
+        model, epochs=1, phases={"train": 1}, optimizer=optimizer
+    )
+    hp = session.current_optimizer_hyperparams()
+    assert set(hp) == {n for n, _ in model.named_parameters()}
+    fc1 = hp["fc1.weight"]
+    assert fc1["lr"] == pytest.approx(0.1)
+    assert fc1["momentum"] == pytest.approx(0.9)
+    assert fc1["weight_decay"] == pytest.approx(5e-4)
+    assert "params" not in fc1
+    assert "nesterov" not in fc1  # bools are flags, not numeric knobs
+
+
+def test_optimizer_methods_empty_without_optimizer() -> None:
+    session, model = _make_session()
+    _train_step(model)
+    assert session.current_optimizer_state() == {}
+    assert session.current_optimizer_hyperparams() == {}
+
+
+def test_snapshot_carries_optimizer_values_when_attached() -> None:
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    session = playgrad.start(
+        model, epochs=1, phases={"train": 1}, optimizer=optimizer
+    )
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            _opt_step(model, optimizer)
+
+    thread = _run_in_thread(loop)
+    assert session.wait_until_paused(timeout=5)
+    snap = session.snapshot
+    assert snap is not None
+    assert set(snap.optimizer_state["fc1.weight"]) == {"momentum_buffer"}
+    assert snap.optimizer_hyperparams["fc1.weight"]["lr"] == pytest.approx(0.1)
+    session.detach()
+    thread.join(timeout=5)
 
 
 def test_snapshot_tensors_are_cpu_and_independent() -> None:
