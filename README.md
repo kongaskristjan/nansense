@@ -115,9 +115,12 @@ node or a layer card highlights both ends of the pair, and clicking
 either side scrolls the *other* pane so the matching element lands at
 the top. The centre pane shows one card per
 submodule with horizontally-scrollable activation and activation-gradient
-strips for the selected sample; the right pane shows the input image for
-that sample (RGB or grayscale), denormalized with the `input_mean` /
-`input_std` passed to `serve()` if any.
+strips for the selected sample, both drawn with the same diverging
+red/blue colormap and told apart by the colored marker bar on each
+strip's left edge (emerald = activations, violet = gradients); the right
+pane shows the input image for that sample (RGB or grayscale),
+denormalized with the `input_mean` / `input_std` passed to `serve()` if
+any.
 
 Each layer card has a "Watch" toggle in its header that marks the
 layer as "watched". Watched cards (and the matching architecture

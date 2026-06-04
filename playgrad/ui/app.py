@@ -1529,6 +1529,11 @@ class _LayerView:
     `ui.image` uses Quasar's responsive q-img instead, which squishes the
     strip to the card width — not what we want here. The card has
     `min-w-0` so a wide strip doesn't push the column wider.
+
+    Both strips use the same diverging colormap, so each one carries a
+    colored marker bar on its left edge to tell them apart (emerald =
+    activations, violet = gradients). The markers are `sticky left-0` so
+    they stay visible while the strips are panned horizontally.
     """
 
     def __init__(
@@ -1585,9 +1590,13 @@ class _LayerView:
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip("Watch this layer (toggle)")
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
-                self.act_html = ui.html("")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-emerald-500", "Activations")
+                    self.act_html = ui.html("")
                 ui.element("div").classes("h-1")
-                self.grad_html = ui.html("")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-violet-500", "Gradients")
+                    self.grad_html = ui.html("")
         # Sync the icon now in case the page is being rebuilt with a layer
         # that's already in the watched set (e.g. after navigating from
         # `/watch` back to `/`).
@@ -1602,13 +1611,25 @@ class _LayerView:
     def compute(
         self, activation: Tensor | None, gradient: Tensor | None, sample_idx: int
     ) -> tuple[str, str]:
-        act_png = render_strip(activation, sample_idx, kind="activation")
-        grad_png = render_strip(gradient, sample_idx, kind="gradient")
+        act_png = render_strip(activation, sample_idx)
+        grad_png = render_strip(gradient, sample_idx)
         return _img_tag(act_png), _img_tag(grad_png)
 
     def apply(self, act_html: str, grad_html: str) -> None:
         self.act_html.set_content(act_html)
         self.grad_html.set_content(grad_html)
+
+
+def _strip_marker(color_class: str, tooltip: str) -> None:
+    """A colored vertical bar marking which kind of strip sits next to it.
+
+    Stretches to the strip's height via the flex row (and collapses to
+    nothing when the strip is empty); `sticky left-0` keeps it pinned to the
+    card's left edge while the strip scrolls underneath.
+    """
+    ui.element("div").classes(
+        f"w-1.5 shrink-0 rounded mr-2 sticky left-0 z-10 {color_class}"
+    ).tooltip(tooltip)
 
 
 def _img_tag(png: bytes | None) -> str:
