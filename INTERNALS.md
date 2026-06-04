@@ -291,7 +291,7 @@ It does not touch tensors directly until they need to be rendered.
   fx-traceable (dynamic control flow, custom ops), it falls back to a
   static module-hierarchy tree rooted at a synthetic `root` node. Nodes
   use different Mermaid shapes per fx op (rectangles for `call_module`,
-  circles for `call_function` / `call_method`, stadiums for
+  ovals/stadiums for `call_function` / `call_method`, circles for
   `placeholder` / `output`).
 - `playgrad.ui.render.render_strip(tensor, sample_idx, kind=...)` is the
   function that turns per-layer CPU tensors into PNG bytes:

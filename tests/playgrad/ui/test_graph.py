@@ -88,13 +88,23 @@ class TwoBlocks(nn.Module):
 def test_fx_scopes_repeated_function_nodes_by_submodule() -> None:
     src = build_mermaid(TwoBlocks())
     # Each block's two relus get scope-qualified ids and labels, so they are
-    # distinguishable instead of a wall of identical "relu" circles.
-    assert 'b0_relu1(("b0.relu1"))' in src
-    assert 'b0_relu2(("b0.relu2"))' in src
-    assert 'b1_relu1(("b1.relu1"))' in src
-    assert 'b1_relu2(("b1.relu2"))' in src
+    # distinguishable instead of a wall of identical "relu" ovals.
+    assert 'b0_relu1(["b0.relu1"])' in src
+    assert 'b0_relu2(["b0.relu2"])' in src
+    assert 'b1_relu1(["b1.relu1"])' in src
+    assert 'b1_relu2(["b1.relu2"])' in src
     # Edges reference the same scoped ids, so graph nodes still link to cards.
     assert "b0_bn1 --> b0_relu1" in src
+
+
+def test_fx_node_shapes_by_kind() -> None:
+    src = build_mermaid(TwoLayer())
+    # Graph in/out are circles, weightless function/method calls (relu, add,
+    # mean, ...) are ovals (stadiums), modules are rectangles.
+    assert '  x(("in: x"))' in src
+    assert '  output(("out"))' in src
+    assert '  mean(["mean"])' in src
+    assert "stem_0[" in src
 
 
 def test_falls_back_to_hierarchy_for_untraceable_model() -> None:

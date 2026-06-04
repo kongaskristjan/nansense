@@ -59,19 +59,21 @@ def _build_from_fx(model: nn.Module, traced: fx.GraphModule) -> str:
 
 
 def _node_def(node: fx.Node, model: nn.Module, names: dict[fx.Node, str]) -> str:
+    # Shape encodes node kind: circles for graph in/out, ovals (stadiums) for
+    # weightless function/method calls (relu, add, ...), rectangles for modules.
     node_id = slug(names[node])
     if node.op == "placeholder":
-        return f'  {node_id}(["in: {node.name}"])'
+        return f'  {node_id}(("in: {node.name}"))'
     if node.op == "output":
-        return f'  {node_id}(["out"])'
+        return f'  {node_id}(("out"))'
     if node.op == "call_module":
         sub = model.get_submodule(str(node.target))
         label = f"{node.target}<br/>{type(sub).__name__}"
         return f'  {node_id}["{label}"]'
     if node.op == "call_function":
-        return f'  {node_id}(("{names[node]}"))'
+        return f'  {node_id}(["{names[node]}"])'
     if node.op == "call_method":
-        return f'  {node_id}(("{names[node]}"))'
+        return f'  {node_id}(["{names[node]}"])'
     return f'  {node_id}["{names[node]}"]'
 
 
