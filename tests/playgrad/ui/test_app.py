@@ -9,35 +9,52 @@ import playgrad
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
+    _BIN_WIDTHS,
+    _DENSITY_TOP_BINS,
     _PLOT_HEIGHT,
     _default_roles,
+    _density_heights,
+    _density_y_range,
     _dims_from_roles,
     _format_live_position,
     _linear_x_range,
     _make_histogram_figure,
     _phases_with_data,
     _role_options,
+    _use_density,
     _validate_step_until_target,
     serve,
 )
 from playgrad.watch import N_BINS, ZERO_BIN, LayerStatsSnapshot, TensorStatsSnapshot
 
 
-def _tensor_stats(n: int) -> TensorStatsSnapshot:
-    hist = [0] * N_BINS
-    hist[ZERO_BIN] = n
+def _tensor_stats(n: int, hist: dict[int, int] | None = None) -> TensorStatsSnapshot:
+    """Stats with `n` values in the zero band, or an explicit `bin -> count` map."""
+    counts = [0] * N_BINS
+    if hist is None:
+        counts[ZERO_BIN] = n
+    else:
+        for idx, count in hist.items():
+            counts[idx] = count
+        n = sum(hist.values())
     return TensorStatsSnapshot(
-        n=n, sum=0.0, sum_sq=0.0, min=0.0, max=0.0, hist=tuple(hist)
+        n=n, sum=0.0, sum_sq=0.0, min=0.0, max=0.0, hist=tuple(counts)
     )
 
 
-def _layer_snap(phase: str, epoch: int = 0, n: int = 10) -> LayerStatsSnapshot:
+def _layer_snap(
+    phase: str,
+    epoch: int = 0,
+    n: int = 10,
+    hist: dict[int, int] | None = None,
+) -> LayerStatsSnapshot:
+    stats = _tensor_stats(n, hist)
     return LayerStatsSnapshot(
         layer="L",
         phase=phase,
         epoch=epoch,
-        activations=_tensor_stats(n),
-        gradients=_tensor_stats(n),
+        activations=stats,
+        gradients=stats,
     )
 
 
@@ -245,6 +262,120 @@ def test_linear_x_range_brackets_populated_bins() -> None:
     lo, hi = rng
     assert lo < 0 < hi
     assert hi - lo < 1.0  # zoomed in, not the full +/-1e6 span
+
+
+# --- Watching histogram: density mode (both axes linear) -------------------
+
+
+@pytest.mark.parametrize(
+    "log_x, log_y, expected",
+    [
+        (True, True, False),
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+    ],
+)
+def test_use_density_only_when_both_axes_linear(
+    log_x: bool, log_y: bool, expected: bool
+) -> None:
+    assert _use_density(log_x, log_y) is expected
+
+
+def test_density_heights_divide_counts_by_bin_width() -> None:
+    hist = [0] * N_BINS
+    hist[ZERO_BIN] = 4
+    hist[ZERO_BIN + 10] = 6
+    heights = _density_heights(tuple(hist))
+    assert heights[ZERO_BIN] == pytest.approx(4 / _BIN_WIDTHS[ZERO_BIN])
+    assert heights[ZERO_BIN + 10] == pytest.approx(6 / _BIN_WIDTHS[ZERO_BIN + 10])
+    assert heights[0] == 0
+
+
+def test_density_y_range_caps_at_20th_tallest_bar() -> None:
+    # 30 populated bins: the cap sits at the 20th-tallest density, so the
+    # taller bars (here, narrow near-zero bins) clip instead of stretching
+    # the scale.
+    hist = {ZERO_BIN + 1 + i: (i + 1) ** 2 for i in range(30)}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    heights = sorted(
+        (h for h in _density_heights(per_phase["train"].activations.hist) if h > 0),
+        reverse=True,
+    )
+    rng = _density_y_range(per_phase, "activation")
+    assert rng is not None
+    assert rng[0] == 0.0
+    assert rng[1] == pytest.approx(heights[_DENSITY_TOP_BINS - 1] * 1.05)
+    assert rng[1] < heights[0]  # the tallest bar does clip
+
+
+def test_density_y_range_pools_phases() -> None:
+    # With two phases the 20-tallest pool spans both traces.
+    per_phase = {
+        "train": _layer_snap("train", hist={ZERO_BIN + 1 + i: 100 for i in range(15)}),
+        "val": _layer_snap("val", hist={ZERO_BIN + 30 + i: 1 for i in range(15)}),
+    }
+    all_heights = sorted(
+        (
+            h
+            for phase in per_phase.values()
+            for h in _density_heights(phase.activations.hist)
+            if h > 0
+        ),
+        reverse=True,
+    )
+    rng = _density_y_range(per_phase, "activation")
+    assert rng is not None
+    assert rng[1] == pytest.approx(all_heights[_DENSITY_TOP_BINS - 1] * 1.05)
+
+
+def test_density_y_range_with_few_bars_uses_smallest() -> None:
+    # Fewer than 20 populated bins: the "biggest 20" are all of them, so the
+    # cap is the smallest populated bar (the giant zero-band spike clips).
+    hist = {ZERO_BIN: 100, ZERO_BIN + 20: 5}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    heights = [
+        h for h in _density_heights(per_phase["train"].activations.hist) if h > 0
+    ]
+    rng = _density_y_range(per_phase, "activation")
+    assert rng is not None
+    assert rng[1] == pytest.approx(min(heights) * 1.05)
+
+
+def test_density_y_range_none_when_empty() -> None:
+    assert _density_y_range({}, "activation") is None
+
+
+def test_histogram_density_mode_plots_density_with_capped_axis() -> None:
+    hist = {ZERO_BIN: 50, ZERO_BIN + 10: 7}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=False, log_y=False
+    )
+    trace = fig.data[0]
+    expected = _density_heights(per_phase["train"].activations.hist)
+    assert list(trace.y) == pytest.approx(expected)
+    # Raw counts ride along for the hover text.
+    assert trace.customdata[ZERO_BIN] == 50
+    assert fig.layout.yaxis.title.text == "density"
+    expected_range = _density_y_range(per_phase, "activation")
+    assert expected_range is not None
+    assert tuple(fig.layout.yaxis.range) == tuple(expected_range)
+
+
+@pytest.mark.parametrize(
+    "log_x, log_y", [(True, True), (True, False), (False, True)]
+)
+def test_histogram_keeps_counts_on_other_axis_combos(
+    log_x: bool, log_y: bool
+) -> None:
+    per_phase = {"train": _layer_snap("train", n=9)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=log_x, log_y=log_y
+    )
+    assert fig.data[0].y[ZERO_BIN] == 9
+    assert fig.layout.yaxis.title.text == "count"
+    assert fig.layout.yaxis.range is None
 
 
 # --- Watching histogram: plot height (task 3) ------------------------------
