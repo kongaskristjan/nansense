@@ -1115,8 +1115,9 @@ def _build_weights_page(session: Session, layer: str) -> None:
         # weights update even mid-training (detach / run modes never publish a
         # snapshot). The live view then persists until the next captured batch.
         weights = session.current_weights()
+        gradients = session.current_weight_gradients()
         for panel in panels:
-            panel.show_weights(weights)
+            panel.show_weights(weights, gradients)
 
     def tick() -> None:
         live = session.live_position
@@ -1155,6 +1156,7 @@ class _WeightPanel:
         self._indices: dict[int, int] = {d: 0 for d in range(self._ndim)}
         self._last_snapshot: BatchSnapshot | None = None
         self._weights: dict[str, Tensor] | None = None
+        self._gradients: dict[str, Tensor] | None = None
         self._role_selects: list[ui.select] = []
         self._index_numbers: dict[int, ui.number] = {}
 
@@ -1192,8 +1194,16 @@ class _WeightPanel:
                             ).props("dense outlined").classes("w-20")
                             self._index_numbers[d] = number
             self._error = ui.label("").classes("text-amber-700 text-xs min-h-4")
+            # Both strips share one horizontal scrollbar so they pan together,
+            # like the activation/gradient pair on the main page's layer cards.
+            # Captions distinguish them, since both use the diverging colormap.
             with ui.element("div").classes("w-full overflow-x-auto"):
+                ui.label("weight").classes("text-xs text-slate-500 font-mono")
                 self._img = ui.html("")
+                self._grad_caption = ui.label("gradient").classes(
+                    "text-xs text-slate-500 font-mono mt-1"
+                )
+                self._grad_img = ui.html("")
         self._sync_index_visibility()
 
     def _on_role(self, dim: int, value: object) -> None:
@@ -1233,11 +1243,16 @@ class _WeightPanel:
         if snap is self._last_snapshot:
             return
         self._last_snapshot = snap
-        self.show_weights(snap.weights)
+        self.show_weights(snap.weights, snap.weight_gradients)
 
-    def show_weights(self, weights: dict[str, Tensor]) -> None:
-        """Display `weights` for this panel's parameter (snapshot or live)."""
+    def show_weights(
+        self,
+        weights: dict[str, Tensor],
+        gradients: dict[str, Tensor],
+    ) -> None:
+        """Display weight + gradient for this panel's parameter (snapshot or live)."""
         self._weights = weights
+        self._gradients = gradients
         self._render()
 
     def _render_current(self) -> None:
@@ -1268,10 +1283,24 @@ class _WeightPanel:
             return
         self._error.text = ""
         self._img.set_content(_img_tag(png))
+        # The gradient shares the weight's shape, so the same axis layout
+        # applies; it's simply absent before the first backward pass.
+        grad = self._gradients.get(self.name) if self._gradients is not None else None
+        grad_png = (
+            render_weight(grad, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed)
+            if grad is not None
+            else None
+        )
+        self._grad_caption.text = (
+            "gradient" if grad_png is not None else "gradient — none captured"
+        )
+        self._grad_img.set_content(_img_tag(grad_png) if grad_png is not None else "")
 
     def _show_error(self, message: str) -> None:
         self._error.text = message
         self._img.set_content("")
+        self._grad_img.set_content("")
+        self._grad_caption.text = "gradient"
 
 
 def _build_step_until_custom_dialog(session: Session) -> ui.dialog:

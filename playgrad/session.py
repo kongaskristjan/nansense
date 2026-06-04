@@ -240,6 +240,20 @@ class Session:
         """
         return {n: self._cpu_clone(p) for n, p in self.model.named_parameters()}
 
+    def current_weight_gradients(self) -> dict[str, Tensor]:
+        """CPU clones of the parameters' current `.grad`, read live at call time.
+
+        The live counterpart of `BatchSnapshot.weight_gradients`, with the
+        same contract: parameters whose gradient is `None` (nothing has run
+        backward yet, or `zero_grad(set_to_none=True)` just cleared them) are
+        omitted. Same benign-race caveat as `current_weights`.
+        """
+        return {
+            n: self._cpu_clone(p.grad)
+            for n, p in self.model.named_parameters()
+            if p.grad is not None
+        }
+
     def set_schedule(
         self,
         *,

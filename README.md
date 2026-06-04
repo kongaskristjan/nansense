@@ -124,16 +124,19 @@ that opens a per-layer weight viewer at `/weights?layer=...`. The
 weight page reuses the main page's stepping controls and epoch/batch
 readout — minus the "Viewing sample" spinner, since a weight has no
 batch axis — so the displayed weights track the currently paused
-batch. It renders one panel per parameter the layer uses, drawn with
-the same diverging colormap as gradients. By default a 4D conv weight
+batch. It renders one panel per parameter the layer uses — the weight
+strip with its gradient strip directly below, both drawn with the same
+diverging colormap and sharing the panel's axis controls (the gradient
+strip is empty until a backward pass has run). By default a 4D conv weight
 `[out, in, kH, kW]` is shown as conv kernels (kH×kW tiles laid out
 across the input channels, with the output channel pinned by index), a
 2D weight as a single image, and a 1D weight as a single heatmap row.
 Per-dimension selects let you remap which axes become the X, Y, and
 tiling (third horizontal) axes; every remaining axis is pinned to a
 single index chosen by number. A Refresh button in the top bar reads
-the model's current weights on demand — so it updates even mid-training
-in `detach` / `step until end`, where no snapshot is being published.
+the model's current weights and gradients on demand — so it updates
+even mid-training in `detach` / `step until end`, where no snapshot is
+being published.
 `session.layer_weights` exposes the underlying
 `layer name -> parameter names` map.
 

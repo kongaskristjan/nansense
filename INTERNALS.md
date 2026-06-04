@@ -389,18 +389,23 @@ It does not touch tensors directly until they need to be rendered.
   per-dimension role select (X / Y / Tile / Index, scaled to the weight's
   rank) plus an index spinner per axis; picking a role auto-demotes
   whichever other axis held it, keeping X/Y/Tile unique, then re-renders
-  against the last snapshot via `render_weight`. New snapshots re-render
+  against the last snapshot via `render_weight`. Each panel stacks two
+  strips in one horizontal scroll container — the weight, then its
+  gradient (same shape, so the same axis layout applies; sourced from
+  `snapshot.weight_gradients` and absent before the first backward).
+  New snapshots re-render
   through the page's `ui.timer` (`maybe_render`). Because NiceGUI
   suppresses `.value` writes made from inside a value-change handler, the
   select/visibility sync after a demotion is deferred one event-loop tick
   with `ui.timer(0.0, …, once=True)` — the same workaround the main page's
   sample spinner uses. A top-bar Refresh button calls
-  `session.current_weights()` (live CPU clones of `named_parameters()`,
-  read at call time rather than at a pause) and pushes them through each
-  panel's `show_weights`, so weights update mid-training even in `detach` /
-  `step_run` where no snapshot is published. Because `maybe_render` only
-  redraws on a *new* snapshot, the manually-refreshed live view persists
-  until the next captured batch.
+  `session.current_weights()` / `session.current_weight_gradients()`
+  (live CPU clones of `named_parameters()` and their `.grad`, read at
+  call time rather than at a pause) and pushes them through each
+  panel's `show_weights`, so both strips update mid-training even in
+  `detach` / `step_run` where no snapshot is published. Because
+  `maybe_render` only redraws on a *new* snapshot, the
+  manually-refreshed live view persists until the next captured batch.
 
 ## Enabled flag (zero-overhead off switch)
 

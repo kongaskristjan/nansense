@@ -592,6 +592,25 @@ def test_current_weights_tracks_parameter_updates() -> None:
     torch.testing.assert_close(after, before + 1.0)
 
 
+def test_current_weight_gradients_empty_before_backward_then_live() -> None:
+    """Before any backward pass there are no gradients; after one, every
+    parameter's `.grad` is returned as an independent CPU clone."""
+    session, model = _make_session()
+    assert session.current_weight_gradients() == {}
+
+    _train_step(model)  # zero_grad + forward + backward
+    grads = session.current_weight_gradients()
+    expected = {n: p.grad for n, p in model.named_parameters() if p.grad is not None}
+    assert set(grads) == set(expected) == {n for n, _ in model.named_parameters()}
+    for name, tensor in grads.items():
+        assert tensor.device.type == "cpu"
+        torch.testing.assert_close(tensor, expected[name].detach().cpu())
+        assert tensor.data_ptr() != expected[name].data_ptr()
+
+    model.zero_grad(set_to_none=True)
+    assert session.current_weight_gradients() == {}
+
+
 def test_snapshot_tensors_are_cpu_and_independent() -> None:
     session, model = _make_session(epochs=1, phases={"train": 1})
 
