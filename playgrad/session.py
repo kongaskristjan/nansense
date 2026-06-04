@@ -29,12 +29,14 @@ from __future__ import annotations
 
 import inspect
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import TracebackType
 from typing import Self
 
+import torch
 from torch import Tensor, fx, nn
+from torch.optim import Optimizer
 from torch.utils.hooks import RemovableHandle
 
 from playgrad.fx_names import friendly_names
@@ -55,9 +57,16 @@ class Mode(StrEnum):
 class BatchSnapshot:
     """Immutable per-batch view, fully resident on CPU.
 
-    All four tensor dicts are independent CPU clones taken at snapshot time,
+    All tensor dicts are independent CPU clones taken at snapshot time,
     so the snapshot survives subsequent batches freeing the live tensors and
     can be safely read from any thread.
+
+    `optimizer_state` / `optimizer_hyperparams` are populated only when the
+    session was given an optimizer at `start()`; otherwise they stay empty.
+    State entries are keyed `param name -> state key -> tensor` (scalar
+    entries like Adam's `step` become 0-dim tensors); hyperparams are the
+    numeric knobs of the parameter's group (`lr`, `momentum`, ...), read at
+    the same instant — so a scheduler-driven `lr` is the batch's actual one.
     """
 
     position: BatchPosition
@@ -65,6 +74,8 @@ class BatchSnapshot:
     activation_gradients: dict[str, Tensor]
     weights: dict[str, Tensor]
     weight_gradients: dict[str, Tensor]
+    optimizer_state: dict[str, dict[str, Tensor]] = field(default_factory=dict)
+    optimizer_hyperparams: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 class Session:
@@ -75,9 +86,11 @@ class Session:
         epochs: int,
         phases: dict[str, int],
         enabled: bool = True,
+        optimizer: Optimizer | None = None,
     ) -> None:
         self.model = model
         self._enabled = enabled
+        self._optimizer = optimizer
         self._schedule = Schedule(epochs=epochs, phases=phases)
         self._mode: Mode = Mode.STEP
         self._target_position: tuple[str, int, int] | None = None
@@ -253,6 +266,65 @@ class Session:
             for n, p in self.model.named_parameters()
             if p.grad is not None
         }
+
+    def current_optimizer_state(self) -> dict[str, dict[str, Tensor]]:
+        """Per-parameter optimizer state, read live at call time.
+
+        `optimizer.state` is keyed by the parameter object itself, so the
+        mapping back to parameter names is an identity lookup — it works for
+        any optimizer following the `torch.optim` convention with no
+        per-optimizer code (SGD's `momentum_buffer`, Adam's `step` /
+        `exp_avg` / `exp_avg_sq`, custom optimizers alike). Tensor entries
+        are CPU-cloned; plain int/float entries become 0-dim tensors so the
+        value type stays uniform. Empty when no optimizer was passed to
+        `start()`, or before the first `optimizer.step()` (state is lazily
+        initialised). Same benign-race caveat as `current_weights`.
+        """
+        if self._optimizer is None:
+            return {}
+        names = {id(p): n for n, p in self.model.named_parameters()}
+        result: dict[str, dict[str, Tensor]] = {}
+        for param, state in self._optimizer.state.items():
+            name = names.get(id(param))
+            if name is None:
+                continue  # parameter from some other model
+            entries: dict[str, Tensor] = {}
+            for key, value in state.items():
+                if isinstance(value, Tensor):
+                    entries[key] = self._cpu_clone(value)
+                elif isinstance(value, (int, float)):
+                    entries[key] = torch.tensor(float(value))
+            if entries:
+                result[name] = entries
+        return result
+
+    def current_optimizer_hyperparams(self) -> dict[str, dict[str, float]]:
+        """Per-parameter numeric hyperparameters of the optimizer group.
+
+        Maps each parameter name to the plain-numeric knobs of the param
+        group it belongs to (`lr`, `momentum`, `weight_decay`, ...). Read
+        live, so a scheduler-mutated `lr` shows its current value. Unlike
+        `current_optimizer_state` this is populated as soon as the optimizer
+        exists — groups are not lazily initialised. Empty when no optimizer
+        was passed to `start()`.
+        """
+        if self._optimizer is None:
+            return {}
+        names = {id(p): n for n, p in self.model.named_parameters()}
+        result: dict[str, dict[str, float]] = {}
+        for group in self._optimizer.param_groups:
+            numeric = {
+                key: float(value)
+                for key, value in group.items()
+                if key != "params"
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            }
+            for param in group["params"]:
+                name = names.get(id(param))
+                if name is not None:
+                    result[name] = dict(numeric)
+        return result
 
     def set_schedule(
         self,
@@ -501,6 +573,10 @@ class Session:
             activation_gradients=activation_gradients,
             weights=weights,
             weight_gradients=weight_gradients,
+            # Runs on the training thread at __exit__, so these reads are
+            # consistent with the weights above ({} when no optimizer given).
+            optimizer_state=self.current_optimizer_state(),
+            optimizer_hyperparams=self.current_optimizer_hyperparams(),
         )
 
     def _wait_for_proceed(self) -> None:
@@ -577,6 +653,7 @@ def start(
     epochs: int,
     phases: dict[str, int],
     enabled: bool = True,
+    optimizer: Optimizer | None = None,
 ) -> Session:
     """Create a `Session` for `model`.
 
@@ -584,8 +661,15 @@ def start(
     trace at construction, `batch()` does nothing, and `serve()` is skipped.
     This lets a training script keep its playgrad wiring in place and turn
     the whole UI off with a single flag.
+
+    `optimizer` is optional: when given, snapshots (and the weights page)
+    additionally carry each parameter's optimizer state — momentum buffers,
+    Adam moments, step counts — plus its param group's numeric
+    hyperparameters. Without it, everything behaves exactly as before.
     """
-    return Session(model, epochs=epochs, phases=phases, enabled=enabled)
+    return Session(
+        model, epochs=epochs, phases=phases, enabled=enabled, optimizer=optimizer
+    )
 
 
 def _try_trace(model: nn.Module) -> fx.GraphModule | None:
