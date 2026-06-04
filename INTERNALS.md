@@ -293,7 +293,7 @@ It does not touch tensors directly until they need to be rendered.
   use different Mermaid shapes per fx op (rectangles for `call_module`,
   circles for `call_function` / `call_method`, stadiums for
   `placeholder` / `output`).
-- `playgrad.ui.render.render_strip(tensor, sample_idx, kind=...)` is the
+- `playgrad.ui.render.render_strip(tensor, sample_idx)` is the
   function that turns per-layer CPU tensors into PNG bytes:
   - For per-sample shape `[C, H, W]` it interpolates each channel to a
     `TILE_SIZE × TILE_SIZE` tile and concatenates horizontally with a
@@ -301,9 +301,11 @@ It does not touch tensors directly until they need to be rendered.
     don't smear together.
   - For `[F]` it builds a single short heatmap row, downsampled to at
     most `LINEAR_MAX_BINS` bins when `F` is large.
-  - Sequential grayscale colormap for activations, diverging
-    blue-white-red for gradients. PNG `compress_level=1` — wire size
-    doesn't matter, encode speed does.
+  - Every strip — activations and gradients alike — uses the same
+    diverging blue-white-red colormap; on the layer cards the two are
+    told apart by a colored marker bar on each strip's left edge
+    (emerald = activations, violet = gradients). PNG `compress_level=1`
+    — wire size doesn't matter, encode speed does.
   - Other per-sample shapes return `None`; the UI hides those images.
 - `playgrad.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
   renders the model input as a natural RGB or grayscale PNG (upscaled to
@@ -318,8 +320,8 @@ It does not touch tensors directly until they need to be rendered.
   a sample it pins every axis not assigned to X/Y/tile to a single index
   (`fixed`, clamped into range), permutes the survivors into
   `[tile, y, x]`, then funnels through the same `_render_chw` /
-  `_render_1d` tile machinery (diverging colormap by default, to match
-  gradients). `default_weight_dims(ndim)` gives the default assignment —
+  `_render_1d` tile machinery and shared diverging colormap.
+  `default_weight_dims(ndim)` gives the default assignment —
   last axis X, second-to-last Y, third-to-last the tile axis, the rest
   fixed — which renders 4D conv weights as kernels, 2D as one image, 1D as
   one row. Duplicate or out-of-range axes return `None`.
@@ -338,8 +340,10 @@ It does not touch tensors directly until they need to be rendered.
   even after the training script's main thread returns — the user
   closes the browser / Ctrl-Cs when they're done browsing post-mortem.
 - The page handler creates one `_LayerView` per submodule (a card with
-  two `ui.image` strips inside a shared horizontal scroll container)
-  and a `ui.timer` that, every 200 ms, checks `session.pause_count`. If
+  two strips inside a shared horizontal scroll container, each flanked by
+  a sticky colored marker bar — emerald for activations, violet for
+  gradients) and a `ui.timer` that, every 200 ms, checks
+  `session.pause_count`. If
   it has advanced since the last render, every layer view re-renders
   against the new snapshot, slicing each tensor at the current
   `sample_idx` (driven by a single `ui.number` input in the top bar).
