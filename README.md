@@ -108,8 +108,8 @@ either side scrolls the *other* pane so the matching element lands at
 the top. The centre pane shows one card per
 submodule with horizontally-scrollable activation and activation-gradient
 strips for the selected sample, both drawn with the same diverging
-red/blue colormap and told apart by the colored marker bar on each
-strip's left edge (emerald = activations, violet = gradients); the right
+red/blue colormap and told apart by the labelled marker bar on each
+strip's left edge (emerald ACTIVATIONS, violet GRADIENTS); the right
 pane shows the input image for that sample (RGB or grayscale),
 denormalized with the `input_mean` / `input_std` passed to `serve()` if
 any.
@@ -129,8 +129,10 @@ readout — minus the "Viewing sample" spinner, since a weight has no
 batch axis — so the displayed weights track the currently paused
 batch. It renders one panel per parameter the layer uses — the weight
 strip with its gradient strip directly below, both drawn with the same
-diverging colormap and sharing the panel's axis controls (the gradient
-strip is empty until a backward pass has run). By default a 4D conv weight
+diverging colormap, marked by the same kind of labelled bars as the
+main page (sky WEIGHT, violet GRADIENT), and sharing the panel's axis
+controls (the gradient strip shows a placeholder note until a backward
+pass has run). By default a 4D conv weight
 `[out, in, kH, kW]` is shown as conv kernels (kH×kW tiles laid out
 across the input channels, with the output channel pinned by index), a
 2D weight as a single image, and a 1D weight as a single heatmap row.

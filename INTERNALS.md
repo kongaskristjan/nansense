@@ -301,10 +301,11 @@ It does not touch tensors directly until they need to be rendered.
     don't smear together.
   - For `[F]` it builds a single short heatmap row, downsampled to at
     most `LINEAR_MAX_BINS` bins when `F` is large.
-  - Every strip — activations and gradients alike — uses the same
-    diverging blue-white-red colormap; on the layer cards the two are
-    told apart by a colored marker bar on each strip's left edge
-    (emerald = activations, violet = gradients). PNG `compress_level=1`
+  - Every strip — activations, gradients, and weights alike — uses the
+    same diverging blue-white-red colormap; strips are told apart by a
+    labelled colored marker bar on each one's left edge (emerald
+    ACTIVATIONS / violet GRADIENTS on the layer cards, sky WEIGHT /
+    violet GRADIENT on the weights page). PNG `compress_level=1`
     — wire size doesn't matter, encode speed does.
   - Other per-sample shapes return `None`; the UI hides those images.
 - `playgrad.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
@@ -341,8 +342,8 @@ It does not touch tensors directly until they need to be rendered.
   closes the browser / Ctrl-Cs when they're done browsing post-mortem.
 - The page handler creates one `_LayerView` per submodule (a card with
   two strips inside a shared horizontal scroll container, each flanked by
-  a sticky colored marker bar — emerald for activations, violet for
-  gradients) and a `ui.timer` that, every 200 ms, checks
+  a sticky marker bar with a vertical label — emerald ACTIVATIONS, violet
+  GRADIENTS) and a `ui.timer` that, every 200 ms, checks
   `session.pause_count`. If
   it has advanced since the last render, every layer view re-renders
   against the new snapshot, slicing each tensor at the current

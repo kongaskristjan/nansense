@@ -386,6 +386,7 @@ def _build_page(
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
     ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
+    ui.add_head_html(_STRIP_MARKER_CSS)
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
 
     step_until_custom = _build_step_until_custom_dialog(session)
@@ -1066,6 +1067,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
+    ui.add_head_html(_STRIP_MARKER_CSS)
 
     weight_names = session.layer_weights.get(layer, [])
     shapes = {
@@ -1138,6 +1140,26 @@ def _weights_placeholder(message: str) -> None:
         ui.label(message).classes("text-slate-600")
 
 
+# Shown next to the GRADIENT marker before any backward pass has populated
+# the parameter's gradient.
+_NO_GRADIENT_HTML: str = (
+    '<div class="text-xs text-slate-400 italic py-1">no gradient captured yet</div>'
+)
+
+# The marker's vertical label is hidden on strips too short to fit it
+# (1D heatmap rows, the no-gradient placeholder); the tallest label is
+# ~75px, so anything under 88px can't show it cleanly. The 128px conv
+# tiles clear the threshold comfortably.
+_STRIP_MARKER_CSS: str = """
+<style>
+  .playgrad-marker { container-type: size; }
+  @container (max-height: 88px) {
+    .playgrad-marker-label { display: none; }
+  }
+</style>
+"""
+
+
 class _WeightPanel:
     """One card per parameter — an axis-remappable kernel/image strip.
 
@@ -1195,15 +1217,16 @@ class _WeightPanel:
                             self._index_numbers[d] = number
             self._error = ui.label("").classes("text-amber-700 text-xs min-h-4")
             # Both strips share one horizontal scrollbar so they pan together,
-            # like the activation/gradient pair on the main page's layer cards.
-            # Captions distinguish them, since both use the diverging colormap.
+            # and carry the same kind of labelled marker bars as the
+            # activation/gradient pair on the main page's layer cards.
             with ui.element("div").classes("w-full overflow-x-auto"):
-                ui.label("weight").classes("text-xs text-slate-500 font-mono")
-                self._img = ui.html("")
-                self._grad_caption = ui.label("gradient").classes(
-                    "text-xs text-slate-500 font-mono mt-1"
-                )
-                self._grad_img = ui.html("")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-sky-500", "WEIGHT")
+                    self._img = ui.html("")
+                ui.element("div").classes("h-1")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-violet-500", "GRADIENT")
+                    self._grad_img = ui.html("")
         self._sync_index_visibility()
 
     def _on_role(self, dim: int, value: object) -> None:
@@ -1291,16 +1314,14 @@ class _WeightPanel:
             if grad is not None
             else None
         )
-        self._grad_caption.text = (
-            "gradient" if grad_png is not None else "gradient — none captured"
+        self._grad_img.set_content(
+            _img_tag(grad_png) if grad_png is not None else _NO_GRADIENT_HTML
         )
-        self._grad_img.set_content(_img_tag(grad_png) if grad_png is not None else "")
 
     def _show_error(self, message: str) -> None:
         self._error.text = message
         self._img.set_content("")
         self._grad_img.set_content("")
-        self._grad_caption.text = "gradient"
 
 
 def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
@@ -1450,9 +1471,9 @@ class _LayerView:
     `min-w-0` so a wide strip doesn't push the column wider.
 
     Both strips use the same diverging colormap, so each one carries a
-    colored marker bar on its left edge to tell them apart (emerald =
-    activations, violet = gradients). The markers are `sticky left-0` so
-    they stay visible while the strips are panned horizontally.
+    labelled colored marker bar on its left edge to tell them apart
+    (emerald ACTIVATIONS, violet GRADIENTS). The markers are `sticky
+    left-0` so they stay visible while the strips are panned horizontally.
     """
 
     def __init__(
@@ -1510,11 +1531,11 @@ class _LayerView:
                     ).tooltip("Watch this layer (toggle)")
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
                 with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-emerald-500", "Activations")
+                    _strip_marker("bg-emerald-500", "ACTIVATIONS")
                     self.act_html = ui.html("")
                 ui.element("div").classes("h-1")
                 with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-violet-500", "Gradients")
+                    _strip_marker("bg-violet-500", "GRADIENTS")
                     self.grad_html = ui.html("")
         # Sync the icon now in case the page is being rebuilt with a layer
         # that's already in the watched set (e.g. after navigating from
@@ -1539,16 +1560,30 @@ class _LayerView:
         self.grad_html.set_content(grad_html)
 
 
-def _strip_marker(color_class: str, tooltip: str) -> None:
-    """A colored vertical bar marking which kind of strip sits next to it.
+def _strip_marker(color_class: str, label: str) -> None:
+    """A labelled colored bar marking which kind of strip sits next to it.
 
     Stretches to the strip's height via the flex row (and collapses to
     nothing when the strip is empty); `sticky left-0` keeps it pinned to the
-    card's left edge while the strip scrolls underneath.
+    card's left edge while the strip scrolls underneath. The label is drawn
+    vertically, reading bottom-up, and is absolutely positioned so it adds
+    no intrinsic height — otherwise a missing strip would leave a floating
+    bar instead of an empty row. On strips too short to fit it the label is
+    hidden via the container query in `_STRIP_MARKER_CSS`; the tooltip
+    carries the full name regardless.
     """
-    ui.element("div").classes(
-        f"w-1.5 shrink-0 rounded mr-2 sticky left-0 z-10 {color_class}"
-    ).tooltip(tooltip)
+    with ui.element("div").classes(
+        f"playgrad-marker w-5 shrink-0 rounded mr-2 sticky left-0 z-10 "
+        f"relative overflow-hidden {color_class}"
+    ).tooltip(label.capitalize()):
+        ui.label(label).classes(
+            "playgrad-marker-label absolute text-white font-bold select-none"
+        ).style(
+            "writing-mode: vertical-rl; top: 50%; left: 50%; "
+            "transform: translate(-50%, -50%) rotate(180deg); "
+            "font-size: 9px; letter-spacing: 0.12em; line-height: 1; "
+            "white-space: nowrap;"
+        )
 
 
 def _img_tag(png: bytes | None) -> str:
