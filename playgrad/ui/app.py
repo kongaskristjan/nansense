@@ -1457,7 +1457,7 @@ class _LayerView:
                             "Weights",
                             icon="grid_on",
                             on_click=lambda: ui.navigate.to(
-                                f"/weights?layer={quote(name)}"
+                                f"/weights?layer={quote(name)}", new_tab=True
                             ),
                             color="blue",
                         ).props("dense no-caps").style(
