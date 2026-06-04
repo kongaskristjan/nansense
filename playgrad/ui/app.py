@@ -648,6 +648,57 @@ _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
 
+# Density mode (both axes linear) caps the y-axis at the height of the
+# N-th tallest bar; see `_density_y_range`.
+_DENSITY_TOP_BINS: int = 20
+
+
+def _use_density(log_x: bool, log_y: bool) -> bool:
+    """Whether bars show density (count / bin width) instead of raw counts.
+
+    On a linear value axis with a linear count axis, raw counts are
+    misleading: the signed-log bins differ in linear width by orders of
+    magnitude, so a wide bin towers over a narrow one holding the same
+    share of values. Density makes bar *area* proportional to count, the
+    honest reading of a distribution on linear axes. With either log axis
+    the area intuition is gone anyway, so raw counts are kept there.
+    """
+    return not log_x and not log_y
+
+
+def _density_heights(hist: tuple[int, ...]) -> list[float]:
+    """Per-bin density: count divided by the bin's linear width."""
+    return [c / w for c, w in zip(hist, _BIN_WIDTHS)]
+
+
+def _density_y_range(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str
+) -> list[float] | None:
+    """Y-axis range for density mode, capped at the 20th-tallest bar.
+
+    The bins near zero are extremely narrow (the zero band is 2e-9 wide), so
+    even a handful of near-zero values produce densities that dwarf the rest
+    of the distribution; autoranging to the global max would flatten
+    everything else. Instead the axis tops out at the smallest of the
+    `_DENSITY_TOP_BINS` tallest bars across the drawn traces (the tallest
+    populated-bar height that the scale must still accommodate), letting the
+    taller spikes clip. Returns `None` (Plotly autorange) when there's no
+    data.
+    """
+    heights = sorted(
+        (
+            h
+            for phase in _phases_with_data(per_phase, kind)
+            for h in _density_heights(_kind_stats(per_phase[phase], kind).hist)
+            if h > 0
+        ),
+        reverse=True,
+    )
+    if not heights:
+        return None
+    cap = heights[min(_DENSITY_TOP_BINS - 1, len(heights) - 1)]
+    return [0.0, cap * 1.05]
+
 
 def _kind_stats(layer_snap: LayerStatsSnapshot, kind: str) -> TensorStatsSnapshot:
     """The activation or gradient stats of a layer snapshot, by `kind`."""
@@ -708,7 +759,8 @@ def _make_histogram_figure(
 
     `log_x` / `log_y` toggle the value (x) and count (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
-    Watching page).
+    Watching page). With both off, bars show density instead of counts
+    (see `_use_density`) and the y-axis is capped (see `_density_y_range`).
 
     This builds the *whole* figure. Routine data refreshes don't call it —
     they restyle the existing figure in place (see `_HistPlot`) so client-side
@@ -716,6 +768,16 @@ def _make_histogram_figure(
     set of phases or the axis scale changes.
     """
     x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
+    density = _use_density(log_x, log_y)
+    if log_x:
+        hover = "bin %{x}<br>count %{y}<extra></extra>"
+    elif density:
+        hover = (
+            "value %{x:.2e}<br>density %{y:.3g}"
+            "<br>count %{customdata}<extra></extra>"
+        )
+    else:
+        hover = "value %{x:.2e}<br>count %{y}<extra></extra>"
     fig = go.Figure()
     phases = _phases_with_data(per_phase, kind)
     for i, (phase, layer_snap) in enumerate(per_phase.items()):
@@ -725,16 +787,13 @@ def _make_histogram_figure(
         fig.add_trace(
             go.Bar(
                 x=x_values,
-                y=list(stats.hist),
+                y=_density_heights(stats.hist) if density else list(stats.hist),
+                customdata=list(stats.hist) if density else None,
                 width=None if log_x else _BIN_WIDTHS,
                 name=f"{phase} (ep {layer_snap.epoch})",
                 marker_color=_phase_color(phase, i),
                 opacity=0.55 if len(per_phase) > 1 else 0.85,
-                hovertemplate=(
-                    "bin %{x}<br>count %{y}<extra></extra>"
-                    if log_x
-                    else "value %{x:.2e}<br>count %{y}<extra></extra>"
-                ),
+                hovertemplate=hover,
             )
         )
     has_data = bool(phases)
@@ -775,10 +834,11 @@ def _make_histogram_figure(
         )
     fig.update_yaxes(
         type="log" if log_y else "linear",
+        range=_density_y_range(per_phase, kind) if density else None,
         showgrid=True,
         gridcolor="#e2e8f0",
         tickfont=dict(size=9),
-        title=dict(text="count", font=dict(size=10)),
+        title=dict(text="density" if density else "count", font=dict(size=10)),
     )
     return fig
 
@@ -885,14 +945,20 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
 
 
 def _plotly_restyle(
-    plot: ui.plotly, update: dict[str, object], indices: list[int]
+    plot: ui.plotly,
+    update: dict[str, object],
+    indices: list[int],
+    layout: dict[str, object] | None = None,
 ) -> None:
     """Update trace attributes of an existing figure in place.
 
-    Calls `Plotly.restyle` on the live graph div instead of replacing the
+    Calls `Plotly.update` on the live graph div instead of replacing the
     figure, so client-side state (legend visibility toggles, zoom/pan) is left
     untouched. `update` maps each attribute to a list of per-trace values
-    (e.g. `{"y": [y0, y1]}`) aligned with `indices`.
+    (e.g. `{"y": [y0, y1]}`) aligned with `indices`. `layout` optionally
+    carries relayout-style updates (e.g. `{"yaxis.range": [0, 5]}`) applied in
+    the same call; note an explicit axis-range write does reset any user zoom
+    on that axis.
 
     The guard makes this a no-op until Plotly's module has loaded and drawn the
     graph (a just-connected client can fire a timer tick before then); the next
@@ -901,7 +967,8 @@ def _plotly_restyle(
     ui.run_javascript(
         f"const gd = getHtmlElement({plot.id}); "
         f"if (gd && gd.data && window.Plotly) "
-        f"window.Plotly.restyle(gd, {json.dumps(update)}, {json.dumps(indices)});"
+        f"window.Plotly.update(gd, {json.dumps(update)}, "
+        f"{json.dumps(layout or {})}, {json.dumps(indices)});"
     )
 
 
@@ -922,6 +989,9 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
+        # Last y-range applied in density mode, so refreshes only push a
+        # relayout when the cap actually moved (a range write resets zoom).
+        self._y_range: list[float] | None = None
         self.element = ui.plotly(
             _make_histogram_figure(
                 {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
@@ -943,13 +1013,31 @@ class _HistPlot:
             self.element.update()
             self._phases = phases
             self._axis = axis
+            self._y_range = (
+                _density_y_range(per_phase, self._kind)
+                if _use_density(*axis)
+                else None
+            )
         elif phases:
             # Same traces and axes — only counts (and the epoch label) moved.
             # Restyle in place so legend toggles and zoom survive.
-            ys = [list(_kind_stats(per_phase[p], self._kind).hist) for p in phases]
+            hists = [_kind_stats(per_phase[p], self._kind).hist for p in phases]
             names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+            update: dict[str, object] = {"name": names}
+            layout: dict[str, object] | None = None
+            if _use_density(*axis):
+                update["y"] = [_density_heights(h) for h in hists]
+                update["customdata"] = [list(h) for h in hists]
+                # The cap follows the data; re-apply it only when it moved so
+                # an idle refresh doesn't keep snapping the user's zoom back.
+                y_range = _density_y_range(per_phase, self._kind)
+                if y_range != self._y_range:
+                    self._y_range = y_range
+                    layout = {"yaxis.range": y_range}
+            else:
+                update["y"] = [list(h) for h in hists]
             _plotly_restyle(
-                self.element, {"y": ys, "name": names}, list(range(len(phases)))
+                self.element, update, list(range(len(phases))), layout
             )
 
 

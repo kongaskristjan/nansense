@@ -167,7 +167,12 @@ histograms (activations + activation gradients) overlaid by phase
 signed-log bins covering `(-1e6, 1e6)` with bin edges on powers of 10
 and at six log-spaced points between them. Two checkboxes in the top
 bar — **Log x** and **Log y** — toggle the value and count axes between
-the log-based default and a linear scale. Above each histogram a
+the log-based default and a linear scale. With both unchecked, bars
+show density (count / bin width) instead of raw counts — on linear axes
+that makes bar area proportional to count despite the wildly different
+linear bin widths — and the y-axis is capped at the 20th-tallest bar so
+the ultra-narrow near-zero bins can't blow out the scale. Above each
+histogram a
 one-line summary shows `n`, `mean`, `std`, histogram-derived
 `median`, and `min`/`max`. Any layer in `session.layer_names` is
 watchable — named modules, fx-traced intermediates (scope-qualified by

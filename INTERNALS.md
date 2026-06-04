@@ -383,7 +383,7 @@ It does not touch tensors directly until they need to be rendered.
   `session.watch_snapshot()` and hands the per-phase stats to every
   `_HistPlot.update`. Routine ticks only change the bar counts (and the
   epoch label), so the plot **restyles the existing figure in place** —
-  `Plotly.restyle(getHtmlElement(id), {y, name}, indices)` run via
+  `Plotly.update(getHtmlElement(id), {y, name}, layout, indices)` run via
   `ui.run_javascript` — rather than replacing it. Restyle leaves the rest
   of the client-side state alone, so legend toggles (a series you clicked
   off) and any zoom/pan survive the refresh for free. The figure is only
@@ -399,7 +399,14 @@ It does not touch tensors directly until they need to be rendered.
   swaps the count axis `type`; **Log x** redraws the bars at their true
   linear bin centres (`_BIN_CENTERS`) with per-bin widths (`_BIN_WIDTHS`),
   auto-zoomed by `_linear_x_range` to the populated bins since the full
-  ±1e6 span is mostly empty.
+  ±1e6 span is mostly empty. With *both* off (`_use_density`), bar
+  heights become densities (`count / bin width`, `_density_heights`) so
+  bar area stays proportional to count on linear axes, and the y-axis is
+  capped by `_density_y_range` at the 20th-tallest bar (`_DENSITY_TOP_BINS`)
+  — the near-zero bins are so narrow that a few stray values would
+  otherwise stretch the scale by orders of magnitude. Refresh ticks in
+  density mode restyle `y` + `customdata` (the raw counts shown on hover)
+  and push a `yaxis.range` relayout only when the cap actually moved.
 - The `/weights` page (one `?layer=` query param) is the per-layer weight
   viewer. It reuses the shared stepping controls (no sample spinner) and
   builds one `_WeightPanel` per name in `session.layer_weights[layer]`,
