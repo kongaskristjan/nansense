@@ -35,6 +35,9 @@ Useful flags:
 - `--device` — `cpu`, `cuda`, or `mps`. Auto-detected when omitted.
 - `--bf16` — wrap forward/loss in `torch.autocast` with `bfloat16` (no `GradScaler` needed).
 - `--checkpoint path/to/file.pt` — save best-by-test-accuracy weights.
+- `--cache-dir` — directory for time-travel epoch checkpoints (default
+  `models/latest`). Every epoch start is checkpointed there, and the UI's
+  Time Travel button can jump training back to any of them.
 - `--playgrad-port 8080` — launch the playgrad UI on this port. Training
   pauses on the first batch; open the URL to drive it with the step / detach
   controls.
@@ -69,7 +72,7 @@ He et al. 2016) with ResNet-D-style downsampling shortcuts (He et al. 2018):
 import playgrad
 
 # enabled=False (default True) makes the session a near-zero-overhead no-op:
-# no fx trace, batch() does nothing, and serve() is skipped. This lets you
+# no fx trace, batch() does nothing, and the UI is skipped. This lets you
 # leave the wiring below in place and toggle the whole UI off with one flag.
 session = playgrad.start(
     model,
@@ -81,34 +84,62 @@ session = playgrad.start(
     # its param group's numeric hyperparameters (live lr, ...). Omit it and
     # the UI looks exactly as without this feature.
     optimizer=optimizer,
-)
-playgrad.serve(
-    session,
+    # Optional: time-travel checkpoints then include the scheduler's state,
+    # so a jump restores the learning-rate schedule automatically.
+    scheduler=scheduler,
+    # Optional: serve the UI immediately. Omit `port` (or call
+    # playgrad.serve(session, port=...) separately) to stay headless.
     port=8080,
     # Optional: denormalize input images for display (e.g., CIFAR10 stats).
     input_mean=(0.4914, 0.4822, 0.4465),
     input_std=(0.2470, 0.2435, 0.2616),
 )
 
-for epoch in range(50):
-    for batch in train_loader:
-        with session.batch(phase="train", epoch=epoch):
-            optimizer.zero_grad()
-            loss = ...
-            loss.backward()
-            optimizer.step()
-    for batch in val_loader:
-        with session.batch(phase="val", epoch=epoch):
-            ...
+# Optional: opt into time travel. The restorer checkpoints the training
+# state (model / optimizer / scheduler / RNG) to `cache_dir` at the start of
+# every epoch, and re-enters the loop at `restorer.start_epoch` when the UI
+# jumps back. Skip the wrapper (use a plain `for epoch in range(50):`) and
+# the UI works as before, just with time travel and caching disabled.
+restorer = session.training_restorer(cache_dir=Path("models/latest"))
+while restorer.pending():
+    with restorer:
+        for epoch in restorer.epochs():  # range(start_epoch, 50)
+            # session.batches wraps each item in a `session.batch(...)`
+            # context; `with session.batch(phase=..., epoch=...):` around the
+            # body is the equivalent long form.
+            for batch in session.batches(train_loader, phase="train", epoch=epoch):
+                optimizer.zero_grad()
+                loss = ...
+                loss.backward()
+                optimizer.step()
+            for batch in session.batches(val_loader, phase="val", epoch=epoch):
+                ...
+            scheduler.step()
 
 session.close()  # UI keeps running so you can browse the last snapshot
 ```
 
+Loop state that depends on history (`best_acc`, metric curves, ...) should
+be initialised inside the `with restorer:` block — a time-travel jump
+restarts the block, which resets them along with the rewound timeline.
+
 Open `http://localhost:8080` while training is running. The top bar drives
 the session with five "go" buttons — `stop`, `step batch`, `step epoch`,
 `step until end`, `step until custom` (opens a dialog where you pick the
-target phase / epoch / batch) — and `detach` (run unattended without
-further pauses). The leading icon button toggles the architecture pane;
+target phase / epoch / batch) — `detach` (run unattended without
+further pauses), and a blue `time travel` button. Time travel opens a
+dialog with a slider over the epochs that have a checkpoint on disk
+(epochs without one are unselectable); picking one jumps training back to
+that epoch's start (model, optimizer, scheduler, and RNG state restored,
+so the replay is deterministic). Text below the slider states the cached
+and uncached epoch ranges, and while any epochs are uncached a "Cache
+full training run" button runs training to the end, checkpointing every
+epoch along the way.
+A checkpoint that no longer matches the model (e.g. left behind by a
+previous run with a different architecture) is rejected with an error
+dialog and no jump happens. Without the `training_restorer` wrapper the
+button is grayed out; hovering it explains why. The leading icon button
+toggles the architecture pane;
 a trailing icon button toggles the input-image pane. The left pane shows
 the module hierarchy as a Mermaid diagram; hovering either a Mermaid
 node or a layer card highlights both ends of the pair, and clicking

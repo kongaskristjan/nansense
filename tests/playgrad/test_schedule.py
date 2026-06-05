@@ -83,3 +83,25 @@ def test_last_phase_name_follows_insertion_order() -> None:
     assert schedule.last_phase_name == "val"
     schedule.update(phases={"val": 1, "train": 1})
     assert schedule.last_phase_name == "train"
+
+
+def test_first_phase_name_follows_insertion_order() -> None:
+    schedule = Schedule(epochs=1, phases={"train": 1, "val": 1})
+    assert schedule.first_phase_name == "train"
+    schedule.update(phases={"val": 1, "train": 1})
+    assert schedule.first_phase_name == "val"
+
+
+def test_rewind_to_epoch_resets_counters_for_that_epoch_onward() -> None:
+    schedule = Schedule(epochs=3, phases={"train": 2})
+    for epoch in range(3):
+        schedule.advance("train", epoch)
+        schedule.advance("train", epoch)
+
+    schedule.rewind_to_epoch(1)
+    # Epochs 1 and 2 advance from batch 0 again...
+    assert schedule.advance("train", 1).batch_idx == 0
+    assert schedule.advance("train", 2).batch_idx == 0
+    # ...while epoch 0's counters survive the rewind.
+    with pytest.raises(ValueError, match="more batches than declared"):
+        schedule.advance("train", 0)

@@ -20,7 +20,9 @@ Synchronization is a single `threading.Condition` (`Session._cv`) protecting:
 - `_pause_count` — monotonic counter; bumped each time the training thread
   enters `_wait_for_proceed`.
 - `_closed` — flips once on `close()`.
-- `_schedule` — mutated by `set_schedule()` only.
+- `_schedule` — mutated by `set_schedule()` and time-travel rewinds.
+- `_pending_jump` — armed by `request_time_travel()`, consumed at batch
+  boundaries (with a lock-free `is None` fast path on the consuming side).
 
 `_snapshot`, `_activations`, and `_hook_handles` are written only by the
 training thread and read by the UI thread; reads are point-in-time and
@@ -292,6 +294,88 @@ least one layer watched, every batch pays capture-mode cost — that's
 the cost of exposing fx intermediates and inputs to the stats
 collector without a parallel implementation. Snapshot timeline and
 pause behaviour are unaffected on non-watching sessions.
+
+## Time travel (`playgrad.restore`)
+
+Time travel jumps training back to the start of any epoch whose state was
+checkpointed to disk. It is opt-in at the training-loop level: the user
+creates a `TrainingRestorer` (`session.training_restorer(cache_dir=...)`,
+default `models/latest/`) and wraps the epoch loop in it:
+
+```python
+while restorer.pending():
+    with restorer:
+        for epoch in restorer.epochs():   # range(start_epoch, schedule.epochs)
+            ...
+```
+
+Without a restorer, nothing is written to disk, the session never raises a
+jump, and the UI's Time Travel button is disabled (its tooltip explains
+why). On a disabled session the restorer is inert.
+
+**Epoch cache.** With a restorer attached, `_BatchContext.__enter__` on the
+first batch of each epoch (batch 0 of the schedule's first phase) writes
+`epoch_<n>.pt` into the cache directory before any forward pass:
+`model.state_dict()`, `optimizer.state_dict()`, `scheduler.state_dict()`
+(when passed to `start()`), and the torch/CUDA RNG states. Writes go
+through a temp file + atomic rename; an existing file for the same epoch is
+overwritten when training passes it again, so after a jump the older
+timeline's entries persist until the re-run reaches them. Restoring the
+global RNG state is what makes the replay deterministic — the DataLoader
+draws its shuffle seed from the global generator at `iter()` time.
+
+**Jump flow.** `Session.request_time_travel(epoch)` runs on the UI thread
+and validates everything up-front: the restorer exists and isn't finished,
+the epoch is in range, the checkpoint loads, and its model state matches
+the live model's parameter names and shapes (`validate_model_state`). Any
+failure raises `TimeTravelError` with a displayable message and nothing
+unwinds — this is what catches a cache directory left behind by a previous
+run of a different model. On success the request arms `_pending_jump`
+under `_cv`, switches the mode to `STEP`, and bumps the resume token.
+
+The training thread consumes the jump at batch boundaries by raising
+`TimeTravelJump(epoch)` — a `BaseException` subclass, so a user's broad
+`except Exception` around the batch body can't swallow it. There are two
+consumption points: `_BatchContext.__enter__` (right after the schedule
+advance, covering requests that arrive mid-run between batches) and
+`__exit__` after `_wait_for_proceed` (covering the common paused case).
+`_wait_for_proceed`'s predicate also wakes on a pending jump: the request
+already bumped the token, so a pause that began after the request would
+otherwise wait for a second UI command.
+
+The exception unwinds through the user's loaders and loops to the
+`with restorer:` block, whose `__exit__` suppresses exactly this type and
+records the target. The next `__enter__` (training thread, between
+attempts, so nothing races a forward pass) loads the checkpoint back into
+the model / optimizer / scheduler / RNG and calls
+`Session._rewind_to_epoch(epoch)`, which drops the schedule's batch
+counters for `epoch` onward (`Schedule.rewind_to_epoch`) and the watch
+accumulators' buckets for those epochs (`forget_epochs_from` — they're
+additive, so the re-run samples must start from empty ones). Because the
+mode was set to `STEP`, the first batch of the target epoch captures and
+pauses for inspection — the same behaviour as session start.
+
+`restorer.pending()` returns `False` once a `with` block completes without
+a jump; it also raises if called twice without the block ever being
+entered, catching a `while` loop that forgot the `with` (which would
+otherwise re-run training forever). Loop state that depends on history
+(`best_acc`, metric curves) belongs inside the `with` block, where a jump
+naturally resets it.
+
+**UI.** The blue Time Travel button (right of Detach, built by
+`_add_time_travel_button`) opens a dialog whose content is rebuilt on
+every open from `session.time_travel_status()`: a slider over the cached
+epochs within the current schedule (it runs over indices into the
+cached-epoch list, so uncached epochs are unselectable even when the set
+has gaps, with a label showing the mapped epoch number), text stating the
+cached and uncached epoch ranges, and — while any are missing — a "Cache
+full training run" button that simply arms `step_run()` (running to the
+end checkpoints every epoch start along the way). A rejected request (`TimeTravelError`) opens a
+separate error dialog and no jump happens. When the session reports time
+travel unavailable at page build (no restorer), the button is rendered
+disabled with the reason as a tooltip on a wrapper div — Quasar suppresses
+pointer events on disabled buttons, so the tooltip can't live on the
+button itself.
 
 ## UI layer
 

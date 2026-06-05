@@ -11,3 +11,4 @@ data/
 *.pt
 *.pth
 playgrad-*.png
+models/

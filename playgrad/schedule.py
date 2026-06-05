@@ -48,8 +48,22 @@ class Schedule:
         return dict(self._phases)
 
     @property
+    def first_phase_name(self) -> str:
+        return next(iter(self._phases))
+
+    @property
     def last_phase_name(self) -> str:
         return next(reversed(self._phases))
+
+    def rewind_to_epoch(self, epoch: int) -> None:
+        """Forget batch counters for `epoch` and everything after it.
+
+        Called when time travel jumps back to the start of `epoch`, so the
+        re-run epochs advance from batch 0 again instead of tripping the
+        more-batches-than-declared check.
+        """
+        for key in [k for k in self._counters if k[1] >= epoch]:
+            del self._counters[key]
 
     def update(self, *, epochs: int | None = None, phases: dict[str, int] | None = None) -> None:
         new_epochs = self._epochs if epochs is None else epochs

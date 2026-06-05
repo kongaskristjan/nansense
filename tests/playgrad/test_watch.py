@@ -206,3 +206,13 @@ def test_snapshot_median_is_histogram_midpoint() -> None:
     # All five samples land in the same bin; the median is its midpoint.
     median_bin = bin_index(0.5)
     assert snap.median == pytest.approx(bin_midpoint(median_bin))
+
+
+def test_watch_accumulator_forget_epochs_from() -> None:
+    acc = WatchAccumulator()
+    for epoch in range(3):
+        acc.update(layer="a", phase="train", epoch=epoch, kind="activation", x=torch.tensor([1.0]))
+    acc.update(layer="b", phase="val", epoch=2, kind="activation", x=torch.tensor([2.0]))
+    acc.forget_epochs_from(1)
+    snap = acc.snapshot()
+    assert set(snap.stats) == {("a", "train", 0)}

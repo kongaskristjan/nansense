@@ -8,6 +8,12 @@ web UI. It deliberately contains no training logic; training lives in
 
 from __future__ import annotations
 
+from playgrad.restore import (
+    TimeTravelError,
+    TimeTravelJump,
+    TimeTravelStatus,
+    TrainingRestorer,
+)
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot, Mode, Session, start
 from playgrad.ui import serve
@@ -25,6 +31,10 @@ __all__ = [
     "Schedule",
     "Session",
     "TensorStatsSnapshot",
+    "TimeTravelError",
+    "TimeTravelJump",
+    "TimeTravelStatus",
+    "TrainingRestorer",
     "WatchSnapshot",
     "serve",
     "start",

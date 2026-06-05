@@ -25,6 +25,7 @@ from playgrad.ui.app import (
     _phases_with_data,
     _role_options,
     _strip_html,
+    _summarize_epoch_ranges,
     _use_density,
     _validate_step_until_target,
     serve,
@@ -405,6 +406,19 @@ def test_serve_on_disabled_session_is_noop() -> None:
     model = torch.nn.Linear(4, 2)
     session = playgrad.start(model, epochs=1, phases={"train": 1}, enabled=False)
     assert serve(session) is None
+
+
+@pytest.mark.parametrize(
+    ("epochs", "expected"),
+    [
+        ([0], "0"),
+        ([0, 1, 2], "0–2"),
+        ([0, 1, 2, 5, 7, 8], "0–2, 5, 7–8"),
+        ([3, 5], "3, 5"),
+    ],
+)
+def test_summarize_epoch_ranges(epochs: list[int], expected: str) -> None:
+    assert _summarize_epoch_ranges(epochs) == expected
 
 
 # --- Strip HTML assembly ----------------------------------------------------

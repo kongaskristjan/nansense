@@ -1024,3 +1024,43 @@ def test_disabled_session_does_not_advance_the_schedule() -> None:
     for _ in range(5):  # far more than the single declared batch
         with session.batch(phase="train", epoch=0):
             _train_step(model)
+
+
+def test_batches_runs_each_item_inside_a_batch_context() -> None:
+    session, _ = _make_session(epochs=1, phases={"train": 3})
+    session.detach()
+
+    items = ["a", "b", "c"]
+    positions: list[tuple[str, int, int]] = []
+    for item in session.batches(items, phase="train", epoch=0):
+        live = session.live_position
+        assert live is not None
+        positions.append((live.phase, live.epoch, live.batch_idx))
+
+    # The body observed each batch's own position: it ran inside the context.
+    assert positions == [("train", 0, 0), ("train", 0, 1), ("train", 0, 2)]
+    # The schedule advanced three times — a fourth batch overflows.
+    with pytest.raises(ValueError, match="more batches than declared"):
+        with session.batch(phase="train", epoch=0):
+            pass
+
+
+def test_batches_yields_loader_items_unchanged_when_disabled() -> None:
+    model = TinyNet()
+    session = playgrad.start(model, epochs=1, phases={"train": 2}, enabled=False)
+    assert list(session.batches([1, 2, 3], phase="train", epoch=0)) == [1, 2, 3]
+
+
+def test_start_with_scheduler_exposes_it() -> None:
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+    session = playgrad.start(
+        model,
+        epochs=1,
+        phases={"train": 1},
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+    assert session.optimizer is optimizer
+    assert session.scheduler is scheduler

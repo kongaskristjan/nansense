@@ -33,15 +33,23 @@ def _autocast(device: torch.device, amp_dtype: torch.dtype | None) -> Iterator[N
         yield
 
 
-@contextlib.contextmanager
-def _maybe_session_batch(
-    session: Session | None, *, phase: str, epoch: int
-) -> Iterator[None]:
+def _batches(
+    session: Session | None,
+    loader: DataLoader,
+    *,
+    phase: str,
+    epoch: int,
+) -> Iterator[tuple[Tensor, Tensor]]:
+    """Iterate `loader`, wrapped in `session.batches` when a session is given.
+
+    The loop body runs inside the session's batch context (the generator is
+    suspended there), so hooks are installed before the forward pass and a
+    time-travel jump surfaces from the `for` statement, not mid-body.
+    """
     if session is None:
-        yield
+        yield from loader
         return
-    with session.batch(phase=phase, epoch=epoch):
-        yield
+    yield from session.batches(loader, phase=phase, epoch=epoch)
 
 
 def train_one_epoch(
@@ -59,21 +67,20 @@ def train_one_epoch(
     total_loss = 0.0
     total_acc = 0.0
     n_batches = 0
-    for inputs, targets in loader:
-        with _maybe_session_batch(session, phase="train", epoch=epoch):
-            inputs = inputs.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
+    for inputs, targets in _batches(session, loader, phase="train", epoch=epoch):
+        inputs = inputs.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
 
-            optimizer.zero_grad(set_to_none=True)
-            with _autocast(device, amp_dtype):
-                logits = model(inputs)
-                loss = criterion(logits, targets)
-            loss.backward()
-            optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        with _autocast(device, amp_dtype):
+            logits = model(inputs)
+            loss = criterion(logits, targets)
+        loss.backward()
+        optimizer.step()
 
-            total_loss += loss.item()
-            total_acc += _accuracy(logits, targets)
-            n_batches += 1
+        total_loss += loss.item()
+        total_acc += _accuracy(logits, targets)
+        n_batches += 1
 
     return EpochStats(loss=total_loss / n_batches, accuracy=total_acc / n_batches)
 
@@ -93,18 +100,17 @@ def evaluate(
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
-    for inputs, targets in loader:
-        with _maybe_session_batch(session, phase="val", epoch=epoch):
-            inputs = inputs.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
+    for inputs, targets in _batches(session, loader, phase="val", epoch=epoch):
+        inputs = inputs.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
 
-            with _autocast(device, amp_dtype):
-                logits = model(inputs)
-                loss = criterion(logits, targets)
+        with _autocast(device, amp_dtype):
+            logits = model(inputs)
+            loss = criterion(logits, targets)
 
-            total_loss += loss.item() * targets.size(0)
-            total_correct += int((logits.argmax(dim=1) == targets).sum().item())
-            total_samples += targets.size(0)
+        total_loss += loss.item() * targets.size(0)
+        total_correct += int((logits.argmax(dim=1) == targets).sum().item())
+        total_samples += targets.size(0)
 
     return EpochStats(
         loss=total_loss / total_samples,

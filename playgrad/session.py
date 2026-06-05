@@ -29,17 +29,28 @@ from __future__ import annotations
 
 import inspect
 import threading
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from types import TracebackType
 from typing import Self
 
 import torch
 from torch import Tensor, fx, nn
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
 from playgrad.fx_names import friendly_names
+from playgrad.restore import (
+    DEFAULT_CACHE_DIR,
+    TimeTravelError,
+    TimeTravelJump,
+    TimeTravelStatus,
+    TrainingRestorer,
+    validate_model_state,
+)
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.watch import WatchAccumulator, WatchSnapshot
 
@@ -87,13 +98,17 @@ class Session:
         phases: dict[str, int],
         enabled: bool = True,
         optimizer: Optimizer | None = None,
+        scheduler: LRScheduler | None = None,
     ) -> None:
         self.model = model
         self._enabled = enabled
         self._optimizer = optimizer
+        self._scheduler = scheduler
         self._schedule = Schedule(epochs=epochs, phases=phases)
         self._mode: Mode = Mode.STEP
         self._target_position: tuple[str, int, int] | None = None
+        self._restorer: TrainingRestorer | None = None
+        self._pending_jump: int | None = None
         self._cv = threading.Condition()
         self._resume_token = 0
         self._pause_count = 0
@@ -121,6 +136,14 @@ class Session:
     @property
     def schedule(self) -> Schedule:
         return self._schedule
+
+    @property
+    def optimizer(self) -> Optimizer | None:
+        return self._optimizer
+
+    @property
+    def scheduler(self) -> LRScheduler | None:
+        return self._scheduler
 
     @property
     def mode(self) -> Mode:
@@ -204,6 +227,25 @@ class Session:
 
     def batch(self, *, phase: str, epoch: int) -> _BatchContext:
         return _BatchContext(self, phase=phase, epoch=epoch)
+
+    def batches[T](
+        self, loader: Iterable[T], *, phase: str, epoch: int
+    ) -> Iterator[T]:
+        """Iterate `loader` with each item wrapped in a `batch()` context.
+
+        Sugar over `batch()` for the common loop shape: the user's batch
+        body runs while the generator is suspended at `yield`, i.e. inside
+        the batch context — hooks are installed before the forward pass and
+        the capture/pause happens when the loop asks for the next item.
+        A `TimeTravelJump` raised at a batch boundary therefore surfaces
+        from the `for` statement itself, not from inside the user's body.
+
+            for inputs, targets in session.batches(loader, phase="train", epoch=e):
+                ...  # forward / backward / step
+        """
+        for item in loader:
+            with self.batch(phase=phase, epoch=epoch):
+                yield item
 
     @property
     def watched_layers(self) -> frozenset[str]:
@@ -357,6 +399,87 @@ class Session:
 
     def detach(self) -> None:
         self._set_mode(Mode.DETACH, resume=True)
+
+    def training_restorer(
+        self, *, cache_dir: Path = DEFAULT_CACHE_DIR
+    ) -> TrainingRestorer:
+        """Create the restorer that opts this session into time travel.
+
+        Wrapping the epoch loop in the returned object (see
+        `TrainingRestorer`) enables both epoch-start checkpointing to
+        `cache_dir` and UI-driven jumps back to any cached epoch. A session
+        without a restorer never writes checkpoints and never raises
+        `TimeTravelJump`. On a disabled session the restorer is inert: the
+        loop runs exactly once and nothing touches the disk.
+        """
+        if self._restorer is not None:
+            raise RuntimeError("this session already has a training restorer")
+        restorer = TrainingRestorer(self, cache_dir=cache_dir)
+        if self._enabled:
+            self._restorer = restorer
+        return restorer
+
+    def request_time_travel(self, epoch: int) -> None:
+        """Ask the training thread to restart at the start of `epoch`.
+
+        Validates the request up-front on the calling (UI) thread — the
+        checkpoint must exist, load, and match the live model's parameter
+        shapes — and raises `TimeTravelError` with a displayable message
+        otherwise, so an incompatible cache (e.g. written by a previous run
+        with a different model) is rejected before anything unwinds. On
+        success the jump is armed: the training thread raises
+        `TimeTravelJump` at its next batch boundary (immediately, when
+        paused), the restorer rolls the state back, and the session enters
+        `STEP` mode so the first batch of `epoch` pauses for inspection.
+        """
+        restorer = self._restorer
+        if restorer is None:
+            raise TimeTravelError(
+                "time travel requires the training loop to be wrapped in a "
+                "training restorer (session.training_restorer())"
+            )
+        if restorer.finished:
+            raise TimeTravelError("the training run has already completed")
+        if not 0 <= epoch < self._schedule.epochs:
+            raise TimeTravelError(
+                f"epoch {epoch} out of range [0, {self._schedule.epochs})"
+            )
+        payload = restorer.cache.load(epoch)
+        error = validate_model_state(payload, self.model)
+        if error is not None:
+            raise TimeTravelError(error)
+        with self._cv:
+            self._pending_jump = epoch
+            self._mode = Mode.STEP
+            self._resume_token += 1
+            self._cv.notify_all()
+
+    def time_travel_status(self) -> TimeTravelStatus:
+        """What the UI needs to render the time-travel button and dialog."""
+        total = self._schedule.epochs
+        restorer = self._restorer
+        if restorer is None:
+            return TimeTravelStatus(
+                available=False,
+                reason=(
+                    "Time travel is off: the training loop is not wrapped in "
+                    "a training restorer (`while restorer.pending(): with "
+                    "restorer: ...`), so no epoch checkpoints are saved."
+                ),
+                cached_epochs=[],
+                total_epochs=total,
+            )
+        cached = [e for e in restorer.cache.cached_epochs() if 0 <= e < total]
+        if restorer.finished:
+            return TimeTravelStatus(
+                available=False,
+                reason="The training run has completed; time travel is no longer available.",
+                cached_epochs=cached,
+                total_epochs=total,
+            )
+        return TimeTravelStatus(
+            available=True, reason=None, cached_epochs=cached, total_epochs=total
+        )
 
     def close(self) -> None:
         with self._cv:
@@ -579,12 +702,43 @@ class Session:
             optimizer_hyperparams=self.current_optimizer_hyperparams(),
         )
 
+    def _take_pending_jump(self) -> int | None:
+        """Consume the armed time-travel target, if any (training thread)."""
+        # Lock-free fast path: this runs on every batch boundary, and the
+        # GIL-atomic read is None for the entire life of most sessions. A
+        # request racing the read is simply consumed at the next boundary.
+        if self._pending_jump is None:
+            return None
+        with self._cv:
+            jump = self._pending_jump
+            self._pending_jump = None
+            return jump
+
+    def _rewind_to_epoch(self, epoch: int) -> None:
+        """Reset per-epoch bookkeeping after a time-travel restore.
+
+        The schedule's batch counters for `epoch` and later are dropped so
+        the re-run epochs advance from batch 0, and the watch accumulators
+        forget the abandoned timeline's buckets — they're additive, so the
+        re-run samples must start from empty ones.
+        """
+        with self._cv:
+            self._schedule.rewind_to_epoch(epoch)
+        self._watch_accumulator.forget_epochs_from(epoch)
+
     def _wait_for_proceed(self) -> None:
+        # A pending time-travel jump also ends the wait: its request already
+        # bumped the resume token, so a pause that began *after* the request
+        # would otherwise sit waiting for a second UI command.
         with self._cv:
             seen = self._resume_token
             self._pause_count += 1
             self._cv.notify_all()
-            while self._resume_token == seen and not self._closed:
+            while (
+                self._resume_token == seen
+                and not self._closed
+                and self._pending_jump is None
+            ):
                 self._cv.wait()
 
 
@@ -609,6 +763,23 @@ class _BatchContext:
         # tracks progress on every batch, even in modes that don't capture
         # snapshots here (step_epoch, step_until_position, step_run, detach).
         self._session._live_position = self._position
+        # A jump that arrived while training was running (not paused) is
+        # consumed before this batch does any work. Raising from __enter__
+        # skips __exit__, but nothing has been installed yet.
+        jump = self._session._take_pending_jump()
+        if jump is not None:
+            raise TimeTravelJump(jump)
+        # With a restorer attached, the first batch of each epoch checkpoints
+        # the epoch-start state (model/optimizer/scheduler/RNG) to disk —
+        # before any forward pass, so a later jump back to this epoch
+        # restores exactly this moment.
+        restorer = self._session._restorer
+        if (
+            restorer is not None
+            and self._position.batch_idx == 0
+            and self._position.phase == self._session._schedule.first_phase_name
+        ):
+            restorer.save_epoch_start(self._epoch)
         self._captured = self._session._should_capture(self._position)
         self._stats_only = (
             not self._captured and bool(self._session._watched_layers)
@@ -628,15 +799,24 @@ class _BatchContext:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        if self._position is None or not (self._captured or self._stats_only):
+        if self._position is None:
             return
-        if exc is None and self._session._watched_layers:
-            self._session._update_watch_stats(self._position)
-        self._session._remove_hooks()
-        if self._captured and exc is None and not self._session.closed:
-            self._session._publish_snapshot(self._position)
-            self._session._wait_for_proceed()
-        self._session._activations.clear()
+        if self._captured or self._stats_only:
+            if exc is None and self._session._watched_layers:
+                self._session._update_watch_stats(self._position)
+            self._session._remove_hooks()
+            if self._captured and exc is None and not self._session.closed:
+                self._session._publish_snapshot(self._position)
+                self._session._wait_for_proceed()
+            self._session._activations.clear()
+        # Every batch boundary — captured, stats-only, or plain (detach) —
+        # consumes an armed time-travel jump. `_wait_for_proceed` above
+        # returns immediately when a jump is pending, so a paused batch
+        # reacts to the request without a second UI command.
+        if exc is None:
+            jump = self._session._take_pending_jump()
+            if jump is not None:
+                raise TimeTravelJump(jump)
 
     @property
     def position(self) -> BatchPosition | None:
@@ -654,11 +834,16 @@ def start(
     phases: dict[str, int],
     enabled: bool = True,
     optimizer: Optimizer | None = None,
+    scheduler: LRScheduler | None = None,
+    port: int | None = None,
+    host: str = "127.0.0.1",
+    input_mean: tuple[float, ...] | None = None,
+    input_std: tuple[float, ...] | None = None,
 ) -> Session:
-    """Create a `Session` for `model`.
+    """Create a `Session` for `model` (and optionally serve the UI).
 
     With `enabled=False` the session is a near-zero-overhead no-op: no fx
-    trace at construction, `batch()` does nothing, and `serve()` is skipped.
+    trace at construction, `batch()` does nothing, and the UI is skipped.
     This lets a training script keep its playgrad wiring in place and turn
     the whole UI off with a single flag.
 
@@ -666,10 +851,32 @@ def start(
     additionally carry each parameter's optimizer state — momentum buffers,
     Adam moments, step counts — plus its param group's numeric
     hyperparameters. Without it, everything behaves exactly as before.
+
+    `scheduler` is optional: when given, time-travel checkpoints include the
+    LR scheduler's state, so a jump restores the learning-rate schedule
+    automatically along with the model and optimizer.
+
+    `port` is optional: when given, the UI is served immediately on that
+    port (equivalent to a separate `playgrad.serve(session, port=...)`
+    call, which remains available for finer control). `host`, `input_mean`,
+    and `input_std` are forwarded to `serve`.
     """
-    return Session(
-        model, epochs=epochs, phases=phases, enabled=enabled, optimizer=optimizer
+    session = Session(
+        model,
+        epochs=epochs,
+        phases=phases,
+        enabled=enabled,
+        optimizer=optimizer,
+        scheduler=scheduler,
     )
+    if port is not None:
+        # Imported lazily: playgrad.ui imports this module at the top level.
+        from playgrad.ui import serve
+
+        serve(
+            session, port=port, host=host, input_mean=input_mean, input_std=input_std
+        )
+    return session
 
 
 def _try_trace(model: nn.Module) -> fx.GraphModule | None:
