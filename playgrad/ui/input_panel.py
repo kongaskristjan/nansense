@@ -1,11 +1,18 @@
 """The "Input Selection" sidebar of the main page.
 
 Hosts the per-sample spinner (moved out of the top bar), the batch-pinning
-controls for probe runs (see `playgrad.probe`), and the input image. The
-panel owns the per-connection view state the page's tick loop reads
-(`sample_idx`) and forwards pin / probe-mode changes to the session; the
-session reacts asynchronously by publishing a new `ProbeResult`, which the
-tick loop picks up like a new snapshot.
+and click-to-perturb controls for probe runs (see `playgrad.probe`), and the
+input image. The panel owns the per-connection view state the page's tick
+loop reads (`sample_idx`, `compare`) and forwards pin / probe-mode /
+perturbation changes to the session; the session reacts asynchronously by
+publishing a new `ProbeResult`, which the tick loop picks up like a new
+snapshot.
+
+The input image is a `ui.interactive_image`, so clicks arrive with
+coordinates in the image's *native* pixel space regardless of the CSS
+upscale. With "Click to perturb" on, a click writes the picked color —
+back-transformed into model-input space via `normalized_color` — into that
+pixel of the viewed sample on every subsequent probe input.
 """
 
 from __future__ import annotations
@@ -13,8 +20,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from nicegui import ui
+from torch import Tensor
 
 from playgrad.session import Session
+from playgrad.ui.render import INPUT_IMAGE_SIZE
 
 _PROBE_MODE_OPTIONS: dict[str, str] = {
     "unchanged": "Unchanged",
@@ -23,18 +32,61 @@ _PROBE_MODE_OPTIONS: dict[str, str] = {
 }
 
 
+def normalized_color(
+    hex_color: str,
+    channels: int,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+) -> tuple[float, ...] | None:
+    """Convert a `#rrggbb` display color to model-input channel values.
+
+    Grayscale inputs (`channels == 1`) use the mean of the RGB components.
+    When `mean` / `std` are given (the same stats used to *de*normalize the
+    input for display), the color is back-transformed into normalized input
+    space: `(c - mean) / std`. Returns `None` for unsupported channel
+    counts, unparsable colors, or mismatched stats lengths.
+    """
+    if channels not in (1, 3):
+        return None
+    text = hex_color.strip().lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        rgb = tuple(int(text[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except ValueError:
+        return None
+    values: tuple[float, ...] = (sum(rgb) / 3.0,) if channels == 1 else rgb
+    if mean is not None and std is not None:
+        if len(mean) != channels or len(std) != channels:
+            return None
+        values = tuple((v - m) / s for v, m, s in zip(values, mean, std))
+    return values
+
+
 class InputPanel:
     """Builds the sidebar's controls inside the currently open container.
 
     `on_change` marks the page dirty so the next tick re-renders the strips
-    (sample flips and unpinning change what's displayed without a new
-    snapshot or probe result arriving).
+    (sample flips, unpinning, and the compare toggle change what's displayed
+    without a new snapshot or probe result arriving).
     """
 
-    def __init__(self, *, session: Session, on_change: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        input_name: str | None,
+        input_mean: tuple[float, ...] | None,
+        input_std: tuple[float, ...] | None,
+        on_change: Callable[[], None],
+    ) -> None:
         self._session = session
+        self._input_name = input_name
+        self._input_mean = input_mean
+        self._input_std = input_std
         self._on_change = on_change
         self.sample_idx = 0
+        self.compare = False
         self._spinner_max: int | None = None
         self._build()
 
@@ -72,11 +124,40 @@ class InputPanel:
         )
         # Probe mode only applies to probe runs, which need a pinned batch.
         self._mode_toggle.bind_enabled_from(self._pin_switch, "value")
+        ui.separator()
+        self._perturb_switch = ui.switch(
+            "Click to perturb",
+            on_change=self._on_perturb_change,
+        ).props("dense").tooltip(
+            "Clicking the input image paints the picked color into that "
+            "pixel of the viewed sample on every probe input"
+        )
+        self._color_input = ui.color_input(
+            label="Perturb color", value="#000000"
+        ).classes("w-full").props("dense")
+        self._compare_switch = ui.switch(
+            "Compare with original",
+            on_change=self._on_compare_change,
+        ).props("dense").tooltip(
+            "Show each layer's activation diff (perturbed − original) "
+            "instead of the perturbed activations"
+        )
+        with ui.row().classes("w-full items-center gap-2 no-wrap"):
+            ui.button(
+                "Clear perturbations",
+                on_click=self._session.clear_perturbations,
+                color="slate-500",
+            ).props("dense size=sm no-caps")
+            self._perturb_caption = ui.label("").classes(
+                "text-xs text-slate-500 font-mono"
+            )
         self._error_label = ui.label("").classes("text-xs text-red-600 self-start")
-        self._image = ui.html("")
+        self._image = ui.interactive_image(
+            on_mouse=self._on_image_click, events=["mousedown"]
+        ).style(f"width:{INPUT_IMAGE_SIZE}px; image-rendering:pixelated")
 
-    def set_image(self, html: str) -> None:
-        self._image.set_content(html)
+    def set_image(self, src: str) -> None:
+        self._image.set_source(src)
 
     def sync_spinner_max(self, batch_size: int | None) -> None:
         """Clamp the sample spinner to the displayed batch's size."""
@@ -100,7 +181,21 @@ class InputPanel:
             if pos is not None
             else ""
         )
+        n = len(self._session.perturbations)
+        self._perturb_caption.text = (
+            f"{n} perturbed pixel{'' if n == 1 else 's'}" if n else ""
+        )
         self._error_label.text = self._session.probe_error or ""
+
+    def _current_input(self) -> Tensor | None:
+        """The input batch the displayed image was rendered from."""
+        probe = self._session.probe_result
+        if probe is not None:
+            return probe.input
+        snap = self._session.snapshot
+        if snap is None or self._input_name is None:
+            return None
+        return snap.activations.get(self._input_name)
 
     @staticmethod
     def _defer(write: Callable[[], object]) -> None:
@@ -139,3 +234,36 @@ class InputPanel:
         value = getattr(e, "value", None)
         if value is not None:
             self._session.set_probe_mode(str(value))
+
+    def _on_perturb_change(self, e: object) -> None:
+        # Crosshair cursor while clicks paint; the toggle only gates clicking
+        # (existing perturbations stay until cleared).
+        if getattr(e, "value", False):
+            self._image.classes(add="cursor-crosshair")
+        else:
+            self._image.classes(remove="cursor-crosshair")
+
+    def _on_compare_change(self, e: object) -> None:
+        self.compare = bool(getattr(e, "value", False))
+        self._on_change()
+
+    def _on_image_click(self, e: object) -> None:
+        if not self._perturb_switch.value:
+            return
+        tensor = self._current_input()
+        if tensor is None or tensor.ndim != 4:
+            return
+        values = normalized_color(
+            str(self._color_input.value or "#000000"),
+            int(tensor.shape[1]),
+            self._input_mean,
+            self._input_std,
+        )
+        if values is None:
+            return
+        h, w = int(tensor.shape[2]), int(tensor.shape[3])
+        x = min(max(int(getattr(e, "image_x", 0)), 0), w - 1)
+        y = min(max(int(getattr(e, "image_y", 0)), 0), h - 1)
+        self._session.add_perturbation(
+            sample=self.sample_idx, y=y, x=x, values=values
+        )

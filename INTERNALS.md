@@ -336,15 +336,30 @@ local dict and are removed in a `finally`. Neither path touches
 `_activations` or `_hook_handles`; both are safe because probes only run
 between batches, when the batch path's hooks are uninstalled.
 
-**Publishing and races.** Probe config (pinned input, mode) is mutated by
-the UI thread under `_cv`, bumping `_probe_version`. `_run_probe` snapshots
-the config under the lock, computes without it, then publishes under the
-lock only if the version is unchanged — a config change mid-run wins and
-its own request re-runs the probe. `_probe_count` is the monotonic
-completion counter (`wait_for_probe` mirrors `wait_until_paused` for tests
-and the UI). A probe that raises publishes `probe_error` instead of killing
-the training thread (`_run_probe_guarded`); `unpin_batch` clears the
-published result so the UI falls back to the snapshot.
+**Perturbations.** `Session.add_perturbation(sample=, y=, x=, values=)`
+records per-pixel edits (`(sample, y, x) -> per-channel values` in
+model-input space; the UI back-transforms the picked display color via
+`input_panel.normalized_color`). When any exist, `apply_perturbations`
+clones the base input, writes the in-range entries (out-of-range or
+channel-mismatched ones are skipped — the base may have changed shape since
+the click), and the probe runs a *second* forward on the copy inside the
+same isolation scope. `ProbeResult` then carries `perturbed_input` /
+`perturbed_activations` next to the base pair, and the UI renders either
+the perturbed activations or the per-layer diff ("Compare with original").
+Perturbations alone keep probing active without a pin — the base falls
+back to the snapshot's input (`_snapshot_input`), so edits track the
+current training batch.
+
+**Publishing and races.** Probe config (pinned input, mode, perturbations)
+is mutated by the UI thread under `_cv`, bumping `_probe_version`.
+`_run_probe` snapshots the config under the lock, computes without it, then
+publishes under the lock only if the version is unchanged — a config change
+mid-run wins and its own request re-runs the probe. `_probe_count` is the
+monotonic completion counter (`wait_for_probe` mirrors `wait_until_paused`
+for tests and the UI). A probe that raises publishes `probe_error` instead
+of killing the training thread (`_run_probe_guarded`); deactivating the
+probe (`unpin_batch` / `clear_perturbations` with nothing else active)
+clears the published result so the UI falls back to the snapshot.
 
 ## Time travel (`playgrad.restore`)
 
@@ -519,11 +534,25 @@ It does not touch tensors directly until they need to be rendered.
   sample" `ui.number` (moved out of the top bar), the "Pin batch" switch
   with a pinned-position caption, the probe-mode toggle
   (unchanged / eval / train, enabled only while pinned via
-  `bind_enabled_from`), and the input image. Pin/mode changes call straight
-  into the session; the session reacts by publishing a new `ProbeResult`,
-  which the tick loop picks up like a new snapshot. A failed pin (no
-  snapshot yet) reverts the switch with the usual one-tick-deferred value
-  write.
+  `bind_enabled_from`), the perturbation controls ("Click to perturb"
+  switch, `ui.color_input` picker, "Compare with original" switch, a clear
+  button with a perturbed-pixel count), and the input image. Pin / mode /
+  perturbation changes call straight into the session; the session reacts
+  by publishing a new `ProbeResult`, which the tick loop picks up like a
+  new snapshot. The compare switch is pure view state (`panel.compare`,
+  threaded into `_compute_frame`) — both forwards are already in the
+  result, so flipping it just re-renders. A failed pin (no snapshot yet)
+  reverts the switch with the usual one-tick-deferred value write.
+- The input image is a `ui.interactive_image` sized by CSS to
+  `INPUT_IMAGE_SIZE` with `image-rendering: pixelated` (the per-frame
+  payload is the native-resolution data URI from `_input_img_src`).
+  NiceGUI delivers click coordinates in the image's *native* pixel space,
+  so the handler clamps `image_x`/`image_y` into the input's `H × W`,
+  converts the picked color with `normalized_color` (grayscale inputs use
+  the RGB mean; `mean`/`std` back-transform into normalized space), and
+  calls `session.add_perturbation` for the viewed sample. The "Click to
+  perturb" switch only gates clicking (and toggles a crosshair cursor);
+  recorded edits persist until cleared.
 - The same timer also refreshes the top-bar position label from
   `session.live_position` — the position recorded on *every* batch's
   `__enter__`, independent of capture. This is what keeps the displayed

@@ -10,6 +10,7 @@ import torch
 from torch import Tensor, nn
 
 import playgrad
+from playgrad.probe import apply_perturbations
 from playgrad.session import Session
 
 
@@ -245,6 +246,112 @@ def test_set_probe_mode_rejects_unknown_mode() -> None:
     session = playgrad.start(BnDropNet(), epochs=1, phases={"train": 1})
     with pytest.raises(ValueError, match="unknown probe mode"):
         session.set_probe_mode("bogus")
+
+
+def test_apply_perturbations_writes_pixels_and_skips_bad_entries() -> None:
+    base = torch.zeros(2, 3, 4, 4)
+    perturbed = apply_perturbations(
+        base,
+        {
+            (0, 1, 2): (1.0, 2.0, 3.0),
+            (1, 3, 0): (4.0, 5.0, 6.0),
+            (9, 0, 0): (7.0, 7.0, 7.0),  # sample out of range — skipped
+            (0, 0, 0): (8.0, 8.0),  # wrong channel count — skipped
+        },
+    )
+    assert perturbed is not None
+    torch.testing.assert_close(perturbed[0, :, 1, 2], torch.tensor([1.0, 2.0, 3.0]))
+    torch.testing.assert_close(perturbed[1, :, 3, 0], torch.tensor([4.0, 5.0, 6.0]))
+    assert float(perturbed.abs().sum()) == pytest.approx(21.0)  # nothing else
+    assert float(base.abs().sum()) == 0.0  # the base is untouched
+
+
+@pytest.mark.parametrize(
+    "base, perturbations",
+    [
+        (torch.zeros(2, 4), {(0, 0, 0): (1.0,)}),  # non-image base
+        (torch.zeros(2, 3, 4, 4), {}),  # nothing to apply
+        (torch.zeros(2, 3, 4, 4), {(9, 0, 0): (1.0, 1.0, 1.0)}),  # all skipped
+    ],
+)
+def test_apply_perturbations_returns_none_when_nothing_applies(
+    base: Tensor, perturbations: dict[tuple[int, int, int], tuple[float, ...]]
+) -> None:
+    assert apply_perturbations(base, perturbations) is None
+
+
+def test_perturbation_without_pin_probes_snapshot_input() -> None:
+    model = BnDropNet()
+    session, thread = _paused_session(model, _bn_drop_step)
+    snap = session.snapshot
+    assert snap is not None
+
+    session.add_perturbation(sample=0, y=1, x=2, values=(5.0, 5.0, 5.0))
+    assert session.wait_for_probe(timeout=5)
+    probe = session.probe_result
+    assert probe is not None
+    assert session.is_pinned is False
+    torch.testing.assert_close(probe.input, snap.activations["x"])
+    assert probe.perturbed_input is not None
+    torch.testing.assert_close(
+        probe.perturbed_input[0, :, 1, 2], torch.tensor([5.0, 5.0, 5.0])
+    )
+    # Only the clicked pixel differs from the base input.
+    mask = torch.ones_like(probe.input, dtype=torch.bool)
+    mask[0, :, 1, 2] = False
+    torch.testing.assert_close(probe.perturbed_input[mask], probe.input[mask])
+    # The second forward saw the edit: downstream activations differ.
+    assert probe.perturbed_activations is not None
+    assert not torch.equal(
+        probe.perturbed_activations["conv"], probe.activations["conv"]
+    )
+
+    _finish(session, thread)
+
+
+def test_clear_perturbations_without_pin_clears_result() -> None:
+    model = BnDropNet()
+    session, thread = _paused_session(model, _bn_drop_step)
+    session.add_perturbation(sample=0, y=0, x=0, values=(1.0, 1.0, 1.0))
+    assert session.wait_for_probe(timeout=5)
+    assert session.probe_result is not None
+
+    session.clear_perturbations()
+    assert session.probe_result is None
+    assert session.perturbations == {}
+
+    _finish(session, thread)
+
+
+def test_unpin_with_perturbations_keeps_probing() -> None:
+    model = BnDropNet()
+    session, thread = _paused_session(model, _bn_drop_step)
+    assert session.pin_current_batch() is True
+    session.add_perturbation(sample=0, y=0, x=0, values=(1.0, 1.0, 1.0))
+    assert session.wait_for_probe(timeout=5)
+    count = session.probe_count
+
+    session.unpin_batch()
+    assert session.wait_for_probe(after_count=count, timeout=5)
+    probe = session.probe_result
+    assert probe is not None  # perturbations keep the probe alive
+    assert session.is_pinned is False
+    assert probe.perturbed_input is not None
+
+    _finish(session, thread)
+
+
+def test_out_of_range_perturbation_publishes_base_only() -> None:
+    model = BnDropNet()
+    session, thread = _paused_session(model, _bn_drop_step)
+    session.add_perturbation(sample=99, y=0, x=0, values=(1.0, 1.0, 1.0))
+    assert session.wait_for_probe(timeout=5)
+    probe = session.probe_result
+    assert probe is not None
+    assert probe.perturbed_input is None
+    assert probe.perturbed_activations is None
+
+    _finish(session, thread)
 
 
 def test_failing_probe_publishes_error_not_crash() -> None:

@@ -22,7 +22,7 @@ from playgrad.ui.app import (
     _density_y_range,
     _dims_from_roles,
     _format_live_position,
-    _input_img_tag,
+    _input_img_src,
     _linear_x_range,
     _make_histogram_figure,
     _phases_with_data,
@@ -448,13 +448,12 @@ def test_strip_html_empty_for_none() -> None:
     assert _strip_html(None) == ""
 
 
-def test_input_img_tag_scales_to_display_size() -> None:
+def test_input_img_src_is_a_data_uri() -> None:
     png = render_image(torch.rand(1, 3, 16, 16), sample_idx=0)
     assert png is not None
-    html = _input_img_tag(png)
-    assert f"width:{INPUT_IMAGE_SIZE}px" in html
-    assert "image-rendering:pixelated" in html
-    assert _input_img_tag(None) == ""
+    src = _input_img_src(png)
+    assert src.startswith(f"data:{image_mime()};base64,")
+    assert _input_img_src(None) == ""
 
 
 # --- Render cache + frame computation ---------------------------------------
@@ -524,7 +523,7 @@ def test_compute_frame_renders_strips_and_input() -> None:
     assert "<img" in act and "<img" in grad
     assert rendered["x"][1] == ""  # the input has no gradient captured
     assert rendered["missing"] == ("", "")
-    assert "<img" in input_html
+    assert input_html.startswith("data:")
 
 
 def test_compute_frame_reuses_cache_within_a_snapshot() -> None:
@@ -577,7 +576,63 @@ def test_compute_frame_prefers_probe_over_snapshot() -> None:
     # Probes are forward-only: every gradient strip is the placeholder note.
     assert grad == _PROBE_NO_GRADIENTS_HTML
     assert rendered["missing"][0] == ""
-    assert "<img" in input_html
+    assert input_html.startswith("data:")
+
+
+def _frame_probe_perturbed() -> ProbeResult:
+    base = torch.rand(2, 3, 4, 4)
+    perturbed = base.clone()
+    perturbed[0, :, 1, 1] = 5.0
+    return ProbeResult(
+        input=base,
+        activations={"x": base, "conv": torch.rand(2, 2, 4, 4)},
+        mode="eval",
+        perturbed_input=perturbed,
+        perturbed_activations={"x": perturbed, "conv": torch.rand(2, 2, 4, 4)},
+    )
+
+
+@pytest.mark.parametrize("compare", [False, True])
+def test_compute_probe_frame_renders_perturbed_or_diff(compare: bool) -> None:
+    probe = _frame_probe_perturbed()
+    rendered, input_src = _compute_frame(
+        ["x", "conv"],
+        None,
+        probe,
+        0,
+        compare=compare,
+        input_name="x",
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    assert "<img" in rendered["x"][0]
+    assert "<img" in rendered["conv"][0]
+    assert rendered["x"][1] == _PROBE_NO_GRADIENTS_HTML
+    assert input_src.startswith("data:")
+
+
+def test_compute_probe_frame_diff_differs_from_perturbed_view() -> None:
+    probe = _frame_probe_perturbed()
+    cache = _RenderCache()
+
+    def frame(compare: bool) -> dict[str, tuple[str, str]]:
+        rendered, _ = _compute_frame(
+            ["x"],
+            None,
+            probe,
+            0,
+            compare=compare,
+            input_name="x",
+            input_mean=None,
+            input_std=None,
+            cache=cache,
+        )
+        return rendered
+
+    # The diff view (perturbed − original: zero except one pixel) renders
+    # different pixels than the perturbed-activations view.
+    assert frame(True)["x"][0] != frame(False)["x"][0]
 
 
 def test_display_batch_size_prefers_probe() -> None:

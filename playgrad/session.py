@@ -44,7 +44,12 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
 from playgrad.fx_names import friendly_names
-from playgrad.probe import PROBE_MODES, ProbeResult
+from playgrad.probe import (
+    PROBE_MODES,
+    PerturbationMap,
+    ProbeResult,
+    apply_perturbations,
+)
 from playgrad.restore import (
     DEFAULT_CACHE_DIR,
     TimeTravelError,
@@ -141,6 +146,7 @@ class Session:
         # config's result).
         self._pinned_input: Tensor | None = None
         self._pinned_position: BatchPosition | None = None
+        self._perturbations: PerturbationMap = {}
         self._probe_mode: str = "eval"
         self._probe_request = False
         self._probe_version = 0
@@ -360,17 +366,61 @@ class Session:
         return True
 
     def unpin_batch(self) -> None:
-        """Drop the pinned input and the published probe result."""
+        """Drop the pinned input (and the probe result, absent perturbations)."""
         with self._cv:
             if self._pinned_input is None:
                 return
             self._pinned_input = None
             self._pinned_position = None
-            self._probe_version += 1
-            self._probe_request = False
-            self._probe_result = None
-            self._probe_error = None
-            self._cv.notify_all()
+            if self._perturbations:
+                # Perturbations keep probing, now against the snapshot input.
+                self._request_probe_locked()
+                return
+            self._clear_probe_result_locked()
+
+    @property
+    def perturbations(self) -> PerturbationMap:
+        """Copy of the active perturbations: (sample, y, x) -> channel values."""
+        with self._cv:
+            return dict(self._perturbations)
+
+    def add_perturbation(
+        self, *, sample: int, y: int, x: int, values: tuple[float, ...]
+    ) -> None:
+        """Pin pixel `(y, x)` of `sample` to per-channel `values` on probe inputs.
+
+        `values` are in the model's input space (i.e. already normalized by
+        the caller — the UI back-transforms the picked display color with the
+        `input_mean` / `input_std` it was given). Perturbations apply to the
+        probe's base input — the pinned batch, or the current snapshot's
+        input when nothing is pinned — and trigger a probe re-run that also
+        captures the perturbed activations. Entries that don't fit the base
+        (out of range, wrong channel count) are skipped at apply time.
+        """
+        if not self._enabled:
+            return
+        with self._cv:
+            self._perturbations[(sample, y, x)] = tuple(values)
+            self._request_probe_locked()
+
+    def clear_perturbations(self) -> None:
+        """Drop all perturbations (and the probe result, when not pinned)."""
+        with self._cv:
+            if not self._perturbations:
+                return
+            self._perturbations.clear()
+            if self._pinned_input is not None:
+                self._request_probe_locked()
+                return
+            self._clear_probe_result_locked()
+
+    def _clear_probe_result_locked(self) -> None:
+        """Deactivate probing and drop the published result (caller holds `_cv`)."""
+        self._probe_version += 1
+        self._probe_request = False
+        self._probe_result = None
+        self._probe_error = None
+        self._cv.notify_all()
 
     def set_probe_mode(self, mode: str) -> None:
         """Set train/eval handling for probe forwards.
@@ -902,7 +952,7 @@ class Session:
 
     def _probe_active_locked(self) -> bool:
         """Whether probe runs should happen at all (caller holds `_cv`)."""
-        return self._pinned_input is not None
+        return self._pinned_input is not None or bool(self._perturbations)
 
     def _request_probe_locked(self) -> None:
         """Arm a probe run and wake a paused training thread (caller holds `_cv`)."""
@@ -937,21 +987,35 @@ class Session:
                 self._cv.notify_all()
 
     def _run_probe(self) -> None:
-        """One probe run: an isolated forward on the pinned input.
+        """One probe run: isolated forwards on the base (and perturbed) input.
 
         Training-thread only. Reads the probe config under `_cv`, runs the
-        forward without the lock, and publishes the result only if the config
-        is still current — a config change mid-run (re-pin, mode flip) wins
-        and its own request re-runs the probe.
+        forwards without the lock, and publishes the result only if the
+        config is still current — a config change mid-run (re-pin, mode flip,
+        new perturbation) wins and its own request re-runs the probe. The
+        base input is the pinned batch, or the snapshot's input when only
+        perturbations are active.
         """
         with self._cv:
             version = self._probe_version
-            base = self._pinned_input
+            pinned = self._pinned_input
             mode = self._probe_mode
+            perturbations = dict(self._perturbations)
+        if pinned is None and not perturbations:
+            return
+        base = pinned if pinned is not None else self._snapshot_input()
         if base is None:
             return
-        activations = self._probe_forwards([base], mode=mode)[0]
-        result = ProbeResult(input=base, activations=activations, mode=mode)
+        perturbed = apply_perturbations(base, perturbations)
+        inputs = [base] if perturbed is None else [base, perturbed]
+        captures = self._probe_forwards(inputs, mode=mode)
+        result = ProbeResult(
+            input=base,
+            activations=captures[0],
+            mode=mode,
+            perturbed_input=perturbed,
+            perturbed_activations=captures[1] if perturbed is not None else None,
+        )
         with self._cv:
             if self._probe_version != version:
                 return
@@ -959,6 +1023,14 @@ class Session:
             self._probe_error = None
             self._probe_count += 1
             self._cv.notify_all()
+
+    def _snapshot_input(self) -> Tensor | None:
+        """The last snapshot's input tensor (the probe base when unpinned)."""
+        snap = self._snapshot
+        input_name = self._input_names[0] if self._input_names else None
+        if snap is None or input_name is None:
+            return None
+        return snap.activations.get(input_name)
 
     def _probe_forwards(
         self, inputs: list[Tensor], *, mode: str

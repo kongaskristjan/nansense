@@ -51,7 +51,6 @@ from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
 from playgrad.ui.input_panel import InputPanel
 from playgrad.ui.render import (
-    INPUT_IMAGE_SIZE,
     StripRender,
     default_weight_dims,
     image_mime,
@@ -567,7 +566,13 @@ def _build_page(
                 def mark_dirty() -> None:
                     state.dirty = True
 
-                input_panel = InputPanel(session=session, on_change=mark_dirty)
+                input_panel = InputPanel(
+                    session=session,
+                    input_name=input_name,
+                    input_mean=input_mean,
+                    input_std=input_std,
+                    on_change=mark_dirty,
+                )
 
         def toggle_architecture() -> None:
             architecture_pane.set_visibility(not architecture_pane.visible)
@@ -625,12 +630,13 @@ def _build_page(
             state.rendering = True
             try:
                 sample_idx = input_panel.sample_idx
-                rendered, input_img = await asyncio.to_thread(
+                rendered, input_src = await asyncio.to_thread(
                     _compute_frame,
                     layer_names,
                     snap,
                     probe,
                     sample_idx,
+                    compare=input_panel.compare,
                     input_name=input_name,
                     input_mean=input_mean,
                     input_std=input_std,
@@ -639,7 +645,7 @@ def _build_page(
             finally:
                 state.rendering = False
             _apply_all(layer_views, rendered)
-            input_panel.set_image(input_img)
+            input_panel.set_image(input_src)
 
     ui.timer(0.2, tick)
 
@@ -1822,23 +1828,26 @@ def _compute_frame(
     probe: ProbeResult | None,
     sample_idx: int,
     *,
+    compare: bool = False,
     input_name: str | None,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
     cache: _RenderCache,
 ) -> tuple[dict[str, tuple[str, str]], str]:
-    """Render every layer's strip pair plus the input image.
+    """Render every layer's strip pair plus the input image source.
 
-    With a probe result present it is the render source (pinned batch view);
-    otherwise the snapshot is. Layers render concurrently on `_RENDER_POOL`;
-    each strip goes through `cache`, so only strips not already rendered for
-    this source cost anything.
+    With a probe result present it is the render source (pinned-batch /
+    perturbed view, see `_compute_probe_frame`); otherwise the snapshot is.
+    Layers render concurrently on `_RENDER_POOL`; each strip goes through
+    `cache`, so only strips not already rendered for this source cost
+    anything.
     """
     if probe is not None:
         return _compute_probe_frame(
             layer_names,
             probe,
             sample_idx,
+            compare=compare,
             input_mean=input_mean,
             input_std=input_std,
             cache=cache,
@@ -1865,10 +1874,10 @@ def _compute_frame(
     rendered = dict(
         zip(layer_names, _RENDER_POOL.map(strips, layer_names), strict=True)
     )
-    input_html = cache.get_or_render(
+    input_src = cache.get_or_render(
         snap,
         (input_name or "", "input", sample_idx),
-        lambda: _input_img_tag(
+        lambda: _input_img_src(
             render_image(
                 snap.activations.get(input_name) if input_name else None,
                 sample_idx,
@@ -1877,7 +1886,7 @@ def _compute_frame(
             )
         ),
     )
-    return rendered, input_html
+    return rendered, input_src
 
 
 def _compute_probe_frame(
@@ -1885,37 +1894,61 @@ def _compute_probe_frame(
     probe: ProbeResult,
     sample_idx: int,
     *,
+    compare: bool,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
     cache: _RenderCache,
 ) -> tuple[dict[str, tuple[str, str]], str]:
     """The probe-sourced equivalent of the snapshot frame.
 
-    Probe runs are forward-only, so every gradient strip shows a placeholder
-    note instead of an image.
+    Without perturbations the strips show the base activations. With
+    perturbations they show the perturbed forward's activations, or — with
+    `compare` on — the per-layer diff `perturbed − original`, whose nonzero
+    extent traces how far the edit propagates (receptive field). The input
+    image shows the perturbed input whenever one exists, so the edit is
+    visible. Probe runs are forward-only, so every gradient strip shows a
+    placeholder note instead of an image.
     """
+    perturbed_acts = probe.perturbed_activations
+    diff = compare and perturbed_acts is not None
+    kind = "probe-diff" if diff else (
+        "probe-perturbed" if perturbed_acts is not None else "probe-act"
+    )
+
+    def act_tensor(name: str) -> Tensor | None:
+        if diff:
+            assert perturbed_acts is not None
+            base = probe.activations.get(name)
+            pert = perturbed_acts.get(name)
+            if base is None or pert is None or base.shape != pert.shape:
+                return None
+            return pert - base
+        if perturbed_acts is not None:
+            return perturbed_acts.get(name)
+        return probe.activations.get(name)
 
     def strips(name: str) -> tuple[str, str]:
         act = cache.get_or_render(
             probe,
-            (name, "probe-act", sample_idx),
-            lambda: _strip_html(
-                render_strip(probe.activations.get(name), sample_idx)
-            ),
+            (name, kind, sample_idx),
+            lambda: _strip_html(render_strip(act_tensor(name), sample_idx)),
         )
         return act, _PROBE_NO_GRADIENTS_HTML
 
     rendered = dict(
         zip(layer_names, _RENDER_POOL.map(strips, layer_names), strict=True)
     )
-    input_html = cache.get_or_render(
+    shown_input = (
+        probe.perturbed_input if probe.perturbed_input is not None else probe.input
+    )
+    input_src = cache.get_or_render(
         probe,
         ("", "probe-input", sample_idx),
-        lambda: _input_img_tag(
-            render_image(probe.input, sample_idx, mean=input_mean, std=input_std)
+        lambda: _input_img_src(
+            render_image(shown_input, sample_idx, mean=input_mean, std=input_std)
         ),
     )
-    return rendered, input_html
+    return rendered, input_src
 
 
 def _apply_all(
@@ -2082,12 +2115,13 @@ def _strip_html(strip: StripRender | None) -> str:
     )
 
 
-def _input_img_tag(image: bytes | None) -> str:
-    """`<img>` for the input pane: native-res image, CSS-scaled to display size."""
+def _input_img_src(image: bytes | None) -> str:
+    """Data-URI source for the input pane's interactive image ("" when absent).
+
+    The sizing (CSS upscale to `INPUT_IMAGE_SIZE` with nearest-neighbour
+    rendering) lives on the `ui.interactive_image` element in `InputPanel`;
+    only the native-resolution source travels per frame.
+    """
     if image is None:
         return ""
-    return (
-        f'<img src="{_b64_img_src(image)}" '
-        f'style="width:{INPUT_IMAGE_SIZE}px; height:{INPUT_IMAGE_SIZE}px; '
-        'image-rendering:pixelated; display:block; max-width:none;" />'
-    )
+    return _b64_img_src(image)
