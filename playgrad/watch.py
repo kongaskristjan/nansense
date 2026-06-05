@@ -36,6 +36,8 @@ from typing import Literal
 import torch
 from torch import Tensor
 
+from playgrad.patches import PatchAccumulator, PatchSnapshot
+
 BINS_PER_DECADE: int = 7
 LOG10_MIN: int = -9
 LOG10_MAX: int = 6
@@ -140,6 +142,9 @@ class LayerStatsSnapshot:
     epoch: int
     activations: TensorStatsSnapshot
     gradients: TensorStatsSnapshot
+    # Per-channel extreme-activation input patches; `None` when the bucket
+    # never saw an image-like input (or was evicted by a newer epoch).
+    patches: PatchSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -277,6 +282,7 @@ class TensorAccumulator:
 class _LayerStats:
     activations: TensorAccumulator = field(default_factory=TensorAccumulator)
     gradients: TensorAccumulator = field(default_factory=TensorAccumulator)
+    patches: PatchAccumulator = field(default_factory=PatchAccumulator)
 
 
 class WatchAccumulator:
@@ -309,6 +315,35 @@ class WatchAccumulator:
                 self._stats[key] = stats
             acc = stats.activations if kind == "activation" else stats.gradients
         acc.update(x)
+
+    def update_patches(
+        self,
+        *,
+        layer: str,
+        phase: str,
+        epoch: int,
+        act: Tensor,
+        x: Tensor,
+    ) -> None:
+        """Fold one batch into `layer`'s extreme-patch buffers.
+
+        Histogram stats are small enough to keep for every epoch, but a
+        patch bucket holds `4 × channels × N_PER_CHANNEL` image crops on
+        the GPU — so when a newer epoch starts for the same (layer, phase),
+        the older epochs' patch buffers are released. The UI only shows the
+        latest epoch per phase, so nothing visible is lost.
+        """
+        key = (layer, phase, epoch)
+        with self._lock:
+            stats = self._stats.get(key)
+            if stats is None:
+                stats = _LayerStats()
+                self._stats[key] = stats
+            acc = stats.patches
+            for (l, ph, ep), other in self._stats.items():
+                if l == layer and ph == phase and ep < epoch:
+                    other.patches.clear()
+        acc.update(act=act, x=x)
 
     def forget_layer(self, layer: str) -> None:
         """Drop all stored stats for `layer` (e.g. on unwatch)."""
@@ -345,5 +380,6 @@ class WatchAccumulator:
                 epoch=epoch,
                 activations=stats.activations.snapshot(),
                 gradients=stats.gradients.snapshot(),
+                patches=stats.patches.snapshot(),
             )
         return WatchSnapshot(stats=out)
