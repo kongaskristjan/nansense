@@ -289,6 +289,9 @@ def serve(
 
     fastapi_app = FastAPI()
     favicon_path = Path(__file__).resolve().parents[2] / "assets" / "logo_small.png"
+    # One cache for all connections: two tabs on the same session share
+    # rendered strips instead of re-rendering them per connection.
+    render_cache = _RenderCache()
 
     @ui.page("/", favicon=str(favicon_path))
     def index() -> None:
@@ -299,6 +302,7 @@ def serve(
             input_name=input_name,
             input_mean=input_mean,
             input_std=input_std,
+            render_cache=render_cache,
         )
 
     @ui.page("/watch", favicon=str(favicon_path))
@@ -332,6 +336,52 @@ class _PageState:
     dirty: bool = False
     rendering: bool = False
     spinner_max: int | None = None
+
+
+class _RenderCache:
+    """Strip-HTML cache for the main page, shared across connections.
+
+    Valid for exactly one snapshot at a time: the cache holds a strong
+    reference to the snapshot it was filled against and resets whenever a
+    different one shows up (identity comparison — snapshots are frozen and
+    every pause publishes a new object, so identity is exactly "same
+    capture"). Within a snapshot, entries are keyed by
+    `(name, kind, sample_idx)`, so flipping the sample spinner back to a
+    value already seen, or a second browser tab on the same session, becomes
+    a dict lookup instead of a re-render. `_MAX_ENTRIES` bounds a long
+    sample-scrubbing session; overflowing simply resets the cache.
+    """
+
+    _MAX_ENTRIES: int = 4096
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._snapshot: BatchSnapshot | None = None
+        self._entries: dict[tuple[str, str, int], str] = {}
+
+    def get_or_render(
+        self,
+        snap: BatchSnapshot,
+        key: tuple[str, str, int],
+        render: Callable[[], str],
+    ) -> str:
+        with self._lock:
+            if snap is not self._snapshot:
+                self._snapshot = snap
+                self._entries = {}
+            entries = self._entries
+            cached = entries.get(key)
+        if cached is not None:
+            return cached
+        html = render()
+        with self._lock:
+            # Drop the result if a newer snapshot displaced the cache while
+            # this render was in flight — `entries` would be the stale dict.
+            if self._snapshot is snap:
+                if len(entries) >= self._MAX_ENTRIES:
+                    entries.clear()
+                entries[key] = html
+        return html
 
 
 _TOP_BAR_CLASSES: str = (
@@ -384,6 +434,7 @@ def _build_page(
     input_name: str | None,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
+    render_cache: _RenderCache,
 ) -> None:
     state = _PageState()
     layer_views: dict[str, _LayerView] = {}
@@ -568,12 +619,13 @@ def _build_page(
                 sample_idx = state.sample_idx
                 rendered, input_img = await asyncio.to_thread(
                     _compute_frame,
-                    layer_views,
+                    layer_names,
                     snap,
                     sample_idx,
                     input_name=input_name,
                     input_mean=input_mean,
                     input_std=input_std,
+                    cache=render_cache,
                 )
             finally:
                 state.rendering = False
@@ -1612,27 +1664,48 @@ def _sync_spinner_max(
 
 
 def _compute_frame(
-    views: dict[str, _LayerView],
+    layer_names: list[str],
     snap: BatchSnapshot,
     sample_idx: int,
     *,
     input_name: str | None,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
+    cache: _RenderCache,
 ) -> tuple[dict[str, tuple[str, str]], str]:
-    rendered = {
-        name: view.compute(
-            snap.activations.get(name),
-            snap.activation_gradients.get(name),
-            sample_idx,
+    """Render every layer's strip pair plus the input image, via the cache."""
+
+    def strips(name: str) -> tuple[str, str]:
+        act = cache.get_or_render(
+            snap,
+            (name, "act", sample_idx),
+            lambda: _strip_html(
+                render_strip(snap.activations.get(name), sample_idx)
+            ),
         )
-        for name, view in views.items()
-    }
-    input_tensor = snap.activations.get(input_name) if input_name else None
-    input_png = render_image(
-        input_tensor, sample_idx, mean=input_mean, std=input_std
+        grad = cache.get_or_render(
+            snap,
+            (name, "grad", sample_idx),
+            lambda: _strip_html(
+                render_strip(snap.activation_gradients.get(name), sample_idx)
+            ),
+        )
+        return act, grad
+
+    rendered = {name: strips(name) for name in layer_names}
+    input_html = cache.get_or_render(
+        snap,
+        (input_name or "", "input", sample_idx),
+        lambda: _input_img_tag(
+            render_image(
+                snap.activations.get(input_name) if input_name else None,
+                sample_idx,
+                mean=input_mean,
+                std=input_std,
+            )
+        ),
     )
-    return rendered, _input_img_tag(input_png)
+    return rendered, input_html
 
 
 def _apply_all(
@@ -1736,14 +1809,6 @@ class _LayerView:
         self._eye_btn.text = "Unwatch" if on else "Watch"
         self._eye_btn.icon = "visibility_off" if on else "visibility"
         self._eye_btn.props(f"color={'red' if on else 'green'}")
-
-    def compute(
-        self, activation: Tensor | None, gradient: Tensor | None, sample_idx: int
-    ) -> tuple[str, str]:
-        return (
-            _strip_html(render_strip(activation, sample_idx)),
-            _strip_html(render_strip(gradient, sample_idx)),
-        )
 
     def apply(self, act_html: str, grad_html: str) -> None:
         self.act_html.set_content(act_html)

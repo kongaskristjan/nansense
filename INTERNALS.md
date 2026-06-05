@@ -212,10 +212,11 @@ snapshot or the new one — never a torn half-written state. The UI can
 hold references to a snapshot for as long as it wants without preventing
 the next batch from running.
 
-Rendering (PNG mosaics, histograms, summary stats) is still computed
-lazily on the UI thread when a layer card is opened; the eager copy in
+Rendering (PNG strips, histograms, summary stats) happens on the UI
+thread against the published snapshot; the eager copy in
 `_publish_snapshot` only moves raw tensor data, not anything pixel-shaped.
-A `(layer, pause_count)` cache in the UI keeps re-opens free.
+A per-snapshot render cache in the UI (`_RenderCache`) keeps repeat
+renders free.
 
 ## Watch accumulators
 
@@ -380,11 +381,16 @@ It does not touch tensors directly until they need to be rendered.
   a single label write per tick, decoupled from the strip rendering; the
   200 ms timer is the natural throttle for the rapid batch advances those
   modes produce.
-- Rendering is intentionally eager when a new snapshot lands — for
-  ResNet-20 it takes well under a second, and during `RUN` / `DETACH`
-  modes no snapshots are produced so the UI is idle. For larger models
-  this is the natural point to add viewport-aware lazy rendering, but
-  the current code path keeps the wiring simple.
+- Rendering is intentionally eager when a new snapshot lands — and during
+  `RUN` / `DETACH` modes no snapshots are produced so the UI is idle.
+  Rendered strip HTML is cached in a `_RenderCache` shared by every
+  connection: entries are keyed `(name, kind, sample_idx)` and the whole
+  cache is invalidated by snapshot identity (snapshots are frozen; every
+  pause publishes a new object). Flipping the sample spinner back to a
+  value already seen, or a second browser tab on the same session, is a
+  dict lookup instead of a re-render. For larger models, viewport-aware
+  lazy rendering is the natural next step, but the current code path
+  keeps the wiring simple.
 - The `/watch` page is its own NiceGUI page handler keyed to the same
   `Session`. It builds one `_WatchLayerPanel` per watched module; each
   holds two `_HistPlot`s (activations and gradients) and a one-line stats

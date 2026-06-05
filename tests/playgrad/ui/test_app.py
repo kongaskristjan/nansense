@@ -12,6 +12,8 @@ from playgrad.ui.app import (
     _BIN_WIDTHS,
     _DENSITY_TOP_BINS,
     _PLOT_HEIGHT,
+    _RenderCache,
+    _compute_frame,
     _default_roles,
     _density_heights,
     _density_y_range,
@@ -431,3 +433,96 @@ def test_input_img_tag_scales_to_display_size() -> None:
     assert f"width:{INPUT_IMAGE_SIZE}px" in html
     assert "image-rendering:pixelated" in html
     assert _input_img_tag(None) == ""
+
+
+# --- Render cache + frame computation ---------------------------------------
+
+
+def _frame_snapshot() -> BatchSnapshot:
+    return BatchSnapshot(
+        position=BatchPosition(
+            phase="train",
+            epoch=0,
+            batch_idx=0,
+            is_last_in_phase=False,
+            is_last_in_epoch=False,
+            is_last_overall=False,
+        ),
+        activations={"x": torch.rand(2, 3, 4, 4), "conv": torch.rand(2, 2, 4, 4)},
+        activation_gradients={"conv": torch.rand(2, 2, 4, 4)},
+        weights={},
+        weight_gradients={},
+    )
+
+
+def test_render_cache_renders_once_per_key() -> None:
+    cache = _RenderCache()
+    snap = _frame_snapshot()
+    calls = 0
+
+    def render() -> str:
+        nonlocal calls
+        calls += 1
+        return "html"
+
+    assert cache.get_or_render(snap, ("a", "act", 0), render) == "html"
+    assert cache.get_or_render(snap, ("a", "act", 0), render) == "html"
+    assert calls == 1
+    cache.get_or_render(snap, ("a", "act", 1), render)
+    assert calls == 2  # a different sample is a different entry
+
+
+def test_render_cache_resets_on_new_snapshot() -> None:
+    cache = _RenderCache()
+    calls = 0
+
+    def render() -> str:
+        nonlocal calls
+        calls += 1
+        return "html"
+
+    cache.get_or_render(_frame_snapshot(), ("a", "act", 0), render)
+    cache.get_or_render(_frame_snapshot(), ("a", "act", 0), render)
+    assert calls == 2  # a new snapshot object invalidates the old entries
+
+
+def test_compute_frame_renders_strips_and_input() -> None:
+    snap = _frame_snapshot()
+    rendered, input_html = _compute_frame(
+        ["x", "conv", "missing"],
+        snap,
+        0,
+        input_name="x",
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    act, grad = rendered["conv"]
+    assert "<img" in act and "<img" in grad
+    assert rendered["x"][1] == ""  # the input has no gradient captured
+    assert rendered["missing"] == ("", "")
+    assert "<img" in input_html
+
+
+def test_compute_frame_reuses_cache_within_a_snapshot() -> None:
+    cache = _RenderCache()
+    snap = _frame_snapshot()
+
+    def frame(sample_idx: int) -> tuple[dict[str, tuple[str, str]], str]:
+        return _compute_frame(
+            ["conv"],
+            snap,
+            sample_idx,
+            input_name="x",
+            input_mean=None,
+            input_std=None,
+            cache=cache,
+        )
+
+    first, input_first = frame(0)
+    again, input_again = frame(0)
+    # Cache hits return the exact same strings, not re-rendered copies.
+    assert again["conv"][0] is first["conv"][0]
+    assert input_again is input_first
+    other_sample, _ = frame(1)
+    assert other_sample["conv"][0] is not first["conv"][0]
