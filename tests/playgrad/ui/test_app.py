@@ -999,6 +999,55 @@ def test_compute_probe_frame_diff_differs_from_perturbed_view() -> None:
     assert frame(True)["x"][0] != frame(False)["x"][0]
 
 
+def test_compute_probe_frame_diff_without_perturbations_renders_zeros() -> None:
+    """Compare mode on a perturbation-free probe still shows the diff view:
+    an all-zero diff (a white strip), not a fallback to the base view."""
+    base = torch.rand(2, 2, 4, 4)
+    probe = ProbeResult(
+        input=torch.rand(2, 3, 4, 4),
+        activations={"conv": base},
+        mode="eval",
+    )
+    rendered, _ = _compute_frame(
+        ["conv"],
+        None,
+        probe,
+        0,
+        compare=True,
+        input_name="x",
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    expected = _strip_html(render_strip(torch.zeros_like(base), 0))
+    assert rendered["conv"][0] == expected
+
+
+def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
+    """Compare mode with no probe at all: activation strips show the all-zero
+    diff while gradient strips keep their normal view."""
+    snap = _frame_snapshot()
+    rendered, _ = _compute_frame(
+        ["conv"],
+        snap,
+        None,
+        0,
+        compare=True,
+        input_name="x",
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    act_expected = _strip_html(
+        render_strip(torch.zeros_like(snap.activations["conv"]), 0)
+    )
+    grad_expected = _strip_html(
+        render_strip(snap.activation_gradients["conv"], 0)
+    )
+    assert rendered["conv"][0] == act_expected
+    assert rendered["conv"][1] == grad_expected
+
+
 def test_display_batch_size_prefers_probe() -> None:
     snap = _frame_snapshot()  # batch size 2
     probe = ProbeResult(

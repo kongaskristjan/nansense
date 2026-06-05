@@ -591,10 +591,14 @@ It does not touch tensors directly until they need to be rendered.
   color; clicking opens a nested `ui.color_picker`, forced to
   `format-model=hex` since `normalized_color` expects `#rrggbb`), the
   "Compare with original" switch, and a perturbed-pixel count with a
-  "Clear" button on its right. Compare and the count/clear row are
-  visible only while perturbations exist (`refresh_status` keeps the
-  visibility in sync), and switching "Click to perturb" off clears all
-  perturbations — leaving editing mode discards the edits.
+  "Clear" button on its right. Compare is visible whenever "Click to
+  perturb" is on (`bind_visibility_from` the perturb switch) — with
+  nothing perturbed its diff is identically zero and renders as white
+  strips, in both the probe and the plain-snapshot paths — while the
+  count/clear row shows only when perturbations exist (`refresh_status`
+  keeps it in sync). Switching "Click to perturb" off clears all
+  perturbations and resets compare — leaving editing mode discards the
+  edits and the diff view.
   Pin / mode / perturbation changes call straight
   into the session; the session reacts by publishing a new `ProbeResult`,
   which the tick loop picks up like a new snapshot. The compare switch is

@@ -44,6 +44,7 @@ import uvicorn
 from fastapi import FastAPI
 from plotly.subplots import make_subplots
 from nicegui import ui
+import torch
 from torch import Tensor
 
 from playgrad.patches import PATCH_TYPES, PatchType
@@ -2365,6 +2366,10 @@ def _snapshot_batch_size(snap: BatchSnapshot) -> int | None:
     return None
 
 
+def _zeros_like(tensor: Tensor | None) -> Tensor | None:
+    return torch.zeros_like(tensor) if tensor is not None else None
+
+
 def _display_batch_size(
     snap: BatchSnapshot | None, probe: ProbeResult | None
 ) -> int | None:
@@ -2417,13 +2422,27 @@ def _compute_frame(
     assert snap is not None  # tick only renders when at least one source exists
 
     def strips(name: str) -> tuple[str, str]:
-        act = cache.get_or_render(
-            snap,
-            (name, "act", sample_idx),
-            lambda: _strip_html(
-                render_strip(snap.activations.get(name), sample_idx)
-            ),
-        )
+        if compare:
+            # Diff view without any probe (perturb mode on, nothing clicked
+            # yet, no pin): the diff is identically zero, rendered as a
+            # white strip — same as a perturbation-free probe diff.
+            act = cache.get_or_render(
+                snap,
+                (name, "act-diff", sample_idx),
+                lambda: _strip_html(
+                    render_strip(
+                        _zeros_like(snap.activations.get(name)), sample_idx
+                    )
+                ),
+            )
+        else:
+            act = cache.get_or_render(
+                snap,
+                (name, "act", sample_idx),
+                lambda: _strip_html(
+                    render_strip(snap.activations.get(name), sample_idx)
+                ),
+            )
         grad = cache.get_or_render(
             snap,
             (name, "grad", sample_idx),
@@ -2466,28 +2485,32 @@ def _compute_probe_frame(
     Without perturbations the strips show the base activations. With
     perturbations they show the perturbed forward's activations, or — with
     `compare` on — the per-layer diff `perturbed − original`, whose nonzero
-    extent traces how far the edit propagates (receptive field). The input
-    image shows the perturbed input whenever one exists, so the edit is
-    visible. Probe runs are forward-only, so every gradient strip shows a
-    placeholder note instead of an image.
+    extent traces how far the edit propagates (receptive field). The diff
+    view renders even with nothing perturbed: an all-zero diff draws as a
+    white strip, signalling "no differences" rather than falling back to a
+    non-diff view. The input image shows the perturbed input whenever one
+    exists, so the edit is visible. Probe runs are forward-only, so every
+    gradient strip shows a placeholder note instead of an image.
     """
     perturbed_acts = probe.perturbed_activations
-    diff = compare and perturbed_acts is not None
-    kind = "probe-diff" if diff else (
+    kind = "probe-diff" if compare else (
         "probe-perturbed" if perturbed_acts is not None else "probe-act"
     )
 
     def act_tensor(name: str) -> Tensor | None:
-        if diff:
-            assert perturbed_acts is not None
-            base = probe.activations.get(name)
+        base = probe.activations.get(name)
+        if compare:
+            if base is None:
+                return None
+            if perturbed_acts is None:
+                return torch.zeros_like(base)
             pert = perturbed_acts.get(name)
-            if base is None or pert is None or base.shape != pert.shape:
+            if pert is None or pert.shape != base.shape:
                 return None
             return pert - base
         if perturbed_acts is not None:
             return perturbed_acts.get(name)
-        return probe.activations.get(name)
+        return base
 
     def strips(name: str) -> tuple[str, str]:
         act = cache.get_or_render(

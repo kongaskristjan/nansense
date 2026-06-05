@@ -187,10 +187,13 @@ input pane shows the edited image. Turning on "Compare with original"
 switches every card to the per-layer activation diff (perturbed −
 original) instead — the spatial extent of the nonzero diff at each layer
 traces how far the edit propagates through the network, i.e. the
-receptive field. Clicks accumulate; the "Compare with original" switch
-and a "{n} perturbed pixels" / "Clear" row appear once at least one pixel
-is perturbed, and turning the "Click to perturb" toggle off discards all
-edits (the image and strips revert to the unperturbed input). Perturbing
+receptive field. The diff view works even before the first click — with
+nothing perturbed the diff is identically zero, rendering every strip
+white. Clicks accumulate; the "Compare with original" switch is shown
+whenever "Click to perturb" is on, the "{n} perturbed pixels" / "Clear"
+row appears once at least one pixel is perturbed, and turning the "Click
+to perturb" toggle off discards all edits and the diff view (the image
+and strips revert to the unperturbed input). Perturbing
 works with or without a pinned batch — unpinned, the edits apply to the
 current training batch's input at each pause. Edits to pixels outside a
 later batch's bounds are skipped rather than erroring.

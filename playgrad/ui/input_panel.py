@@ -159,21 +159,23 @@ class InputPanel:
                     # Hex only: normalized_color expects #rrggbb, so don't let
                     # the picker emit rgba()/hsl() strings.
                     picker.q_color.props("format-model=hex")
-            # Compare and clear only make sense once a pixel has been
-            # perturbed; `refresh_status` keeps their visibility in sync.
-            has_perturbations = bool(self._session.perturbations)
             self._compare_switch = ui.switch(
                 "Compare with original",
                 on_change=self._on_compare_change,
             ).props("dense").classes("self-start").tooltip(
-                "Show each layer's activation diff (perturbed − original) "
-                "instead of the perturbed activations"
+                "Show each layer's activation diff (perturbed − original); "
+                "with nothing perturbed the diff is zero and renders white"
             )
-            self._compare_switch.set_visibility(has_perturbations)
+            # Compare belongs to editing mode (it shows white with zero
+            # edits); the count/clear row only makes sense once a pixel has
+            # actually been perturbed (`refresh_status` keeps it in sync).
+            self._compare_switch.bind_visibility_from(
+                self._perturb_switch, "value"
+            )
             self._clear_row = ui.row().classes(
                 "w-full items-center justify-between no-wrap"
             )
-            self._clear_row.set_visibility(has_perturbations)
+            self._clear_row.set_visibility(bool(self._session.perturbations))
             with self._clear_row:
                 self._perturb_caption = ui.label("").classes(
                     "text-xs text-slate-500 font-mono"
@@ -235,8 +237,6 @@ class InputPanel:
             f"{n} perturbed pixel{'' if n == 1 else 's'}" if n else ""
         )
         has_perturbations = n > 0
-        if self._compare_switch.visible != has_perturbations:
-            self._compare_switch.set_visibility(has_perturbations)
         if self._clear_row.visible != has_perturbations:
             self._clear_row.set_visibility(has_perturbations)
         self._error_label.text = self._session.probe_error or ""
@@ -297,9 +297,12 @@ class InputPanel:
         if getattr(e, "value", False):
             self._image.classes(add="cursor-crosshair")
         else:
-            # Leaving editing mode discards the edits: the image and strips
-            # revert to the unperturbed input.
+            # Leaving editing mode discards the edits and the diff view: the
+            # image and strips revert to the unperturbed input. Resetting the
+            # (now hidden) compare switch fires its own change handler, which
+            # clears `self.compare` and marks the page dirty.
             self._image.classes(remove="cursor-crosshair")
+            self._compare_switch.set_value(False)
             self._on_clear()
 
     def _on_compare_change(self, e: object) -> None:
