@@ -243,6 +243,16 @@ def test_watch_accumulator_update_patches_lands_in_snapshot() -> None:
     assert acc.snapshot().stats[("b", "train", 0)].patches is None
 
 
+def test_watch_accumulator_snapshot_can_skip_patches() -> None:
+    acc = WatchAccumulator()
+    act, x = _patch_batch()
+    acc.update_patches(layer="a", phase="train", epoch=0, act=act, x=x)
+    snap = acc.snapshot(include_patches=False)
+    assert snap.stats[("a", "train", 0)].patches is None
+    # The buffers themselves are untouched — a full snapshot still has them.
+    assert acc.snapshot().stats[("a", "train", 0)].patches is not None
+
+
 def test_watch_accumulator_evicts_older_epoch_patch_buffers() -> None:
     acc = WatchAccumulator()
     act, x = _patch_batch()

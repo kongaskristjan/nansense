@@ -57,10 +57,12 @@ LEGEND_GAP: int = 4
 LEGEND_WIDTH: int = LEGEND_LABEL_WIDTH + LEGEND_GAP + LEGEND_BAR_WIDTH + LEGEND_GAP
 LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 # Extreme-patch grids: CSS pixel side of one cell, the strongest heatmap
-# overlay opacity, and the fill for never-filled slots.
+# overlay opacity, the fill for never-filled slots, and the grids' fixed
+# encoding (see `PatchGridRender` for why it isn't `STRIP_FORMAT`).
 PATCH_CELL_SIZE: int = 44
 HEAT_MAX_ALPHA: float = 0.55
 _EMPTY_CELL_GRAY: int = 235
+PATCH_GRID_FORMAT: str = "PNG"
 
 
 def image_mime() -> str:
@@ -275,12 +277,19 @@ class PatchGridRender:
 
     `image` is encoded at native patch resolution; the UI shows it at
     `width × height` CSS pixels (`PATCH_CELL_SIZE` per cell) with
-    `image-rendering: pixelated`, like the activation strips.
+    `image-rendering: pixelated`, like the activation strips. Unlike the
+    strips, grids are always PNG (`PATCH_GRID_FORMAT`, mime in `mime`):
+    a wide layer's BMP grids reach multiple MB per refresh message, enough
+    to pause the websocket transport — concurrent drains then trip a known
+    `websockets`-legacy keepalive assertion and kill the connection. PNG
+    keeps grid messages ~10× under that regime for a few ms of (worker
+    thread) encode time.
     """
 
     image: bytes
     width: int
     height: int
+    mime: str
 
 
 def render_patch_grid(
@@ -318,9 +327,10 @@ def render_patch_grid(
             y, x = row * (ph + gap), col * (pw + gap)
             grid[y : y + ph, x : x + pw] = cells[col, row]
     return PatchGridRender(
-        image=_encode_image(grid),
+        image=_encode_image(grid, fmt=PATCH_GRID_FORMAT),
         width=round(grid.shape[1] * PATCH_CELL_SIZE / pw),
         height=round(grid.shape[0] * PATCH_CELL_SIZE / ph),
+        mime=_MIME_TYPES[PATCH_GRID_FORMAT],
     )
 
 
@@ -469,14 +479,17 @@ def _render_legend(height: int, *, abs_max: float) -> np.ndarray:
     return np.concatenate([labels, gap, bar, gap], axis=1)
 
 
-def _encode_image(rgb: np.ndarray) -> bytes:
-    return _pil_to_bytes(Image.fromarray(np.ascontiguousarray(rgb), mode="RGB"))
+def _encode_image(rgb: np.ndarray, *, fmt: str | None = None) -> bytes:
+    return _pil_to_bytes(
+        Image.fromarray(np.ascontiguousarray(rgb), mode="RGB"), fmt=fmt
+    )
 
 
-def _pil_to_bytes(pil: Image.Image) -> bytes:
+def _pil_to_bytes(pil: Image.Image, *, fmt: str | None = None) -> bytes:
+    fmt = fmt or STRIP_FORMAT
     buf = io.BytesIO()
-    if STRIP_FORMAT == "PNG":
+    if fmt == "PNG":
         pil.save(buf, format="PNG", compress_level=PNG_COMPRESS_LEVEL)
     else:
-        pil.save(buf, format=STRIP_FORMAT)
+        pil.save(buf, format=fmt)
     return buf.getvalue()
