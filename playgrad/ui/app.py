@@ -1360,12 +1360,13 @@ def _build_watch_page(
                         f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} grid"
                     )
                 ui.checkbox(
-                    "Heatmap",
+                    "Enable heatmap",
                     value=heat_on["on"],
                     on_change=lambda e: set_heat(bool(e.value)),
                 ).props("dense").classes("text-sm").tooltip(
                     "Blend each channel's activation strength over the "
-                    "patches (red positive, blue negative)"
+                    "patches (red positive, blue negative), with a scale "
+                    "next to each grid"
                 )
             minmax_controls.set_visibility(False)
             ui.button(
@@ -1813,20 +1814,31 @@ def _patch_grids_html(
 def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
     """One labeled grid: channels as columns, top samples as rows.
 
-    `max-width:none` opts the image out of the preflight `max-width:100%`
+    With the heatmap enabled the grid is flanked by its crisp
+    display-resolution colorbar (the overlay's `±vmax` scale), which sits
+    outside the scroll container so it stays visible on wide grids.
+    `max-width:none` opts the images out of the preflight `max-width:100%`
     so wide grids scroll horizontally instead of being squashed.
     """
+    legend = (
+        f'<img src="{_b64_img_src(grid.heat_legend)}" '
+        'style="display:block; flex:none; max-width:none;" />'
+        if grid.heat_legend is not None
+        else ""
+    )
     return (
         '<div class="flex flex-col gap-0.5 w-full">'
         '<div class="text-[10px] uppercase tracking-wide text-slate-500 '
         f'font-mono">{label}</div>'
-        '<div class="overflow-x-auto w-full">'
+        '<div style="display:flex; align-items:flex-start;" class="w-full">'
+        f"{legend}"
+        '<div class="overflow-x-auto" style="flex:1; min-width:0;">'
         f'<img src="{_b64_img_src(grid.image, mime=grid.mime)}" '
         f'style="width:{grid.width}px; height:{grid.height}px; '
         'image-rendering:pixelated; display:block; max-width:none;" '
         f'title="{label} — columns: channels, rows: top samples '
         '(best first)" />'
-        "</div></div>"
+        "</div></div></div>"
     )
 
 

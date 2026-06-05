@@ -1116,3 +1116,15 @@ def test_filter_phase_narrows_to_selected_phase() -> None:
     assert set(_filter_phase(per_phase, "val")) == {"val"}
     assert set(_filter_phase(per_phase, "train")) == {"train"}
     assert _filter_phase(per_phase, "test") == {}
+
+
+def test_patch_grids_html_adds_heat_legend_when_enabled() -> None:
+    per_phase = {"train": _layer_snap_with_patches("train")}
+    plain = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
+    )
+    heat = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=True, mean=None, std=None
+    )
+    assert plain.count("<img") == 1
+    assert heat.count("<img") == 2  # the grid plus its colorbar
