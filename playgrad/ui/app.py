@@ -1061,6 +1061,31 @@ def _axis_ranges(
         share = min(share + _CLIP_SHARE_STEP, _MAX_CLIP_SHARE)
 
 
+def _effective_log_x(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str, log_x: bool
+) -> bool:
+    """Whether the figure should use the signed-log value axis.
+
+    A checked **Log x** always wins. Otherwise the signed-log view kicks in
+    automatically when even the most aggressive linear trims
+    (`_MAX_CLIP_SHARE`) would leave the bars covering less than
+    `_MIN_FILL_FRACTION` of the plot area: a distribution spanning many
+    decades — gradients routinely do — has no readable linear-value
+    rendering at all, which is exactly what the signed-log axis is for.
+    The decision ignores **Log y** so toggling it never flips the x-mode
+    (a log count axis fixes vertical visibility, not a multi-decade
+    value range).
+    """
+    if log_x:
+        return True
+    bounds = _trimmed_bin_bounds(per_phase, kind, _MAX_CLIP_SHARE)
+    y_range = _linear_y_range(per_phase, kind, True, _MAX_CLIP_SHARE)
+    if bounds is None or y_range is None:
+        return False
+    fill = _fill_fraction(per_phase, kind, True, bounds, y_range[1])
+    return fill < _MIN_FILL_FRACTION
+
+
 def _make_histogram_figure(
     per_phase: dict[str, LayerStatsSnapshot],
     kind: str,
@@ -1086,13 +1111,18 @@ def _make_histogram_figure(
     `log_x` / `log_y` toggle the value (x) and probability (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
     Watching page). With `log_x` off, bars show probability density instead
-    of probabilities (see `_use_density`).
+    of probabilities (see `_use_density`) — unless the distribution has no
+    readable linear rendering, in which case the figure falls back to the
+    signed-log view on its own (see `_effective_log_x`) and says so in the
+    x-axis title.
 
     This builds the *whole* figure. Routine data refreshes don't call it —
     they restyle the existing figure in place (see `_HistPlot`) so client-side
     state like zoom survives; the figure is only rebuilt when the set of
-    phases or the axis scale changes.
+    phases, the axis scale, or the automatic log-x fallback changes.
     """
+    auto_log_x = not log_x and _effective_log_x(per_phase, kind, log_x)
+    log_x = log_x or auto_log_x
     x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
     density = _use_density(log_x)
     if density:
@@ -1159,6 +1189,14 @@ def _make_histogram_figure(
             showgrid=False,
             zeroline=False,
         )
+        if auto_log_x:
+            # Make the silent fallback visible: the Log x checkbox is off,
+            # yet this figure renders on the signed-log axis.
+            fig.update_xaxes(
+                title=dict(text="signed-log scale (auto)", font=dict(size=9)),
+                row=max(1, len(phases)),
+                col=1,
+            )
     else:
         fig.update_xaxes(
             range=x_range,
@@ -1229,7 +1267,9 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
                 value=axis_log["x"],
                 on_change=lambda e: set_axis_log("x", bool(e.value)),
             ).props("dense").classes("text-sm ml-4").tooltip(
-                "Log-based (signed-log) scale on the value axis"
+                "Log-based (signed-log) scale on the value axis. Unchecked, "
+                "plots whose distribution spans too many decades for a "
+                "linear axis still fall back to it automatically."
             )
             ui.checkbox(
                 "Log y",
@@ -1334,9 +1374,9 @@ class _HistPlot:
     """One Plotly histogram figure that refreshes its data in place.
 
     The figure (one subplot row per phase) is built once and rebuilt only
-    when the set of phases or the axis scale changes. Routine per-tick
-    updates go through `Plotly.update`, which leaves client-side state —
-    zoom/pan — untouched.
+    when the set of phases, the axis scale, or the automatic log-x fallback
+    changes. Routine per-tick updates go through `Plotly.update`, which
+    leaves client-side state — zoom/pan — untouched.
     """
 
     def __init__(self, kind: str, title: str, axis_log: dict[str, bool]) -> None:
@@ -1347,6 +1387,7 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
+        self._log_x = self._axis[0]  # effective x-mode (manual or fallback)
         # Last axis ranges applied, so refreshes only push a relayout when a
         # cap actually moved (a range write resets zoom on that axis).
         self._y_range: list[float] | None = None
@@ -1365,10 +1406,15 @@ class _HistPlot:
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
-        density = _use_density(axis[0])
-        if phases != self._phases or axis != self._axis:
-            # A phase appeared/disappeared or an axis-scale checkbox flipped —
-            # rebuild the whole figure (the subplot rows change with it).
+        # The effective x-mode can flip without any checkbox changing (the
+        # accumulating data crosses the fallback threshold), and with it the
+        # whole figure structure — bar positions, widths, hover — so it is
+        # part of the rebuild signature.
+        log_x = _effective_log_x(per_phase, self._kind, axis[0])
+        density = _use_density(log_x)
+        if phases != self._phases or axis != self._axis or log_x != self._log_x:
+            # A phase appeared/disappeared, an axis-scale checkbox flipped,
+            # or the fallback engaged — rebuild the whole figure.
             self.element.update_figure(
                 _figure_payload(
                     _make_histogram_figure(
@@ -1382,8 +1428,9 @@ class _HistPlot:
             )
             self._phases = phases
             self._axis = axis
+            self._log_x = log_x
             self._x_range, self._y_range = _axis_ranges(
-                per_phase, self._kind, log_x=axis[0], log_y=axis[1]
+                per_phase, self._kind, log_x=log_x, log_y=axis[1]
             )
         elif phases:
             # Same rows and axes — only counts (and the epoch label) moved.
@@ -1403,7 +1450,7 @@ class _HistPlot:
             # The caps follow the data; re-apply them only when they moved so
             # an idle refresh doesn't keep snapping the user's zoom back.
             x_range, y_range = _axis_ranges(
-                per_phase, self._kind, log_x=axis[0], log_y=axis[1]
+                per_phase, self._kind, log_x=log_x, log_y=axis[1]
             )
             if y_range is not None and y_range != self._y_range:
                 # Every row gets the same range (row 1 is "yaxis", row n is
