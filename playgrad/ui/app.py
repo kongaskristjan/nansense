@@ -1321,17 +1321,22 @@ class _WeightPanel:
             # and carry the same kind of labelled marker bars as the
             # activation/gradient pair on the main page's layer cards.
             with ui.element("div").classes("w-full overflow-x-auto"):
-                with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-sky-500", "WEIGHT")
-                    self._img = ui.html("")
-                ui.element("div").classes("h-1")
-                with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-violet-500", "GRADIENT")
-                    self._grad_img = ui.html("")
-                # One marker-barred strip per tensor-valued optimizer state
-                # entry (momentum_buffer, exp_avg, …); rebuilt on each render.
-                # Stays empty — invisible — when the session has no optimizer.
-                self._opt_container = ui.element("div").classes("w-full")
+                # Same max-content wrapper as the layer cards: every row spans
+                # the widest strip so the sticky markers stay in view across
+                # the whole scroll range.
+                with ui.element("div").classes("w-max min-w-full"):
+                    with ui.element("div").classes("flex no-wrap items-stretch"):
+                        _strip_marker("bg-sky-500", "WEIGHT")
+                        self._img = ui.html("")
+                    ui.element("div").classes("h-1")
+                    with ui.element("div").classes("flex no-wrap items-stretch"):
+                        _strip_marker("bg-violet-500", "GRADIENT")
+                        self._grad_img = ui.html("")
+                    # One marker-barred strip per tensor-valued optimizer
+                    # state entry (momentum_buffer, exp_avg, …); rebuilt on
+                    # each render. Stays empty — invisible — when the session
+                    # has no optimizer.
+                    self._opt_container = ui.element("div").classes("w-full")
             # Scalar optimizer values: 0-dim state entries (Adam's `step`) and
             # the param group's numeric hyperparameters (`lr`, …).
             self._opt_scalars = ui.label("").classes(
@@ -1705,13 +1710,18 @@ class _LayerView:
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip("Watch this layer (toggle)")
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
-                with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-emerald-500", "ACTIVATIONS")
-                    self.act_html = ui.html("")
-                ui.element("div").classes("h-1")
-                with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-violet-500", "GRADIENTS")
-                    self.grad_html = ui.html("")
+                # The max-content wrapper makes every row span the widest
+                # strip. Without it a row is only as wide as the visible
+                # container, so its sticky marker would be dragged out of
+                # view once the strips are scrolled past that width.
+                with ui.element("div").classes("w-max min-w-full"):
+                    with ui.element("div").classes("flex no-wrap items-stretch"):
+                        _strip_marker("bg-emerald-500", "ACTIVATIONS")
+                        self.act_html = ui.html("")
+                    ui.element("div").classes("h-1")
+                    with ui.element("div").classes("flex no-wrap items-stretch"):
+                        _strip_marker("bg-violet-500", "GRADIENTS")
+                        self.grad_html = ui.html("")
         # Sync the icon now in case the page is being rebuilt with a layer
         # that's already in the watched set (e.g. after navigating from
         # `/watch` back to `/`).
@@ -1740,16 +1750,20 @@ def _strip_marker(color_class: str, label: str) -> None:
 
     Stretches to the strip's height via the flex row (and collapses to
     nothing when the strip is empty); `sticky left-0` keeps it pinned to the
-    card's left edge while the strip scrolls underneath. The label is drawn
-    vertically, reading bottom-up, and is absolutely positioned so it adds
-    no intrinsic height — otherwise a missing strip would leave a floating
-    bar instead of an empty row. On strips too short to fit it the label is
-    hidden via the container query in `_STRIP_MARKER_CSS`; the tooltip
-    carries the full name regardless.
+    card's left edge while the strip scrolls underneath. A sticky element
+    can only travel within its parent, so the caller must make the flex row
+    span the full scrollable width (the `w-max min-w-full` wrapper around
+    the rows) — otherwise the marker is dragged out of view once the strips
+    are scrolled past the visible width. The label is drawn vertically,
+    reading bottom-up, and is absolutely positioned so it adds no intrinsic
+    height — otherwise a missing strip would leave a floating bar instead
+    of an empty row. On strips too short to fit it the label is hidden via
+    the container query in `_STRIP_MARKER_CSS`; the tooltip carries the
+    full name regardless.
     """
     with ui.element("div").classes(
         f"playgrad-marker w-5 shrink-0 rounded mr-2 sticky left-0 z-10 "
-        f"relative overflow-hidden {color_class}"
+        f"overflow-hidden {color_class}"
     ).tooltip(label.capitalize()):
         ui.label(label).classes(
             "playgrad-marker-label absolute text-white font-bold select-none"
