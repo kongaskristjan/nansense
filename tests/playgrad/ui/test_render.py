@@ -348,6 +348,16 @@ def test_patch_grid_layout_and_css_size() -> None:
     )
 
 
+def test_patch_grid_is_png_regardless_of_strip_format() -> None:
+    # Grids ignore STRIP_FORMAT: multi-MB BMP grid messages can pause the
+    # websocket transport and crash its keepalive (see PatchGridRender).
+    tp = _type_patches(torch.zeros(2, 5), torch.rand(2, 5, 3, 4, 4))
+    grid = render_patch_grid(tp)
+    assert grid is not None
+    assert grid.image.startswith(b"\x89PNG")
+    assert grid.mime == "image/png"
+
+
 def test_patch_grid_denormalizes_with_mean_std() -> None:
     tp = _type_patches(torch.zeros(1, 5), torch.zeros(1, 5, 3, 4, 4))
     grid = render_patch_grid(tp, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))

@@ -364,8 +364,18 @@ class WatchAccumulator:
                 if key[2] >= epoch:
                     del self._stats[key]
 
-    def snapshot(self, *, layers: Iterable[str] | None = None) -> WatchSnapshot:
-        """Snapshot all (or the requested subset of) layers' stats."""
+    def snapshot(
+        self,
+        *,
+        layers: Iterable[str] | None = None,
+        include_patches: bool = True,
+    ) -> WatchSnapshot:
+        """Snapshot all (or the requested subset of) layers' stats.
+
+        `include_patches=False` skips the patch buffers' GPU→CPU copies —
+        they're the bulk of the sync, and a caller showing only histograms
+        has no use for them.
+        """
         wanted = set(layers) if layers is not None else None
         with self._lock:
             keys = [k for k in self._stats if wanted is None or k[0] in wanted]
@@ -380,6 +390,6 @@ class WatchAccumulator:
                 epoch=epoch,
                 activations=stats.activations.snapshot(),
                 gradients=stats.gradients.snapshot(),
-                patches=stats.patches.snapshot(),
+                patches=stats.patches.snapshot() if include_patches else None,
             )
         return WatchSnapshot(stats=out)

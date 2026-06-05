@@ -1274,23 +1274,23 @@ def _build_watch_page(
     grid_on: dict[PatchType, bool] = dict.fromkeys(PATCH_TYPES, True)
     heat_on = {"on": False}
 
-    def set_axis_log(axis: str, value: bool) -> None:
+    async def set_axis_log(axis: str, value: bool) -> None:
         axis_log[axis] = value
-        refresh()
+        await refresh()
 
-    def set_mode(value: object) -> None:
+    async def set_mode(value: object) -> None:
         view_minmax["on"] = value == _VIEW_MINMAX
         hist_controls.set_visibility(not view_minmax["on"])
         minmax_controls.set_visibility(view_minmax["on"])
-        refresh()
+        await refresh()
 
-    def set_grid(ptype: PatchType, value: bool) -> None:
+    async def set_grid(ptype: PatchType, value: bool) -> None:
         grid_on[ptype] = value
-        refresh()
+        await refresh()
 
-    def set_heat(value: bool) -> None:
+    async def set_heat(value: bool) -> None:
         heat_on["on"] = value
-        refresh()
+        await refresh()
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
@@ -1391,17 +1391,58 @@ def _build_watch_page(
                     input_std=input_std,
                 )
 
-    def refresh() -> None:
-        watched = session.watched_layers
-        n = len(watched)
-        count_label_holder["count"].text = f"{n} layer{'' if n == 1 else 's'}"
-        if set(layer_panels) != set(watched):
-            rebuild_cards()
-        snap = session.watch_snapshot()
-        for panel in layer_panels.values():
-            panel.update(snap)
+    # Single-flight refresh: snapshotting and grid rendering run in a worker
+    # thread so the event loop keeps serving websocket traffic (a blocked
+    # loop starves keepalive pings and kills the connection). A toggle that
+    # lands while a pass is in flight just marks it dirty — rapid Heatmap
+    # clicks coalesce into one follow-up pass instead of queueing a full
+    # re-render per click.
+    refresh_state = {"running": False, "dirty": False}
 
-    refresh()
+    async def refresh() -> None:
+        if refresh_state["running"]:
+            refresh_state["dirty"] = True
+            return
+        refresh_state["running"] = True
+        try:
+            while True:
+                refresh_state["dirty"] = False
+                watched = session.watched_layers
+                n = len(watched)
+                count_label_holder["count"].text = (
+                    f"{n} layer{'' if n == 1 else 's'}"
+                )
+                if set(layer_panels) != set(watched):
+                    rebuild_cards()
+                panels = dict(layer_panels)
+                minmax = view_minmax["on"]
+
+                def compute(
+                    panels: dict[str, _WatchLayerPanel] = panels,
+                    minmax: bool = minmax,
+                ) -> tuple[
+                    WatchSnapshot,
+                    dict[str, tuple[tuple[object, ...], str] | None],
+                ]:
+                    # The GPU→CPU patch sync is only paid when the MIN/MAX
+                    # view will actually consume it.
+                    snap = session.watch_snapshot(include_patches=minmax)
+                    grids: dict[str, tuple[tuple[object, ...], str] | None] = {}
+                    if minmax:
+                        for name, panel in panels.items():
+                            grids[name] = panel.prepare_grids(snap)
+                    return snap, grids
+
+                snap, grids = await asyncio.to_thread(compute)
+                for name, panel in panels.items():
+                    if layer_panels.get(name) is panel:  # not rebuilt meanwhile
+                        panel.update(snap, grids.get(name))
+                if not refresh_state["dirty"]:
+                    return
+        finally:
+            refresh_state["running"] = False
+
+    ui.timer(0.0, refresh, once=True)
     ui.timer(2.0, refresh)
 
 
@@ -1608,34 +1649,56 @@ class _WatchLayerPanel:
                 self._grids = ui.html(_NO_PATCHES_HTML).classes("w-full")
             self._patch_section.set_visibility(False)
 
-    def update(self, snap: WatchSnapshot) -> None:
+    def update(
+        self,
+        snap: WatchSnapshot,
+        grids: tuple[tuple[object, ...], str] | None = None,
+    ) -> None:
+        """Refresh the visible view. Runs on the UI event loop.
+
+        `grids` is the output of `prepare_grids` (computed off the event
+        loop by the page's refresh); `None` means the grids are unchanged.
+        """
         per_phase = snap.latest_per_phase(self.name)
         minmax = self._view_minmax["on"]
         self._hist_section.set_visibility(not minmax)
         self._patch_section.set_visibility(minmax)
         if minmax:
-            self._update_grids(per_phase)
+            if grids is not None:
+                self._grid_sig, html = grids
+                self._grids.set_content(html)
             return
         self._act_stats.set_content(_stats_table_html(per_phase, "activation"))
         self._grad_stats.set_content(_stats_table_html(per_phase, "gradient"))
         self._act.update(per_phase)
         self._grad.update(per_phase)
 
-    def _update_grids(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
+    def prepare_grids(
+        self, snap: WatchSnapshot
+    ) -> tuple[tuple[object, ...], str] | None:
+        """Render this panel's patch grids if their signature changed.
+
+        Pure compute — no UI element access — so the page's refresh can run
+        it in a worker thread: blending heatmaps and encoding a card's worth
+        of grid images would otherwise block the event loop long enough to
+        starve websocket keepalive pings when toggles re-render every card.
+        Returns `(signature, html)` for `update` to apply, or `None` when
+        the current content is already up to date.
+        """
+        per_phase = snap.latest_per_phase(self.name)
         enabled = [t for t in PATCH_TYPES if self._grid_on[t]]
-        sig = _patch_grids_signature(per_phase, enabled, self._heat_on["on"])
+        heatmap = self._heat_on["on"]
+        sig = _patch_grids_signature(per_phase, enabled, heatmap)
         if sig == self._grid_sig:
-            return
-        self._grid_sig = sig
-        self._grids.set_content(
-            _patch_grids_html(
-                per_phase,
-                enabled=enabled,
-                heatmap=self._heat_on["on"],
-                mean=self._input_mean,
-                std=self._input_std,
-            )
+            return None
+        html = _patch_grids_html(
+            per_phase,
+            enabled=enabled,
+            heatmap=heatmap,
+            mean=self._input_mean,
+            std=self._input_std,
         )
+        return sig, html
 
 
 _VIEW_HISTOGRAM: str = "HISTOGRAM"
@@ -1726,7 +1789,7 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
         '<div class="text-[10px] uppercase tracking-wide text-slate-500 '
         f'font-mono">{label}</div>'
         '<div class="overflow-x-auto w-full">'
-        f'<img src="{_b64_img_src(grid.image)}" '
+        f'<img src="{_b64_img_src(grid.image, mime=grid.mime)}" '
         f'style="width:{grid.width}px; height:{grid.height}px; '
         'image-rendering:pixelated; display:block; max-width:none;" '
         f'title="{label} — columns: channels, rows: top samples '
@@ -2673,8 +2736,10 @@ def _strip_marker(color_class: str, label: str) -> None:
         )
 
 
-def _b64_img_src(image: bytes) -> str:
-    return f"data:{image_mime()};base64," + base64.b64encode(image).decode("ascii")
+def _b64_img_src(image: bytes, *, mime: str | None = None) -> str:
+    """Data-URI for an image, defaulting to the global `STRIP_FORMAT` mime."""
+    encoded = base64.b64encode(image).decode("ascii")
+    return f"data:{mime or image_mime()};base64,{encoded}"
 
 
 def _strip_html(strip: StripRender | None) -> str:

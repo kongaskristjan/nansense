@@ -731,7 +731,18 @@ It does not touch tensors directly until they need to be rendered.
   slots render flat gray. Grids re-render only when a cheap signature
   (enabled toggles + heatmap flag + the stored extreme values) changes
   (`_patch_grids_signature`), so routine 2-second ticks cost nothing
-  once an epoch's buffers settle.
+  once an epoch's buffers settle. The page's refresh is single-flight:
+  snapshotting and grid rendering run in a worker thread
+  (`asyncio.to_thread`) so the event loop keeps serving websocket
+  traffic, and a toggle landing mid-render marks the pass dirty —
+  rapid Heatmap clicks coalesce into one follow-up render instead of
+  queueing one per click. Two further guards against websocket
+  overload: grids are always PNG (`PATCH_GRID_FORMAT`) because a wide
+  layer's BMP grids reach multiple MB per message — enough to pause
+  the transport, where concurrent drains trip a known
+  `websockets`-legacy keepalive assertion that kills the connection —
+  and `watch_snapshot(include_patches=False)` skips the patch GPU→CPU
+  copies entirely while the HISTOGRAM view is selected.
 - The `/weights` page (one `?layer=` query param) is the per-layer weight
   viewer. It reuses the shared stepping controls (no sample spinner) and
   builds one `_WeightPanel` per name in `session.layer_weights[layer]`,

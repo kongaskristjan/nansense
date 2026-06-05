@@ -297,11 +297,17 @@ class Session:
             self._watched_layers.discard(layer)
         self._watch_accumulator.forget_layer(layer)
 
-    def watch_snapshot(self) -> WatchSnapshot:
-        """Snapshot of all currently-watched layers' stats."""
+    def watch_snapshot(self, *, include_patches: bool = True) -> WatchSnapshot:
+        """Snapshot of all currently-watched layers' stats.
+
+        `include_patches=False` skips the extreme-patch GPU→CPU copies for
+        callers that only need the scalar/histogram stats.
+        """
         with self._cv:
             layers = list(self._watched_layers)
-        return self._watch_accumulator.snapshot(layers=layers)
+        return self._watch_accumulator.snapshot(
+            layers=layers, include_patches=include_patches
+        )
 
     @property
     def probe_result(self) -> ProbeResult | None:
