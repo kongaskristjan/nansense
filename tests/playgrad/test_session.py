@@ -910,6 +910,49 @@ def test_unwatch_drops_collected_stats() -> None:
     assert session.watch_snapshot().stats == {}
 
 
+class TinyConvNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(3, 2, kernel_size=3, padding=1)
+        self.fc = nn.Linear(2 * 8 * 8, 3)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.fc(torch.relu(self.conv(x)).flatten(1))
+
+
+def test_watch_gathers_patches_for_image_inputs() -> None:
+    model = TinyConvNet()
+    session = playgrad.start(model, epochs=1, phases={"train": 2})
+    session.watch("conv")
+    session.detach()
+
+    for _ in range(2):
+        with session.batch(phase="train", epoch=0):
+            x = torch.randn(2, 3, 8, 8)
+            y = torch.randint(0, 3, (2,))
+            model.zero_grad(set_to_none=True)
+            nn.functional.cross_entropy(model(x), y).backward()
+
+    patches = session.watch_snapshot().stats[("conv", "train", 0)].patches
+    assert patches is not None
+    tp = patches.by_type["max_pixel"]
+    assert tp.values.shape[0] == 2  # one row per conv channel
+    # Two batches × 2 samples = 4 candidates per channel made it in.
+    assert torch.isfinite(tp.values[:, :4]).all()
+
+
+def test_watch_skips_patches_without_image_input() -> None:
+    session, model = _make_session(epochs=1, phases={"train": 1})
+    session.watch("fc1")
+    session.detach()
+    with session.batch(phase="train", epoch=0):
+        _train_step(model)
+    # TinyNet's input is 2D — stats accumulate but no patches are gathered.
+    layer_stats = session.watch_snapshot().stats[("fc1", "train", 0)]
+    assert layer_stats.activations.n > 0
+    assert layer_stats.patches is None
+
+
 def test_watching_uses_full_capture_machinery_under_detach() -> None:
     """Watching engages the same hook path as capture, so fx intermediates work."""
     session, model = _make_session(epochs=1, phases={"train": 1})
