@@ -194,18 +194,24 @@ being published.
 
 The `/watch` page renders one card per watched layer with two plotly
 histograms (activations + activation gradients) overlaid by phase
-(train / val) for the most recent epoch. Each histogram has 211
-signed-log bins covering `(-1e6, 1e6)` with bin edges on powers of 10
-and at six log-spaced points between them. Two checkboxes in the top
-bar — **Log x** and **Log y** — switch the value and count axes from
-the linear default to a log-based scale. With both unchecked (the
-default), bars show density (count / bin width) instead of raw counts —
-on linear axes that makes bar area proportional to count despite the
-wildly different linear bin widths — and the y-axis is capped at the
-20th-tallest bar so the ultra-narrow near-zero bins can't blow out the
-scale. Above each histogram a
-one-line summary shows `n`, `mean`, `std`, histogram-derived
-`median`, and `min`/`max`. Any layer in `session.layer_names` is
+(train / val) for the most recent epoch — train draws underneath
+near-opaque, val on top half-transparent so both stay readable. Each
+histogram has 211 signed-log bins covering `(-1e6, 1e6)` with bin
+edges on powers of 10 and at six log-spaced points between them. Two
+checkboxes in the top bar — **Log x** and **Log y** — switch the
+value and probability axes from the linear default to a log-based
+scale. With **Log x** unchecked (the default), bars show probability
+density (`count / (n * bin width)`) — on a linear value axis that
+makes bar area proportional to the share of values despite the wildly
+different linear bin widths — and, with **Log y** also unchecked, the
+y-axis is capped so that bars holding 99.9% of the values stay fully
+in range, letting only sparse ultra-narrow near-zero spikes clip.
+Checking **Log x** switches the bars to plain per-bin probabilities
+(`count / n`); per-phase normalization keeps train and val comparable
+regardless of how many batches each has seen. Above each histogram a
+table shows one column per phase (`train ep N`, `val ep N`) and one
+row per stat: `n`, `mean`, `std`, histogram-derived `median`, and
+`min`/`max`. Any layer in `session.layer_names` is
 watchable — named modules, fx-traced intermediates (scope-qualified by
 their submodule, e.g. `stage1.0.relu1`, `stage1.0.add`), and the graph
 input itself (`x`). While at least one layer

@@ -10,12 +10,10 @@ from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
     _BIN_WIDTHS,
-    _DENSITY_TOP_BINS,
     _PLOT_HEIGHT,
     _RenderCache,
     _compute_frame,
     _default_roles,
-    _density_heights,
     _density_y_range,
     _dims_from_roles,
     _format_live_position,
@@ -23,7 +21,10 @@ from playgrad.ui.app import (
     _linear_x_range,
     _make_histogram_figure,
     _phases_with_data,
+    _probabilities,
+    _probability_densities,
     _role_options,
+    _stats_table_html,
     _strip_html,
     _summarize_epoch_ranges,
     _use_density,
@@ -275,7 +276,7 @@ def test_linear_x_range_brackets_populated_bins() -> None:
     assert hi - lo < 1.0  # zoomed in, not the full +/-1e6 span
 
 
-# --- Watching histogram: density mode (both axes linear) -------------------
+# --- Watching histogram: density mode (linear value axis) ------------------
 
 
 def test_histogram_defaults_to_linear_density_mode() -> None:
@@ -283,118 +284,178 @@ def test_histogram_defaults_to_linear_density_mode() -> None:
     per_phase = {"train": _layer_snap("train")}
     fig = _make_histogram_figure(per_phase, "activation", "activations")
     assert fig.layout.yaxis.type == "linear"
-    assert fig.layout.yaxis.title.text == "density"
+    assert fig.layout.yaxis.title.text == "probability density"
 
 
-@pytest.mark.parametrize(
-    "log_x, log_y, expected",
-    [
-        (True, True, False),
-        (True, False, False),
-        (False, True, False),
-        (False, False, True),
-    ],
-)
-def test_use_density_only_when_both_axes_linear(
-    log_x: bool, log_y: bool, expected: bool
-) -> None:
-    assert _use_density(log_x, log_y) is expected
+@pytest.mark.parametrize("log_x, expected", [(True, False), (False, True)])
+def test_use_density_depends_only_on_log_x(log_x: bool, expected: bool) -> None:
+    assert _use_density(log_x) is expected
 
 
-def test_density_heights_divide_counts_by_bin_width() -> None:
+def test_probabilities_normalize_counts() -> None:
     hist = [0] * N_BINS
     hist[ZERO_BIN] = 4
     hist[ZERO_BIN + 10] = 6
-    heights = _density_heights(tuple(hist))
-    assert heights[ZERO_BIN] == pytest.approx(4 / _BIN_WIDTHS[ZERO_BIN])
-    assert heights[ZERO_BIN + 10] == pytest.approx(6 / _BIN_WIDTHS[ZERO_BIN + 10])
+    probs = _probabilities(tuple(hist))
+    assert probs[ZERO_BIN] == pytest.approx(0.4)
+    assert probs[ZERO_BIN + 10] == pytest.approx(0.6)
+    assert sum(probs) == pytest.approx(1.0)
+
+
+def test_probability_densities_normalize_by_count_and_width() -> None:
+    hist = [0] * N_BINS
+    hist[ZERO_BIN] = 4
+    hist[ZERO_BIN + 10] = 6
+    heights = _probability_densities(tuple(hist))
+    assert heights[ZERO_BIN] == pytest.approx(0.4 / _BIN_WIDTHS[ZERO_BIN])
+    assert heights[ZERO_BIN + 10] == pytest.approx(0.6 / _BIN_WIDTHS[ZERO_BIN + 10])
     assert heights[0] == 0
+    # Bar areas integrate to 1 — it's a probability density.
+    assert sum(h * w for h, w in zip(heights, _BIN_WIDTHS)) == pytest.approx(1.0)
 
 
-def test_density_y_range_caps_at_20th_tallest_bar() -> None:
-    # 30 populated bins: the cap sits at the 20th-tallest density, so the
-    # taller bars (here, narrow near-zero bins) clip instead of stretching
-    # the scale.
-    hist = {ZERO_BIN + 1 + i: (i + 1) ** 2 for i in range(30)}
+def test_probability_helpers_handle_empty_hist() -> None:
+    empty = (0,) * N_BINS
+    assert _probabilities(empty) == [0.0] * N_BINS
+    assert _probability_densities(empty) == [0.0] * N_BINS
+
+
+def test_density_y_range_clips_bars_holding_under_coverage() -> None:
+    # The zero-band spike holds 5 of 10005 points (< 0.1%), so it may clip;
+    # the bulk bar holds the other 99.95% and must stay fully visible.
+    hist = {ZERO_BIN: 5, ZERO_BIN + 50: 10_000}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    heights = sorted(
-        (h for h in _density_heights(per_phase["train"].activations.hist) if h > 0),
-        reverse=True,
-    )
+    heights = _probability_densities(per_phase["train"].activations.hist)
     rng = _density_y_range(per_phase, "activation")
     assert rng is not None
     assert rng[0] == 0.0
-    assert rng[1] == pytest.approx(heights[_DENSITY_TOP_BINS - 1] * 1.05)
-    assert rng[1] < heights[0]  # the tallest bar does clip
+    assert rng[1] == pytest.approx(heights[ZERO_BIN + 50] * 1.05)
+    assert rng[1] < heights[ZERO_BIN]  # the sparse spike does clip
 
 
-def test_density_y_range_pools_phases() -> None:
-    # With two phases the 20-tallest pool spans both traces.
-    per_phase = {
-        "train": _layer_snap("train", hist={ZERO_BIN + 1 + i: 100 for i in range(15)}),
-        "val": _layer_snap("val", hist={ZERO_BIN + 30 + i: 1 for i in range(15)}),
-    }
-    all_heights = sorted(
-        (
-            h
-            for phase in per_phase.values()
-            for h in _density_heights(phase.activations.hist)
-            if h > 0
-        ),
-        reverse=True,
-    )
-    rng = _density_y_range(per_phase, "activation")
-    assert rng is not None
-    assert rng[1] == pytest.approx(all_heights[_DENSITY_TOP_BINS - 1] * 1.05)
-
-
-def test_density_y_range_with_few_bars_uses_smallest() -> None:
-    # Fewer than 20 populated bins: the "biggest 20" are all of them, so the
-    # cap is the smallest populated bar (the giant zero-band spike clips).
-    hist = {ZERO_BIN: 100, ZERO_BIN + 20: 5}
+def test_density_y_range_keeps_bars_holding_over_coverage() -> None:
+    # The spike holds ~1% of the points — more than the 0.1% clip budget — so
+    # the range must reach the tallest bar even though it's just one bin.
+    hist = {ZERO_BIN: 100, ZERO_BIN + 50: 10_000}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    heights = [
-        h for h in _density_heights(per_phase["train"].activations.hist) if h > 0
-    ]
+    heights = _probability_densities(per_phase["train"].activations.hist)
     rng = _density_y_range(per_phase, "activation")
     assert rng is not None
-    assert rng[1] == pytest.approx(min(heights) * 1.05)
+    assert rng[1] == pytest.approx(max(heights) * 1.05)
+
+
+def test_density_y_range_pools_phases_weighted_by_count() -> None:
+    # The clip budget is 0.1% of the pooled points across both traces:
+    # train's sparse zero spike clips, and the cap lands on the tallest
+    # bulk bar of either phase.
+    per_phase = {
+        "train": _layer_snap("train", hist={ZERO_BIN: 5, ZERO_BIN + 30: 5_000}),
+        "val": _layer_snap("val", hist={ZERO_BIN + 40: 5_000}),
+    }
+    train_heights = _probability_densities(per_phase["train"].activations.hist)
+    val_heights = _probability_densities(per_phase["val"].activations.hist)
+    rng = _density_y_range(per_phase, "activation")
+    assert rng is not None
+    expected_cap = max(train_heights[ZERO_BIN + 30], val_heights[ZERO_BIN + 40])
+    assert rng[1] == pytest.approx(expected_cap * 1.05)
+    assert rng[1] < train_heights[ZERO_BIN]
 
 
 def test_density_y_range_none_when_empty() -> None:
     assert _density_y_range({}, "activation") is None
 
 
-def test_histogram_density_mode_plots_density_with_capped_axis() -> None:
+def test_histogram_density_mode_plots_probability_density_with_capped_axis() -> None:
     hist = {ZERO_BIN: 50, ZERO_BIN + 10: 7}
     per_phase = {"train": _layer_snap("train", hist=hist)}
     fig = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False, log_y=False
     )
     trace = fig.data[0]
-    expected = _density_heights(per_phase["train"].activations.hist)
+    expected = _probability_densities(per_phase["train"].activations.hist)
     assert list(trace.y) == pytest.approx(expected)
     # Raw counts ride along for the hover text.
     assert trace.customdata[ZERO_BIN] == 50
-    assert fig.layout.yaxis.title.text == "density"
+    assert fig.layout.yaxis.title.text == "probability density"
     expected_range = _density_y_range(per_phase, "activation")
     assert expected_range is not None
     assert tuple(fig.layout.yaxis.range) == tuple(expected_range)
 
 
-@pytest.mark.parametrize(
-    "log_x, log_y", [(True, True), (True, False), (False, True)]
-)
-def test_histogram_keeps_counts_on_other_axis_combos(
-    log_x: bool, log_y: bool
-) -> None:
+def test_histogram_log_y_keeps_density_but_drops_range_cap() -> None:
+    # Log y alone no longer switches what's measured: bars stay probability
+    # densities, but the cap (a linear-space range) gives way to autorange.
     per_phase = {"train": _layer_snap("train", n=9)}
     fig = _make_histogram_figure(
-        per_phase, "activation", "activations", log_x=log_x, log_y=log_y
+        per_phase, "activation", "activations", log_x=False, log_y=True
     )
-    assert fig.data[0].y[ZERO_BIN] == 9
-    assert fig.layout.yaxis.title.text == "count"
+    expected = _probability_densities(per_phase["train"].activations.hist)
+    assert list(fig.data[0].y) == pytest.approx(expected)
+    assert fig.layout.yaxis.title.text == "probability density"
     assert fig.layout.yaxis.range is None
+
+
+@pytest.mark.parametrize("log_y", [True, False])
+def test_histogram_log_x_plots_probabilities(log_y: bool) -> None:
+    per_phase = {"train": _layer_snap("train", n=9)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=True, log_y=log_y
+    )
+    assert fig.data[0].y[ZERO_BIN] == pytest.approx(1.0)
+    assert fig.data[0].customdata[ZERO_BIN] == 9
+    assert fig.layout.yaxis.title.text == "probability"
+    assert fig.layout.yaxis.range is None
+
+
+# --- Watching histogram: phase overlay opacity ------------------------------
+
+
+def test_histogram_overlay_keeps_train_visible_under_val() -> None:
+    per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val")}
+    fig = _make_histogram_figure(per_phase, "activation", "activations")
+    # train draws first (underneath) near-opaque; val sits on top
+    # half-transparent so train stays readable through it.
+    assert fig.data[0].opacity == 0.85
+    assert fig.data[1].opacity == 0.5
+
+
+def test_histogram_single_phase_is_near_opaque() -> None:
+    fig = _make_histogram_figure(
+        {"train": _layer_snap("train")}, "activation", "activations"
+    )
+    assert fig.data[0].opacity == 0.85
+
+
+# --- Watching stats table ----------------------------------------------------
+
+
+def test_stats_table_no_data() -> None:
+    assert "no data yet" in _stats_table_html({}, "activation")
+
+
+def test_stats_table_has_phase_columns_and_stat_rows() -> None:
+    per_phase = {
+        "train": _layer_snap("train", epoch=2, n=1500),
+        "val": _layer_snap("val", epoch=2, n=10),
+    }
+    table = _stats_table_html(per_phase, "activation")
+    assert "<table" in table
+    assert "train ep 2" in table and "val ep 2" in table
+    for label in ("n", "mean", "std", "median", "min", "max"):
+        assert f">{label}</td>" in table
+    assert ">1,500</td>" in table  # n is comma-formatted
+
+
+def test_stats_table_skips_phase_without_data() -> None:
+    per_phase = {"train": _layer_snap("train", n=5), "val": _layer_snap("val", n=0)}
+    table = _stats_table_html(per_phase, "activation")
+    assert "train ep 0" in table
+    assert "val" not in table
+
+
+def test_stats_table_escapes_phase_names() -> None:
+    per_phase = {"<b>": _layer_snap("<b>")}
+    assert "<b>" not in _stats_table_html(per_phase, "activation")
 
 
 # --- Watching histogram: plot height (task 3) ------------------------------

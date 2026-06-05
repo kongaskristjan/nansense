@@ -499,24 +499,35 @@ It does not touch tensors directly until they need to be rendered.
   changes — a phase appears/disappears, or a **Log x** / **Log y**
   checkbox flips an axis scale — which `_HistPlot` detects by comparing the
   current `(phases, axis)` signature against the last render. The figures
-  use `barmode="overlay"` with per-phase opacity so train/val sit on the
-  same axes. Both axes default to linear (the **Log x** / **Log y**
-  checkboxes start unchecked): bars sit at their true linear bin centres
-  (`_BIN_CENTERS`) with per-bin widths (`_BIN_WIDTHS`), auto-zoomed by
-  `_linear_x_range` to the populated bins since the full ±1e6 span is
-  mostly empty. With both axes linear (`_use_density`), bar heights are
-  densities (`count / bin width`, `_density_heights`) so bar area stays
-  proportional to count, and the y-axis is capped by `_density_y_range`
-  at the 20th-tallest bar (`_DENSITY_TOP_BINS`) — the near-zero bins are
-  so narrow that a few stray values would otherwise stretch the scale by
-  orders of magnitude. Refresh ticks in density mode restyle `y` +
-  `customdata` (the raw counts shown on hover) and push a `yaxis.range`
-  relayout only when the cap actually moved. Checking **Log y** swaps
-  the count axis `type` to log so distribution tails stay visible;
-  checking **Log x** redraws the bars at evenly spaced bin indices with
-  signed-log tick positions computed once by `_x_tick_layout` (powers of
-  10 labelled, intermediate edges unlabelled). Either checkbox leaves
-  density mode, returning the bars to raw counts.
+  use `barmode="overlay"` with the first trace (train) drawn underneath
+  near-opaque and later traces half-transparent, so train stays readable
+  behind val on the same axes. Both axes default to linear (the **Log x**
+  / **Log y** checkboxes start unchecked): bars sit at their true linear
+  bin centres (`_BIN_CENTERS`) with per-bin widths (`_BIN_WIDTHS`),
+  auto-zoomed by `_linear_x_range` to the populated bins since the full
+  ±1e6 span is mostly empty. The y-axis is always normalized per phase so
+  train and val are comparable regardless of sample counts: with a linear
+  value axis (`_use_density`, governed by **Log x** alone), bar heights
+  are probability densities (`count / (n * bin width)`,
+  `_probability_densities`) so bar area is the share of values; checking
+  **Log x** redraws the bars at evenly spaced bin indices (signed-log
+  tick positions computed once by `_x_tick_layout`, powers of 10
+  labelled) with plain per-bin probabilities (`count / n`,
+  `_probabilities`). In density mode with a linear y-axis the range is
+  capped by `_density_y_range` so that bars holding `_Y_RANGE_COVERAGE`
+  (99.9%) of the pooled data points stay fully in range — bars clip
+  tallest-first only while the clipped ones together hold under 0.1% of
+  the points; the near-zero bins are so narrow that a few stray values
+  would otherwise stretch the scale by orders of magnitude. Refresh
+  ticks restyle `y` + `customdata` (the raw counts shown on hover) and
+  push a `yaxis.range` relayout only when the cap actually moved.
+  Checking **Log y** swaps the y-axis `type` to log so distribution
+  tails stay visible (dropping the cap in favour of autorange — a
+  linear-space range would be misread as log10 units) without changing
+  what the bars measure. The scalar stats above each histogram render as
+  an HTML table (`_stats_table_html`): one column per phase with data
+  (header tinted with the trace color), one row per stat (`n`, `mean`,
+  `std`, `median`, `min`, `max`).
 - The `/weights` page (one `?layer=` query param) is the per-layer weight
   viewer. It reuses the shared stepping controls (no sample spinner) and
   builds one `_WeightPanel` per name in `session.layer_weights[layer]`,
