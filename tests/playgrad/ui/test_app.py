@@ -526,3 +526,33 @@ def test_compute_frame_reuses_cache_within_a_snapshot() -> None:
     assert input_again is input_first
     other_sample, _ = frame(1)
     assert other_sample["conv"][0] is not first["conv"][0]
+
+
+def test_compute_frame_renders_more_layers_than_pool_workers() -> None:
+    # Exercise the render pool's queueing: more layers than max_workers.
+    names = [f"l{i}" for i in range(20)]
+    snap = BatchSnapshot(
+        position=BatchPosition(
+            phase="train",
+            epoch=0,
+            batch_idx=0,
+            is_last_in_phase=False,
+            is_last_in_epoch=False,
+            is_last_overall=False,
+        ),
+        activations={name: torch.rand(1, 2, 4, 4) for name in names},
+        activation_gradients={},
+        weights={},
+        weight_gradients={},
+    )
+    rendered, _ = _compute_frame(
+        names,
+        snap,
+        0,
+        input_name=None,
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    assert set(rendered) == set(names)
+    assert all("<img" in rendered[name][0] for name in names)

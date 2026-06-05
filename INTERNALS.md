@@ -383,7 +383,11 @@ It does not touch tensors directly until they need to be rendered.
   modes produce.
 - Rendering is intentionally eager when a new snapshot lands — and during
   `RUN` / `DETACH` modes no snapshots are produced so the UI is idle.
-  Rendered strip HTML is cached in a `_RenderCache` shared by every
+  Per-layer renders are independent, so a frame fans out over a shared
+  `ThreadPoolExecutor` (`_RENDER_POOL`); the heavy parts (torch
+  interpolate, numpy colormap, PIL PNG encode) release the GIL, so
+  layers render in parallel across cores. Rendered strip HTML is cached
+  in a `_RenderCache` shared by every
   connection: entries are keyed `(name, kind, sample_idx)` and the whole
   cache is invalidated by snapshot identity (snapshots are frozen; every
   pause publishes a new object). Flipping the sample spinner back to a

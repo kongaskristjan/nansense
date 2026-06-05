@@ -27,8 +27,10 @@ import asyncio
 import base64
 import json
 import math
+import os
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -336,6 +338,15 @@ class _PageState:
     dirty: bool = False
     rendering: bool = False
     spinner_max: int | None = None
+
+
+# Shared pool for strip rendering. Per-layer renders are independent and the
+# heavy parts (torch interpolate, numpy colormap, PIL PNG encode) release the
+# GIL, so a new snapshot's strips render in parallel across cores. Workers
+# spawn lazily, so the pool costs nothing until the first frame.
+_RENDER_POOL = ThreadPoolExecutor(
+    max_workers=min(8, os.cpu_count() or 1), thread_name_prefix="playgrad-render"
+)
 
 
 class _RenderCache:
@@ -1673,7 +1684,12 @@ def _compute_frame(
     input_std: tuple[float, ...] | None,
     cache: _RenderCache,
 ) -> tuple[dict[str, tuple[str, str]], str]:
-    """Render every layer's strip pair plus the input image, via the cache."""
+    """Render every layer's strip pair plus the input image.
+
+    Layers render concurrently on `_RENDER_POOL`; each strip goes through
+    `cache`, so only strips not already rendered for this snapshot cost
+    anything.
+    """
 
     def strips(name: str) -> tuple[str, str]:
         act = cache.get_or_render(
@@ -1692,7 +1708,9 @@ def _compute_frame(
         )
         return act, grad
 
-    rendered = {name: strips(name) for name in layer_names}
+    rendered = dict(
+        zip(layer_names, _RENDER_POOL.map(strips, layer_names), strict=True)
+    )
     input_html = cache.get_or_render(
         snap,
         (input_name or "", "input", sample_idx),
