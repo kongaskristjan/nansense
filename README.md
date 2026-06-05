@@ -193,25 +193,27 @@ being published.
 `layer name -> parameter names` map.
 
 The `/watch` page renders one card per watched layer with two plotly
-histograms (activations + activation gradients) overlaid by phase
-(train / val) for the most recent epoch — train draws underneath
-near-opaque, val on top half-transparent so both stay readable. Each
-histogram has 211 signed-log bins covering `(-1e6, 1e6)` with bin
-edges on powers of 10 and at six log-spaced points between them. Two
-checkboxes in the top bar — **Log x** and **Log y** — switch the
-value and probability axes from the linear default to a log-based
-scale. With **Log x** unchecked (the default), bars show probability
-density (`count / (n * bin width)`) — on a linear value axis that
-makes bar area proportional to the share of values despite the wildly
-different linear bin widths — and, with **Log y** also unchecked, the
-y-axis is capped so that bars holding 99.9% of the values stay fully
-in range, letting only sparse ultra-narrow near-zero spikes clip.
+figures (activations + activation gradients), each showing one stacked
+subplot row per phase (train / val) for the most recent epoch — the
+rows share the value axis and y-range so the distributions compare
+directly without obscuring each other. Each histogram has 211
+signed-log bins covering `(-1e6, 1e6)` with bin edges on powers of 10
+and at six log-spaced points between them. Two checkboxes in the top
+bar — **Log x** and **Log y** — switch the value and probability axes
+from the linear default to a log-based scale. With **Log x** unchecked
+(the default), bars show probability density (`count / (n * bin
+width)`) — on a linear value axis that makes bar area proportional to
+the share of values despite the wildly different linear bin widths.
 Checking **Log x** switches the bars to plain per-bin probabilities
 (`count / n`); per-phase normalization keeps train and val comparable
-regardless of how many batches each has seen. Above each histogram a
-table shows one column per phase (`train ep N`, `val ep N`) and one
-row per stat: `n`, `mean`, `std`, histogram-derived `median`, and
-`min`/`max`. Any layer in `session.layer_names` is
+regardless of how many batches each has seen. While **Log y** is
+unchecked, the y-axis is capped so that bars holding 99.9% of the
+values stay fully in range, and a single drastically dominant bar per
+phase — more than 5x taller than the runner-up, e.g. the exact-zero
+spike of a ReLU — is excluded from the scale entirely so it can't
+flatten the rest of the distribution. Above each figure a table shows
+one column per phase (`train ep N`, `val ep N`) and one row per stat:
+`n`, `mean`, `std`, histogram-derived `median`, and `min`/`max`. Any layer in `session.layer_names` is
 watchable — named modules, fx-traced intermediates (scope-qualified by
 their submodule, e.g. `stage1.0.relu1`, `stage1.0.add`), and the graph
 input itself (`x`). While at least one layer

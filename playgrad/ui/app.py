@@ -39,6 +39,7 @@ from urllib.parse import quote
 import plotly.graph_objects as go
 import uvicorn
 from fastapi import FastAPI
+from plotly.subplots import make_subplots
 from nicegui import ui
 from torch import Tensor
 
@@ -753,9 +754,13 @@ _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
 
-# Density mode (linear x-axis) caps the y-axis so that bars holding this
-# share of the data points stay fully in range; see `_density_y_range`.
+# On a linear y-axis the range is capped so that bars holding this share of
+# the data points stay fully in range; see `_linear_y_range`.
 _Y_RANGE_COVERAGE: float = 0.999
+
+# A bar more than this many times taller than the runner-up in its phase is
+# a freak spike (e.g. ReLU's exact zeros) and never anchors the y-scale.
+_DOMINANCE_RATIO: float = 5.0
 
 
 def _use_density(log_x: bool) -> bool:
@@ -792,29 +797,51 @@ def _trace_heights(hist: tuple[int, ...], density: bool) -> list[float]:
     return _probability_densities(hist) if density else _probabilities(hist)
 
 
-def _density_y_range(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str
-) -> list[float] | None:
-    """Y-axis range for density mode, keeping 99.9% of the data in range.
+def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]:
+    """One trace's `(height, count)` bars that may anchor the y-scale.
 
-    The bins near zero are extremely narrow (the zero band is 2e-9 wide), so
-    even a handful of near-zero values produce densities that dwarf the rest
-    of the distribution; autoranging to the global max would flatten
-    everything else. Instead, bars are clipped tallest-first, but only as long
-    as the clipped bars together hold less than `1 - _Y_RANGE_COVERAGE` of the
-    pooled data points across the drawn traces — the cap lands on the tallest
-    bar that must stay fully visible. Returns `None` (Plotly autorange) when
-    there's no data.
+    Sorted tallest-first, with a single drastically dominant bar — more than
+    `_DOMINANCE_RATIO` times the runner-up — dropped no matter how many
+    points it holds: a value the data hits exactly (e.g. ReLU zeros piling
+    into the 2e-9-wide zero band) produces a bar that would otherwise
+    flatten the rest of the distribution.
     """
-    bars: list[tuple[float, int]] = []  # (height, count), populated bins only
+    heights = _trace_heights(hist, density)
+    bars = sorted(((h, c) for h, c in zip(heights, hist) if c > 0), reverse=True)
+    if len(bars) >= 2 and bars[0][0] > _DOMINANCE_RATIO * bars[1][0]:
+        return bars[1:]
+    return bars
+
+
+def _linear_y_range(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str, density: bool
+) -> list[float] | None:
+    """Y-axis range on a linear y-axis, keeping 99.9% of the data in range.
+
+    Two clipping rules keep freak spikes from flattening the rest of the
+    distribution (with **Log y** checked the axis autoranges instead, so
+    everything is visible there):
+
+    - Per phase, a single drastically dominant bar never anchors the scale
+      (see `_scale_bars`).
+    - Among the rest, bars clip tallest-first, but only as long as the
+      clipped bars together hold less than `1 - _Y_RANGE_COVERAGE` of the
+      pooled data points — the cap lands on the tallest bar that must stay
+      fully visible.
+
+    The same range is applied to every phase's subplot row so the rows stay
+    comparable. Returns `None` (Plotly autorange) when there's no data.
+    """
+    bars: list[tuple[float, int]] = []
+    total = 0
     for phase in _phases_with_data(per_phase, kind):
         hist = _kind_stats(per_phase[phase], kind).hist
-        heights = _probability_densities(hist)
-        bars.extend((h, c) for h, c in zip(heights, hist) if c > 0)
+        total += sum(hist)
+        bars.extend(_scale_bars(hist, density))
     if not bars:
         return None
     bars.sort(reverse=True)
-    allowed = (1.0 - _Y_RANGE_COVERAGE) * sum(c for _, c in bars)
+    allowed = (1.0 - _Y_RANGE_COVERAGE) * total
     cap = bars[0][0]
     clipped = 0
     for height, count in bars:
@@ -875,23 +902,29 @@ def _make_histogram_figure(
     log_x: bool = False,
     log_y: bool = False,
 ) -> go.Figure:
-    """Plotly bar chart of the signed-log histogram, one trace per phase.
+    """Plotly bar chart of the signed-log histogram, one subplot row per phase.
 
     `kind` selects which of the two histograms on each `LayerStatsSnapshot`
     to plot ("activation" or "gradient"). `per_phase` may be empty (initial
     render before any data has been collected) — the figure is still
     returned, just with no traces.
 
+    Each phase draws in its own stacked subplot row (titled with the phase
+    and epoch, tinted with the trace color) rather than overlaying bars on
+    shared axes, so one phase never obscures another. The rows share the
+    x-axis and, on a linear y-axis, the same capped y-range
+    (`_linear_y_range`), keeping the per-phase distributions directly
+    comparable.
+
     `log_x` / `log_y` toggle the value (x) and probability (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
     Watching page). With `log_x` off, bars show probability density instead
-    of probabilities (see `_use_density`); with the y-axis also linear, it is
-    capped (see `_density_y_range`).
+    of probabilities (see `_use_density`).
 
     This builds the *whole* figure. Routine data refreshes don't call it —
     they restyle the existing figure in place (see `_HistPlot`) so client-side
-    state like legend toggles survives; the figure is only rebuilt when the
-    set of phases or the axis scale changes.
+    state like zoom survives; the figure is only rebuilt when the set of
+    phases or the axis scale changes.
     """
     x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
     density = _use_density(log_x)
@@ -905,44 +938,43 @@ def _make_histogram_figure(
             "bin %{x}<br>probability %{y:.3g}"
             "<br>count %{customdata}<extra></extra>"
         )
-    fig = go.Figure()
     phases = _phases_with_data(per_phase, kind)
+    names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+    fig = make_subplots(
+        rows=max(1, len(phases)),
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        subplot_titles=names or None,
+    )
     for i, phase in enumerate(phases):
-        layer_snap = per_phase[phase]
-        stats = _kind_stats(layer_snap, kind)
+        stats = _kind_stats(per_phase[phase], kind)
         fig.add_trace(
             go.Bar(
                 x=x_values,
                 y=_trace_heights(stats.hist, density),
                 customdata=list(stats.hist),
                 width=None if log_x else _BIN_WIDTHS,
-                name=f"{phase} (ep {layer_snap.epoch})",
+                name=names[i],
                 marker_color=_phase_color(phase, i),
-                # The first trace (train) is drawn underneath at near-full
-                # opacity; the later traces on top are half-transparent so
-                # the ones below stay readable through them.
-                opacity=0.85 if i == 0 else 0.5,
+                opacity=0.85,
                 hovertemplate=hover,
-            )
+            ),
+            row=i + 1,
+            col=1,
         )
-    has_data = bool(phases)
+    # Subplot titles double as the legend: phase name + epoch in the trace
+    # color, sitting right above the row they describe.
+    for i, annotation in enumerate(fig.layout.annotations):
+        annotation.update(font=dict(size=11, color=_phase_color(phases[i], i)))
     fig.update_layout(
         title=dict(text=title, x=0.0, font=dict(size=12)),
-        barmode="overlay",
         bargap=0,
         margin=dict(l=50, r=20, t=40, b=40),
-        height=_PLOT_HEIGHT,
+        height=_PLOT_HEIGHT * max(1, len(phases)),
         plot_bgcolor="#f8fafc",
         paper_bgcolor="white",
-        showlegend=has_data,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(size=10),
-        ),
+        showlegend=False,
     )
     if log_x:
         tick_vals, tick_text = _x_tick_layout()
@@ -966,7 +998,7 @@ def _make_histogram_figure(
         # The cap is a linear-space range; on a log y-axis Plotly interprets
         # ranges in log10 units, so autorange (which shows 100% of the data
         # anyway) is used there instead.
-        range=_density_y_range(per_phase, kind) if density and not log_y else None,
+        range=None if log_y else _linear_y_range(per_phase, kind, density),
         showgrid=True,
         gridcolor="#e2e8f0",
         tickfont=dict(size=9),
@@ -981,8 +1013,8 @@ def _make_histogram_figure(
 def _build_watch_page(session: Session, layer_names: list[str]) -> None:
     """The deep-dive page for watched layers — plotly histograms per layer.
 
-    Each card renders one bar chart per tensor kind (activations and
-    activation gradients) with train/val overlaid. A `ui.timer` polls
+    Each card renders one figure per tensor kind (activations and activation
+    gradients) with a stacked subplot row per phase. A `ui.timer` polls
     `session.watch_snapshot()` and refreshes the figures in place.
 
     Layers can also be unwatched directly from the card header here, which
@@ -1109,12 +1141,12 @@ def _plotly_restyle(
 
 
 class _HistPlot:
-    """One Plotly histogram that refreshes its data in place.
+    """One Plotly histogram figure that refreshes its data in place.
 
-    The figure is built once and rebuilt only when the set of phases or the
-    axis scale changes. Routine per-tick updates go through `Plotly.restyle`,
-    which leaves client-side state — legend toggles, zoom — untouched, so a
-    series the user clicked off the legend stays hidden across refreshes.
+    The figure (one subplot row per phase) is built once and rebuilt only
+    when the set of phases or the axis scale changes. Routine per-tick
+    updates go through `Plotly.update`, which leaves client-side state —
+    zoom/pan — untouched.
     """
 
     def __init__(self, kind: str, title: str, axis_log: dict[str, bool]) -> None:
@@ -1125,7 +1157,7 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
-        # Last y-range applied in density mode, so refreshes only push a
+        # Last y-range applied on a linear y-axis, so refreshes only push a
         # relayout when the cap actually moved (a range write resets zoom).
         self._y_range: list[float] | None = None
         self.element = ui.plotly(
@@ -1140,9 +1172,10 @@ class _HistPlot:
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
+        density = _use_density(axis[0])
         if phases != self._phases or axis != self._axis:
             # A phase appeared/disappeared or an axis-scale checkbox flipped —
-            # rebuild the whole figure.
+            # rebuild the whole figure (the subplot rows change with it).
             self.element.figure = _make_histogram_figure(
                 per_phase, self._kind, self._title, log_x=axis[0], log_y=axis[1]
             )
@@ -1150,14 +1183,13 @@ class _HistPlot:
             self._phases = phases
             self._axis = axis
             self._y_range = (
-                _density_y_range(per_phase, self._kind)
-                if _use_density(axis[0]) and not axis[1]
-                else None
+                None
+                if axis[1]
+                else _linear_y_range(per_phase, self._kind, density)
             )
         elif phases:
-            # Same traces and axes — only counts (and the epoch label) moved.
-            # Restyle in place so legend toggles and zoom survive.
-            density = _use_density(axis[0])
+            # Same rows and axes — only counts (and the epoch label) moved.
+            # Restyle in place so zoom/pan survives.
             hists = [_kind_stats(per_phase[p], self._kind).hist for p in phases]
             names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
             update: dict[str, object] = {
@@ -1165,14 +1197,22 @@ class _HistPlot:
                 "y": [_trace_heights(h, density) for h in hists],
                 "customdata": [list(h) for h in hists],
             }
-            layout: dict[str, object] | None = None
-            if density and not axis[1]:
+            # The subplot titles carry the epoch, so refresh them with the
+            # data (annotation order matches row order).
+            layout: dict[str, object] = {
+                f"annotations[{i}].text": name for i, name in enumerate(names)
+            }
+            if not axis[1]:
                 # The cap follows the data; re-apply it only when it moved so
                 # an idle refresh doesn't keep snapping the user's zoom back.
-                y_range = _density_y_range(per_phase, self._kind)
+                # Every row gets the same range (row 1 is "yaxis", row n is
+                # "yaxis{n}") so the subplots stay comparable.
+                y_range = _linear_y_range(per_phase, self._kind, density)
                 if y_range != self._y_range:
                     self._y_range = y_range
-                    layout = {"yaxis.range": y_range}
+                    for i in range(len(phases)):
+                        axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
+                        layout[f"{axis_name}.range"] = y_range
             _plotly_restyle(
                 self.element, update, list(range(len(phases))), layout
             )
