@@ -43,6 +43,9 @@ from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
 from playgrad.ui.render import (
+    INPUT_IMAGE_SIZE,
+    TILE_GAP,
+    StripRender,
     default_weight_dims,
     render_image,
     render_strip,
@@ -1424,24 +1427,24 @@ class _WeightPanel:
             for d in range(self._ndim)
             if self._roles[d] == "index"
         }
-        png = render_weight(
+        strip = render_weight(
             tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
         )
-        if png is None:
+        if strip is None:
             self._show_error("invalid axis selection")
             return
         self._error.text = ""
-        self._img.set_content(_img_tag(png))
+        self._img.set_content(_strip_html(strip))
         # The gradient shares the weight's shape, so the same axis layout
         # applies; it's simply absent before the first backward pass.
         grad = self._gradients.get(self.name) if self._gradients is not None else None
-        grad_png = (
+        grad_strip = (
             render_weight(grad, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed)
             if grad is not None
             else None
         )
         self._grad_img.set_content(
-            _img_tag(grad_png) if grad_png is not None else _NO_GRADIENT_HTML
+            _strip_html(grad_strip) if grad_strip is not None else _NO_GRADIENT_HTML
         )
         self._render_optimizer_values(x_dim=x_dim, y_dim=y_dim, tile=tile, fixed=fixed)
 
@@ -1471,24 +1474,24 @@ class _WeightPanel:
                     scalar_parts.append(f"{key} = {_format_stat(float(tensor))}")
                     continue
                 if tuple(tensor.shape) == self._shape:
-                    png = render_weight(
+                    strip = render_weight(
                         tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
                     )
                 else:
                     dims = default_weight_dims(tensor.ndim)
-                    png = render_weight(
+                    strip = render_weight(
                         tensor,
                         x_dim=dims.x_dim,
                         y_dim=dims.y_dim,
                         tile_dim=dims.tile_dim,
                         fixed={d: 0 for d in dims.fixed_dims},
                     )
-                if png is None:
+                if strip is None:
                     continue
                 ui.element("div").classes("h-1")
                 with ui.element("div").classes("flex no-wrap items-stretch"):
                     _strip_marker("bg-amber-600", key.upper())
-                    ui.html(_img_tag(png))
+                    ui.html(_strip_html(strip))
         scalar_parts += [
             f"{key} = {_format_stat(value)}"
             for key, value in sorted(self._opt_hparams.get(self.name, {}).items())
@@ -1629,7 +1632,7 @@ def _compute_frame(
     input_png = render_image(
         input_tensor, sample_idx, mean=input_mean, std=input_std
     )
-    return rendered, _img_tag(input_png)
+    return rendered, _input_img_tag(input_png)
 
 
 def _apply_all(
@@ -1643,12 +1646,13 @@ def _apply_all(
 class _LayerView:
     """One card per submodule, with activation + activation-gradient strips.
 
-    The strips are raw `<img>` elements with `max-width: none`, so each PNG
-    renders at its natural pixel width and the wrapping `overflow-x-auto`
-    div produces a shared horizontal scrollbar inside the card. NiceGUI's
-    `ui.image` uses Quasar's responsive q-img instead, which squishes the
-    strip to the card width — not what we want here. The card has
-    `min-w-0` so a wide strip doesn't push the column wider.
+    The strips are raw `<img>` elements (see `_strip_html`) with fixed CSS
+    sizes and `flex:none`, so each strip renders at its display pixel width
+    and the wrapping `overflow-x-auto` div produces a shared horizontal
+    scrollbar inside the card. NiceGUI's `ui.image` uses Quasar's responsive
+    q-img instead, which squishes the strip to the card width — not what we
+    want here. The card has `min-w-0` so a wide strip doesn't push the
+    column wider.
 
     Both strips use the same diverging colormap, so each one carries a
     labelled colored marker bar on its left edge to tell them apart
@@ -1736,9 +1740,10 @@ class _LayerView:
     def compute(
         self, activation: Tensor | None, gradient: Tensor | None, sample_idx: int
     ) -> tuple[str, str]:
-        act_png = render_strip(activation, sample_idx)
-        grad_png = render_strip(gradient, sample_idx)
-        return _img_tag(act_png), _img_tag(grad_png)
+        return (
+            _strip_html(render_strip(activation, sample_idx)),
+            _strip_html(render_strip(gradient, sample_idx)),
+        )
 
     def apply(self, act_html: str, grad_html: str) -> None:
         self.act_html.set_content(act_html)
@@ -1775,11 +1780,45 @@ def _strip_marker(color_class: str, label: str) -> None:
         )
 
 
-def _img_tag(png: bytes | None) -> str:
+def _b64_img_src(png: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _strip_html(strip: StripRender | None) -> str:
+    """HTML for one strip: a crisp legend `<img>` plus native-res tile `<img>`s.
+
+    The tiles are PNGs at the tensor's native resolution; explicit CSS
+    width/height plus `image-rendering: pixelated` make the browser do the
+    nearest-neighbour upscale the renderer used to do server-side. The legend
+    PNG is already at display resolution and renders 1:1, so its labels stay
+    sharp. `flex:none` keeps the scroll container from squishing the images
+    (the old single-`<img>` strips used `max-width:none` for the same reason).
+    """
+    if strip is None:
+        return ""
+    tile_style = (
+        f"width:{strip.tile_width}px; height:{strip.tile_height}px; "
+        "image-rendering:pixelated; display:block; flex:none; max-width:none;"
+    )
+    tiles = "".join(
+        f'<img src="{_b64_img_src(png)}" style="{tile_style}" />'
+        for png in strip.tile_pngs
+    )
+    return (
+        '<div style="display:flex; align-items:flex-start;">'
+        f'<img src="{_b64_img_src(strip.legend_png)}" '
+        'style="display:block; flex:none; max-width:none;" />'
+        f'<div style="display:flex; gap:{TILE_GAP}px;">{tiles}</div>'
+        "</div>"
+    )
+
+
+def _input_img_tag(png: bytes | None) -> str:
+    """`<img>` for the input pane: native-res PNG, CSS-scaled to display size."""
     if png is None:
         return ""
-    b64 = base64.b64encode(png).decode("ascii")
     return (
-        f'<img src="data:image/png;base64,{b64}" '
-        'style="display:block; max-width:none;" />'
+        f'<img src="{_b64_img_src(png)}" '
+        f'style="width:{INPUT_IMAGE_SIZE}px; height:{INPUT_IMAGE_SIZE}px; '
+        'image-rendering:pixelated; display:block; max-width:none;" />'
     )

@@ -307,14 +307,22 @@ It does not touch tensors directly until they need to be rendered.
   use different Mermaid shapes per fx op (rectangles for `call_module`,
   ovals/stadiums for `call_function` / `call_method`, circles for
   `placeholder` / `output`).
-- `playgrad.ui.render.render_strip(tensor, sample_idx)` is the
-  function that turns per-layer CPU tensors into PNG bytes:
-  - For per-sample shape `[C, H, W]` it interpolates each channel to a
-    `TILE_SIZE × TILE_SIZE` tile and concatenates horizontally with a
-    `TILE_GAP`-px white spacer between tiles so adjacent dark channels
-    don't smear together.
-  - For `[F]` it builds a single short heatmap row, downsampled to at
-    most `LINEAR_MAX_BINS` bins when `F` is large.
+- `playgrad.ui.render.render_strip(tensor, sample_idx)` turns per-layer
+  CPU tensors into a `StripRender`: per-tile data PNGs at the tensor's
+  *native* resolution plus a legend PNG at display resolution.
+  - For per-sample shape `[C, H, W]` each channel becomes one tile PNG,
+    downsampled server-side (`area`) only when larger than
+    `TILE_SIZE × TILE_SIZE`. The browser upscales each tile to the display
+    size via CSS sizing plus `image-rendering: pixelated` — equivalent to
+    the old server-side nearest-neighbour interpolation, but an 8×8
+    feature map travels as 64 pixels instead of 16k (`_strip_html` in
+    `app.py` builds the flex row; tile gaps are `TILE_GAP`-px CSS gaps).
+  - For `[F]` the data PNG is a single 1-px-tall heatmap row, downsampled
+    to at most `LINEAR_MAX_BINS` bins when `F` is large, stretched
+    client-side to `LINEAR_BIN_WIDTH` per bin × `LINEAR_TILE_HEIGHT`.
+  - The legend (vertical colorbar with `+x` / `0` / `-x` labels) is the
+    exception to native-resolution encoding: it is rendered at display
+    resolution into its own PNG so its text stays crisp.
   - Every strip — activations, gradients, and weights alike — uses the
     same diverging blue-white-red colormap; strips are told apart by a
     labelled colored marker bar on each one's left edge (emerald
@@ -323,8 +331,9 @@ It does not touch tensors directly until they need to be rendered.
     — wire size doesn't matter, encode speed does.
   - Other per-sample shapes return `None`; the UI hides those images.
 - `playgrad.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
-  renders the model input as a natural RGB or grayscale PNG (upscaled to
-  `INPUT_IMAGE_SIZE` with nearest-neighbour). Channels are assumed to lie
+  renders the model input as a natural RGB or grayscale PNG at the
+  sample's native resolution; the UI scales it to `INPUT_IMAGE_SIZE` with
+  CSS nearest-neighbour. Channels are assumed to lie
   in `[0, 1]` unless both `mean` and `std` are passed, in which case the
   sample is denormalized (`x * std + mean`) before being clamped and
   scaled to 8-bit. Anything other than `C == 1` or `C == 3` returns

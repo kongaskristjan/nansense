@@ -5,11 +5,19 @@ slice and produces one horizontal strip per layer for the right pane of the
 UI. Conv-style activations become a row of square channel tiles; 1D
 activations become a single short heatmap row.
 
+A strip is returned as a `StripRender`: the data tiles are encoded at the
+tensor's *native* resolution (downsampled server-side only when larger than
+the display tile) and upscaled by the browser via CSS sizing plus
+`image-rendering: pixelated` — equivalent to nearest-neighbour, but without
+inflating an 8×8 feature map to 128×128 pixels before colormapping and PNG
+encoding. The legend (vertical colorbar with `+x` / `0` / `-x` labels) is
+the exception: it is rendered at display resolution into its own PNG so its
+text stays crisp.
+
 Every strip — activations, gradients, and weights alike — uses the same
 diverging (blue-white-red) colormap on a symmetric `[-x, +x]` scale where
-`x` is the per-strip absolute maximum; a vertical colorbar with `+x` / `0` /
-`-x` labels is rendered into the left edge of each strip. PNGs are encoded
-with `compress_level=1` to favour speed over size — bytes travel a local
+`x` is the per-strip absolute maximum. PNGs are encoded with
+`compress_level=1` to favour speed over size — bytes travel a local
 WebSocket, so wire size is irrelevant.
 """
 
@@ -37,8 +45,24 @@ LEGEND_WIDTH: int = LEGEND_LABEL_WIDTH + LEGEND_GAP + LEGEND_BAR_WIDTH + LEGEND_
 LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 
 
-def render_strip(tensor: Tensor | None, sample_idx: int) -> bytes | None:
-    """Render a per-channel horizontal strip as PNG bytes.
+@dataclass(frozen=True)
+class StripRender:
+    """One rendered strip: native-resolution data tiles plus a crisp legend.
+
+    `tile_pngs` hold the data at native (or server-downsampled) resolution;
+    the UI displays each tile at `tile_width × tile_height` CSS pixels with
+    `image-rendering: pixelated`, separated by `TILE_GAP`-px gaps.
+    `legend_png` is already at display resolution and is shown 1:1.
+    """
+
+    legend_png: bytes
+    tile_pngs: tuple[bytes, ...]
+    tile_width: int
+    tile_height: int
+
+
+def render_strip(tensor: Tensor | None, sample_idx: int) -> StripRender | None:
+    """Render a per-channel horizontal strip.
 
     Returns `None` if the tensor is `None`, `sample_idx` is out of range, or
     the per-sample shape is unsupported (anything other than `[C, H, W]` or
@@ -98,7 +122,7 @@ def render_weight(
     y_dim: int | None,
     tile_dim: int | None,
     fixed: dict[int, int],
-) -> bytes | None:
+) -> StripRender | None:
     """Render a weight tensor as a horizontal strip under a chosen axis layout.
 
     `x_dim` / `y_dim` / `tile_dim` pick the axes shown within and across tiles
@@ -136,32 +160,23 @@ def render_weight(
     return _render_chw(chw)
 
 
-def _render_chw(tensor: Tensor) -> bytes:
-    c, h, w = tensor.shape
+def _render_chw(tensor: Tensor) -> StripRender:
+    _, h, w = tensor.shape
     abs_max = float(tensor.detach().abs().max())
-    mode = "nearest" if max(h, w) <= TILE_SIZE else "area"
-    resized = F.interpolate(
-        tensor.unsqueeze(0).float(),
-        size=(TILE_SIZE, TILE_SIZE),
-        mode=mode,
-    )[0]
-    rgb = _apply_colormap(resized.numpy(), abs_max=abs_max)
-    strip = _concat_tiles_with_gaps(list(rgb), TILE_GAP)
-    legend = _render_legend(TILE_SIZE, abs_max=abs_max)
-    return _encode_png(np.concatenate([legend, strip], axis=1))
-
-
-def _concat_tiles_with_gaps(tiles: list[np.ndarray], gap: int) -> np.ndarray:
-    if gap <= 0 or len(tiles) <= 1:
-        return np.concatenate(tiles, axis=1)
-    h = tiles[0].shape[0]
-    spacer = np.full((h, gap, 3), 255, dtype=np.uint8)
-    pieces: list[np.ndarray] = []
-    for i, tile in enumerate(tiles):
-        if i > 0:
-            pieces.append(spacer)
-        pieces.append(tile)
-    return np.concatenate(pieces, axis=1)
+    data = tensor.detach().float()
+    if max(h, w) > TILE_SIZE:
+        # Downsampling needs real averaging server-side; *up*scaling small
+        # maps is left to the browser's nearest-neighbour (CSS `pixelated`).
+        data = F.interpolate(
+            data.unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="area"
+        )[0]
+    rgb = _apply_colormap(data.numpy(), abs_max=abs_max)
+    return StripRender(
+        legend_png=_encode_png(_render_legend(TILE_SIZE, abs_max=abs_max)),
+        tile_pngs=tuple(_encode_png(tile) for tile in rgb),
+        tile_width=TILE_SIZE,
+        tile_height=TILE_SIZE,
+    )
 
 
 def render_image(
@@ -176,8 +191,10 @@ def render_image(
     Expects a `[B, C, H, W]` tensor with `C in (1, 3)`. Values are assumed
     to lie in `[0, 1]` unless both `mean` and `std` are provided, in which
     case the sample is denormalized as `x * std + mean` before being
-    clamped and scaled to 8-bit. Returns `None` for unsupported shapes,
-    out-of-range `sample_idx`, or a None tensor.
+    clamped and scaled to 8-bit. The PNG keeps the sample's native `H × W`;
+    the UI scales it to `INPUT_IMAGE_SIZE` with CSS nearest-neighbour.
+    Returns `None` for unsupported shapes, out-of-range `sample_idx`, or a
+    None tensor.
     """
     if tensor is None or tensor.ndim != 4:
         return None
@@ -200,12 +217,11 @@ def render_image(
         pil = Image.fromarray(hwc[..., 0], mode="L")
     else:
         pil = Image.fromarray(hwc, mode="RGB")
-    pil = pil.resize((INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE), Image.Resampling.NEAREST)
     return _pil_to_png(pil)
 
 
-def _render_1d(tensor: Tensor) -> bytes:
-    values = tensor.float()
+def _render_1d(tensor: Tensor) -> StripRender:
+    values = tensor.detach().float()
     abs_max = float(values.abs().max())
     f = values.shape[0]
     if f > LINEAR_MAX_BINS:
@@ -214,14 +230,13 @@ def _render_1d(tensor: Tensor) -> bytes:
         ).reshape(-1)
         f = LINEAR_MAX_BINS
     rgb_row = _apply_colormap(values.numpy(), abs_max=abs_max)
-    image = np.broadcast_to(rgb_row[None, :, :], (LINEAR_TILE_HEIGHT, f, 3)).copy()
-    strip = np.asarray(
-        Image.fromarray(image, mode="RGB").resize(
-            (f * LINEAR_BIN_WIDTH, LINEAR_TILE_HEIGHT), Image.Resampling.NEAREST
-        )
+    # A 1-px-tall row; the browser stretches it to the display height.
+    return StripRender(
+        legend_png=_encode_png(_render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)),
+        tile_pngs=(_encode_png(rgb_row[None, :, :]),),
+        tile_width=f * LINEAR_BIN_WIDTH,
+        tile_height=LINEAR_TILE_HEIGHT,
     )
-    legend = _render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)
-    return _encode_png(np.concatenate([legend, strip], axis=1))
 
 
 def _apply_colormap(values: np.ndarray, *, abs_max: float) -> np.ndarray:
@@ -270,7 +285,7 @@ def _render_legend(height: int, *, abs_max: float) -> np.ndarray:
 
 
 def _encode_png(rgb: np.ndarray) -> bytes:
-    return _pil_to_png(Image.fromarray(rgb, mode="RGB"))
+    return _pil_to_png(Image.fromarray(np.ascontiguousarray(rgb), mode="RGB"))
 
 
 def _pil_to_png(pil: Image.Image) -> bytes:

@@ -17,14 +17,17 @@ from playgrad.ui.app import (
     _density_y_range,
     _dims_from_roles,
     _format_live_position,
+    _input_img_tag,
     _linear_x_range,
     _make_histogram_figure,
     _phases_with_data,
     _role_options,
+    _strip_html,
     _use_density,
     _validate_step_until_target,
     serve,
 )
+from playgrad.ui.render import INPUT_IMAGE_SIZE, TILE_GAP, render_image, render_strip
 from playgrad.watch import N_BINS, ZERO_BIN, LayerStatsSnapshot, TensorStatsSnapshot
 
 
@@ -400,3 +403,31 @@ def test_serve_on_disabled_session_is_noop() -> None:
     model = torch.nn.Linear(4, 2)
     session = playgrad.start(model, epochs=1, phases={"train": 1}, enabled=False)
     assert serve(session) is None
+
+
+# --- Strip HTML assembly ----------------------------------------------------
+
+
+def test_strip_html_scales_native_tiles_and_keeps_legend_crisp() -> None:
+    strip = render_strip(torch.randn(1, 2, 8, 8), sample_idx=0)
+    assert strip is not None
+    html = _strip_html(strip)
+    # One legend <img> (shown 1:1, no pixelated scaling) + one <img> per tile.
+    assert html.count("<img") == 1 + len(strip.tile_pngs)
+    assert html.count("image-rendering:pixelated") == len(strip.tile_pngs)
+    assert f"width:{strip.tile_width}px" in html
+    assert f"height:{strip.tile_height}px" in html
+    assert f"gap:{TILE_GAP}px" in html
+
+
+def test_strip_html_empty_for_none() -> None:
+    assert _strip_html(None) == ""
+
+
+def test_input_img_tag_scales_to_display_size() -> None:
+    png = render_image(torch.rand(1, 3, 16, 16), sample_idx=0)
+    assert png is not None
+    html = _input_img_tag(png)
+    assert f"width:{INPUT_IMAGE_SIZE}px" in html
+    assert "image-rendering:pixelated" in html
+    assert _input_img_tag(None) == ""

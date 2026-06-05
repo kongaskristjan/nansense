@@ -9,12 +9,10 @@ import torch
 from PIL import Image
 
 from playgrad.ui.render import (
-    INPUT_IMAGE_SIZE,
     LEGEND_WIDTH,
     LINEAR_BIN_WIDTH,
     LINEAR_MAX_BINS,
     LINEAR_TILE_HEIGHT,
-    TILE_GAP,
     TILE_SIZE,
     default_weight_dims,
     render_image,
@@ -23,41 +21,62 @@ from playgrad.ui.render import (
 )
 
 
-def _chw_strip_width(num_tiles: int) -> int:
-    tiles = num_tiles * TILE_SIZE + max(0, num_tiles - 1) * TILE_GAP
-    return LEGEND_WIDTH + tiles
-
-
-def _1d_strip_width(num_bins: int) -> int:
-    return LEGEND_WIDTH + num_bins * LINEAR_BIN_WIDTH
-
-
 def _decode(png: bytes) -> Image.Image:
     return Image.open(io.BytesIO(png)).convert("RGB")
 
 
-def test_chw_strip_dimensions() -> None:
-    tensor = torch.randn(4, 8, 32, 32)
-    png = render_strip(tensor, sample_idx=2)
-    assert png is not None
-    img = _decode(png)
-    assert img.size == (_chw_strip_width(8), TILE_SIZE)
+def _rgb_at(img: Image.Image, x: int, y: int) -> tuple[int, int, int]:
+    pixel = img.getpixel((x, y))
+    assert isinstance(pixel, tuple) and len(pixel) == 3
+    r, g, b = pixel
+    return int(r), int(g), int(b)
+
+
+def test_chw_strip_has_native_resolution_tiles() -> None:
+    # Small maps are encoded at their native H×W; the browser upscales them
+    # to the display tile size (StripRender.tile_width/height) via CSS.
+    tensor = torch.randn(4, 8, 16, 12)
+    strip = render_strip(tensor, sample_idx=2)
+    assert strip is not None
+    assert len(strip.tile_pngs) == 8
+    assert all(_decode(png).size == (12, 16) for png in strip.tile_pngs)
+    assert (strip.tile_width, strip.tile_height) == (TILE_SIZE, TILE_SIZE)
+
+
+def test_chw_strip_downsamples_large_maps_to_tile_size() -> None:
+    tensor = torch.randn(1, 2, 300, 200)
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    assert all(
+        _decode(png).size == (TILE_SIZE, TILE_SIZE) for png in strip.tile_pngs
+    )
+
+
+def test_chw_legend_is_display_resolution() -> None:
+    strip = render_strip(torch.randn(1, 2, 8, 8), sample_idx=0)
+    assert strip is not None
+    assert _decode(strip.legend_png).size == (LEGEND_WIDTH, TILE_SIZE)
 
 
 def test_1d_strip_dimensions() -> None:
     tensor = torch.randn(4, 10)
-    png = render_strip(tensor, sample_idx=0)
-    assert png is not None
-    img = _decode(png)
-    assert img.size == (_1d_strip_width(10), LINEAR_TILE_HEIGHT)
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    assert len(strip.tile_pngs) == 1
+    assert _decode(strip.tile_pngs[0]).size == (10, 1)
+    assert (strip.tile_width, strip.tile_height) == (
+        10 * LINEAR_BIN_WIDTH,
+        LINEAR_TILE_HEIGHT,
+    )
+    assert _decode(strip.legend_png).size == (LEGEND_WIDTH, LINEAR_TILE_HEIGHT)
 
 
 def test_1d_strip_caps_at_max_bins() -> None:
     tensor = torch.randn(4, LINEAR_MAX_BINS * 4)
-    png = render_strip(tensor, sample_idx=0)
-    assert png is not None
-    img = _decode(png)
-    assert img.size == (_1d_strip_width(LINEAR_MAX_BINS), LINEAR_TILE_HEIGHT)
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    assert _decode(strip.tile_pngs[0]).size == (LINEAR_MAX_BINS, 1)
+    assert strip.tile_width == LINEAR_MAX_BINS * LINEAR_BIN_WIDTH
 
 
 def test_returns_none_for_none_tensor() -> None:
@@ -79,39 +98,28 @@ def test_returns_none_for_unsupported_shape() -> None:
 def test_zero_variance_tensor_renders() -> None:
     # All-zero input must not crash the diverging colormap (abs_max=0 edge).
     tensor = torch.zeros(2, 4, 8, 8)
-    png = render_strip(tensor, sample_idx=0)
-    assert png is not None
-    img = _decode(png)
-    assert img.size == (_chw_strip_width(4), TILE_SIZE)
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    assert len(strip.tile_pngs) == 4
 
 
 def test_strip_uses_diverging_colormap() -> None:
-    # Tile 0 is all +max → pure red at its centre; tile 1 all -max → pure blue.
+    # Tile 0 is all +max → pure red; tile 1 all -max → pure blue.
     sample = torch.stack([torch.ones(8, 8), -torch.ones(8, 8)])
-    png = render_strip(sample.unsqueeze(0), sample_idx=0)
-    assert png is not None
-    img = _decode(png)
-    y = TILE_SIZE // 2
-    pos_x = LEGEND_WIDTH + TILE_SIZE // 2
-    neg_x = LEGEND_WIDTH + TILE_SIZE + TILE_GAP + TILE_SIZE // 2
-    assert _rgb_at(img, pos_x, y) == (255, 0, 0)
-    assert _rgb_at(img, neg_x, y) == (0, 0, 255)
+    strip = render_strip(sample.unsqueeze(0), sample_idx=0)
+    assert strip is not None
+    assert _rgb_at(_decode(strip.tile_pngs[0]), 4, 4) == (255, 0, 0)
+    assert _rgb_at(_decode(strip.tile_pngs[1]), 4, 4) == (0, 0, 255)
 
 
 @pytest.mark.parametrize("channels", [1, 3])
-def test_input_image_dimensions(channels: int) -> None:
+def test_input_image_keeps_native_resolution(channels: int) -> None:
+    # The UI scales the input image to its display size via CSS, so the PNG
+    # stays at the sample's native H×W.
     tensor = torch.rand(2, channels, 16, 16)
     png = render_image(tensor, sample_idx=0)
     assert png is not None
-    img = _decode(png)
-    assert img.size == (INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE)
-
-
-def _rgb_at(img: Image.Image, x: int, y: int) -> tuple[int, int, int]:
-    pixel = img.getpixel((x, y))
-    assert isinstance(pixel, tuple) and len(pixel) == 3
-    r, g, b = pixel
-    return int(r), int(g), int(b)
+    assert _decode(png).size == (16, 16)
 
 
 def test_input_image_denormalizes_with_mean_std() -> None:
@@ -182,47 +190,56 @@ def test_render_weight_4d_default_lays_kernels_across_in_channels() -> None:
     # `out` pinned by index.
     w = torch.randn(8, 3, 3, 3)
     d = default_weight_dims(4)
-    png = render_weight(
+    strip = render_weight(
         w,
         x_dim=d.x_dim,
         y_dim=d.y_dim,
         tile_dim=d.tile_dim,
         fixed={f: 0 for f in d.fixed_dims},
     )
-    assert png is not None
-    assert _decode(png).size == (_chw_strip_width(3), TILE_SIZE)
+    assert strip is not None
+    assert len(strip.tile_pngs) == 3
+    assert all(_decode(png).size == (3, 3) for png in strip.tile_pngs)
+    assert (strip.tile_width, strip.tile_height) == (TILE_SIZE, TILE_SIZE)
 
 
 def test_render_weight_2d_is_single_image_tile() -> None:
     w = torch.randn(10, 4)
     d = default_weight_dims(2)
-    png = render_weight(w, x_dim=d.x_dim, y_dim=d.y_dim, tile_dim=d.tile_dim, fixed={})
-    assert png is not None
-    assert _decode(png).size == (_chw_strip_width(1), TILE_SIZE)
+    strip = render_weight(
+        w, x_dim=d.x_dim, y_dim=d.y_dim, tile_dim=d.tile_dim, fixed={}
+    )
+    assert strip is not None
+    assert len(strip.tile_pngs) == 1
+    assert _decode(strip.tile_pngs[0]).size == (4, 10)
 
 
 def test_render_weight_1d_is_single_row() -> None:
     w = torch.randn(16)
-    png = render_weight(w, x_dim=0, y_dim=None, tile_dim=None, fixed={})
-    assert png is not None
-    assert _decode(png).size == (_1d_strip_width(16), LINEAR_TILE_HEIGHT)
+    strip = render_weight(w, x_dim=0, y_dim=None, tile_dim=None, fixed={})
+    assert strip is not None
+    assert _decode(strip.tile_pngs[0]).size == (16, 1)
+    assert (strip.tile_width, strip.tile_height) == (
+        16 * LINEAR_BIN_WIDTH,
+        LINEAR_TILE_HEIGHT,
+    )
 
 
 def test_render_weight_custom_tile_axis_changes_tile_count() -> None:
     # Tile across `out`=8 instead of the default `in`, pinning `in` by index.
     w = torch.randn(8, 3, 3, 3)
-    png = render_weight(w, x_dim=3, y_dim=2, tile_dim=0, fixed={1: 1})
-    assert png is not None
-    assert _decode(png).size == (_chw_strip_width(8), TILE_SIZE)
+    strip = render_weight(w, x_dim=3, y_dim=2, tile_dim=0, fixed={1: 1})
+    assert strip is not None
+    assert len(strip.tile_pngs) == 8
 
 
 def test_render_weight_clamps_out_of_range_fixed_index() -> None:
     w = torch.randn(8, 3, 3, 3)
     d = default_weight_dims(4)
-    png = render_weight(
+    strip = render_weight(
         w, x_dim=d.x_dim, y_dim=d.y_dim, tile_dim=d.tile_dim, fixed={0: 999}
     )
-    assert png is not None  # index clamped into range rather than crashing
+    assert strip is not None  # index clamped into range rather than crashing
 
 
 def test_render_weight_returns_none_for_none_tensor() -> None:
