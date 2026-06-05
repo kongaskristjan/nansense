@@ -267,6 +267,14 @@ def test_linear_x_range_brackets_populated_bins() -> None:
 # --- Watching histogram: density mode (both axes linear) -------------------
 
 
+def test_histogram_defaults_to_linear_density_mode() -> None:
+    # Log x / Log y start unchecked, so the no-args figure is the density view.
+    per_phase = {"train": _layer_snap("train")}
+    fig = _make_histogram_figure(per_phase, "activation", "activations")
+    assert fig.layout.yaxis.type == "linear"
+    assert fig.layout.yaxis.title.text == "density"
+
+
 @pytest.mark.parametrize(
     "log_x, log_y, expected",
     [

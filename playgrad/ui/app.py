@@ -751,8 +751,8 @@ def _make_histogram_figure(
     kind: str,
     title: str,
     *,
-    log_x: bool = True,
-    log_y: bool = True,
+    log_x: bool = False,
+    log_y: bool = False,
 ) -> go.Figure:
     """Plotly bar chart of the signed-log histogram, one trace per phase.
 
@@ -867,9 +867,9 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
     count_label_holder: dict[str, ui.label] = {}
     body_container: ui.column
     # Whether the value (x) and count (y) axes use a log-based scale. Both
-    # default on, matching the original behaviour; the header checkboxes flip
-    # them and re-render every plot immediately.
-    axis_log = {"x": True, "y": True}
+    # default off — linear axes showing density (see `_use_density`); the
+    # header checkboxes flip them and re-render every plot immediately.
+    axis_log = {"x": False, "y": False}
 
     def set_axis_log(axis: str, value: bool) -> None:
         axis_log[axis] = value
