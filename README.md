@@ -263,11 +263,10 @@ way: it zooms to the bins holding 99.5% of the values, so a lone
 outlier can't stretch the value axis. When a tall near-zero peak plus
 a long thin tail still leaves the bars covering less than 5% of the
 plot area, the 0.5% clip budget is raised step by step (up to 5%)
-until the plot is at least 5% full — and if even the most aggressive
-trims can't get there (the distribution spans too many decades for
-any linear window, as gradients routinely do), the figure falls back
-to the signed-log view on its own, labeled "signed-log scale (auto)"
-on the x-axis. Because Plotly's "Autoscale"
+until the plot is at least 5% full. Distributions spanning many
+decades (as gradients routinely do) are best viewed with **Log x**
+checked — the checkbox alone decides the
+x-mode. Because Plotly's "Autoscale"
 would undo these caps (landing on a different scale than the initial
 render), the button is removed — "Reset axes" and double-click return
 to the intended ranges. Above each figure a table shows one column per

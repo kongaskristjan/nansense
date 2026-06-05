@@ -22,7 +22,6 @@ from playgrad.ui.app import (
     _display_batch_size,
     _default_roles,
     _dims_from_roles,
-    _effective_log_x,
     _figure_payload,
     _fill_fraction,
     _filter_phase,
@@ -449,53 +448,26 @@ def test_axis_ranges_none_when_empty() -> None:
     )
 
 
-# --- Watching histogram: automatic signed-log x fallback --------------------
+# --- Watching histogram: the Log x checkbox alone picks the x-mode ----------
 
 
 def _multi_decade_snap() -> dict[str, LayerStatsSnapshot]:
     # Mass spread evenly over four decades on both signs (like real gradient
-    # distributions): no linear window can show more than a sliver of it.
+    # distributions).
     hist = {ZERO_BIN + s * i: 1000 for i in range(1, 29) for s in (1, -1)}
     hist[ZERO_BIN] = 2000
     return {"train": _layer_snap("train", hist=hist)}
 
 
-def test_effective_log_x_passthrough_and_empty() -> None:
-    assert _effective_log_x({}, "activation", True) is True
-    assert _effective_log_x({}, "activation", False) is False
-
-
-def test_effective_log_x_false_for_compact_distribution() -> None:
-    per_phase = {
-        "train": _layer_snap(
-            "train", hist={ZERO_BIN + 60 + i: 100 for i in range(5)}
-        )
-    }
-    assert _effective_log_x(per_phase, "activation", False) is False
-
-
-def test_effective_log_x_true_for_multi_decade_distribution() -> None:
-    assert _effective_log_x(_multi_decade_snap(), "activation", False) is True
-
-
-def test_histogram_auto_falls_back_to_signed_log_x() -> None:
-    per_phase = _multi_decade_snap()
+def test_histogram_stays_linear_even_for_multi_decade_distribution() -> None:
+    # The Log x checkbox is authoritative: with it off, even a gradient-like
+    # multi-decade distribution renders on the linear value axis (no silent
+    # signed-log fallback).
     fig = _make_histogram_figure(
-        per_phase, "activation", "activations", log_x=False
+        _multi_decade_snap(), "activation", "activations", log_x=False
     )
-    # Drawn as the signed-log view: uniform bars at bin indices showing
-    # probabilities, with the fallback called out in the x-axis title.
-    assert fig.data[0].x[0] == 0
-    assert fig.data[0].width is None
-    assert fig.layout.yaxis.title.text == "probability"
-    assert fig.layout.xaxis.title.text == "signed-log scale (auto)"
-
-
-def test_histogram_manual_log_x_has_no_auto_label() -> None:
-    per_phase = {"train": _layer_snap("train", n=9)}
-    fig = _make_histogram_figure(
-        per_phase, "activation", "activations", log_x=True
-    )
+    assert fig.data[0].width is not None  # linear per-bin widths
+    assert fig.layout.yaxis.title.text == "probability density"
     assert fig.layout.xaxis.title.text is None
 
 
