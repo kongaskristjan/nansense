@@ -8,16 +8,20 @@ import pytest
 import torch
 from PIL import Image
 
+from playgrad.patches import TypePatches
 from playgrad.ui import render
 from playgrad.ui.render import (
+    HEAT_MAX_ALPHA,
     LEGEND_WIDTH,
     LINEAR_BIN_WIDTH,
     LINEAR_MAX_BINS,
     LINEAR_TILE_HEIGHT,
+    PATCH_CELL_SIZE,
     TILE_SIZE,
     default_weight_dims,
     image_mime,
     render_image,
+    render_patch_grid,
     render_strip,
     render_weight,
 )
@@ -302,3 +306,111 @@ def test_render_weight_returns_none_for_duplicate_axes() -> None:
 def test_render_weight_returns_none_for_out_of_range_axis() -> None:
     w = torch.randn(4, 4)
     assert render_weight(w, x_dim=5, y_dim=0, tile_dim=None, fixed={}) is None
+
+
+def _type_patches(
+    values: torch.Tensor,
+    patches: torch.Tensor,
+    *,
+    heat: torch.Tensor | None = None,
+    crop: bool = False,
+    top: torch.Tensor | None = None,
+    left: torch.Tensor | None = None,
+    input_hw: tuple[int, int] = (8, 8),
+) -> TypePatches:
+    c, n = values.shape
+    if heat is None:
+        heat = torch.zeros(c, n, 1, 1)
+    if top is None:
+        top = torch.zeros(c, n, dtype=torch.int64)
+    if left is None:
+        left = torch.zeros(c, n, dtype=torch.int64)
+    return TypePatches(
+        values=values,
+        patches=patches,
+        heat=heat,
+        top=top,
+        left=left,
+        input_hw=input_hw,
+        crop=crop,
+    )
+
+
+def test_patch_grid_layout_and_css_size() -> None:
+    tp = _type_patches(torch.zeros(2, 5), torch.rand(2, 5, 3, 4, 4))
+    grid = render_patch_grid(tp)
+    assert grid is not None
+    # 2 channel columns × 5 sample rows of 4×4 cells with 1-px gaps.
+    assert _decode(grid.image).size == (2 * 4 + 1, 5 * 4 + 4)
+    assert (grid.width, grid.height) == (
+        round((2 * 4 + 1) * PATCH_CELL_SIZE / 4),
+        round((5 * 4 + 4) * PATCH_CELL_SIZE / 4),
+    )
+
+
+def test_patch_grid_denormalizes_with_mean_std() -> None:
+    tp = _type_patches(torch.zeros(1, 5), torch.zeros(1, 5, 3, 4, 4))
+    grid = render_patch_grid(tp, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+    assert grid is not None
+    assert _rgb_at(_decode(grid.image), 0, 0) == (127, 127, 127)
+
+
+def test_patch_grid_marks_unfilled_slots_gray() -> None:
+    values = torch.full((1, 5), float("-inf"))
+    values[0, 0] = 1.0
+    tp = _type_patches(values, torch.ones(1, 5, 3, 4, 4))
+    grid = render_patch_grid(tp)
+    assert grid is not None
+    img = _decode(grid.image)
+    assert _rgb_at(img, 0, 0) == (255, 255, 255)  # filled slot, white patch
+    assert _rgb_at(img, 0, 5) == (235, 235, 235)  # row 1 never filled
+
+
+def test_patch_grid_returns_none_until_first_fill() -> None:
+    tp = _type_patches(torch.full((2, 5), float("inf")), torch.zeros(2, 5, 3, 4, 4))
+    assert render_patch_grid(tp) is None
+
+
+@pytest.mark.parametrize(("sign", "channel"), [(1.0, 0), (-1.0, 2)])
+def test_patch_grid_heatmap_tints_red_or_blue(sign: float, channel: int) -> None:
+    values = torch.full((1, 5), float("-inf"))
+    values[0, 0] = sign
+    heat = torch.zeros(1, 5, 2, 2)
+    heat[0, 0] = sign  # uniform map at the grid-wide |max|
+    tp = _type_patches(values, torch.ones(1, 5, 3, 4, 4), heat=heat)
+    grid = render_patch_grid(tp, heatmap=True)
+    assert grid is not None
+    rgb = _rgb_at(_decode(grid.image), 0, 0)
+    # White patch blended with a full-strength overlay at HEAT_MAX_ALPHA:
+    # the tint channel stays 255, the others drop to 255 * (1 - alpha).
+    faded = round(255 * (1 - HEAT_MAX_ALPHA))
+    assert rgb[channel] == 255
+    assert abs(rgb[1] - faded) <= 1
+    assert abs(rgb[2 - channel] - faded) <= 1
+
+
+def test_patch_grid_heatmap_crops_window_region() -> None:
+    # Crop covers the input's top-left quadrant; only the matching
+    # activation-map cell (positive) should drive the blend.
+    values = torch.full((1, 5), float("-inf"))
+    values[0, 0] = 1.0
+    heat = torch.zeros(1, 5, 2, 2)
+    heat[0, 0, 0, 0] = 1.0
+    tp = _type_patches(
+        values,
+        torch.ones(1, 5, 3, 4, 4),
+        heat=heat,
+        crop=True,
+        input_hw=(8, 8),
+    )
+    grid = render_patch_grid(tp, heatmap=True)
+    assert grid is not None
+    rgb = _rgb_at(_decode(grid.image), 0, 0)
+    assert rgb[0] == 255 and rgb[1] < 255  # tinted red inside the window
+
+
+def test_patch_grid_grayscale_input() -> None:
+    tp = _type_patches(torch.zeros(1, 5), torch.full((1, 5, 1, 4, 4), 0.5))
+    grid = render_patch_grid(tp)
+    assert grid is not None
+    assert _rgb_at(_decode(grid.image), 0, 0) == (127, 127, 127)
