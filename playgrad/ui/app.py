@@ -1560,36 +1560,59 @@ def _add_time_travel_button(session: Session) -> None:
                 with ui.row():
                     ui.button("Close", on_click=dialog.close)
                 return
-            epoch_select: ui.select | None = None
+            # The slider runs over *indices into the cached-epoch list*, so
+            # epochs without a checkpoint are unselectable even when the
+            # cached set has gaps; the label shows the mapped epoch number.
+            epoch_slider: ui.slider | None = None
             if cached:
                 ui.label("Jump back to the start of a cached epoch:").classes(
                     "text-sm"
                 )
-                epoch_select = ui.select(
-                    cached, label="Epoch", value=cached[-1]
-                ).classes("w-40")
+                with ui.row().classes("w-full items-center gap-4 no-wrap"):
+                    epoch_label = ui.label(f"epoch {cached[-1]}").classes(
+                        "font-mono text-sm w-20 shrink-0"
+                    )
+                    epoch_slider = ui.slider(
+                        min=0,
+                        max=len(cached) - 1,
+                        step=1,
+                        value=len(cached) - 1,
+                        on_change=lambda e: epoch_label.set_text(
+                            f"epoch {cached[int(e.value)]}"
+                        ),
+                    ).classes("grow")
             else:
                 ui.label("No epochs have a cached model yet.").classes(
                     "text-sm text-slate-600"
                 )
+            ui.label(
+                "Cached epochs: "
+                + (_summarize_epoch_ranges(cached) if cached else "none")
+            ).classes("text-xs text-slate-500")
             if missing:
                 ui.label(
-                    "Epochs without a cached model: "
-                    f"{_summarize_epoch_ranges(missing)}. An epoch becomes "
-                    "available once training has passed its start."
+                    f"Uncached epochs: {_summarize_epoch_ranges(missing)}. "
+                    "An epoch becomes available once training has passed "
+                    "its start."
                 ).classes("text-xs text-slate-500")
             with ui.row():
                 ui.button("Cancel", on_click=dialog.close)
                 if missing:
-                    ui.button("Cache training run", on_click=cache_run).tooltip(
+                    ui.button(
+                        "Cache full training run", on_click=cache_run
+                    ).tooltip(
                         "Run training to the end, checkpointing every epoch "
                         "start along the way"
                     )
-                if epoch_select is not None:
-                    select = epoch_select
+                if epoch_slider is not None:
+                    slider = epoch_slider
                     ui.button(
                         "Time travel",
-                        on_click=lambda: submit(select.value),
+                        on_click=lambda: submit(
+                            cached[int(slider.value)]
+                            if slider.value is not None
+                            else None
+                        ),
                         color="blue",
                     )
 

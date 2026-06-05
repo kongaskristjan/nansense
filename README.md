@@ -128,11 +128,13 @@ the session with five "go" buttons — `stop`, `step batch`, `step epoch`,
 `step until end`, `step until custom` (opens a dialog where you pick the
 target phase / epoch / batch) — `detach` (run unattended without
 further pauses), and a blue `time travel` button. Time travel opens a
-dialog listing every epoch with a checkpoint on disk; picking one jumps
-training back to that epoch's start (model, optimizer, scheduler, and RNG
-state restored, so the replay is deterministic). Epochs without a
-checkpoint are listed as unavailable, with a "Cache training run" button
-that runs training to the end, checkpointing every epoch along the way.
+dialog with a slider over the epochs that have a checkpoint on disk
+(epochs without one are unselectable); picking one jumps training back to
+that epoch's start (model, optimizer, scheduler, and RNG state restored,
+so the replay is deterministic). Text below the slider states the cached
+and uncached epoch ranges, and while any epochs are uncached a "Cache
+full training run" button runs training to the end, checkpointing every
+epoch along the way.
 A checkpoint that no longer matches the model (e.g. left behind by a
 previous run with a different architecture) is rejected with an error
 dialog and no jump happens. Without the `training_restorer` wrapper the

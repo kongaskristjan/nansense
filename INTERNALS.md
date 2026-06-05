@@ -363,11 +363,13 @@ naturally resets it.
 
 **UI.** The blue Time Travel button (right of Detach, built by
 `_add_time_travel_button`) opens a dialog whose content is rebuilt on
-every open from `session.time_travel_status()`: a select restricted to the
-cached epochs within the current schedule, a note summarizing epochs
-without a checkpoint, and — while any are missing — a "Cache training run"
-button that simply arms `step_run()` (running to the end checkpoints every
-epoch start along the way). A rejected request (`TimeTravelError`) opens a
+every open from `session.time_travel_status()`: a slider over the cached
+epochs within the current schedule (it runs over indices into the
+cached-epoch list, so uncached epochs are unselectable even when the set
+has gaps, with a label showing the mapped epoch number), text stating the
+cached and uncached epoch ranges, and — while any are missing — a "Cache
+full training run" button that simply arms `step_run()` (running to the
+end checkpoints every epoch start along the way). A rejected request (`TimeTravelError`) opens a
 separate error dialog and no jump happens. When the session reports time
 travel unavailable at page build (no restorer), the button is rendered
 disabled with the reason as a tooltip on a wrapper div — Quasar suppresses
