@@ -22,9 +22,9 @@ from playgrad.ui.app import (
     _display_batch_size,
     _default_roles,
     _dims_from_roles,
-    _effective_log_x,
     _figure_payload,
     _fill_fraction,
+    _filter_phase,
     _format_live_position,
     _input_img_src,
     _linear_x_range,
@@ -51,7 +51,13 @@ from playgrad.ui.render import (
     render_image,
     render_strip,
 )
-from playgrad.watch import N_BINS, ZERO_BIN, LayerStatsSnapshot, TensorStatsSnapshot
+from playgrad.watch import (
+    N_BINS,
+    ZERO_BIN,
+    LayerStatsSnapshot,
+    TensorStatsSnapshot,
+    bin_midpoint,
+)
 
 
 def _tensor_stats(n: int, hist: dict[int, int] | None = None) -> TensorStatsSnapshot:
@@ -448,53 +454,26 @@ def test_axis_ranges_none_when_empty() -> None:
     )
 
 
-# --- Watching histogram: automatic signed-log x fallback --------------------
+# --- Watching histogram: the Log x checkbox alone picks the x-mode ----------
 
 
 def _multi_decade_snap() -> dict[str, LayerStatsSnapshot]:
     # Mass spread evenly over four decades on both signs (like real gradient
-    # distributions): no linear window can show more than a sliver of it.
+    # distributions).
     hist = {ZERO_BIN + s * i: 1000 for i in range(1, 29) for s in (1, -1)}
     hist[ZERO_BIN] = 2000
     return {"train": _layer_snap("train", hist=hist)}
 
 
-def test_effective_log_x_passthrough_and_empty() -> None:
-    assert _effective_log_x({}, "activation", True) is True
-    assert _effective_log_x({}, "activation", False) is False
-
-
-def test_effective_log_x_false_for_compact_distribution() -> None:
-    per_phase = {
-        "train": _layer_snap(
-            "train", hist={ZERO_BIN + 60 + i: 100 for i in range(5)}
-        )
-    }
-    assert _effective_log_x(per_phase, "activation", False) is False
-
-
-def test_effective_log_x_true_for_multi_decade_distribution() -> None:
-    assert _effective_log_x(_multi_decade_snap(), "activation", False) is True
-
-
-def test_histogram_auto_falls_back_to_signed_log_x() -> None:
-    per_phase = _multi_decade_snap()
+def test_histogram_stays_linear_even_for_multi_decade_distribution() -> None:
+    # The Log x checkbox is authoritative: with it off, even a gradient-like
+    # multi-decade distribution renders on the linear value axis (no silent
+    # signed-log fallback).
     fig = _make_histogram_figure(
-        per_phase, "activation", "activations", log_x=False
+        _multi_decade_snap(), "activation", "activations", log_x=False
     )
-    # Drawn as the signed-log view: uniform bars at bin indices showing
-    # probabilities, with the fallback called out in the x-axis title.
-    assert fig.data[0].x[0] == 0
-    assert fig.data[0].width is None
-    assert fig.layout.yaxis.title.text == "probability"
-    assert fig.layout.xaxis.title.text == "signed-log scale (auto)"
-
-
-def test_histogram_manual_log_x_has_no_auto_label() -> None:
-    per_phase = {"train": _layer_snap("train", n=9)}
-    fig = _make_histogram_figure(
-        per_phase, "activation", "activations", log_x=True
-    )
+    assert fig.data[0].width is not None  # linear per-bin widths
+    assert fig.layout.yaxis.title.text == "probability density"
     assert fig.layout.xaxis.title.text is None
 
 
@@ -665,7 +644,7 @@ def test_histogram_log_x_plots_probabilities(log_y: bool) -> None:
         per_phase, "activation", "activations", log_x=True, log_y=log_y
     )
     assert fig.data[0].y[ZERO_BIN] == pytest.approx(1.0)
-    assert fig.data[0].customdata[ZERO_BIN] == 9
+    assert tuple(fig.data[0].customdata[ZERO_BIN]) == (9, "0")
     assert fig.layout.yaxis.title.text == "probability"
     if log_y:
         assert fig.layout.yaxis.range is None
@@ -1172,3 +1151,48 @@ def test_patch_grids_signature_tracks_toggles_and_values() -> None:
     assert base != _patch_grids_signature(per_phase, ["max_pixel"], False)
     other = {"train": _layer_snap_with_patches("train")}  # new random extremes
     assert base != _patch_grids_signature(other, list(PATCH_TYPES), False)
+
+
+def test_filter_phase_narrows_to_selected_phase() -> None:
+    per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val")}
+    assert set(_filter_phase(per_phase, "val")) == {"val"}
+    assert set(_filter_phase(per_phase, "train")) == {"train"}
+    assert _filter_phase(per_phase, "test") == {}
+
+
+def test_patch_grids_html_adds_heat_legend_when_enabled() -> None:
+    per_phase = {"train": _layer_snap_with_patches("train")}
+    plain = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
+    )
+    heat = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=True, mean=None, std=None
+    )
+    assert plain.count("<img") == 1
+    assert heat.count("<img") == 2  # the grid plus its colorbar
+
+
+def test_log_x_hover_shows_bin_value_not_index() -> None:
+    hist = {ZERO_BIN: 5, ZERO_BIN + 1 + 9 * 7: 4}  # zero band + the 1.0 decade
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=True
+    )
+    hover = fig.data[0].hovertemplate
+    assert "bin %{x}" not in hover
+    assert "value ≈ %{customdata[1]}" in hover
+    assert "count %{customdata[0]}" in hover
+    # Each bar carries (count, representative value); the value matches the
+    # bin's geometric midpoint, the same notion the median stat reports.
+    count, label = fig.data[0].customdata[ZERO_BIN + 1 + 9 * 7]
+    assert count == 4
+    assert label == f"{bin_midpoint(ZERO_BIN + 1 + 9 * 7):.3g}"
+
+
+def test_linear_hover_keeps_value_from_bar_position() -> None:
+    per_phase = {"train": _layer_snap("train", n=9)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=False
+    )
+    assert "value %{x:.2e}" in fig.data[0].hovertemplate
+    assert fig.data[0].customdata[ZERO_BIN] == 9
