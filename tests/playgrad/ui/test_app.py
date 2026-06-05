@@ -14,10 +14,12 @@ from playgrad.ui.app import (
     _PLOT_HEIGHT,
     _PLOTLY_CONFIG,
     _RenderCache,
+    _axis_ranges,
     _compute_frame,
     _default_roles,
     _dims_from_roles,
     _figure_payload,
+    _fill_fraction,
     _format_live_position,
     _input_img_tag,
     _linear_x_range,
@@ -371,6 +373,72 @@ def test_histogram_log_x_zooms_to_trimmed_bins() -> None:
     expected = _log_x_range(per_phase, "activation")
     assert expected is not None
     assert tuple(fig.layout.xaxis.range) == tuple(expected)
+
+
+# --- Watching histogram: adaptive clip share (fill heuristic) ---------------
+
+
+def test_fill_fraction_full_for_single_bar() -> None:
+    # One bar spanning the whole x-range and reaching the y-top covers the
+    # entire plot.
+    per_phase = {"train": _layer_snap("train", hist={ZERO_BIN + 60: 100})}
+    heights = _probability_densities(per_phase["train"].activations.hist)
+    bounds = (ZERO_BIN + 60, ZERO_BIN + 60)
+    frac = _fill_fraction(
+        per_phase, "activation", True, bounds, heights[ZERO_BIN + 60]
+    )
+    assert frac == pytest.approx(1.0)
+
+
+def test_axis_ranges_keep_base_share_when_plot_is_full() -> None:
+    # A compact distribution fills the plot fine at the base budget, so the
+    # adaptive loop leaves the base ranges untouched.
+    hist = {ZERO_BIN + 60 + i: 100 for i in range(5)}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    x_range, y_range = _axis_ranges(
+        per_phase, "activation", log_x=False, log_y=False
+    )
+    assert x_range == _linear_x_range(per_phase, "activation")
+    assert y_range == _linear_y_range(per_phase, "activation", density=True)
+
+
+def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
+    # A huge exact-zero peak flanked by tall narrow near-zero bars plus a
+    # long thin tail: at the base 0.5% budget the y-cap chases the narrow
+    # near-zero bars and the tail stretches the x-span, leaving the bars
+    # covering almost none of the plot. The budget then rises (up to 5%),
+    # clipping the near-zero bars and trimming more of the tail.
+    hist = {ZERO_BIN: 50_000, ZERO_BIN + 1: 600, ZERO_BIN + 2: 500}
+    hist.update({ZERO_BIN + 60 + i: 250 for i in range(40)})
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    base_x = _linear_x_range(per_phase, "activation")
+    base_y = _linear_y_range(per_phase, "activation", density=True)
+    x_range, y_range = _axis_ranges(
+        per_phase, "activation", log_x=False, log_y=False
+    )
+    assert base_x is not None and base_y is not None
+    assert x_range is not None and y_range is not None
+    assert y_range[1] < base_y[1]  # cap dropped below the near-zero bars
+    assert x_range[1] < base_x[1]  # tail trimmed harder
+
+
+def test_axis_ranges_log_y_keeps_base_trim_and_autorange() -> None:
+    # With Log y everything is visible on the log scale, so the y-range
+    # autoranges and the x-trim sticks to the base budget.
+    hist = {ZERO_BIN: 50_000, ZERO_BIN + 60: 5}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    x_range, y_range = _axis_ranges(
+        per_phase, "activation", log_x=False, log_y=True
+    )
+    assert y_range is None
+    assert x_range == _linear_x_range(per_phase, "activation")
+
+
+def test_axis_ranges_none_when_empty() -> None:
+    assert _axis_ranges({}, "activation", log_x=False, log_y=False) == (
+        None,
+        None,
+    )
 
 
 # --- Watching histogram: density mode (linear value axis) ------------------

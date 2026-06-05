@@ -509,10 +509,10 @@ It does not touch tensors directly until they need to be rendered.
   widths (`_BIN_WIDTHS`). The x-axis zooms to the trimmed bin span
   (`_trimmed_bin_bounds`): pooled across traces, the outermost bins are
   dropped greedily — lighter end first — while the dropped bins together
-  hold under `1 - _RANGE_COVERAGE` (0.5%) of the points, so a lone
-  outlier value can't stretch the axis; `_linear_x_range` maps the span
-  to value space (the full ±1e6 span is mostly empty) and `_log_x_range`
-  to bin-index space for the signed-log view. The y-axis is always
+  hold under the clip budget's share of the points, so a lone outlier
+  value can't stretch the axis; `_linear_x_range` maps the span to value
+  space (the full ±1e6 span is mostly empty) and `_log_x_range` to
+  bin-index space for the signed-log view. The y-axis is always
   normalized per phase so train and val are comparable regardless of
   sample counts: with a linear value axis (`_use_density`, governed by
   **Log x** alone), bar heights are probability densities
@@ -528,8 +528,14 @@ It does not touch tensors directly until they need to be rendered.
   taller than the runner-up, e.g. ReLU's exact zeros piling into the
   2e-9-wide zero band — never anchors the scale (`_scale_bars`); among
   the rest, bars clip tallest-first only while the clipped ones together
-  hold under `1 - _RANGE_COVERAGE` (0.5%) of the pooled data points.
-  Refresh ticks restyle `y` + `customdata` (the raw counts shown on
+  hold under the clip budget's share of the pooled data points. Both
+  axes draw their budget from `_axis_ranges`: it starts at
+  `_BASE_CLIP_SHARE` (0.5%) and, while the bars would cover less than
+  `_MIN_FILL_FRACTION` (5%) of the plot area (`_fill_fraction` — bar
+  area over x-span x y-top, averaged across rows), raises the share in
+  `_CLIP_SHARE_STEP` increments up to `_MAX_CLIP_SHARE` (5%), so a tall
+  near-zero peak next to a long thin tail can't leave the plot nearly
+  empty. Refresh ticks restyle `y` + `customdata` (the raw counts shown on
   hover) and push per-row `yaxis{n}.range` (plus a single matched
   `xaxis.range`) relayouts only when a cap actually moved. Checking
   **Log y** swaps the y-axis `type` to log so distribution tails stay

@@ -766,10 +766,17 @@ _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
 
-# Axis ranges are capped/trimmed so that bins holding this share of the
-# data points stay fully in range; see `_linear_y_range` and
-# `_trimmed_bin_bounds`.
-_RANGE_COVERAGE: float = 0.995
+# Axis trims may clip bins/bars holding up to this share of the data points
+# (see `_trimmed_bin_bounds` / `_linear_y_range`). `_axis_ranges` starts at
+# the base share and raises it in steps up to the max while the bars would
+# fill less than `_MIN_FILL_FRACTION` of the plot area.
+_BASE_CLIP_SHARE: float = 0.005
+_MAX_CLIP_SHARE: float = 0.05
+_CLIP_SHARE_STEP: float = 0.005
+
+# Minimum share of the plot area the bars should cover; below this the clip
+# share keeps being raised (up to `_MAX_CLIP_SHARE`).
+_MIN_FILL_FRACTION: float = 0.05
 
 # A bar more than this many times taller than the runner-up in its phase is
 # a freak spike (e.g. ReLU's exact zeros) and never anchors the y-scale.
@@ -827,9 +834,12 @@ def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]
 
 
 def _linear_y_range(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str, density: bool
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    density: bool,
+    clip_share: float = _BASE_CLIP_SHARE,
 ) -> list[float] | None:
-    """Y-axis range on a linear y-axis, keeping 99.5% of the data in range.
+    """Y-axis range on a linear y-axis, capped under a clip budget.
 
     Two clipping rules keep freak spikes from flattening the rest of the
     distribution (with **Log y** checked the axis autoranges instead, so
@@ -838,9 +848,9 @@ def _linear_y_range(
     - Per phase, a single drastically dominant bar never anchors the scale
       (see `_scale_bars`).
     - Among the rest, bars clip tallest-first, but only as long as the
-      clipped bars together hold less than `1 - _RANGE_COVERAGE` of the
-      pooled data points — the cap lands on the tallest bar that must stay
-      fully visible.
+      clipped bars together hold less than `clip_share` of the pooled data
+      points — the cap lands on the tallest bar that must stay fully
+      visible.
 
     The same range is applied to every phase's subplot row so the rows stay
     comparable. Returns `None` (Plotly autorange) when there's no data.
@@ -854,7 +864,7 @@ def _linear_y_range(
     if not bars:
         return None
     bars.sort(reverse=True)
-    allowed = (1.0 - _RANGE_COVERAGE) * total
+    allowed = clip_share * total
     cap = bars[0][0]
     clipped = 0
     for height, count in bars:
@@ -883,14 +893,16 @@ def _phases_with_data(
 
 
 def _trimmed_bin_bounds(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    clip_share: float = _BASE_CLIP_SHARE,
 ) -> tuple[int, int] | None:
     """Smallest/largest bin indices after trimming the extreme-tail bins.
 
     Pooled across the drawn traces, the outermost populated bins are dropped
     greedily — lighter end first — while the dropped bins together hold less
-    than `1 - _RANGE_COVERAGE` of the data points, so the x-range keeps
-    bins holding 99.5% of the values and a lone outlier value no longer
+    than `clip_share` of the data points, so the x-range keeps the bins
+    holding the rest of the values and a lone outlier value no longer
     stretches the whole value axis. Returns `None` when there's no data.
     """
     counts = [0] * N_BINS
@@ -902,7 +914,7 @@ def _trimmed_bin_bounds(
         return None
     lo = next(i for i, c in enumerate(counts) if c > 0)
     hi = next(i for i in range(N_BINS - 1, -1, -1) if counts[i] > 0)
-    allowed = (1.0 - _RANGE_COVERAGE) * total
+    allowed = clip_share * total
     trimmed = 0
     while lo < hi:
         side = lo if counts[lo] <= counts[hi] else hi
@@ -921,7 +933,9 @@ def _trimmed_bin_bounds(
 
 
 def _linear_x_range(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    clip_share: float = _BASE_CLIP_SHARE,
 ) -> list[float] | None:
     """X-axis range (linear value space) covering the trimmed bins.
 
@@ -931,7 +945,7 @@ def _linear_x_range(
     distribution stays legible. Returns `None` (Plotly autorange) when
     there's no data.
     """
-    bounds = _trimmed_bin_bounds(per_phase, kind)
+    bounds = _trimmed_bin_bounds(per_phase, kind, clip_share)
     if bounds is None:
         return None
     lo = _HIST_EDGES[bounds[0]]
@@ -941,7 +955,9 @@ def _linear_x_range(
 
 
 def _log_x_range(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    clip_share: float = _BASE_CLIP_SHARE,
 ) -> list[float] | None:
     """X-axis range (bin-index space) covering the trimmed bins.
 
@@ -950,12 +966,92 @@ def _log_x_range(
     plus a little padding. Returns `None` (Plotly autorange — the full
     211-bin span) when there's no data.
     """
-    bounds = _trimmed_bin_bounds(per_phase, kind)
+    bounds = _trimmed_bin_bounds(per_phase, kind, clip_share)
     if bounds is None:
         return None
     lo, hi = bounds
     pad = (hi - lo + 1) * 0.05
     return [lo - 0.5 - pad, hi + 0.5 + pad]
+
+
+def _fill_fraction(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    density: bool,
+    bounds: tuple[int, int],
+    y_top: float,
+) -> float:
+    """Share of the plot area the bars cover at the given axis ranges.
+
+    Bar areas are measured in the units the bars are drawn in (value space
+    for density mode, bin-index space for the signed-log view) with heights
+    clipped to the y-range top; the plot area is the x-span times the
+    y-range top, averaged over the drawn traces (every subplot row shares
+    the same ranges).
+    """
+    if y_top <= 0:
+        return 1.0
+    lo, hi = bounds
+    span = (_HIST_EDGES[hi + 1] - _HIST_EDGES[lo]) if density else (hi - lo + 1)
+    phases = _phases_with_data(per_phase, kind)
+    filled = 0.0
+    for phase in phases:
+        heights = _trace_heights(_kind_stats(per_phase[phase], kind).hist, density)
+        for i in range(lo, hi + 1):
+            width = _BIN_WIDTHS[i] if density else 1.0
+            filled += width * min(heights[i], y_top)
+    return filled / (span * y_top * len(phases))
+
+
+def _axis_ranges(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    *,
+    log_x: bool,
+    log_y: bool,
+) -> tuple[list[float] | None, list[float] | None]:
+    """The histogram figure's `(x, y)` axis ranges.
+
+    Both ranges come from the same clip budget: bins/bars holding up to a
+    share of the data points may be cut off (x: outermost tail bins,
+    `_trimmed_bin_bounds`; y: tallest bars, `_linear_y_range`).
+
+    A tall near-zero peak next to a long thin tail can leave the plot
+    nearly empty even after the base trims — the cap chases the peak's
+    narrow neighbours while the tail stretches the x-span. So while the
+    bars would cover less than `_MIN_FILL_FRACTION` of the plot area, the
+    clip share is raised in `_CLIP_SHARE_STEP` increments (clipping more of
+    the peak and trimming more of the tail), stopping once the plot is at
+    least that full or the share reaches `_MAX_CLIP_SHARE`.
+
+    With **Log y** the y-range is `None` (autorange) and the x-trim sticks
+    to the base share — the log scale keeps the bars visible, so the fill
+    heuristic doesn't apply. Both ranges are `None` when there's no data.
+    """
+    density = _use_density(log_x)
+
+    def x_range_at(share: float) -> list[float] | None:
+        return (
+            _log_x_range(per_phase, kind, share)
+            if log_x
+            else _linear_x_range(per_phase, kind, share)
+        )
+
+    if log_y:
+        return x_range_at(_BASE_CLIP_SHARE), None
+    share = _BASE_CLIP_SHARE
+    while True:
+        bounds = _trimmed_bin_bounds(per_phase, kind, share)
+        y_range = _linear_y_range(per_phase, kind, density, share)
+        if bounds is None or y_range is None:
+            return None, None
+        if (
+            share >= _MAX_CLIP_SHARE
+            or _fill_fraction(per_phase, kind, density, bounds, y_range[1])
+            >= _MIN_FILL_FRACTION
+        ):
+            return x_range_at(share), y_range
+        share = min(share + _CLIP_SHARE_STEP, _MAX_CLIP_SHARE)
 
 
 def _make_histogram_figure(
@@ -977,7 +1073,7 @@ def _make_histogram_figure(
     and epoch, tinted with the trace color) rather than overlaying bars on
     shared axes, so one phase never obscures another. The rows share the
     x-axis and, on a linear y-axis, the same capped y-range
-    (`_linear_y_range`), keeping the per-phase distributions directly
+    (see `_axis_ranges`), keeping the per-phase distributions directly
     comparable.
 
     `log_x` / `log_y` toggle the value (x) and probability (y) axes between a
@@ -1045,10 +1141,11 @@ def _make_histogram_figure(
         paper_bgcolor="white",
         showlegend=False,
     )
+    x_range, y_range = _axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
     if log_x:
         tick_vals, tick_text = _x_tick_layout()
         fig.update_xaxes(
-            range=_log_x_range(per_phase, kind),
+            range=x_range,
             tickvals=tick_vals,
             ticktext=tick_text,
             tickfont=dict(size=9),
@@ -1057,7 +1154,7 @@ def _make_histogram_figure(
         )
     else:
         fig.update_xaxes(
-            range=_linear_x_range(per_phase, kind),
+            range=x_range,
             tickfont=dict(size=9),
             showgrid=False,
             zeroline=True,
@@ -1065,10 +1162,10 @@ def _make_histogram_figure(
         )
     fig.update_yaxes(
         type="log" if log_y else "linear",
-        # The cap is a linear-space range; on a log y-axis Plotly interprets
-        # ranges in log10 units, so autorange (which shows 100% of the data
-        # anyway) is used there instead.
-        range=None if log_y else _linear_y_range(per_phase, kind, density),
+        # The cap is a linear-space range; on a log y-axis `_axis_ranges`
+        # returns `None` (Plotly autorange, which shows 100% of the data
+        # anyway) since Plotly would misread the range as log10 units.
+        range=y_range,
         showgrid=True,
         gridcolor="#e2e8f0",
         tickfont=dict(size=9),
@@ -1258,15 +1355,6 @@ class _HistPlot:
     def _current_axis(self) -> tuple[bool, bool]:
         return self._axis_log["x"], self._axis_log["y"]
 
-    def _current_x_range(
-        self, per_phase: dict[str, LayerStatsSnapshot], log_x: bool
-    ) -> list[float] | None:
-        return (
-            _log_x_range(per_phase, self._kind)
-            if log_x
-            else _linear_x_range(per_phase, self._kind)
-        )
-
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
@@ -1287,12 +1375,9 @@ class _HistPlot:
             )
             self._phases = phases
             self._axis = axis
-            self._y_range = (
-                None
-                if axis[1]
-                else _linear_y_range(per_phase, self._kind, density)
+            self._x_range, self._y_range = _axis_ranges(
+                per_phase, self._kind, log_x=axis[0], log_y=axis[1]
             )
-            self._x_range = self._current_x_range(per_phase, axis[0])
         elif phases:
             # Same rows and axes — only counts (and the epoch label) moved.
             # Restyle in place so zoom/pan survives.
@@ -1308,21 +1393,20 @@ class _HistPlot:
             layout: dict[str, object] = {
                 f"annotations[{i}].text": name for i, name in enumerate(names)
             }
-            if not axis[1]:
-                # The cap follows the data; re-apply it only when it moved so
-                # an idle refresh doesn't keep snapping the user's zoom back.
+            # The caps follow the data; re-apply them only when they moved so
+            # an idle refresh doesn't keep snapping the user's zoom back.
+            x_range, y_range = _axis_ranges(
+                per_phase, self._kind, log_x=axis[0], log_y=axis[1]
+            )
+            if y_range is not None and y_range != self._y_range:
                 # Every row gets the same range (row 1 is "yaxis", row n is
                 # "yaxis{n}") so the subplots stay comparable.
-                y_range = _linear_y_range(per_phase, self._kind, density)
-                if y_range != self._y_range:
-                    self._y_range = y_range
-                    for i in range(len(phases)):
-                        axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
-                        layout[f"{axis_name}.range"] = y_range
-            # The x-zoom follows the populated bins; the rows' x-axes are
-            # matched (shared_xaxes), so one key updates every row.
-            x_range = self._current_x_range(per_phase, axis[0])
+                self._y_range = y_range
+                for i in range(len(phases)):
+                    axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
+                    layout[f"{axis_name}.range"] = y_range
             if x_range != self._x_range:
+                # The rows' x-axes are matched, so one key updates every row.
                 self._x_range = x_range
                 layout["xaxis.range"] = x_range
             _plotly_restyle(

@@ -213,7 +213,10 @@ phase — more than 5x taller than the runner-up, e.g. the exact-zero
 spike of a ReLU — is excluded from the scale entirely so it can't
 flatten the rest of the distribution. The x-axis is trimmed the same
 way: it zooms to the bins holding 99.5% of the values, so a lone
-outlier can't stretch the value axis. Because Plotly's "Autoscale"
+outlier can't stretch the value axis. When a tall near-zero peak plus
+a long thin tail still leaves the bars covering less than 5% of the
+plot area, the 0.5% clip budget is raised step by step (up to 5%)
+until the plot is at least 5% full. Because Plotly's "Autoscale"
 would undo these caps (landing on a different scale than the initial
 render), the button is removed — "Reset axes" and double-click return
 to the intended ranges. Above each figure a table shows one column per
