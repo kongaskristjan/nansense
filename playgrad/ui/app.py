@@ -39,6 +39,7 @@ from fastapi import FastAPI
 from nicegui import ui
 from torch import Tensor
 
+from playgrad.restore import TimeTravelError
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
@@ -364,6 +365,7 @@ def _add_step_controls(session: Session, step_until_custom: ui.dialog) -> ui.lab
     ui.button("Detach", on_click=session.detach, color="green").props(
         "dense size=md"
     ).tooltip("Release the training loop and stop capturing snapshots")
+    _add_time_travel_button(session)
     return ui.label("(waiting for first snapshot)").classes(
         "ml-3 font-mono text-sm"
     )
@@ -1502,6 +1504,127 @@ class _WeightPanel:
         self._grad_img.set_content("")
         self._opt_container.clear()
         self._opt_scalars.set_visibility(False)
+
+
+def _add_time_travel_button(session: Session) -> None:
+    """The blue Time Travel button (right of Detach) and its dialogs.
+
+    The button is grayed out — with the reason as a hover tooltip — when the
+    session has no training restorer, i.e. the training loop did not opt
+    into time travel. The picker dialog rebuilds its content on every open,
+    so the cached-epoch choices track the checkpoints written so far; a
+    request the session rejects (e.g. a cache written by a different model)
+    surfaces in a separate error dialog and no jump happens.
+    """
+    with ui.dialog() as error_dialog, ui.card().classes("min-w-96 p-6 gap-3"):
+        ui.label("Time travel failed").classes("text-lg font-bold text-red-600")
+        error_label = ui.label("").classes("text-sm text-slate-700")
+        with ui.row():
+            ui.button("Close", on_click=error_dialog.close)
+
+    with ui.dialog() as dialog, ui.card().classes("min-w-96 p-6 gap-4"):
+        ui.label("Time travel").classes("text-lg font-bold")
+        content = ui.column().classes("w-full gap-3")
+
+    def show_error(message: str) -> None:
+        error_label.text = message
+        error_dialog.open()
+
+    def submit(value: object) -> None:
+        if not isinstance(value, (int, float)):
+            show_error("Pick an epoch to jump to.")
+            return
+        try:
+            session.request_time_travel(int(value))
+        except TimeTravelError as e:
+            show_error(str(e))
+            return
+        dialog.close()
+
+    def cache_run() -> None:
+        # Runs training to the very end; with a restorer active, every
+        # epoch start gets checkpointed along the way, filling the cache.
+        session.step_run()
+        dialog.close()
+
+    def rebuild() -> None:
+        content.clear()
+        status = session.time_travel_status()
+        cached = status.cached_epochs
+        missing = sorted(set(range(status.total_epochs)) - set(cached))
+        with content:
+            if not status.available:
+                ui.label(status.reason or "Time travel is unavailable.").classes(
+                    "text-sm text-slate-600"
+                )
+                with ui.row():
+                    ui.button("Close", on_click=dialog.close)
+                return
+            epoch_select: ui.select | None = None
+            if cached:
+                ui.label("Jump back to the start of a cached epoch:").classes(
+                    "text-sm"
+                )
+                epoch_select = ui.select(
+                    cached, label="Epoch", value=cached[-1]
+                ).classes("w-40")
+            else:
+                ui.label("No epochs have a cached model yet.").classes(
+                    "text-sm text-slate-600"
+                )
+            if missing:
+                ui.label(
+                    "Epochs without a cached model: "
+                    f"{_summarize_epoch_ranges(missing)}. An epoch becomes "
+                    "available once training has passed its start."
+                ).classes("text-xs text-slate-500")
+            with ui.row():
+                ui.button("Cancel", on_click=dialog.close)
+                if missing:
+                    ui.button("Cache training run", on_click=cache_run).tooltip(
+                        "Run training to the end, checkpointing every epoch "
+                        "start along the way"
+                    )
+                if epoch_select is not None:
+                    select = epoch_select
+                    ui.button(
+                        "Time travel",
+                        on_click=lambda: submit(select.value),
+                        color="blue",
+                    )
+
+    def open_dialog() -> None:
+        rebuild()
+        dialog.open()
+
+    status = session.time_travel_status()
+    # Quasar suppresses pointer events on disabled buttons, so the tooltip
+    # (which must explain *why* the button is off) lives on a wrapper div.
+    tooltip = (
+        "Jump training back to the start of a cached epoch"
+        if status.available
+        else (status.reason or "Time travel is unavailable.")
+    )
+    with ui.element("div").tooltip(tooltip):
+        button = ui.button("Time Travel", on_click=open_dialog, color="blue").props(
+            "dense size=md"
+        )
+        if not status.available:
+            button.props("disable")
+
+
+def _summarize_epoch_ranges(epochs: list[int]) -> str:
+    """Compact "0–2, 5, 7–49" rendering of a sorted epoch list."""
+    parts: list[str] = []
+    start = prev = epochs[0]
+    for e in epochs[1:]:
+        if e == prev + 1:
+            prev = e
+            continue
+        parts.append(f"{start}–{prev}" if prev > start else f"{start}")
+        start = prev = e
+    parts.append(f"{start}–{prev}" if prev > start else f"{start}")
+    return ", ".join(parts)
 
 
 def _build_step_until_custom_dialog(session: Session) -> ui.dialog:

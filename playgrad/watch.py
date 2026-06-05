@@ -317,6 +317,18 @@ class WatchAccumulator:
                 if key[0] == layer:
                     del self._stats[key]
 
+    def forget_epochs_from(self, epoch: int) -> None:
+        """Drop stats for `epoch` and later, across all layers and phases.
+
+        Called when time travel rewinds to the start of `epoch`: the
+        abandoned timeline's buckets must not absorb the re-run epochs'
+        samples (the accumulators are additive) or linger on the watch page.
+        """
+        with self._lock:
+            for key in list(self._stats):
+                if key[2] >= epoch:
+                    del self._stats[key]
+
     def snapshot(self, *, layers: Iterable[str] | None = None) -> WatchSnapshot:
         """Snapshot all (or the requested subset of) layers' stats."""
         wanted = set(layers) if layers is not None else None

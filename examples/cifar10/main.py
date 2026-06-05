@@ -34,6 +34,12 @@ def parse_args() -> argparse.Namespace:
         help="Use torch.autocast with bfloat16 for forward/loss (no GradScaler needed)",
     )
     parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("models/latest"),
+        help="Directory for time-travel epoch checkpoints (default models/latest).",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--playgrad-port",
@@ -99,6 +105,7 @@ def main() -> None:
 
     # Always create the session; `enabled=False` makes it a near-zero-overhead
     # no-op so the training loop below needs no playgrad-specific branching.
+    # `port=` serves the UI immediately (skipped automatically when disabled).
     session = playgrad.start(
         model,
         epochs=args.epochs,
@@ -107,45 +114,52 @@ def main() -> None:
         # Optional: lets the weights page show per-parameter optimizer state
         # (momentum buffers) and the group's live hyperparameters (lr, ...).
         optimizer=optimizer,
+        # Optional: lets time-travel checkpoints restore the LR schedule.
+        scheduler=scheduler,
+        port=args.playgrad_port,
+        input_mean=CIFAR10_MEAN,
+        input_std=CIFAR10_STD,
     )
     if session.enabled:
-        playgrad.serve(
-            session,
-            port=args.playgrad_port,
-            input_mean=CIFAR10_MEAN,
-            input_std=CIFAR10_STD,
-        )
         print(f"playgrad UI at http://127.0.0.1:{args.playgrad_port}")
 
+    # Opting into time travel: each epoch start is checkpointed to
+    # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and
+    # re-enters the epoch loop at `restorer.start_epoch` with the cached
+    # model / optimizer / scheduler / RNG state restored.
+    restorer = session.training_restorer(cache_dir=args.cache_dir)
     best_acc = 0.0
-    for epoch in range(1, args.epochs + 1):
-        epoch_start = time.time()
-        train_stats = train_one_epoch(
-            model, train_loader, optimizer, criterion, device,
-            amp_dtype=amp_dtype, session=session, epoch=epoch - 1,
-        )
-        test_stats = evaluate(
-            model, test_loader, criterion, device,
-            amp_dtype=amp_dtype, session=session, epoch=epoch - 1,
-        )
-        scheduler.step()
-
-        elapsed = time.time() - epoch_start
-        print(
-            f"epoch {epoch:3d}/{args.epochs} "
-            f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
-            f"test_loss={test_stats.loss:.4f} test_acc={test_stats.accuracy:.4f} "
-            f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
-        )
-
-        if test_stats.accuracy > best_acc:
-            best_acc = test_stats.accuracy
-            if args.checkpoint is not None:
-                args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(
-                    {"model": model.state_dict(), "epoch": epoch, "test_acc": best_acc},
-                    args.checkpoint,
+    while restorer.pending():
+        with restorer:
+            best_acc = 0.0  # re-derived per attempt: a jump rewinds history
+            for epoch in restorer.epochs():
+                epoch_start = time.time()
+                train_stats = train_one_epoch(
+                    model, train_loader, optimizer, criterion, device,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch,
                 )
+                test_stats = evaluate(
+                    model, test_loader, criterion, device,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch,
+                )
+                scheduler.step()
+
+                elapsed = time.time() - epoch_start
+                print(
+                    f"epoch {epoch + 1:3d}/{args.epochs} "
+                    f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
+                    f"test_loss={test_stats.loss:.4f} test_acc={test_stats.accuracy:.4f} "
+                    f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
+                )
+
+                if test_stats.accuracy > best_acc:
+                    best_acc = test_stats.accuracy
+                    if args.checkpoint is not None:
+                        args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                        torch.save(
+                            {"model": model.state_dict(), "epoch": epoch + 1, "test_acc": best_acc},
+                            args.checkpoint,
+                        )
 
     print(f"Best test accuracy: {best_acc:.4f}")
 
