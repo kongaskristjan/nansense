@@ -231,19 +231,39 @@ being published.
 `layer name -> parameter names` map.
 
 The `/watch` page renders one card per watched layer with two plotly
-histograms (activations + activation gradients) overlaid by phase
-(train / val) for the most recent epoch. Each histogram has 211
+figures (activations + activation gradients), each showing one stacked
+subplot row per phase (train / val) for the most recent epoch — the
+rows share the value axis and y-range so the distributions compare
+directly without obscuring each other. Each histogram has 211
 signed-log bins covering `(-1e6, 1e6)` with bin edges on powers of 10
 and at six log-spaced points between them. Two checkboxes in the top
-bar — **Log x** and **Log y** — switch the value and count axes from
-the linear default to a log-based scale. With both unchecked (the
-default), bars show density (count / bin width) instead of raw counts —
-on linear axes that makes bar area proportional to count despite the
-wildly different linear bin widths — and the y-axis is capped at the
-20th-tallest bar so the ultra-narrow near-zero bins can't blow out the
-scale. Above each histogram a
-one-line summary shows `n`, `mean`, `std`, histogram-derived
-`median`, and `min`/`max`. Any layer in `session.layer_names` is
+bar — **Log x** and **Log y** — switch the value and probability axes
+from the linear default to a log-based scale. With **Log x** unchecked
+(the default), bars show probability density (`count / (n * bin
+width)`) — on a linear value axis that makes bar area proportional to
+the share of values despite the wildly different linear bin widths.
+Checking **Log x** switches the bars to plain per-bin probabilities
+(`count / n`); per-phase normalization keeps train and val comparable
+regardless of how many batches each has seen. While **Log y** is
+unchecked, the y-axis is capped so that bars holding 99.5% of the
+values stay fully in range, and a single drastically dominant bar per
+phase — more than 5x taller than the runner-up, e.g. the exact-zero
+spike of a ReLU — is excluded from the scale entirely so it can't
+flatten the rest of the distribution. The x-axis is trimmed the same
+way: it zooms to the bins holding 99.5% of the values, so a lone
+outlier can't stretch the value axis. When a tall near-zero peak plus
+a long thin tail still leaves the bars covering less than 5% of the
+plot area, the 0.5% clip budget is raised step by step (up to 5%)
+until the plot is at least 5% full — and if even the most aggressive
+trims can't get there (the distribution spans too many decades for
+any linear window, as gradients routinely do), the figure falls back
+to the signed-log view on its own, labeled "signed-log scale (auto)"
+on the x-axis. Because Plotly's "Autoscale"
+would undo these caps (landing on a different scale than the initial
+render), the button is removed — "Reset axes" and double-click return
+to the intended ranges. Above each figure a table shows one column per
+phase (`train ep N`, `val ep N`) and one row per stat: `n`, `mean`,
+`std`, histogram-derived `median`, and `min`/`max`. Any layer in `session.layer_names` is
 watchable — named modules, fx-traced intermediates (scope-qualified by
 their submodule, e.g. `stage1.0.relu1`, `stage1.0.add`), and the graph
 input itself (`x`). While at least one layer

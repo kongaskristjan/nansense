@@ -578,37 +578,77 @@ It does not touch tensors directly until they need to be rendered.
   keeps the wiring simple.
 - The `/watch` page is its own NiceGUI page handler keyed to the same
   `Session`. It builds one `_WatchLayerPanel` per watched module; each
-  holds two `_HistPlot`s (activations and gradients) and a one-line stats
-  summary above each. A 2-second `ui.timer` calls
+  holds two `_HistPlot`s (activations and gradients) and a stats table
+  above each. A 2-second `ui.timer` calls
   `session.watch_snapshot()` and hands the per-phase stats to every
   `_HistPlot.update`. Routine ticks only change the bar counts (and the
   epoch label), so the plot **restyles the existing figure in place** —
   `Plotly.update(getHtmlElement(id), {y, name}, layout, indices)` run via
   `ui.run_javascript` — rather than replacing it. Restyle leaves the rest
-  of the client-side state alone, so legend toggles (a series you clicked
-  off) and any zoom/pan survive the refresh for free. The figure is only
-  rebuilt (`plot.figure = new_fig; plot.update()`) when the *structure*
-  changes — a phase appears/disappears, or a **Log x** / **Log y**
-  checkbox flips an axis scale — which `_HistPlot` detects by comparing the
-  current `(phases, axis)` signature against the last render. The figures
-  use `barmode="overlay"` with per-phase opacity so train/val sit on the
-  same axes. Both axes default to linear (the **Log x** / **Log y**
-  checkboxes start unchecked): bars sit at their true linear bin centres
-  (`_BIN_CENTERS`) with per-bin widths (`_BIN_WIDTHS`), auto-zoomed by
-  `_linear_x_range` to the populated bins since the full ±1e6 span is
-  mostly empty. With both axes linear (`_use_density`), bar heights are
-  densities (`count / bin width`, `_density_heights`) so bar area stays
-  proportional to count, and the y-axis is capped by `_density_y_range`
-  at the 20th-tallest bar (`_DENSITY_TOP_BINS`) — the near-zero bins are
-  so narrow that a few stray values would otherwise stretch the scale by
-  orders of magnitude. Refresh ticks in density mode restyle `y` +
-  `customdata` (the raw counts shown on hover) and push a `yaxis.range`
-  relayout only when the cap actually moved. Checking **Log y** swaps
-  the count axis `type` to log so distribution tails stay visible;
-  checking **Log x** redraws the bars at evenly spaced bin indices with
-  signed-log tick positions computed once by `_x_tick_layout` (powers of
-  10 labelled, intermediate edges unlabelled). Either checkbox leaves
-  density mode, returning the bars to raw counts.
+  of the client-side state alone, so any zoom/pan survives the refresh
+  for free. The figure is only rebuilt
+  (`plot.update_figure(_figure_payload(new_fig))`) when the *structure* changes —
+  a phase appears/disappears, or a **Log x** / **Log y** checkbox flips
+  an axis scale — which `_HistPlot` detects by comparing the current
+  `(phases, axis)` signature against the last render. Each figure is a
+  `make_subplots` column with one stacked row per phase (no overlay), so
+  one phase never obscures another: the rows share the x-axis, each row
+  is `_PLOT_HEIGHT` tall, and the subplot titles — phase + epoch, tinted
+  with the trace color — double as the legend (refreshed via
+  `annotations[i].text` relayouts on every tick). Both axes default to
+  linear (the **Log x** / **Log y** checkboxes start unchecked): bars
+  sit at their true linear bin centres (`_BIN_CENTERS`) with per-bin
+  widths (`_BIN_WIDTHS`). The x-axis zooms to the trimmed bin span
+  (`_trimmed_bin_bounds`): pooled across traces, the outermost bins are
+  dropped greedily — lighter end first — while the dropped bins together
+  hold under the clip budget's share of the points, so a lone outlier
+  value can't stretch the axis; `_linear_x_range` maps the span to value
+  space (the full ±1e6 span is mostly empty) and `_log_x_range` to
+  bin-index space for the signed-log view. The y-axis is always
+  normalized per phase so train and val are comparable regardless of
+  sample counts: with a linear value axis (`_use_density`, governed by
+  **Log x** alone), bar heights are probability densities
+  (`count / (n * bin width)`, `_probability_densities`) so bar area is
+  the share of values; checking **Log x** redraws the bars at evenly
+  spaced bin indices (signed-log tick positions computed once by
+  `_x_tick_layout`, powers of 10 labelled) with plain per-bin
+  probabilities (`count / n`, `_probabilities`). On a linear y-axis the
+  range is capped by `_linear_y_range`, with the same range applied to
+  every row so the subplots stay comparable. Two clipping rules keep
+  freak spikes from flattening the rest of the distribution: per phase,
+  a single drastically dominant bar — more than `_DOMINANCE_RATIO` (5x)
+  taller than the runner-up, e.g. ReLU's exact zeros piling into the
+  2e-9-wide zero band — never anchors the scale (`_scale_bars`); among
+  the rest, bars clip tallest-first only while the clipped ones together
+  hold under the clip budget's share of the pooled data points. Both
+  axes draw their budget from `_axis_ranges`: it starts at
+  `_BASE_CLIP_SHARE` (0.5%) and, while the bars would cover less than
+  `_MIN_FILL_FRACTION` (5%) of the plot area (`_fill_fraction` — bar
+  area over x-span x y-top, averaged across rows), raises the share in
+  `_CLIP_SHARE_STEP` increments up to `_MAX_CLIP_SHARE` (5%), so a tall
+  near-zero peak next to a long thin tail can't leave the plot nearly
+  empty. When even the max-share trims stay under the fill floor — the
+  distribution spans too many decades for any linear window (real
+  gradient distributions spread mass across ~6 decades) — the figure
+  falls back to the signed-log view on its own (`_effective_log_x`,
+  ignoring **Log y** so toggling it never flips the x-mode) and labels
+  the bottom x-axis "signed-log scale (auto)"; the effective x-mode is
+  part of `_HistPlot`'s rebuild signature since accumulating data can
+  cross the threshold without any checkbox changing. Refresh ticks
+  restyle `y` + `customdata` (the raw counts shown on
+  hover) and push per-row `yaxis{n}.range` (plus a single matched
+  `xaxis.range`) relayouts only when a cap actually moved. Checking
+  **Log y** swaps the y-axis `type` to log so distribution tails stay
+  visible (dropping the y-cap in favour of autorange — a linear-space
+  range would be misread as log10 units) without changing what the bars
+  measure. Every figure ships with `_PLOTLY_CONFIG` (via
+  `_figure_payload`): the "Autoscale" modebar button is removed because
+  it would autorange onto the clipped spikes — a different scale than
+  the initial render — and double-click is set to `reset`, restoring
+  the built ranges. The scalar stats above each figure render as an
+  HTML table (`_stats_table_html`) in a light framed box: one column per
+  phase with data (header tinted with the trace color), one row per stat
+  (`n`, `mean`, `std`, `median`, `min`, `max`).
 - The `/weights` page (one `?layer=` query param) is the per-layer weight
   viewer. It reuses the shared stepping controls (no sample spinner) and
   builds one `_WeightPanel` per name in `session.layer_weights[layer]`,

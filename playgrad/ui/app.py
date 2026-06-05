@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import html
 import json
 import math
 import os
@@ -41,6 +42,7 @@ from urllib.parse import quote
 import plotly.graph_objects as go
 import uvicorn
 from fastapi import FastAPI
+from plotly.subplots import make_subplots
 from nicegui import ui
 from torch import Tensor
 
@@ -511,6 +513,13 @@ def _build_page(
                         "px-3 py-2 text-slate-500 text-sm italic"
                     )
                     return
+                # Section header: the entries below scroll the main view to a
+                # layer, which is easy to misread as further actions like the
+                # "Open watch view" item above.
+                ui.label("Jump to layer").classes(
+                    "px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider "
+                    "text-slate-400 select-none"
+                )
                 for layer in layer_names:
                     if layer not in watched:
                         continue
@@ -693,17 +702,61 @@ def _format_stat(value: float) -> str:
     return f"{value:.3g}"
 
 
-def _stats_summary(stats: TensorStatsSnapshot) -> str:
-    """Compact one-line summary of the scalar stats shown above each histogram."""
-    if stats.n == 0:
-        return "no data yet"
+# Rows of the per-histogram stats table: label and how to format the value.
+_STAT_ROWS: tuple[tuple[str, Callable[[TensorStatsSnapshot], str]], ...] = (
+    ("n", lambda s: f"{s.n:,}"),
+    ("mean", lambda s: _format_stat(s.mean)),
+    ("std", lambda s: _format_stat(s.std)),
+    ("median", lambda s: _format_stat(s.median)),
+    ("min", lambda s: _format_stat(s.min)),
+    ("max", lambda s: _format_stat(s.max)),
+)
+
+_STATS_CELL_STYLE: str = "padding:2px 26px 2px 0;text-align:left"
+
+# Light framed card around each stats table so it stands out from the page
+# instead of floating as bare text.
+_STATS_BOX_STYLE: str = (
+    "display:inline-block;background:#f8fafc;border:1px solid #e2e8f0;"
+    "border-radius:6px;padding:8px 14px"
+)
+
+
+def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> str:
+    """Scalar stats as an HTML table: one column per phase, one row per stat.
+
+    The header of each phase column ("train ep 0") is tinted with the phase's
+    trace color so it reads against the matching bars in the histogram below,
+    and the whole table sits in a light framed box for visibility. Returns a
+    plain "no data yet" note while the phase has no samples.
+    """
+    phases = _phases_with_data(per_phase, kind)
+    if not phases:
+        return '<span class="text-slate-500">no data yet</span>'
+    header = "".join(
+        f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
+        f"border-bottom:1px solid #e2e8f0;"
+        f'color:{_phase_color(p, i)}">'
+        f"{html.escape(p)} ep {per_phase[p].epoch}</th>"
+        for i, p in enumerate(phases)
+    )
+    rows = "".join(
+        f'<tr><td style="{_STATS_CELL_STYLE};color:#64748b">{label}</td>'
+        + "".join(
+            f'<td style="{_STATS_CELL_STYLE};color:#1e293b">'
+            f"{fmt(_kind_stats(per_phase[p], kind))}</td>"
+            for p in phases
+        )
+        + "</tr>"
+        for label, fmt in _STAT_ROWS
+    )
     return (
-        f"n={stats.n:,}  "
-        f"mean={_format_stat(stats.mean)}  "
-        f"std={_format_stat(stats.std)}  "
-        f"median≈{_format_stat(stats.median)}  "
-        f"min={_format_stat(stats.min)}  "
-        f"max={_format_stat(stats.max)}"
+        f'<div style="{_STATS_BOX_STYLE}">'
+        '<table style="border-collapse:collapse">'
+        "<thead><tr>"
+        f'<th style="border-bottom:1px solid #e2e8f0"></th>{header}'
+        "</tr></thead>"
+        f"<tbody>{rows}</tbody></table></div>"
     )
 
 
@@ -722,55 +775,112 @@ _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
 
-# Density mode (both axes linear) caps the y-axis at the height of the
-# N-th tallest bar; see `_density_y_range`.
-_DENSITY_TOP_BINS: int = 20
+# Axis trims may clip bins/bars holding up to this share of the data points
+# (see `_trimmed_bin_bounds` / `_linear_y_range`). `_axis_ranges` starts at
+# the base share and raises it in steps up to the max while the bars would
+# fill less than `_MIN_FILL_FRACTION` of the plot area.
+_BASE_CLIP_SHARE: float = 0.005
+_MAX_CLIP_SHARE: float = 0.05
+_CLIP_SHARE_STEP: float = 0.005
+
+# Minimum share of the plot area the bars should cover; below this the clip
+# share keeps being raised (up to `_MAX_CLIP_SHARE`).
+_MIN_FILL_FRACTION: float = 0.05
+
+# A bar more than this many times taller than the runner-up in its phase is
+# a freak spike (e.g. ReLU's exact zeros) and never anchors the y-scale.
+_DOMINANCE_RATIO: float = 5.0
 
 
-def _use_density(log_x: bool, log_y: bool) -> bool:
-    """Whether bars show density (count / bin width) instead of raw counts.
+def _use_density(log_x: bool) -> bool:
+    """Whether bars show probability density instead of probabilities.
 
-    On a linear value axis with a linear count axis, raw counts are
-    misleading: the signed-log bins differ in linear width by orders of
-    magnitude, so a wide bin towers over a narrow one holding the same
-    share of values. Density makes bar *area* proportional to count, the
-    honest reading of a distribution on linear axes. With either log axis
-    the area intuition is gone anyway, so raw counts are kept there.
+    On a linear value axis, per-bin probabilities are misleading: the
+    signed-log bins differ in linear width by orders of magnitude, so a wide
+    bin towers over a narrow one holding the same share of values. Density
+    makes bar *area* proportional to probability, the honest reading of a
+    distribution on a linear value axis. With the signed-log x-axis the bins
+    render at uniform width, so plain probabilities are kept there.
     """
-    return not log_x and not log_y
+    return not log_x
 
 
-def _density_heights(hist: tuple[int, ...]) -> list[float]:
-    """Per-bin density: count divided by the bin's linear width."""
-    return [c / w for c, w in zip(hist, _BIN_WIDTHS)]
+def _probabilities(hist: tuple[int, ...]) -> list[float]:
+    """Per-bin probability: count divided by the total count."""
+    n = sum(hist)
+    if n == 0:
+        return [0.0] * len(hist)
+    return [c / n for c in hist]
 
 
-def _density_y_range(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str
+def _probability_densities(hist: tuple[int, ...]) -> list[float]:
+    """Per-bin probability density: probability divided by the bin's width."""
+    n = sum(hist)
+    if n == 0:
+        return [0.0] * len(hist)
+    return [c / (n * w) for c, w in zip(hist, _BIN_WIDTHS)]
+
+
+def _trace_heights(hist: tuple[int, ...], density: bool) -> list[float]:
+    """Bar heights for one trace: probability densities or probabilities."""
+    return _probability_densities(hist) if density else _probabilities(hist)
+
+
+def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]:
+    """One trace's `(height, count)` bars that may anchor the y-scale.
+
+    Sorted tallest-first, with a single drastically dominant bar — more than
+    `_DOMINANCE_RATIO` times the runner-up — dropped no matter how many
+    points it holds: a value the data hits exactly (e.g. ReLU zeros piling
+    into the 2e-9-wide zero band) produces a bar that would otherwise
+    flatten the rest of the distribution.
+    """
+    heights = _trace_heights(hist, density)
+    bars = sorted(((h, c) for h, c in zip(heights, hist) if c > 0), reverse=True)
+    if len(bars) >= 2 and bars[0][0] > _DOMINANCE_RATIO * bars[1][0]:
+        return bars[1:]
+    return bars
+
+
+def _linear_y_range(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    density: bool,
+    clip_share: float = _BASE_CLIP_SHARE,
 ) -> list[float] | None:
-    """Y-axis range for density mode, capped at the 20th-tallest bar.
+    """Y-axis range on a linear y-axis, capped under a clip budget.
 
-    The bins near zero are extremely narrow (the zero band is 2e-9 wide), so
-    even a handful of near-zero values produce densities that dwarf the rest
-    of the distribution; autoranging to the global max would flatten
-    everything else. Instead the axis tops out at the smallest of the
-    `_DENSITY_TOP_BINS` tallest bars across the drawn traces (the tallest
-    populated-bar height that the scale must still accommodate), letting the
-    taller spikes clip. Returns `None` (Plotly autorange) when there's no
-    data.
+    Two clipping rules keep freak spikes from flattening the rest of the
+    distribution (with **Log y** checked the axis autoranges instead, so
+    everything is visible there):
+
+    - Per phase, a single drastically dominant bar never anchors the scale
+      (see `_scale_bars`).
+    - Among the rest, bars clip tallest-first, but only as long as the
+      clipped bars together hold less than `clip_share` of the pooled data
+      points — the cap lands on the tallest bar that must stay fully
+      visible.
+
+    The same range is applied to every phase's subplot row so the rows stay
+    comparable. Returns `None` (Plotly autorange) when there's no data.
     """
-    heights = sorted(
-        (
-            h
-            for phase in _phases_with_data(per_phase, kind)
-            for h in _density_heights(_kind_stats(per_phase[phase], kind).hist)
-            if h > 0
-        ),
-        reverse=True,
-    )
-    if not heights:
+    bars: list[tuple[float, int]] = []
+    total = 0
+    for phase in _phases_with_data(per_phase, kind):
+        hist = _kind_stats(per_phase[phase], kind).hist
+        total += sum(hist)
+        bars.extend(_scale_bars(hist, density))
+    if not bars:
         return None
-    cap = heights[min(_DENSITY_TOP_BINS - 1, len(heights) - 1)]
+    bars.sort(reverse=True)
+    allowed = clip_share * total
+    cap = bars[0][0]
+    clipped = 0
+    for height, count in bars:
+        if clipped + count > allowed:
+            cap = height
+            break
+        clipped += count
     return [0.0, cap * 1.05]
 
 
@@ -791,29 +901,191 @@ def _phases_with_data(
     return [p for p, snap in per_phase.items() if _kind_stats(snap, kind).n > 0]
 
 
+def _trimmed_bin_bounds(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    clip_share: float = _BASE_CLIP_SHARE,
+) -> tuple[int, int] | None:
+    """Smallest/largest bin indices after trimming the extreme-tail bins.
+
+    Pooled across the drawn traces, the outermost populated bins are dropped
+    greedily — lighter end first — while the dropped bins together hold less
+    than `clip_share` of the data points, so the x-range keeps the bins
+    holding the rest of the values and a lone outlier value no longer
+    stretches the whole value axis. Returns `None` when there's no data.
+    """
+    counts = [0] * N_BINS
+    for phase in _phases_with_data(per_phase, kind):
+        for i, count in enumerate(_kind_stats(per_phase[phase], kind).hist):
+            counts[i] += count
+    total = sum(counts)
+    if total == 0:
+        return None
+    lo = next(i for i, c in enumerate(counts) if c > 0)
+    hi = next(i for i in range(N_BINS - 1, -1, -1) if counts[i] > 0)
+    allowed = clip_share * total
+    trimmed = 0
+    while lo < hi:
+        side = lo if counts[lo] <= counts[hi] else hi
+        if trimmed + counts[side] > allowed:
+            break
+        trimmed += counts[side]
+        if side == lo:
+            lo += 1
+            while counts[lo] == 0:
+                lo += 1
+        else:
+            hi -= 1
+            while counts[hi] == 0:
+                hi -= 1
+    return lo, hi
+
+
 def _linear_x_range(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    clip_share: float = _BASE_CLIP_SHARE,
 ) -> list[float] | None:
-    """X-axis range (linear value space) covering the populated bins.
+    """X-axis range (linear value space) covering the trimmed bins.
 
     On a linear axis the bars span the full `[-1e6, 1e6]` edge range, almost
-    all of it empty. We zoom to the smallest/largest edges that actually hold
-    counts (plus a little padding) so the populated part of the distribution
-    stays legible. Returns `None` (Plotly autorange) when there's no data.
+    all of it empty. We zoom to the edges of the trimmed bin span
+    (`_trimmed_bin_bounds`, plus a little padding) so the bulk of the
+    distribution stays legible. Returns `None` (Plotly autorange) when
+    there's no data.
     """
-    lo_idx = N_BINS
-    hi_idx = -1
-    for layer_snap in per_phase.values():
-        for i, count in enumerate(_kind_stats(layer_snap, kind).hist):
-            if count > 0:
-                lo_idx = min(lo_idx, i)
-                hi_idx = max(hi_idx, i)
-    if hi_idx < 0:
+    bounds = _trimmed_bin_bounds(per_phase, kind, clip_share)
+    if bounds is None:
         return None
-    lo = _HIST_EDGES[lo_idx]
-    hi = _HIST_EDGES[hi_idx + 1]
+    lo = _HIST_EDGES[bounds[0]]
+    hi = _HIST_EDGES[bounds[1] + 1]
     pad = (hi - lo) * 0.05 or 1.0
     return [lo - pad, hi + pad]
+
+
+def _log_x_range(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    clip_share: float = _BASE_CLIP_SHARE,
+) -> list[float] | None:
+    """X-axis range (bin-index space) covering the trimmed bins.
+
+    The signed-log view draws bars at integer bin indices, so the range
+    brackets the trimmed span (`_trimmed_bin_bounds`) with half-bar margins
+    plus a little padding. Returns `None` (Plotly autorange — the full
+    211-bin span) when there's no data.
+    """
+    bounds = _trimmed_bin_bounds(per_phase, kind, clip_share)
+    if bounds is None:
+        return None
+    lo, hi = bounds
+    pad = (hi - lo + 1) * 0.05
+    return [lo - 0.5 - pad, hi + 0.5 + pad]
+
+
+def _fill_fraction(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    density: bool,
+    bounds: tuple[int, int],
+    y_top: float,
+) -> float:
+    """Share of the plot area the bars cover at the given axis ranges.
+
+    Bar areas are measured in the units the bars are drawn in (value space
+    for density mode, bin-index space for the signed-log view) with heights
+    clipped to the y-range top; the plot area is the x-span times the
+    y-range top, averaged over the drawn traces (every subplot row shares
+    the same ranges).
+    """
+    if y_top <= 0:
+        return 1.0
+    lo, hi = bounds
+    span = (_HIST_EDGES[hi + 1] - _HIST_EDGES[lo]) if density else (hi - lo + 1)
+    phases = _phases_with_data(per_phase, kind)
+    filled = 0.0
+    for phase in phases:
+        heights = _trace_heights(_kind_stats(per_phase[phase], kind).hist, density)
+        for i in range(lo, hi + 1):
+            width = _BIN_WIDTHS[i] if density else 1.0
+            filled += width * min(heights[i], y_top)
+    return filled / (span * y_top * len(phases))
+
+
+def _axis_ranges(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    *,
+    log_x: bool,
+    log_y: bool,
+) -> tuple[list[float] | None, list[float] | None]:
+    """The histogram figure's `(x, y)` axis ranges.
+
+    Both ranges come from the same clip budget: bins/bars holding up to a
+    share of the data points may be cut off (x: outermost tail bins,
+    `_trimmed_bin_bounds`; y: tallest bars, `_linear_y_range`).
+
+    A tall near-zero peak next to a long thin tail can leave the plot
+    nearly empty even after the base trims — the cap chases the peak's
+    narrow neighbours while the tail stretches the x-span. So while the
+    bars would cover less than `_MIN_FILL_FRACTION` of the plot area, the
+    clip share is raised in `_CLIP_SHARE_STEP` increments (clipping more of
+    the peak and trimming more of the tail), stopping once the plot is at
+    least that full or the share reaches `_MAX_CLIP_SHARE`.
+
+    With **Log y** the y-range is `None` (autorange) and the x-trim sticks
+    to the base share — the log scale keeps the bars visible, so the fill
+    heuristic doesn't apply. Both ranges are `None` when there's no data.
+    """
+    density = _use_density(log_x)
+
+    def x_range_at(share: float) -> list[float] | None:
+        return (
+            _log_x_range(per_phase, kind, share)
+            if log_x
+            else _linear_x_range(per_phase, kind, share)
+        )
+
+    if log_y:
+        return x_range_at(_BASE_CLIP_SHARE), None
+    share = _BASE_CLIP_SHARE
+    while True:
+        bounds = _trimmed_bin_bounds(per_phase, kind, share)
+        y_range = _linear_y_range(per_phase, kind, density, share)
+        if bounds is None or y_range is None:
+            return None, None
+        if (
+            share >= _MAX_CLIP_SHARE
+            or _fill_fraction(per_phase, kind, density, bounds, y_range[1])
+            >= _MIN_FILL_FRACTION
+        ):
+            return x_range_at(share), y_range
+        share = min(share + _CLIP_SHARE_STEP, _MAX_CLIP_SHARE)
+
+
+def _effective_log_x(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str, log_x: bool
+) -> bool:
+    """Whether the figure should use the signed-log value axis.
+
+    A checked **Log x** always wins. Otherwise the signed-log view kicks in
+    automatically when even the most aggressive linear trims
+    (`_MAX_CLIP_SHARE`) would leave the bars covering less than
+    `_MIN_FILL_FRACTION` of the plot area: a distribution spanning many
+    decades — gradients routinely do — has no readable linear-value
+    rendering at all, which is exactly what the signed-log axis is for.
+    The decision ignores **Log y** so toggling it never flips the x-mode
+    (a log count axis fixes vertical visibility, not a multi-decade
+    value range).
+    """
+    if log_x:
+        return True
+    bounds = _trimmed_bin_bounds(per_phase, kind, _MAX_CLIP_SHARE)
+    y_range = _linear_y_range(per_phase, kind, True, _MAX_CLIP_SHARE)
+    if bounds is None or y_range is None:
+        return False
+    fill = _fill_fraction(per_phase, kind, True, bounds, y_range[1])
+    return fill < _MIN_FILL_FRACTION
 
 
 def _make_histogram_figure(
@@ -824,83 +1096,112 @@ def _make_histogram_figure(
     log_x: bool = False,
     log_y: bool = False,
 ) -> go.Figure:
-    """Plotly bar chart of the signed-log histogram, one trace per phase.
+    """Plotly bar chart of the signed-log histogram, one subplot row per phase.
 
     `kind` selects which of the two histograms on each `LayerStatsSnapshot`
     to plot ("activation" or "gradient"). `per_phase` may be empty (initial
     render before any data has been collected) — the figure is still
     returned, just with no traces.
 
-    `log_x` / `log_y` toggle the value (x) and count (y) axes between a
+    Each phase draws in its own stacked subplot row (titled with the phase
+    and epoch, tinted with the trace color) rather than overlaying bars on
+    shared axes, so one phase never obscures another. The rows share the
+    x-axis and, on a linear y-axis, the same capped y-range
+    (see `_axis_ranges`), keeping the per-phase distributions directly
+    comparable.
+
+    `log_x` / `log_y` toggle the value (x) and probability (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
-    Watching page). With both off, bars show density instead of counts
-    (see `_use_density`) and the y-axis is capped (see `_density_y_range`).
+    Watching page). With `log_x` off, bars show probability density instead
+    of probabilities (see `_use_density`) — unless the distribution has no
+    readable linear rendering, in which case the figure falls back to the
+    signed-log view on its own (see `_effective_log_x`) and says so in the
+    x-axis title.
 
     This builds the *whole* figure. Routine data refreshes don't call it —
     they restyle the existing figure in place (see `_HistPlot`) so client-side
-    state like legend toggles survives; the figure is only rebuilt when the
-    set of phases or the axis scale changes.
+    state like zoom survives; the figure is only rebuilt when the set of
+    phases, the axis scale, or the automatic log-x fallback changes.
     """
+    auto_log_x = not log_x and _effective_log_x(per_phase, kind, log_x)
+    log_x = log_x or auto_log_x
     x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
-    density = _use_density(log_x, log_y)
-    if log_x:
-        hover = "bin %{x}<br>count %{y}<extra></extra>"
-    elif density:
+    density = _use_density(log_x)
+    if density:
         hover = (
-            "value %{x:.2e}<br>density %{y:.3g}"
+            "value %{x:.2e}<br>probability density %{y:.3g}"
             "<br>count %{customdata}<extra></extra>"
         )
     else:
-        hover = "value %{x:.2e}<br>count %{y}<extra></extra>"
-    fig = go.Figure()
+        hover = (
+            "bin %{x}<br>probability %{y:.3g}"
+            "<br>count %{customdata}<extra></extra>"
+        )
     phases = _phases_with_data(per_phase, kind)
-    for i, (phase, layer_snap) in enumerate(per_phase.items()):
-        stats = _kind_stats(layer_snap, kind)
-        if stats.n == 0:
-            continue
+    names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+    fig = make_subplots(
+        rows=max(1, len(phases)),
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        subplot_titles=names or None,
+    )
+    for i, phase in enumerate(phases):
+        stats = _kind_stats(per_phase[phase], kind)
         fig.add_trace(
             go.Bar(
                 x=x_values,
-                y=_density_heights(stats.hist) if density else list(stats.hist),
-                customdata=list(stats.hist) if density else None,
+                y=_trace_heights(stats.hist, density),
+                customdata=list(stats.hist),
                 width=None if log_x else _BIN_WIDTHS,
-                name=f"{phase} (ep {layer_snap.epoch})",
+                name=names[i],
                 marker_color=_phase_color(phase, i),
-                opacity=0.55 if len(per_phase) > 1 else 0.85,
+                opacity=0.85,
                 hovertemplate=hover,
-            )
+            ),
+            row=i + 1,
+            col=1,
         )
-    has_data = bool(phases)
+    # Subplot titles double as the legend: phase name + epoch in the trace
+    # color, sitting right above the row they describe.
+    for i, annotation in enumerate(fig.layout.annotations):
+        annotation.update(font=dict(size=11, color=_phase_color(phases[i], i)))
+    # `shared_xaxes` only hides the upper rows' tick labels; matching the
+    # x-axes proper keeps every row in lock-step when zooming/panning and
+    # lets a single `xaxis.range` relayout retarget all rows at once.
+    for row in range(2, len(phases) + 1):
+        fig.update_xaxes(matches="x", row=row, col=1)
     fig.update_layout(
         title=dict(text=title, x=0.0, font=dict(size=12)),
-        barmode="overlay",
         bargap=0,
         margin=dict(l=50, r=20, t=40, b=40),
-        height=_PLOT_HEIGHT,
+        height=_PLOT_HEIGHT * max(1, len(phases)),
         plot_bgcolor="#f8fafc",
         paper_bgcolor="white",
-        showlegend=has_data,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(size=10),
-        ),
+        showlegend=False,
     )
+    x_range, y_range = _axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
     if log_x:
         tick_vals, tick_text = _x_tick_layout()
         fig.update_xaxes(
+            range=x_range,
             tickvals=tick_vals,
             ticktext=tick_text,
             tickfont=dict(size=9),
             showgrid=False,
             zeroline=False,
         )
+        if auto_log_x:
+            # Make the silent fallback visible: the Log x checkbox is off,
+            # yet this figure renders on the signed-log axis.
+            fig.update_xaxes(
+                title=dict(text="signed-log scale (auto)", font=dict(size=9)),
+                row=max(1, len(phases)),
+                col=1,
+            )
     else:
         fig.update_xaxes(
-            range=_linear_x_range(per_phase, kind),
+            range=x_range,
             tickfont=dict(size=9),
             showgrid=False,
             zeroline=True,
@@ -908,11 +1209,17 @@ def _make_histogram_figure(
         )
     fig.update_yaxes(
         type="log" if log_y else "linear",
-        range=_density_y_range(per_phase, kind) if density else None,
+        # The cap is a linear-space range; on a log y-axis `_axis_ranges`
+        # returns `None` (Plotly autorange, which shows 100% of the data
+        # anyway) since Plotly would misread the range as log10 units.
+        range=y_range,
         showgrid=True,
         gridcolor="#e2e8f0",
         tickfont=dict(size=9),
-        title=dict(text="density" if density else "count", font=dict(size=10)),
+        title=dict(
+            text="probability density" if density else "probability",
+            font=dict(size=10),
+        ),
     )
     return fig
 
@@ -920,8 +1227,8 @@ def _make_histogram_figure(
 def _build_watch_page(session: Session, layer_names: list[str]) -> None:
     """The deep-dive page for watched layers — plotly histograms per layer.
 
-    Each card renders one bar chart per tensor kind (activations and
-    activation gradients) with train/val overlaid. A `ui.timer` polls
+    Each card renders one figure per tensor kind (activations and activation
+    gradients) with a stacked subplot row per phase. A `ui.timer` polls
     `session.watch_snapshot()` and refreshes the figures in place.
 
     Layers can also be unwatched directly from the card header here, which
@@ -936,9 +1243,10 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
     layer_panels: dict[str, _WatchLayerPanel] = {}
     count_label_holder: dict[str, ui.label] = {}
     body_container: ui.column
-    # Whether the value (x) and count (y) axes use a log-based scale. Both
-    # default off — linear axes showing density (see `_use_density`); the
-    # header checkboxes flip them and re-render every plot immediately.
+    # Whether the value (x) and probability (y) axes use a log-based scale.
+    # Both default off — linear axes showing probability density (see
+    # `_use_density`); the header checkboxes flip them and re-render every
+    # plot immediately.
     axis_log = {"x": False, "y": False}
 
     def set_axis_log(axis: str, value: bool) -> None:
@@ -961,14 +1269,16 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
                 value=axis_log["x"],
                 on_change=lambda e: set_axis_log("x", bool(e.value)),
             ).props("dense").classes("text-sm ml-4").tooltip(
-                "Log-based (signed-log) scale on the value axis"
+                "Log-based (signed-log) scale on the value axis. Unchecked, "
+                "plots whose distribution spans too many decades for a "
+                "linear axis still fall back to it automatically."
             )
             ui.checkbox(
                 "Log y",
                 value=axis_log["y"],
                 on_change=lambda e: set_axis_log("y", bool(e.value)),
             ).props("dense").classes("text-sm").tooltip(
-                "Log scale on the count axis"
+                "Log scale on the probability axis"
             )
             ui.button(
                 icon="refresh",
@@ -1046,13 +1356,29 @@ def _plotly_restyle(
     )
 
 
-class _HistPlot:
-    """One Plotly histogram that refreshes its data in place.
+# Plotly config shared by all watch histograms. "Autoscale" would expand the
+# axes to fit every bar — including the freak spikes and outlier tails the
+# capped ranges deliberately clip — landing on a different scale than the
+# initial render, so the button is removed; "Reset axes" and double-click
+# restore the ranges the figure was built with instead.
+_PLOTLY_CONFIG: dict[str, object] = {
+    "modeBarButtonsToRemove": ["autoScale2d"],
+    "doubleClick": "reset",
+}
 
-    The figure is built once and rebuilt only when the set of phases or the
-    axis scale changes. Routine per-tick updates go through `Plotly.restyle`,
-    which leaves client-side state — legend toggles, zoom — untouched, so a
-    series the user clicked off the legend stays hidden across refreshes.
+
+def _figure_payload(fig: go.Figure) -> dict[str, object]:
+    """The data/layout/config dict NiceGUI hands to `Plotly.react`."""
+    return {**fig.to_plotly_json(), "config": _PLOTLY_CONFIG}
+
+
+class _HistPlot:
+    """One Plotly histogram figure that refreshes its data in place.
+
+    The figure (one subplot row per phase) is built once and rebuilt only
+    when the set of phases, the axis scale, or the automatic log-x fallback
+    changes. Routine per-tick updates go through `Plotly.update`, which
+    leaves client-side state — zoom/pan — untouched.
     """
 
     def __init__(self, kind: str, title: str, axis_log: dict[str, bool]) -> None:
@@ -1063,12 +1389,16 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
-        # Last y-range applied in density mode, so refreshes only push a
-        # relayout when the cap actually moved (a range write resets zoom).
+        self._log_x = self._axis[0]  # effective x-mode (manual or fallback)
+        # Last axis ranges applied, so refreshes only push a relayout when a
+        # cap actually moved (a range write resets zoom on that axis).
         self._y_range: list[float] | None = None
+        self._x_range: list[float] | None = None
         self.element = ui.plotly(
-            _make_histogram_figure(
-                {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
+            _figure_payload(
+                _make_histogram_figure(
+                    {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
+                )
             )
         ).classes("w-full")
 
@@ -1078,38 +1408,63 @@ class _HistPlot:
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
-        if phases != self._phases or axis != self._axis:
-            # A phase appeared/disappeared or an axis-scale checkbox flipped —
-            # rebuild the whole figure.
-            self.element.figure = _make_histogram_figure(
-                per_phase, self._kind, self._title, log_x=axis[0], log_y=axis[1]
+        # The effective x-mode can flip without any checkbox changing (the
+        # accumulating data crosses the fallback threshold), and with it the
+        # whole figure structure — bar positions, widths, hover — so it is
+        # part of the rebuild signature.
+        log_x = _effective_log_x(per_phase, self._kind, axis[0])
+        density = _use_density(log_x)
+        if phases != self._phases or axis != self._axis or log_x != self._log_x:
+            # A phase appeared/disappeared, an axis-scale checkbox flipped,
+            # or the fallback engaged — rebuild the whole figure.
+            self.element.update_figure(
+                _figure_payload(
+                    _make_histogram_figure(
+                        per_phase,
+                        self._kind,
+                        self._title,
+                        log_x=axis[0],
+                        log_y=axis[1],
+                    )
+                )
             )
-            self.element.update()
             self._phases = phases
             self._axis = axis
-            self._y_range = (
-                _density_y_range(per_phase, self._kind)
-                if _use_density(*axis)
-                else None
+            self._log_x = log_x
+            self._x_range, self._y_range = _axis_ranges(
+                per_phase, self._kind, log_x=log_x, log_y=axis[1]
             )
         elif phases:
-            # Same traces and axes — only counts (and the epoch label) moved.
-            # Restyle in place so legend toggles and zoom survive.
+            # Same rows and axes — only counts (and the epoch label) moved.
+            # Restyle in place so zoom/pan survives.
             hists = [_kind_stats(per_phase[p], self._kind).hist for p in phases]
             names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
-            update: dict[str, object] = {"name": names}
-            layout: dict[str, object] | None = None
-            if _use_density(*axis):
-                update["y"] = [_density_heights(h) for h in hists]
-                update["customdata"] = [list(h) for h in hists]
-                # The cap follows the data; re-apply it only when it moved so
-                # an idle refresh doesn't keep snapping the user's zoom back.
-                y_range = _density_y_range(per_phase, self._kind)
-                if y_range != self._y_range:
-                    self._y_range = y_range
-                    layout = {"yaxis.range": y_range}
-            else:
-                update["y"] = [list(h) for h in hists]
+            update: dict[str, object] = {
+                "name": names,
+                "y": [_trace_heights(h, density) for h in hists],
+                "customdata": [list(h) for h in hists],
+            }
+            # The subplot titles carry the epoch, so refresh them with the
+            # data (annotation order matches row order).
+            layout: dict[str, object] = {
+                f"annotations[{i}].text": name for i, name in enumerate(names)
+            }
+            # The caps follow the data; re-apply them only when they moved so
+            # an idle refresh doesn't keep snapping the user's zoom back.
+            x_range, y_range = _axis_ranges(
+                per_phase, self._kind, log_x=log_x, log_y=axis[1]
+            )
+            if y_range is not None and y_range != self._y_range:
+                # Every row gets the same range (row 1 is "yaxis", row n is
+                # "yaxis{n}") so the subplots stay comparable.
+                self._y_range = y_range
+                for i in range(len(phases)):
+                    axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
+                    layout[f"{axis_name}.range"] = y_range
+            if x_range != self._x_range:
+                # The rows' x-axes are matched, so one key updates every row.
+                self._x_range = x_range
+                layout["xaxis.range"] = x_range
             _plotly_restyle(
                 self.element, update, list(range(len(phases))), layout
             )
@@ -1140,36 +1495,24 @@ class _WatchLayerPanel:
                 ui.label("Activations").classes(
                     "font-mono text-sm text-slate-600"
                 )
-                self._act_stats = ui.label("no data yet").classes(
-                    "font-mono text-xs text-slate-500"
-                )
+                self._act_stats = ui.html(
+                    _stats_table_html({}, "activation")
+                ).classes("font-mono text-sm")
                 self._act = _HistPlot("activation", "activations", axis_log)
                 ui.label("Gradients").classes(
                     "font-mono text-sm text-slate-600"
                 )
-                self._grad_stats = ui.label("no data yet").classes(
-                    "font-mono text-xs text-slate-500"
-                )
+                self._grad_stats = ui.html(
+                    _stats_table_html({}, "gradient")
+                ).classes("font-mono text-sm")
                 self._grad = _HistPlot("gradient", "gradients", axis_log)
 
     def update(self, snap: WatchSnapshot) -> None:
         per_phase = snap.latest_per_phase(self.name)
-        self._act_stats.text = _combined_summary(per_phase, "activation")
-        self._grad_stats.text = _combined_summary(per_phase, "gradient")
+        self._act_stats.set_content(_stats_table_html(per_phase, "activation"))
+        self._grad_stats.set_content(_stats_table_html(per_phase, "gradient"))
         self._act.update(per_phase)
         self._grad.update(per_phase)
-
-
-def _combined_summary(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str
-) -> str:
-    if not per_phase:
-        return "no data yet"
-    parts: list[str] = []
-    for phase, layer_snap in per_phase.items():
-        stats = _kind_stats(layer_snap, kind)
-        parts.append(f"[{phase} ep{layer_snap.epoch}] {_stats_summary(stats)}")
-    return "    ".join(parts)
 
 
 _ROLE_LABELS: dict[str, str] = {"x": "X", "y": "Y", "tile": "Tile", "index": "Index"}
