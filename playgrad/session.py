@@ -30,7 +30,7 @@ from __future__ import annotations
 import inspect
 import threading
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -43,6 +43,12 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
+from playgrad import experiments
+from playgrad.experiments import (
+    EXPERIMENT_KINDS,
+    ExperimentRequest,
+    ExperimentResult,
+)
 from playgrad.fx_names import friendly_names
 from playgrad.probe import (
     PROBE_MODES,
@@ -153,6 +159,14 @@ class Session:
         self._probe_count = 0
         self._probe_result: ProbeResult | None = None
         self._probe_error: str | None = None
+        # Experiment state (see playgrad.experiments): one armed request at a
+        # time, consumed by the pause loop; a newer request supersedes a
+        # running one via the seq counter, which `_publish_experiment` checks
+        # before every write.
+        self._experiment_request: ExperimentRequest | None = None
+        self._experiment_seq = 0
+        self._experiment_result: ExperimentResult | None = None
+        self._experiment_cancel = False
 
     @property
     def schedule(self) -> Schedule:
@@ -466,6 +480,68 @@ class Session:
         with self._cv:
             return self._cv.wait_for(
                 lambda: self._probe_count > after_count or self._closed,
+                timeout=timeout,
+            )
+
+    @property
+    def experiment_result(self) -> ExperimentResult | None:
+        """The latest experiment progress/outcome (lock-free read, like
+        `snapshot`): a frozen dataclass of CPU tensors, or `None` before the
+        first run."""
+        return self._experiment_result
+
+    @property
+    def experiment_pending(self) -> bool:
+        """Whether a request is armed but not yet picked up by a pause."""
+        with self._cv:
+            return self._experiment_request is not None
+
+    def request_experiment(
+        self, *, kind: str, layer: str, params: dict[str, object]
+    ) -> int:
+        """Arm an experiment for the paused training thread to run.
+
+        Like probe requests, experiments execute only on the training thread
+        — immediately when paused, otherwise at the next pause. A new request
+        supersedes the previous one: a still-running experiment notices the
+        bumped seq via its abort check and stops; its late results are
+        dropped by `_publish_experiment`. Returns the request's seq.
+        """
+        if kind not in EXPERIMENT_KINDS:
+            raise ValueError(
+                f"unknown experiment kind {kind!r}; "
+                f"expected one of {list(EXPERIMENT_KINDS)}"
+            )
+        with self._cv:
+            self._experiment_seq += 1
+            self._experiment_cancel = False
+            self._experiment_request = ExperimentRequest(
+                kind=kind, layer=layer, params=dict(params), seq=self._experiment_seq
+            )
+            self._cv.notify_all()
+            return self._experiment_seq
+
+    def cancel_experiment(self) -> None:
+        """Drop an armed request and abort a running experiment."""
+        with self._cv:
+            self._experiment_request = None
+            self._experiment_cancel = True
+            self._cv.notify_all()
+
+    def wait_for_experiment(self, *, timeout: float | None = None) -> bool:
+        """Block until the latest request publishes its final result.
+
+        The experiment counterpart of `wait_until_paused` / `wait_for_probe`,
+        used by tests to synchronize without polling.
+        """
+        with self._cv:
+            return self._cv.wait_for(
+                lambda: (
+                    self._experiment_result is not None
+                    and self._experiment_result.done
+                    and self._experiment_result.seq == self._experiment_seq
+                )
+                or self._closed,
                 timeout=timeout,
             )
 
@@ -956,11 +1032,11 @@ class Session:
             seen = self._resume_token
             self._pause_count += 1
             self._cv.notify_all()
-        # Pause-time job loop: probe requests (pin / mode changes from the
-        # UI) also wake the paused training thread, which runs the probe
-        # forward *here* — the model is only ever touched from the training
-        # thread — and re-enters the wait. The forward runs outside the lock
-        # so UI reads (mode, pause_count, ...) stay responsive meanwhile.
+        # Pause-time job loop: probe and experiment requests from the UI also
+        # wake the paused training thread, which runs the work *here* — the
+        # model is only ever touched from the training thread — and re-enters
+        # the wait. Jobs run outside the lock so UI reads (mode, pause_count,
+        # ...) stay responsive meanwhile.
         while True:
             with self._cv:
                 self._cv.wait_for(
@@ -968,20 +1044,29 @@ class Session:
                     or self._closed
                     or self._pending_jump is not None
                     or self._probe_request
+                    or self._experiment_request is not None
                 )
-                run_probe = self._probe_request
-                self._probe_request = False
                 done = (
                     self._resume_token != seen
                     or self._closed
                     or self._pending_jump is not None
                 )
+                run_probe = False
+                experiment: ExperimentRequest | None = None
+                if not done:
+                    run_probe = self._probe_request
+                    self._probe_request = False
+                    experiment = self._experiment_request
+                    self._experiment_request = None
             if done:
-                # A coalesced probe request is dropped: resuming into a
-                # capture re-runs the probe anyway (_maybe_run_probe_at_capture).
+                # A coalesced probe request is dropped (resuming into a
+                # capture re-runs the probe anyway); an armed experiment
+                # stays armed for the next pause.
                 return
             if run_probe:
                 self._run_probe_guarded()
+            if experiment is not None:
+                self._run_experiment_guarded(experiment)
 
     def _probe_active_locked(self) -> bool:
         """Whether probe runs should happen at all (caller holds `_cv`)."""
@@ -1065,21 +1150,23 @@ class Session:
             return None
         return snap.activations.get(input_name)
 
-    def _probe_forwards(
-        self, inputs: list[Tensor], *, mode: str
-    ) -> list[dict[str, Tensor]]:
-        """Run isolated no-grad forwards, capturing every layer's output.
+    @contextmanager
+    def _isolated_model(self, mode: str) -> Iterator[torch.device]:
+        """Run model inference without mutating training state.
 
-        Isolation contract — probes never mutate training state:
+        The shared isolation contract of probes and experiments:
 
         - Per-module `training` flags are saved and restored ("eval"/"train"
-          probes flip them; "unchanged" runs with whatever the loop set).
+          flip the whole model; "unchanged" runs with whatever the loop set).
         - Every buffer is restored afterwards (a train-mode BatchNorm forward
           updates running stats in place).
         - The RNG is forked, so e.g. train-mode dropout doesn't perturb the
           global stream that time-travel replays depend on.
-        - `torch.no_grad()` keeps parameters' `.grad` and autograd state
-          untouched.
+
+        Callers add their own gradient policy: probes wrap the body in
+        `torch.no_grad()`; experiments take input gradients via
+        `torch.autograd.grad`, which leaves parameter `.grad` untouched.
+        Yields the model's device.
         """
         device = self._model_device()
         saved_flags = [(m, m.training) for m in self.model.modules()]
@@ -1089,14 +1176,67 @@ class Session:
                 self.model.eval()
             elif mode == "train":
                 self.model.train()
-            with self._fork_rng(device), torch.no_grad():
-                return [self._capture_forward(inp.to(device)) for inp in inputs]
+            with self._fork_rng(device):
+                yield device
         finally:
             for module, flag in saved_flags:
                 module.training = flag
             with torch.no_grad():
                 for buffer, saved in saved_buffers:
                     buffer.copy_(saved)
+
+    def _probe_forwards(
+        self, inputs: list[Tensor], *, mode: str
+    ) -> list[dict[str, Tensor]]:
+        """Run isolated no-grad forwards, capturing every layer's output."""
+        with self._isolated_model(mode) as device, torch.no_grad():
+            return [self._capture_forward(inp.to(device)) for inp in inputs]
+
+    def _run_experiment_guarded(self, request: ExperimentRequest) -> None:
+        """Drive one experiment to completion on the training thread.
+
+        Streams every yielded progress result through `_publish_experiment`.
+        The abort predicate stops the run on `cancel_experiment()`, on a
+        newer request (seq bumped), and on anything that ends the pause —
+        resume commands, a pending time-travel jump, `close()` — so the
+        pause loop regains control promptly. A failing experiment publishes
+        an error result instead of killing the training thread.
+        """
+        with self._cv:
+            resume_seen = self._resume_token
+
+        def should_abort() -> bool:
+            with self._cv:
+                return (
+                    self._experiment_cancel
+                    or self._experiment_seq != request.seq
+                    or self._closed
+                    or self._pending_jump is not None
+                    or self._resume_token != resume_seen
+                )
+
+        try:
+            for partial in experiments.run(self, request, should_abort):
+                self._publish_experiment(partial)
+        except Exception as e:  # noqa: BLE001 — surfaced via the result
+            self._publish_experiment(
+                ExperimentResult(
+                    seq=request.seq,
+                    kind=request.kind,
+                    layer=request.layer,
+                    step=0,
+                    total_steps=0,
+                    done=True,
+                    error=f"{type(e).__name__}: {e}",
+                )
+            )
+
+    def _publish_experiment(self, result: ExperimentResult) -> None:
+        with self._cv:
+            if result.seq != self._experiment_seq:
+                return  # superseded by a newer request
+            self._experiment_result = result
+            self._cv.notify_all()
 
     def _capture_forward(self, inp: Tensor) -> dict[str, Tensor]:
         """One forward pass capturing every layer output into a fresh dict.

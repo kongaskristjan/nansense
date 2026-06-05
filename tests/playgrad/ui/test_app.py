@@ -1048,6 +1048,21 @@ def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
     assert rendered["conv"][1] == grad_expected
 
 
+def test_experiment_params_cover_every_kind() -> None:
+    from playgrad.experiments import EXPERIMENT_KINDS
+    from playgrad.ui.app import _EXPERIMENT_PARAMS
+
+    assert set(_EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
+    for kind, specs in _EXPERIMENT_PARAMS.items():
+        assert specs, kind  # every experiment exposes at least one knob
+        for spec in specs:
+            assert spec.kind in ("int", "float", "bool", "select"), spec.key
+            if spec.kind == "select":
+                assert spec.options and spec.default in spec.options, spec.key
+            if spec.kind in ("int", "float"):
+                assert isinstance(spec.default, (int, float)), spec.key
+
+
 def test_display_batch_size_prefers_probe() -> None:
     snap = _frame_snapshot()  # batch size 2
     probe = ProbeResult(

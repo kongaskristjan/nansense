@@ -48,6 +48,7 @@ import torch
 from torch import Tensor
 
 from playgrad.patches import PATCH_TYPES, PatchType
+from playgrad.experiments import EXPERIMENT_KINDS, ExperimentResult
 from playgrad.probe import ProbeResult
 from playgrad.restore import TimeTravelError
 from playgrad.schedule import BatchPosition, Schedule
@@ -55,6 +56,7 @@ from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
 from playgrad.ui.input_panel import InputPanel
 from playgrad.ui.render import (
+    INPUT_IMAGE_SIZE,
     PatchGridRender,
     StripRender,
     default_weight_dims,
@@ -327,6 +329,12 @@ def serve(
     @ui.page("/weights", favicon=str(favicon_path))
     def weights_page(layer: str = "") -> None:
         _build_weights_page(session, layer)
+
+    @ui.page("/experiment", favicon=str(favicon_path))
+    def experiment_page(layer: str = "") -> None:
+        _build_experiment_page(
+            session, layer, input_mean=input_mean, input_std=input_std
+        )
 
     ui.run_with(fastapi_app, storage_secret="playgrad")
 
@@ -2200,6 +2208,325 @@ class _WeightPanel:
         self._opt_scalars.set_visibility(False)
 
 
+@dataclass(frozen=True)
+class _ExperimentParam:
+    """One configurable knob of an experiment, rendered as a form widget."""
+
+    key: str
+    label: str
+    kind: str  # "int" | "float" | "bool" | "select"
+    default: object
+    options: dict[str, str] | None = None
+    minimum: float | None = None
+    tooltip: str = ""
+
+
+_CHANNEL_PARAM = _ExperimentParam(
+    "channel",
+    "Channel (-1 = whole layer)",
+    "int",
+    0,
+    minimum=-1,
+    tooltip="Which channel / feature of this layer to target",
+)
+_SAMPLE_PARAM = _ExperimentParam(
+    "sample",
+    "Sample",
+    "int",
+    0,
+    minimum=0,
+    tooltip="Batch sample index of the input to work on",
+)
+_TARGET_PARAM = _ExperimentParam(
+    "target",
+    "Target class (-1 = argmax)",
+    "int",
+    -1,
+    minimum=-1,
+    tooltip="Class index the attribution explains; -1 uses the model's prediction",
+)
+
+_EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
+    "deep_dream": [
+        _CHANNEL_PARAM,
+        _ExperimentParam("steps", "Steps", "int", 100, minimum=1),
+        _ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0),
+        _ExperimentParam(
+            "diffusion",
+            "Diffusion",
+            "float",
+            0.05,
+            minimum=0,
+            tooltip="Per-step blend with a 3×3 blur; damps high-frequency noise",
+        ),
+        _ExperimentParam(
+            "jitter",
+            "Jitter (px)",
+            "int",
+            2,
+            minimum=0,
+            tooltip=(
+                "Random shift each step, undone after the update; "
+                "reduces pixel-grid artifacts"
+            ),
+        ),
+        _ExperimentParam(
+            "zoom",
+            "Zoom per step",
+            "float",
+            0.0,
+            minimum=0,
+            tooltip=(
+                "Fractional center zoom-in per step (0 disables; on small "
+                "inputs it only takes effect above ~1/size)"
+            ),
+        ),
+        _SAMPLE_PARAM,
+        _ExperimentParam(
+            "start",
+            "Start from",
+            "select",
+            "sample",
+            options={"sample": "Current sample", "noise": "Noise"},
+        ),
+        _ExperimentParam(
+            "clamp",
+            "Clamp to displayable range",
+            "bool",
+            True,
+            tooltip=(
+                "Keep pixels inside the [0, 1] display range mapped through "
+                "the input mean/std"
+            ),
+        ),
+    ],
+    "gradcam": [_TARGET_PARAM, _SAMPLE_PARAM],
+    "neuron_gradient": [_CHANNEL_PARAM, _SAMPLE_PARAM],
+    "neuron_ig": [
+        _CHANNEL_PARAM,
+        _ExperimentParam("steps", "Integration steps", "int", 32, minimum=2),
+        _SAMPLE_PARAM,
+    ],
+    "occlusion": [
+        _TARGET_PARAM,
+        _ExperimentParam(
+            "window",
+            "Window (px)",
+            "int",
+            4,
+            minimum=1,
+            tooltip="Side length of the occluding patch",
+        ),
+        _ExperimentParam("stride", "Stride (px)", "int", 2, minimum=1),
+        _SAMPLE_PARAM,
+    ],
+}
+
+
+def _experiment_status(result: ExperimentResult) -> str:
+    state = "running"
+    if result.done:
+        state = "stopped early" if result.step < result.total_steps else "done"
+    if result.error is not None:
+        state = "failed"
+    text = f"{EXPERIMENT_KINDS.get(result.kind, result.kind)} — {state}"
+    if result.total_steps > 1:
+        text += f" · step {result.step}/{result.total_steps}"
+    if result.objective is not None:
+        text += f" · objective {result.objective:.4g}"
+    return text
+
+
+def _experiment_img_html(image: bytes | None) -> str:
+    """Input-space experiment image, CSS-upscaled like the input pane."""
+    if image is None:
+        return '<div class="text-xs text-slate-400 italic">not renderable</div>'
+    return (
+        f'<img src="{_b64_img_src(image)}" '
+        f'style="width:{INPUT_IMAGE_SIZE}px; image-rendering:pixelated; '
+        'display:block; max-width:none;" />'
+    )
+
+
+def _build_experiment_page(
+    session: Session,
+    layer: str,
+    *,
+    input_mean: tuple[float, ...] | None,
+    input_std: tuple[float, ...] | None,
+) -> None:
+    """Per-layer experiments: deep dream and selected Captum attributions.
+
+    The top bar carries the experiment-kind dropdown (deep dream by
+    default), Run / Cancel, and the shared stepping controls — experiments
+    execute on the paused training thread, so the user can pause right from
+    this page. The left pane holds the selected kind's parameter form
+    (rebuilt on every dropdown change); the right pane streams status and
+    results from `session.experiment_result`. Deep dream results render as
+    a denormalized input-space image (updating live while the run
+    progresses); attributions render with the shared diverging-colormap
+    strip machinery, next to the input sample they explain.
+    """
+    title = f"Experiment · {layer}" if layer else "Experiment"
+    ui.page_title(f"PlayGrad — {title}")
+    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
+    ui.query("body").classes("overflow-hidden")
+    ui.query("html").classes("overflow-hidden")
+    ui.add_head_html(_STRIP_MARKER_CSS)
+
+    step_until_custom = _build_step_until_custom_dialog(session)
+    widgets: dict[str, ui.element] = {}
+    kind_holder = {"kind": "deep_dream"}
+    last_result: list[ExperimentResult | None] = [None]
+
+    def collect_params() -> dict[str, object]:
+        params: dict[str, object] = {"mean": input_mean, "std": input_std}
+        for spec in _EXPERIMENT_PARAMS[kind_holder["kind"]]:
+            value: object = getattr(widgets.get(spec.key), "value", None)
+            if spec.kind in ("int", "float"):
+                if not isinstance(value, (int, float)):
+                    value = spec.default
+                assert isinstance(value, (int, float))  # numeric specs only
+                params[spec.key] = int(value) if spec.kind == "int" else float(value)
+            elif spec.kind == "bool":
+                params[spec.key] = bool(value)
+            else:
+                params[spec.key] = str(value if value is not None else spec.default)
+        return params
+
+    def run() -> None:
+        session.request_experiment(
+            kind=kind_holder["kind"], layer=layer, params=collect_params()
+        )
+
+    def on_kind_change(e: object) -> None:
+        value = getattr(e, "value", None)
+        if value is not None:
+            kind_holder["kind"] = str(value)
+            rebuild_params()
+
+    with ui.column().classes("w-full h-screen no-wrap gap-0"):
+        with _top_bar_row():
+            ui.button(
+                icon="arrow_back",
+                on_click=lambda: ui.navigate.to("/"),
+                color="slate-500",
+            ).props("dense size=md").tooltip("Back to the main page")
+            ui.label(title).classes(
+                "font-mono text-base font-bold ml-2 truncate max-w-64"
+            )
+            position_label = _add_step_controls(session, step_until_custom)
+            ui.select(
+                dict(EXPERIMENT_KINDS),
+                value=kind_holder["kind"],
+                on_change=on_kind_change,
+            ).props("dense outlined").classes("w-72 ml-3")
+            ui.button("Run", icon="science", on_click=run, color="yellow-8").props(
+                "dense size=md"
+            ).tooltip("Run the experiment (training must be paused)")
+            ui.button(
+                "Cancel", on_click=session.cancel_experiment, color="slate-500"
+            ).props("dense size=md").tooltip("Abort the running experiment")
+
+        with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
+            params_pane = ui.column().classes(
+                "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
+                "border-r-2 border-slate-300 bg-slate-50"
+            )
+            with ui.column().classes(
+                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
+            ):
+                if layer not in session.layer_names:
+                    _weights_placeholder(f"Unknown layer {layer!r}.")
+                    return
+                status_label = ui.label(
+                    "Pick an experiment and press Run (training must be paused)."
+                ).classes("text-sm text-slate-600")
+                error_label = ui.label("").classes("text-sm text-red-600")
+                results_row = ui.row().classes("gap-6 flex-wrap items-start")
+
+    def rebuild_params() -> None:
+        widgets.clear()
+        params_pane.clear()
+        with params_pane:
+            ui.label("Parameters").classes("font-mono text-sm")
+            for spec in _EXPERIMENT_PARAMS[kind_holder["kind"]]:
+                if spec.kind == "bool":
+                    widget: ui.element = ui.switch(
+                        spec.label, value=bool(spec.default)
+                    ).props("dense")
+                elif spec.kind == "select":
+                    widget = ui.select(
+                        spec.options or {}, label=spec.label, value=spec.default
+                    ).props("dense outlined").classes("w-full")
+                else:
+                    default_number = (
+                        spec.default if isinstance(spec.default, (int, float)) else 0
+                    )
+                    widget = ui.number(
+                        label=spec.label,
+                        value=default_number,
+                        min=spec.minimum,
+                        step=1 if spec.kind == "int" else None,
+                        format="%d" if spec.kind == "int" else None,
+                    ).props("dense outlined").classes("w-full")
+                if spec.tooltip:
+                    widget.tooltip(spec.tooltip)
+                widgets[spec.key] = widget
+
+    def render_result(result: ExperimentResult) -> None:
+        results_row.clear()
+        with results_row:
+            if result.image is not None:
+                with ui.column().classes("gap-1"):
+                    ui.label("Result").classes("font-mono text-xs text-slate-600")
+                    ui.html(
+                        _experiment_img_html(
+                            render_image(
+                                result.image, 0, mean=input_mean, std=input_std
+                            )
+                        )
+                    )
+            if result.attribution is not None:
+                with ui.column().classes("gap-1 min-w-0"):
+                    ui.label("Attribution").classes(
+                        "font-mono text-xs text-slate-600"
+                    )
+                    with ui.element("div").classes("max-w-full overflow-x-auto"):
+                        ui.html(_strip_html(render_strip(result.attribution, 0)))
+            if result.reference is not None:
+                with ui.column().classes("gap-1"):
+                    ui.label("Input").classes("font-mono text-xs text-slate-600")
+                    ui.html(
+                        _experiment_img_html(
+                            render_image(
+                                result.reference, 0, mean=input_mean, std=input_std
+                            )
+                        )
+                    )
+
+    def tick() -> None:
+        live = session.live_position
+        if live is not None:
+            position_label.text = _format_live_position(live)
+        result = session.experiment_result
+        if session.experiment_pending:
+            status_label.text = (
+                "queued — waiting for the training thread to pause "
+                "(use Stop / Step Batch above)"
+            )
+        elif result is not None:
+            status_label.text = _experiment_status(result)
+        error_label.text = result.error or "" if result is not None else ""
+        if result is not None and result is not last_result[0]:
+            last_result[0] = result
+            if result.error is None:
+                render_result(result)
+
+    rebuild_params()
+    ui.timer(0.2, tick)
+
+
 def _add_time_travel_button(session: Session) -> None:
     """The blue Time Travel button (right of Detach) and its dialogs.
 
@@ -2668,6 +2995,19 @@ class _LayerView:
                         ).tooltip(
                             f"Inspect this layer's weights ({len(weights)})"
                         )
+                with ui.element("div").props("data-card-action"):
+                    ui.button(
+                        "Experiment",
+                        icon="science",
+                        on_click=lambda: ui.navigate.to(
+                            f"/experiment?layer={quote(name)}", new_tab=True
+                        ),
+                        color="yellow-8",
+                    ).props("dense no-caps").style(
+                        "min-height: 0; padding: 1px 6px; font-size: 11px"
+                    ).tooltip(
+                        "Run deep dream / Captum experiments on this layer"
+                    )
                 with ui.element("div").props("data-card-action"):
                     self._eye_btn = ui.button(
                         "Watch",

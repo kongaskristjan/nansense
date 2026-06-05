@@ -198,6 +198,42 @@ works with or without a pinned batch — unpinned, the edits apply to the
 current training batch's input at each pause. Edits to pixels outside a
 later batch's bounds are skipped rather than erroring.
 
+Each layer card carries a yellow "Experiment" button that opens the
+per-layer experiments page at `/experiment?layer=...`. Its top bar holds a
+dropdown picking the experiment (Deep Dream by default), Run / Cancel, and
+the shared stepping controls; the left pane is the selected experiment's
+parameter form, and the right pane streams status and results.
+Experiments run on the *paused* training thread — like probe runs, the
+model is never touched from the UI thread — so a request made while
+training is detached waits for the next pause, and any resume command
+aborts a running experiment. They are side-effect-free (eval-mode forwards
+with flags/buffers restored, forked RNG, input-only gradients via
+`torch.autograd.grad`), so training and time-travel determinism are
+unaffected.
+
+**Deep Dream** runs gradient ascent on a channel's mean activation (or the
+whole layer's with channel −1) with the classic regularizers, each
+configurable: steps, learning rate (gradients are normalized by their mean
+magnitude), "diffusion" (per-step blend with a 3×3 blur), pixel jitter,
+optional per-step center zoom (default 0), starting point (the current
+input sample or noise), and clamping to the displayable value range — the
+`[0, 1]` display interval mapped through `input_mean` / `input_std`. The
+evolving image streams into the page as the run progresses, alongside a
+live objective value.
+
+The Captum selection (the library has dozens of methods; these four cover
+the main families): **Grad-CAM** (class-score localization on the selected
+layer; target class defaults to the model's argmax), **Neuron Gradient**
+(input saliency of one channel — the gradient view of its receptive
+field), **Neuron Integrated Gradients** (the path-integrated,
+higher-quality version; integration steps configurable), and **Occlusion**
+(perturbation-based: slide a patch of configurable window/stride over the
+input and measure the class-score drop). Attributions render with the same
+diverging colormap as the activation strips, next to the input sample they
+explain. Layer-targeted Captum methods need a real `nn.Module` — picking
+an fx intermediate (`relu`, `add`, …) reports an error pointing at the
+producing module instead; Deep Dream works on any captured layer.
+
 Each layer card has a "Watch" toggle in its header that marks the
 layer as "watched". Watched cards (and the matching architecture
 node) get a stronger amber outline that persists across hover. The

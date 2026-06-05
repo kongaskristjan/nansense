@@ -411,6 +411,57 @@ of killing the training thread (`_run_probe_guarded`); deactivating the
 probe (`unpin_batch` / `clear_perturbations` with nothing else active)
 clears the published result so the UI falls back to the snapshot.
 
+## Experiments (`playgrad.experiments`)
+
+Experiments — deep dream and a small Captum selection (Grad-CAM, Neuron
+Gradient, Neuron Integrated Gradients, Occlusion) — are the long-running,
+cancellable extension of the probe job queue. The UI arms an
+`ExperimentRequest` (`Session.request_experiment`); the pause loop in
+`_wait_for_proceed` consumes it and calls `experiments.run(...)`, a
+generator yielding `ExperimentResult` progress snapshots that the session
+publishes one by one (`_publish_experiment`) — that's what streams the
+evolving deep-dream image to the page.
+
+**Cancellation and supersession.** The runner checks a `should_abort()`
+predicate between steps; it fires on `cancel_experiment()`, on a newer
+request (each request bumps `_experiment_seq`, and `_publish_experiment`
+drops results whose seq is stale), and on anything that ends the pause —
+resume commands, a pending time-travel jump, `close()` — so the pause loop
+regains control within one step. A request armed while training is running
+stays armed until the next pause (`experiment_pending` lets the UI say
+so). A raising experiment publishes an error result instead of killing the
+training thread.
+
+**Isolation.** Experiments share the probe contract via
+`Session._isolated_model` (the refactored common core): eval-mode forwards
+with per-module flags and all buffers restored, forked RNG. Gradients are
+taken w.r.t. the *input* only (`torch.autograd.grad`), so parameter
+`.grad` — which the snapshot path reads at `__exit__` — is never touched.
+
+**Deep dream** (`_run_deep_dream`) is normalized-gradient ascent on a
+channel's mean activation (`_target_activation`: the fx interpreter against
+a local dict, so any name in `layer_names` is a valid target; a single
+temporary hook in the fallback). Regularizers per step: jitter (random
+roll, undone after the update — forked RNG only), diffusion (blend with a
+3×3 box blur), optional center zoom, and clamping to `_value_bounds` — the
+displayable `[0, 1]` range mapped through the input mean/std.
+
+**Captum** (`_run_captum`) imports lazily and runs the *unpatched* model
+inside the isolation scope (experiments only execute between batches).
+Layer-targeted methods require an `nn.Module`; fx intermediates are
+rejected with a pointer to the producing module. Output-targeted methods
+(Grad-CAM, Occlusion) resolve target class −1 to the model's argmax and
+require a `[batch, classes]` output. Neuron methods address a channel via
+a selector callable (per-example mean of that channel).
+
+**UI** (`/experiment?layer=...`, one yellow "Experiment" button per layer
+card): the kind dropdown defaults to deep dream; each kind's knobs are
+declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
+number/switch/select widgets and collected on Run). A 200 ms timer streams
+`session.experiment_result` into the page: deep-dream images render
+denormalized via `render_image`, attributions via the shared
+diverging-colormap `render_strip`, each next to the input sample.
+
 ## Time travel (`playgrad.restore`)
 
 Time travel jumps training back to the start of any epoch whose state was
