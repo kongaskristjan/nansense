@@ -87,74 +87,115 @@ class InputPanel:
         self._on_change = on_change
         self.sample_idx = 0
         self.compare = False
+        self._color = "#000000"
         self._spinner_max: int | None = None
         self._build()
 
     def _build(self) -> None:
-        ui.label("Input Selection").classes("font-mono text-sm self-start")
-        with ui.row().classes("w-full items-center gap-2 no-wrap"):
-            ui.label("Viewing sample:").classes("text-sm")
-            self._sample_input = ui.number(
-                value=0,
-                min=0,
-                step=1,
-                format="%d",
-                on_change=self._on_sample_change,
-            ).classes("w-20").props("dense")
-        self._pin_switch = ui.switch(
-            "Pin batch",
-            value=self._session.is_pinned,
-            on_change=self._on_pin_change,
-        ).props("dense").tooltip(
-            "Re-run the model on this fixed batch at every pause (a probe "
-            "run), instead of showing the changing training batch"
-        )
-        self._pinned_caption = ui.label("").classes(
-            "text-xs text-slate-500 font-mono self-start"
-        )
-        self._mode_toggle = ui.toggle(
-            _PROBE_MODE_OPTIONS,
-            value=self._session.probe_mode,
-            on_change=self._on_mode_change,
-        ).props("dense no-caps").tooltip(
-            "Train/eval handling for probe forwards. Eval (default) uses "
-            "BatchNorm running stats and disables dropout; Unchanged runs "
-            "with whatever modes training left; Train uses batch stats and "
-            "dropout. All modes restore the model's state afterwards."
-        )
-        # Probe mode only applies to probe runs, which need a pinned batch.
-        self._mode_toggle.bind_enabled_from(self._pin_switch, "value")
-        ui.separator()
-        self._perturb_switch = ui.switch(
-            "Click to perturb",
-            on_change=self._on_perturb_change,
-        ).props("dense").tooltip(
-            "Clicking the input image paints the picked color into that "
-            "pixel of the viewed sample on every probe input"
-        )
-        self._color_input = ui.color_input(
-            label="Perturb color", value="#000000"
-        ).classes("w-full").props("dense")
-        self._compare_switch = ui.switch(
-            "Compare with original",
-            on_change=self._on_compare_change,
-        ).props("dense").tooltip(
-            "Show each layer's activation diff (perturbed − original) "
-            "instead of the perturbed activations"
-        )
-        with ui.row().classes("w-full items-center gap-2 no-wrap"):
-            ui.button(
-                "Clear perturbations",
-                on_click=self._session.clear_perturbations,
-                color="slate-500",
-            ).props("dense size=sm no-caps")
-            self._perturb_caption = ui.label("").classes(
-                "text-xs text-slate-500 font-mono"
+        # One compact column: the image first (it is what everything below
+        # acts on), then its sample selector, then the "Probe" and "Perturb"
+        # control sections.
+        with ui.column().classes("w-full items-center gap-2"):
+            ui.label("Input Selection").classes("font-mono text-sm self-start")
+            self._image = ui.interactive_image(
+                on_mouse=self._on_image_click, events=["mousedown"]
+            ).style(f"width:{INPUT_IMAGE_SIZE}px; image-rendering:pixelated")
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                ui.label("Viewing sample:").classes("text-sm")
+                self._sample_input = ui.number(
+                    value=0,
+                    min=0,
+                    step=1,
+                    format="%d",
+                    on_change=self._on_sample_change,
+                ).classes("w-20").props("dense")
+            self._error_label = ui.label("").classes(
+                "text-xs text-red-600 self-start"
             )
-        self._error_label = ui.label("").classes("text-xs text-red-600 self-start")
-        self._image = ui.interactive_image(
-            on_mouse=self._on_image_click, events=["mousedown"]
-        ).style(f"width:{INPUT_IMAGE_SIZE}px; image-rendering:pixelated")
+
+            ui.separator()
+            self._section_label("Probe")
+            self._pin_switch = ui.switch(
+                "Pin batch",
+                value=self._session.is_pinned,
+                on_change=self._on_pin_change,
+            ).props("dense").classes("self-start").tooltip(
+                "Re-run the model on this fixed batch at every pause (a probe "
+                "run), instead of showing the changing training batch"
+            )
+            self._mode_toggle = ui.toggle(
+                _PROBE_MODE_OPTIONS,
+                value=self._session.probe_mode,
+                on_change=self._on_mode_change,
+            ).props("dense no-caps spread").classes("w-full").tooltip(
+                "Train/eval handling for probe forwards. Eval (default) uses "
+                "BatchNorm running stats and disables dropout; Unchanged runs "
+                "with whatever modes training left; Train uses batch stats and "
+                "dropout. All modes restore the model's state afterwards."
+            )
+            # Probe mode only applies to probe runs, which need a pinned batch.
+            self._mode_toggle.bind_enabled_from(self._pin_switch, "value")
+            self._pinned_caption = ui.label("").classes(
+                "text-xs text-slate-500 font-mono self-start"
+            )
+
+            ui.separator()
+            self._section_label("Perturb")
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                self._perturb_switch = ui.switch(
+                    "Click to perturb",
+                    on_change=self._on_perturb_change,
+                ).props("dense").tooltip(
+                    "Clicking the input image paints the swatch color into "
+                    "that pixel of the viewed sample on every probe input"
+                )
+                # A compact color swatch that opens the picker on click; the
+                # button's background *is* the current color.
+                self._color_button = ui.button().props("dense unelevated").style(
+                    self._swatch_style()
+                ).tooltip("Perturb color — click to change")
+                with self._color_button:
+                    picker = ui.color_picker(on_pick=self._on_pick_color)
+                    # Hex only: normalized_color expects #rrggbb, so don't let
+                    # the picker emit rgba()/hsl() strings.
+                    picker.q_color.props("format-model=hex")
+            self._compare_switch = ui.switch(
+                "Compare with original",
+                on_change=self._on_compare_change,
+            ).props("dense").classes("self-start").tooltip(
+                "Show each layer's activation diff (perturbed − original) "
+                "instead of the perturbed activations"
+            )
+            with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                ui.button(
+                    "Clear",
+                    on_click=self._session.clear_perturbations,
+                    color="slate-500",
+                ).props("dense size=sm no-caps").tooltip(
+                    "Remove all perturbations"
+                )
+                self._perturb_caption = ui.label("").classes(
+                    "text-xs text-slate-500 font-mono"
+                )
+
+    @staticmethod
+    def _section_label(text: str) -> None:
+        ui.label(text).classes(
+            "text-[10px] uppercase tracking-wider text-slate-400 self-start"
+        )
+
+    def _swatch_style(self) -> str:
+        return (
+            f"background-color: {self._color} !important; "
+            "width: 28px; height: 28px; min-height: 0; "
+            "border: 1px solid #cbd5e1"
+        )
+
+    def _on_pick_color(self, e: object) -> None:
+        color = str(getattr(e, "color", "") or "")
+        if color:
+            self._color = color
+            self._color_button.style(self._swatch_style())
 
     def set_image(self, src: str) -> None:
         self._image.set_source(src)
@@ -254,7 +295,7 @@ class InputPanel:
         if tensor is None or tensor.ndim != 4:
             return
         values = normalized_color(
-            str(self._color_input.value or "#000000"),
+            self._color,
             int(tensor.shape[1]),
             self._input_mean,
             self._input_std,

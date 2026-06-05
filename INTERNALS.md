@@ -530,19 +530,24 @@ It does not touch tensors directly until they need to be rendered.
   gradient strips show a placeholder note (probes are forward-only). The
   `_RenderCache` is keyed by render-source identity — snapshot or probe
   result — so both share one cache.
-- The right sidebar is `playgrad.ui.input_panel.InputPanel`: the "Viewing
-  sample" `ui.number` (moved out of the top bar), the "Pin batch" switch
-  with a pinned-position caption, the probe-mode toggle
-  (unchanged / eval / train, enabled only while pinned via
-  `bind_enabled_from`), the perturbation controls ("Click to perturb"
-  switch, `ui.color_input` picker, "Compare with original" switch, a clear
-  button with a perturbed-pixel count), and the input image. Pin / mode /
-  perturbation changes call straight into the session; the session reacts
-  by publishing a new `ProbeResult`, which the tick loop picks up like a
-  new snapshot. The compare switch is pure view state (`panel.compare`,
-  threaded into `_compute_frame`) — both forwards are already in the
-  result, so flipping it just re-renders. A failed pin (no snapshot yet)
-  reverts the switch with the usual one-tick-deferred value write.
+- The right sidebar is `playgrad.ui.input_panel.InputPanel`, laid out
+  top-down as: the input image (what every control below acts on), the
+  "Viewing sample" `ui.number` (moved out of the top bar), a "Probe"
+  section — the "Pin batch" switch, the probe-mode toggle (unchanged /
+  eval / train, enabled only while pinned via `bind_enabled_from`,
+  `spread` so it fills the pane width) and a pinned-position caption —
+  and a "Perturb" section: the "Click to perturb" switch with a compact
+  color-swatch button beside it (the button's background *is* the current
+  color; clicking opens a nested `ui.color_picker`, forced to
+  `format-model=hex` since `normalized_color` expects `#rrggbb`), the
+  "Compare with original" switch, and a "Clear" button with a
+  perturbed-pixel count. Pin / mode / perturbation changes call straight
+  into the session; the session reacts by publishing a new `ProbeResult`,
+  which the tick loop picks up like a new snapshot. The compare switch is
+  pure view state (`panel.compare`, threaded into `_compute_frame`) — both
+  forwards are already in the result, so flipping it just re-renders. A
+  failed pin (no snapshot yet) reverts the switch with the usual
+  one-tick-deferred value write.
 - The input image is a `ui.interactive_image` sized by CSS to
   `INPUT_IMAGE_SIZE` with `image-rendering: pixelated` (the per-frame
   payload is the native-resolution data URI from `_input_img_src`).

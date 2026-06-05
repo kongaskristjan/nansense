@@ -149,10 +149,11 @@ submodule with horizontally-scrollable activation and activation-gradient
 strips for the selected sample, both drawn with the same diverging
 red/blue colormap and told apart by the labelled marker bar on each
 strip's left edge (emerald ACTIVATIONS, violet GRADIENTS); the right
-"Input Selection" pane holds the "Viewing sample" spinner that picks the
-displayed sample, the batch-pinning controls described below, and the
-input image for that sample (RGB or grayscale), denormalized with the
-`input_mean` / `input_std` passed to `serve()` if any.
+"Input Selection" pane shows the input image for the selected sample at
+the top (RGB or grayscale, denormalized with the `input_mean` /
+`input_std` passed to `serve()` if any), the "Viewing sample" spinner
+right beneath it, and then two compact control sections — "Probe" and
+"Perturb" — described below.
 
 The Input Selection pane's "Pin batch" toggle pins the currently displayed
 batch as a fixed *probe* input: from then on, every pause re-runs the model
@@ -174,9 +175,10 @@ time-travel determinism are unaffected. Pinning while paused publishes the
 probe immediately; pinning mid-`detach` takes effect at the next pause.
 Unpinning returns the page to the live training batch.
 
-Below the pinning controls sit the perturbation controls. With the "Click
-to perturb" toggle on, clicking the input image paints the color from the
-"Perturb color" picker into the clicked pixel of the viewed sample —
+The "Perturb" section sits below the pinning controls. With the "Click
+to perturb" toggle on, clicking the input image paints the current color —
+shown on the swatch button next to the toggle, which opens a color picker —
+into the clicked pixel of the viewed sample,
 back-transformed into model-input space with the `input_mean` /
 `input_std` given to `serve()` — on a *copy* of the probe input. Each
 probe then runs twice (original and perturbed, in the same isolation
@@ -185,8 +187,8 @@ input pane shows the edited image. Turning on "Compare with original"
 switches every card to the per-layer activation diff (perturbed −
 original) instead — the spatial extent of the nonzero diff at each layer
 traces how far the edit propagates through the network, i.e. the
-receptive field. Clicks accumulate (the caption counts them); "Clear
-perturbations" drops them all. Perturbing works with or without a pinned
+receptive field. Clicks accumulate (the caption counts them); the "Clear"
+button drops them all. Perturbing works with or without a pinned
 batch — unpinned, the edits apply to the current training batch's input
 at each pause. Edits to pixels outside a later batch's bounds are skipped
 rather than erroring.
