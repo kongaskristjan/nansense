@@ -766,9 +766,10 @@ _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
 
-# On a linear y-axis the range is capped so that bars holding this share of
-# the data points stay fully in range; see `_linear_y_range`.
-_Y_RANGE_COVERAGE: float = 0.999
+# Axis ranges are capped/trimmed so that bins holding this share of the
+# data points stay fully in range; see `_linear_y_range` and
+# `_trimmed_bin_bounds`.
+_RANGE_COVERAGE: float = 0.995
 
 # A bar more than this many times taller than the runner-up in its phase is
 # a freak spike (e.g. ReLU's exact zeros) and never anchors the y-scale.
@@ -828,7 +829,7 @@ def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]
 def _linear_y_range(
     per_phase: dict[str, LayerStatsSnapshot], kind: str, density: bool
 ) -> list[float] | None:
-    """Y-axis range on a linear y-axis, keeping 99.9% of the data in range.
+    """Y-axis range on a linear y-axis, keeping 99.5% of the data in range.
 
     Two clipping rules keep freak spikes from flattening the rest of the
     distribution (with **Log y** checked the axis autoranges instead, so
@@ -837,7 +838,7 @@ def _linear_y_range(
     - Per phase, a single drastically dominant bar never anchors the scale
       (see `_scale_bars`).
     - Among the rest, bars clip tallest-first, but only as long as the
-      clipped bars together hold less than `1 - _Y_RANGE_COVERAGE` of the
+      clipped bars together hold less than `1 - _RANGE_COVERAGE` of the
       pooled data points — the cap lands on the tallest bar that must stay
       fully visible.
 
@@ -853,7 +854,7 @@ def _linear_y_range(
     if not bars:
         return None
     bars.sort(reverse=True)
-    allowed = (1.0 - _Y_RANGE_COVERAGE) * total
+    allowed = (1.0 - _RANGE_COVERAGE) * total
     cap = bars[0][0]
     clipped = 0
     for height, count in bars:
@@ -888,8 +889,8 @@ def _trimmed_bin_bounds(
 
     Pooled across the drawn traces, the outermost populated bins are dropped
     greedily — lighter end first — while the dropped bins together hold less
-    than `1 - _Y_RANGE_COVERAGE` of the data points, so the x-range keeps
-    bins holding 99.9% of the values and a lone outlier value no longer
+    than `1 - _RANGE_COVERAGE` of the data points, so the x-range keeps
+    bins holding 99.5% of the values and a lone outlier value no longer
     stretches the whole value axis. Returns `None` when there's no data.
     """
     counts = [0] * N_BINS
@@ -901,7 +902,7 @@ def _trimmed_bin_bounds(
         return None
     lo = next(i for i, c in enumerate(counts) if c > 0)
     hi = next(i for i in range(N_BINS - 1, -1, -1) if counts[i] > 0)
-    allowed = (1.0 - _Y_RANGE_COVERAGE) * total
+    allowed = (1.0 - _RANGE_COVERAGE) * total
     trimmed = 0
     while lo < hi:
         side = lo if counts[lo] <= counts[hi] else hi

@@ -207,12 +207,12 @@ the share of values despite the wildly different linear bin widths.
 Checking **Log x** switches the bars to plain per-bin probabilities
 (`count / n`); per-phase normalization keeps train and val comparable
 regardless of how many batches each has seen. While **Log y** is
-unchecked, the y-axis is capped so that bars holding 99.9% of the
+unchecked, the y-axis is capped so that bars holding 99.5% of the
 values stay fully in range, and a single drastically dominant bar per
 phase — more than 5x taller than the runner-up, e.g. the exact-zero
 spike of a ReLU — is excluded from the scale entirely so it can't
 flatten the rest of the distribution. The x-axis is trimmed the same
-way: it zooms to the bins holding 99.9% of the values, so a lone
+way: it zooms to the bins holding 99.5% of the values, so a lone
 outlier can't stretch the value axis. Because Plotly's "Autoscale"
 would undo these caps (landing on a different scale than the initial
 render), the button is removed — "Reset axes" and double-click return

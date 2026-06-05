@@ -509,7 +509,7 @@ It does not touch tensors directly until they need to be rendered.
   widths (`_BIN_WIDTHS`). The x-axis zooms to the trimmed bin span
   (`_trimmed_bin_bounds`): pooled across traces, the outermost bins are
   dropped greedily — lighter end first — while the dropped bins together
-  hold under `1 - _Y_RANGE_COVERAGE` (0.1%) of the points, so a lone
+  hold under `1 - _RANGE_COVERAGE` (0.5%) of the points, so a lone
   outlier value can't stretch the axis; `_linear_x_range` maps the span
   to value space (the full ±1e6 span is mostly empty) and `_log_x_range`
   to bin-index space for the signed-log view. The y-axis is always
@@ -528,7 +528,7 @@ It does not touch tensors directly until they need to be rendered.
   taller than the runner-up, e.g. ReLU's exact zeros piling into the
   2e-9-wide zero band — never anchors the scale (`_scale_bars`); among
   the rest, bars clip tallest-first only while the clipped ones together
-  hold under `1 - _Y_RANGE_COVERAGE` (0.1%) of the pooled data points.
+  hold under `1 - _RANGE_COVERAGE` (0.5%) of the pooled data points.
   Refresh ticks restyle `y` + `customdata` (the raw counts shown on
   hover) and push per-row `yaxis{n}.range` (plus a single matched
   `xaxis.range`) relayouts only when a cap actually moved. Checking

@@ -285,7 +285,7 @@ def test_linear_x_range_brackets_populated_bins() -> None:
 
 
 def test_trimmed_bin_bounds_drops_sparse_outlier_tail() -> None:
-    # The 5-count outlier bin holds < 0.1% of the points, so the bounds
+    # The 5-count outlier bin holds < 0.5% of the points, so the bounds
     # shrink to the bulk bin.
     hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
     per_phase = {"train": _layer_snap("train", hist=hist)}
@@ -297,7 +297,7 @@ def test_trimmed_bin_bounds_drops_sparse_outlier_tail() -> None:
 
 def test_trimmed_bin_bounds_keeps_heavy_tails() -> None:
     # Both bins hold 50% of the points — trimming either would drop far more
-    # than the 0.1% budget, so the bounds cover them both.
+    # than the 0.5% budget, so the bounds cover them both.
     hist = {ZERO_BIN + 10: 500, ZERO_BIN + 80: 500}
     per_phase = {"train": _layer_snap("train", hist=hist)}
     assert _trimmed_bin_bounds(per_phase, "activation") == (
@@ -317,9 +317,9 @@ def test_trimmed_bin_bounds_budget_spans_both_tails() -> None:
 
 
 def test_trimmed_bin_bounds_stops_when_budget_runs_out() -> None:
-    # Trimming both tails (7 + 8 = 15 of 10015) would exceed the 0.1% budget
-    # (~10 points), so only the lighter tail is dropped.
-    hist = {ZERO_BIN - 40: 8, ZERO_BIN + 10: 10_000, ZERO_BIN + 40: 7}
+    # Trimming both tails (30 + 40 = 70 of 10070) would exceed the 0.5%
+    # budget (~50 points), so only the lighter tail is dropped.
+    hist = {ZERO_BIN - 40: 40, ZERO_BIN + 10: 10_000, ZERO_BIN + 40: 30}
     per_phase = {"train": _layer_snap("train", hist=hist)}
     assert _trimmed_bin_bounds(per_phase, "activation") == (
         ZERO_BIN - 40,
@@ -328,7 +328,7 @@ def test_trimmed_bin_bounds_stops_when_budget_runs_out() -> None:
 
 
 def test_trimmed_bin_bounds_pools_phases() -> None:
-    # val's lone outlier bin holds < 0.1% of the pooled points, so it trims
+    # val's lone outlier bin holds < 0.5% of the pooled points, so it trims
     # even though it's all the data val has in that bin.
     per_phase = {
         "train": _layer_snap("train", hist={ZERO_BIN + 10: 10_000}),
@@ -418,7 +418,7 @@ def test_probability_helpers_handle_empty_hist() -> None:
 
 
 def test_linear_y_range_clips_bars_holding_under_coverage() -> None:
-    # The zero-band spike holds 5 of 10005 points (< 0.1%), so it may clip;
+    # The zero-band spike holds 5 of 10005 points (< 0.5%), so it may clip;
     # the bulk bar holds the other 99.95% and must stay fully visible.
     hist = {ZERO_BIN: 5, ZERO_BIN + 50: 10_000}
     per_phase = {"train": _layer_snap("train", hist=hist)}
@@ -433,7 +433,7 @@ def test_linear_y_range_clips_bars_holding_under_coverage() -> None:
 def test_linear_y_range_keeps_tall_bars_that_do_not_dominate() -> None:
     # Two adjacent narrow bins of similar height (ratio ~1.39, under the 5x
     # dominance cutoff) hold nearly all the points: neither the dominance
-    # rule nor the 0.1% clip budget applies, so the cap reaches the tallest.
+    # rule nor the 0.5% clip budget applies, so the cap reaches the tallest.
     hist = {ZERO_BIN + 1: 5_000, ZERO_BIN + 2: 5_000, ZERO_BIN + 50: 100}
     per_phase = {"train": _layer_snap("train", hist=hist)}
     heights = _probability_densities(per_phase["train"].activations.hist)
@@ -471,7 +471,7 @@ def test_linear_y_range_dominance_is_per_phase() -> None:
 
 
 def test_linear_y_range_pools_phases_weighted_by_count() -> None:
-    # The clip budget is 0.1% of the pooled points across both traces:
+    # The clip budget is 0.5% of the pooled points across both traces:
     # train's sparse zero spike clips, and the cap lands on the tallest
     # bulk bar of either phase.
     per_phase = {
