@@ -703,21 +703,30 @@ _STAT_ROWS: tuple[tuple[str, Callable[[TensorStatsSnapshot], str]], ...] = (
     ("max", lambda s: _format_stat(s.max)),
 )
 
-_STATS_CELL_STYLE: str = "padding:0 18px 0 0;text-align:left"
+_STATS_CELL_STYLE: str = "padding:2px 26px 2px 0;text-align:left"
+
+# Light framed card around each stats table so it stands out from the page
+# instead of floating as bare text.
+_STATS_BOX_STYLE: str = (
+    "display:inline-block;background:#f8fafc;border:1px solid #e2e8f0;"
+    "border-radius:6px;padding:8px 14px"
+)
 
 
 def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> str:
     """Scalar stats as an HTML table: one column per phase, one row per stat.
 
     The header of each phase column ("train ep 0") is tinted with the phase's
-    trace color so it reads against the matching bars in the histogram below.
-    Returns a plain "no data yet" note while the phase has no samples.
+    trace color so it reads against the matching bars in the histogram below,
+    and the whole table sits in a light framed box for visibility. Returns a
+    plain "no data yet" note while the phase has no samples.
     """
     phases = _phases_with_data(per_phase, kind)
     if not phases:
         return '<span class="text-slate-500">no data yet</span>'
     header = "".join(
-        f'<th style="{_STATS_CELL_STYLE};font-weight:600;'
+        f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
+        f"border-bottom:1px solid #e2e8f0;"
         f'color:{_phase_color(p, i)}">'
         f"{html.escape(p)} ep {per_phase[p].epoch}</th>"
         for i, p in enumerate(phases)
@@ -725,7 +734,7 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> st
     rows = "".join(
         f'<tr><td style="{_STATS_CELL_STYLE};color:#64748b">{label}</td>'
         + "".join(
-            f'<td style="{_STATS_CELL_STYLE}">'
+            f'<td style="{_STATS_CELL_STYLE};color:#1e293b">'
             f"{fmt(_kind_stats(per_phase[p], kind))}</td>"
             for p in phases
         )
@@ -733,9 +742,12 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> st
         for label, fmt in _STAT_ROWS
     )
     return (
+        f'<div style="{_STATS_BOX_STYLE}">'
         '<table style="border-collapse:collapse">'
-        f"<thead><tr><th></th>{header}</tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
+        "<thead><tr>"
+        f'<th style="border-bottom:1px solid #e2e8f0"></th>{header}'
+        "</tr></thead>"
+        f"<tbody>{rows}</tbody></table></div>"
     )
 
 
@@ -869,29 +881,80 @@ def _phases_with_data(
     return [p for p, snap in per_phase.items() if _kind_stats(snap, kind).n > 0]
 
 
+def _trimmed_bin_bounds(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str
+) -> tuple[int, int] | None:
+    """Smallest/largest bin indices after trimming the extreme-tail bins.
+
+    Pooled across the drawn traces, the outermost populated bins are dropped
+    greedily — lighter end first — while the dropped bins together hold less
+    than `1 - _Y_RANGE_COVERAGE` of the data points, so the x-range keeps
+    bins holding 99.9% of the values and a lone outlier value no longer
+    stretches the whole value axis. Returns `None` when there's no data.
+    """
+    counts = [0] * N_BINS
+    for phase in _phases_with_data(per_phase, kind):
+        for i, count in enumerate(_kind_stats(per_phase[phase], kind).hist):
+            counts[i] += count
+    total = sum(counts)
+    if total == 0:
+        return None
+    lo = next(i for i, c in enumerate(counts) if c > 0)
+    hi = next(i for i in range(N_BINS - 1, -1, -1) if counts[i] > 0)
+    allowed = (1.0 - _Y_RANGE_COVERAGE) * total
+    trimmed = 0
+    while lo < hi:
+        side = lo if counts[lo] <= counts[hi] else hi
+        if trimmed + counts[side] > allowed:
+            break
+        trimmed += counts[side]
+        if side == lo:
+            lo += 1
+            while counts[lo] == 0:
+                lo += 1
+        else:
+            hi -= 1
+            while counts[hi] == 0:
+                hi -= 1
+    return lo, hi
+
+
 def _linear_x_range(
     per_phase: dict[str, LayerStatsSnapshot], kind: str
 ) -> list[float] | None:
-    """X-axis range (linear value space) covering the populated bins.
+    """X-axis range (linear value space) covering the trimmed bins.
 
     On a linear axis the bars span the full `[-1e6, 1e6]` edge range, almost
-    all of it empty. We zoom to the smallest/largest edges that actually hold
-    counts (plus a little padding) so the populated part of the distribution
-    stays legible. Returns `None` (Plotly autorange) when there's no data.
+    all of it empty. We zoom to the edges of the trimmed bin span
+    (`_trimmed_bin_bounds`, plus a little padding) so the bulk of the
+    distribution stays legible. Returns `None` (Plotly autorange) when
+    there's no data.
     """
-    lo_idx = N_BINS
-    hi_idx = -1
-    for layer_snap in per_phase.values():
-        for i, count in enumerate(_kind_stats(layer_snap, kind).hist):
-            if count > 0:
-                lo_idx = min(lo_idx, i)
-                hi_idx = max(hi_idx, i)
-    if hi_idx < 0:
+    bounds = _trimmed_bin_bounds(per_phase, kind)
+    if bounds is None:
         return None
-    lo = _HIST_EDGES[lo_idx]
-    hi = _HIST_EDGES[hi_idx + 1]
+    lo = _HIST_EDGES[bounds[0]]
+    hi = _HIST_EDGES[bounds[1] + 1]
     pad = (hi - lo) * 0.05 or 1.0
     return [lo - pad, hi + pad]
+
+
+def _log_x_range(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str
+) -> list[float] | None:
+    """X-axis range (bin-index space) covering the trimmed bins.
+
+    The signed-log view draws bars at integer bin indices, so the range
+    brackets the trimmed span (`_trimmed_bin_bounds`) with half-bar margins
+    plus a little padding. Returns `None` (Plotly autorange — the full
+    211-bin span) when there's no data.
+    """
+    bounds = _trimmed_bin_bounds(per_phase, kind)
+    if bounds is None:
+        return None
+    lo, hi = bounds
+    pad = (hi - lo + 1) * 0.05
+    return [lo - 0.5 - pad, hi + 0.5 + pad]
 
 
 def _make_histogram_figure(
@@ -967,6 +1030,11 @@ def _make_histogram_figure(
     # color, sitting right above the row they describe.
     for i, annotation in enumerate(fig.layout.annotations):
         annotation.update(font=dict(size=11, color=_phase_color(phases[i], i)))
+    # `shared_xaxes` only hides the upper rows' tick labels; matching the
+    # x-axes proper keeps every row in lock-step when zooming/panning and
+    # lets a single `xaxis.range` relayout retarget all rows at once.
+    for row in range(2, len(phases) + 1):
+        fig.update_xaxes(matches="x", row=row, col=1)
     fig.update_layout(
         title=dict(text=title, x=0.0, font=dict(size=12)),
         bargap=0,
@@ -979,6 +1047,7 @@ def _make_histogram_figure(
     if log_x:
         tick_vals, tick_text = _x_tick_layout()
         fig.update_xaxes(
+            range=_log_x_range(per_phase, kind),
             tickvals=tick_vals,
             ticktext=tick_text,
             tickfont=dict(size=9),
@@ -1140,6 +1209,22 @@ def _plotly_restyle(
     )
 
 
+# Plotly config shared by all watch histograms. "Autoscale" would expand the
+# axes to fit every bar — including the freak spikes and outlier tails the
+# capped ranges deliberately clip — landing on a different scale than the
+# initial render, so the button is removed; "Reset axes" and double-click
+# restore the ranges the figure was built with instead.
+_PLOTLY_CONFIG: dict[str, object] = {
+    "modeBarButtonsToRemove": ["autoScale2d"],
+    "doubleClick": "reset",
+}
+
+
+def _figure_payload(fig: go.Figure) -> dict[str, object]:
+    """The data/layout/config dict NiceGUI hands to `Plotly.react`."""
+    return {**fig.to_plotly_json(), "config": _PLOTLY_CONFIG}
+
+
 class _HistPlot:
     """One Plotly histogram figure that refreshes its data in place.
 
@@ -1157,17 +1242,29 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
-        # Last y-range applied on a linear y-axis, so refreshes only push a
-        # relayout when the cap actually moved (a range write resets zoom).
+        # Last axis ranges applied, so refreshes only push a relayout when a
+        # cap actually moved (a range write resets zoom on that axis).
         self._y_range: list[float] | None = None
+        self._x_range: list[float] | None = None
         self.element = ui.plotly(
-            _make_histogram_figure(
-                {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
+            _figure_payload(
+                _make_histogram_figure(
+                    {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
+                )
             )
         ).classes("w-full")
 
     def _current_axis(self) -> tuple[bool, bool]:
         return self._axis_log["x"], self._axis_log["y"]
+
+    def _current_x_range(
+        self, per_phase: dict[str, LayerStatsSnapshot], log_x: bool
+    ) -> list[float] | None:
+        return (
+            _log_x_range(per_phase, self._kind)
+            if log_x
+            else _linear_x_range(per_phase, self._kind)
+        )
 
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
         phases = _phases_with_data(per_phase, self._kind)
@@ -1176,10 +1273,17 @@ class _HistPlot:
         if phases != self._phases or axis != self._axis:
             # A phase appeared/disappeared or an axis-scale checkbox flipped —
             # rebuild the whole figure (the subplot rows change with it).
-            self.element.figure = _make_histogram_figure(
-                per_phase, self._kind, self._title, log_x=axis[0], log_y=axis[1]
+            self.element.update_figure(
+                _figure_payload(
+                    _make_histogram_figure(
+                        per_phase,
+                        self._kind,
+                        self._title,
+                        log_x=axis[0],
+                        log_y=axis[1],
+                    )
+                )
             )
-            self.element.update()
             self._phases = phases
             self._axis = axis
             self._y_range = (
@@ -1187,6 +1291,7 @@ class _HistPlot:
                 if axis[1]
                 else _linear_y_range(per_phase, self._kind, density)
             )
+            self._x_range = self._current_x_range(per_phase, axis[0])
         elif phases:
             # Same rows and axes — only counts (and the epoch label) moved.
             # Restyle in place so zoom/pan survives.
@@ -1213,6 +1318,12 @@ class _HistPlot:
                     for i in range(len(phases)):
                         axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
                         layout[f"{axis_name}.range"] = y_range
+            # The x-zoom follows the populated bins; the rows' x-axes are
+            # matched (shared_xaxes), so one key updates every row.
+            x_range = self._current_x_range(per_phase, axis[0])
+            if x_range != self._x_range:
+                self._x_range = x_range
+                layout["xaxis.range"] = x_range
             _plotly_restyle(
                 self.element, update, list(range(len(phases))), layout
             )
@@ -1245,14 +1356,14 @@ class _WatchLayerPanel:
                 )
                 self._act_stats = ui.html(
                     _stats_table_html({}, "activation")
-                ).classes("font-mono text-xs")
+                ).classes("font-mono text-sm")
                 self._act = _HistPlot("activation", "activations", axis_log)
                 ui.label("Gradients").classes(
                     "font-mono text-sm text-slate-600"
                 )
                 self._grad_stats = ui.html(
                     _stats_table_html({}, "gradient")
-                ).classes("font-mono text-xs")
+                ).classes("font-mono text-sm")
                 self._grad = _HistPlot("gradient", "gradients", axis_log)
 
     def update(self, snap: WatchSnapshot) -> None:

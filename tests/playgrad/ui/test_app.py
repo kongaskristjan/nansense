@@ -10,15 +10,19 @@ from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
     _BIN_WIDTHS,
+    _HIST_EDGES,
     _PLOT_HEIGHT,
+    _PLOTLY_CONFIG,
     _RenderCache,
     _compute_frame,
     _default_roles,
     _dims_from_roles,
+    _figure_payload,
     _format_live_position,
     _input_img_tag,
     _linear_x_range,
     _linear_y_range,
+    _log_x_range,
     _make_histogram_figure,
     _phases_with_data,
     _probabilities,
@@ -27,6 +31,7 @@ from playgrad.ui.app import (
     _stats_table_html,
     _strip_html,
     _summarize_epoch_ranges,
+    _trimmed_bin_bounds,
     _use_density,
     _validate_step_until_target,
     serve,
@@ -276,6 +281,98 @@ def test_linear_x_range_brackets_populated_bins() -> None:
     assert hi - lo < 1.0  # zoomed in, not the full +/-1e6 span
 
 
+# --- Watching histogram: x-range tail trimming ------------------------------
+
+
+def test_trimmed_bin_bounds_drops_sparse_outlier_tail() -> None:
+    # The 5-count outlier bin holds < 0.1% of the points, so the bounds
+    # shrink to the bulk bin.
+    hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    assert _trimmed_bin_bounds(per_phase, "activation") == (
+        ZERO_BIN + 10,
+        ZERO_BIN + 10,
+    )
+
+
+def test_trimmed_bin_bounds_keeps_heavy_tails() -> None:
+    # Both bins hold 50% of the points — trimming either would drop far more
+    # than the 0.1% budget, so the bounds cover them both.
+    hist = {ZERO_BIN + 10: 500, ZERO_BIN + 80: 500}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    assert _trimmed_bin_bounds(per_phase, "activation") == (
+        ZERO_BIN + 10,
+        ZERO_BIN + 80,
+    )
+
+
+def test_trimmed_bin_bounds_budget_spans_both_tails() -> None:
+    # 3 + 4 outlier points (0.07% combined) trim away on both sides.
+    hist = {ZERO_BIN - 40: 3, ZERO_BIN + 10: 10_000, ZERO_BIN + 40: 4}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    assert _trimmed_bin_bounds(per_phase, "activation") == (
+        ZERO_BIN + 10,
+        ZERO_BIN + 10,
+    )
+
+
+def test_trimmed_bin_bounds_stops_when_budget_runs_out() -> None:
+    # Trimming both tails (7 + 8 = 15 of 10015) would exceed the 0.1% budget
+    # (~10 points), so only the lighter tail is dropped.
+    hist = {ZERO_BIN - 40: 8, ZERO_BIN + 10: 10_000, ZERO_BIN + 40: 7}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    assert _trimmed_bin_bounds(per_phase, "activation") == (
+        ZERO_BIN - 40,
+        ZERO_BIN + 10,
+    )
+
+
+def test_trimmed_bin_bounds_pools_phases() -> None:
+    # val's lone outlier bin holds < 0.1% of the pooled points, so it trims
+    # even though it's all the data val has in that bin.
+    per_phase = {
+        "train": _layer_snap("train", hist={ZERO_BIN + 10: 10_000}),
+        "val": _layer_snap("val", hist={ZERO_BIN + 80: 5}),
+    }
+    assert _trimmed_bin_bounds(per_phase, "activation") == (
+        ZERO_BIN + 10,
+        ZERO_BIN + 10,
+    )
+
+
+def test_trimmed_bin_bounds_none_when_empty() -> None:
+    assert _trimmed_bin_bounds({}, "activation") is None
+
+
+def test_linear_x_range_excludes_sparse_outlier_tail() -> None:
+    hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    rng = _linear_x_range(per_phase, "activation")
+    assert rng is not None
+    assert rng[1] < _HIST_EDGES[ZERO_BIN + 80]  # the outlier bin is outside
+
+
+def test_log_x_range_brackets_trimmed_bins() -> None:
+    hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    rng = _log_x_range(per_phase, "activation")
+    assert rng is not None
+    assert rng[0] < ZERO_BIN + 10 < rng[1]
+    assert rng[1] < ZERO_BIN + 80  # the outlier bin is outside
+    assert _log_x_range({}, "activation") is None
+
+
+def test_histogram_log_x_zooms_to_trimmed_bins() -> None:
+    hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=True
+    )
+    expected = _log_x_range(per_phase, "activation")
+    assert expected is not None
+    assert tuple(fig.layout.xaxis.range) == tuple(expected)
+
+
 # --- Watching histogram: density mode (linear value axis) ------------------
 
 
@@ -472,6 +569,8 @@ def test_histogram_one_subplot_row_per_phase() -> None:
     # Subplot titles carry phase + epoch, so the legend is dropped.
     assert [a.text for a in fig.layout.annotations] == ["train (ep 0)", "val (ep 1)"]
     assert fig.layout.showlegend is False
+    # The rows' x-axes are matched so zooms and range relayouts stay in sync.
+    assert fig.layout.xaxis2.matches == "x"
 
 
 def test_histogram_rows_share_the_capped_y_range() -> None:
@@ -481,6 +580,16 @@ def test_histogram_rows_share_the_capped_y_range() -> None:
     assert expected is not None
     assert tuple(fig.layout.yaxis.range) == tuple(expected)
     assert tuple(fig.layout.yaxis2.range) == tuple(expected)
+
+
+def test_figure_payload_carries_plotly_config() -> None:
+    # Autoscale would land on a different scale than the capped initial
+    # render, so it's removed; double-click resets to the built ranges.
+    payload = _figure_payload(_make_histogram_figure({}, "activation", "a"))
+    assert set(payload) >= {"data", "layout", "config"}
+    assert payload["config"] is _PLOTLY_CONFIG
+    assert _PLOTLY_CONFIG["modeBarButtonsToRemove"] == ["autoScale2d"]
+    assert _PLOTLY_CONFIG["doubleClick"] == "reset"
 
 
 # --- Watching stats table ----------------------------------------------------
@@ -497,6 +606,7 @@ def test_stats_table_has_phase_columns_and_stat_rows() -> None:
     }
     table = _stats_table_html(per_phase, "activation")
     assert "<table" in table
+    assert table.startswith("<div")  # framed box around the table
     assert "train ep 2" in table and "val ep 2" in table
     for label in ("n", "mean", "std", "median", "min", "max"):
         assert f">{label}</td>" in table
