@@ -17,6 +17,8 @@
 - When running in agents mode (work isolated in a git worktree), keep the worktree in sync with `main` to reduce conflicts:
   - Start new work by branching a worktree from the current `main`. Use a meaningful name for the worktree.
   - After finishing work, merge the worktree branch back into `main`.
+    - For automatic merges, additional verification after the merge is usually not necessary.
+    - For complex/manual merges, run the tests/checks again. For UI conflicts, verify with Playwright.
 
 ## Code quality
 
