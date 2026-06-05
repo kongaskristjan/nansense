@@ -72,6 +72,7 @@ from playgrad.watch import (
     LayerStatsSnapshot,
     TensorStatsSnapshot,
     WatchSnapshot,
+    bin_midpoint,
     histogram_edges,
 )
 
@@ -779,6 +780,10 @@ _BIN_CENTERS: list[float] = [
 _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
+# Hover labels for the signed-log view, where bars sit at plain bin indices:
+# each bin's representative value (its geometric midpoint, the same notion
+# the median stat uses) instead of the meaningless index.
+_BIN_VALUE_LABELS: list[str] = [f"{bin_midpoint(i):.3g}" for i in range(N_BINS)]
 
 # Axis trims may clip bins/bars holding up to this share of the data points
 # (see `_trimmed_bin_bounds` / `_linear_y_range`). `_axis_ranges` starts at
@@ -829,6 +834,20 @@ def _probability_densities(hist: tuple[int, ...]) -> list[float]:
 def _trace_heights(hist: tuple[int, ...], density: bool) -> list[float]:
     """Bar heights for one trace: probability densities or probabilities."""
     return _probability_densities(hist) if density else _probabilities(hist)
+
+
+def _hover_customdata(hist: tuple[int, ...], density: bool) -> list[object]:
+    """Per-bar hover payload, matching `_make_histogram_figure`'s templates.
+
+    Density mode (linear x): the raw count alone — the bar's own x position
+    is already the value. Signed-log mode: `[count, value-label]` pairs, so
+    the hover can show the bin's value instead of its meaningless index.
+    """
+    if density:
+        return list(hist)
+    return [
+        [count, label] for count, label in zip(hist, _BIN_VALUE_LABELS)
+    ]
 
 
 def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]:
@@ -1109,9 +1128,11 @@ def _make_histogram_figure(
             "<br>count %{customdata}<extra></extra>"
         )
     else:
+        # Bars sit at bin indices on the signed-log axis; the hover shows
+        # the bin's value (via customdata), not the index.
         hover = (
-            "bin %{x}<br>probability %{y:.3g}"
-            "<br>count %{customdata}<extra></extra>"
+            "value ≈ %{customdata[1]}<br>probability %{y:.3g}"
+            "<br>count %{customdata[0]}<extra></extra>"
         )
     phases = _phases_with_data(per_phase, kind)
     names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
@@ -1128,7 +1149,7 @@ def _make_histogram_figure(
             go.Bar(
                 x=x_values,
                 y=_trace_heights(stats.hist, density),
-                customdata=list(stats.hist),
+                customdata=_hover_customdata(stats.hist, density),
                 width=None if log_x else _BIN_WIDTHS,
                 name=names[i],
                 marker_color=_phase_color(phase, i),
@@ -1532,7 +1553,7 @@ class _HistPlot:
             update: dict[str, object] = {
                 "name": names,
                 "y": [_trace_heights(h, density) for h in hists],
-                "customdata": [list(h) for h in hists],
+                "customdata": [_hover_customdata(h, density) for h in hists],
             }
             # The subplot titles carry the epoch, so refresh them with the
             # data (annotation order matches row order).

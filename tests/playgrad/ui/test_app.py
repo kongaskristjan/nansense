@@ -51,7 +51,13 @@ from playgrad.ui.render import (
     render_image,
     render_strip,
 )
-from playgrad.watch import N_BINS, ZERO_BIN, LayerStatsSnapshot, TensorStatsSnapshot
+from playgrad.watch import (
+    N_BINS,
+    ZERO_BIN,
+    LayerStatsSnapshot,
+    TensorStatsSnapshot,
+    bin_midpoint,
+)
 
 
 def _tensor_stats(n: int, hist: dict[int, int] | None = None) -> TensorStatsSnapshot:
@@ -638,7 +644,7 @@ def test_histogram_log_x_plots_probabilities(log_y: bool) -> None:
         per_phase, "activation", "activations", log_x=True, log_y=log_y
     )
     assert fig.data[0].y[ZERO_BIN] == pytest.approx(1.0)
-    assert fig.data[0].customdata[ZERO_BIN] == 9
+    assert tuple(fig.data[0].customdata[ZERO_BIN]) == (9, "0")
     assert fig.layout.yaxis.title.text == "probability"
     if log_y:
         assert fig.layout.yaxis.range is None
@@ -1100,3 +1106,29 @@ def test_patch_grids_html_adds_heat_legend_when_enabled() -> None:
     )
     assert plain.count("<img") == 1
     assert heat.count("<img") == 2  # the grid plus its colorbar
+
+
+def test_log_x_hover_shows_bin_value_not_index() -> None:
+    hist = {ZERO_BIN: 5, ZERO_BIN + 1 + 9 * 7: 4}  # zero band + the 1.0 decade
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=True
+    )
+    hover = fig.data[0].hovertemplate
+    assert "bin %{x}" not in hover
+    assert "value ≈ %{customdata[1]}" in hover
+    assert "count %{customdata[0]}" in hover
+    # Each bar carries (count, representative value); the value matches the
+    # bin's geometric midpoint, the same notion the median stat reports.
+    count, label = fig.data[0].customdata[ZERO_BIN + 1 + 9 * 7]
+    assert count == 4
+    assert label == f"{bin_midpoint(ZERO_BIN + 1 + 9 * 7):.3g}"
+
+
+def test_linear_hover_keeps_value_from_bar_position() -> None:
+    per_phase = {"train": _layer_snap("train", n=9)}
+    fig = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=False
+    )
+    assert "value %{x:.2e}" in fig.data[0].hovertemplate
+    assert fig.data[0].customdata[ZERO_BIN] == 9
