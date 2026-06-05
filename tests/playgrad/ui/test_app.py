@@ -25,6 +25,7 @@ from playgrad.ui.app import (
     _effective_log_x,
     _figure_payload,
     _fill_fraction,
+    _filter_phase,
     _format_live_position,
     _input_img_src,
     _linear_x_range,
@@ -1108,3 +1109,10 @@ def test_patch_grids_signature_tracks_toggles_and_values() -> None:
     assert base != _patch_grids_signature(per_phase, ["max_pixel"], False)
     other = {"train": _layer_snap_with_patches("train")}  # new random extremes
     assert base != _patch_grids_signature(other, list(PATCH_TYPES), False)
+
+
+def test_filter_phase_narrows_to_selected_phase() -> None:
+    per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val")}
+    assert set(_filter_phase(per_phase, "val")) == {"val"}
+    assert set(_filter_phase(per_phase, "train")) == {"train"}
+    assert _filter_phase(per_phase, "test") == {}

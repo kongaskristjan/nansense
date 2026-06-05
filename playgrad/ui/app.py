@@ -1238,10 +1238,12 @@ def _build_watch_page(
 ) -> None:
     """The deep-dive page for watched layers.
 
-    A header dropdown switches every layer card between two views:
+    A header dropdown switches every layer card between two views, and a
+    second dropdown picks which phase (train / val / …) the cards show —
+    one phase at a time, in both views:
 
     - HISTOGRAM — one plotly figure per tensor kind (activations and
-      activation gradients) with a stacked subplot row per phase, plus
+      activation gradients) for the selected phase's latest epoch, plus
       the "Log x" / "Log y" axis-scale checkboxes.
     - MIN/MAX — the extreme-activation patch grids (channels across,
       per-channel top samples down), one per patch type, each toggleable
@@ -1272,6 +1274,10 @@ def _build_watch_page(
     view_minmax = {"on": False}
     grid_on: dict[PatchType, bool] = dict.fromkeys(PATCH_TYPES, True)
     heat_on = {"on": False}
+    # Every card shows one phase at a time, picked by a header dropdown
+    # shared by both views; defaults to the schedule's first phase.
+    phase_names = list(session.schedule.phases)
+    selected_phase = {"name": phase_names[0] if phase_names else ""}
 
     async def set_axis_log(axis: str, value: bool) -> None:
         axis_log[axis] = value
@@ -1281,6 +1287,10 @@ def _build_watch_page(
         view_minmax["on"] = value == _VIEW_MINMAX
         hist_controls.set_visibility(not view_minmax["on"])
         minmax_controls.set_visibility(view_minmax["on"])
+        await refresh()
+
+    async def set_phase(value: object) -> None:
+        selected_phase["name"] = str(value)
         await refresh()
 
     async def set_grid(ptype: PatchType, value: bool) -> None:
@@ -1309,6 +1319,13 @@ def _build_watch_page(
             ).props("dense outlined options-dense").classes(
                 "ml-4 text-sm"
             ).tooltip("What each layer card shows")
+            ui.select(
+                phase_names,
+                value=selected_phase["name"],
+                on_change=lambda e: set_phase(e.value),
+            ).props("dense outlined options-dense").classes(
+                "ml-2 text-sm"
+            ).tooltip("Which phase the cards show")
             with ui.row().classes(
                 "items-center gap-x-3 no-wrap"
             ) as hist_controls:
@@ -1386,6 +1403,7 @@ def _build_watch_page(
                     view_minmax=view_minmax,
                     grid_on=grid_on,
                     heat_on=heat_on,
+                    selected_phase=selected_phase,
                     input_mean=input_mean,
                     input_std=input_std,
                 )
@@ -1608,6 +1626,7 @@ class _WatchLayerPanel:
         view_minmax: dict[str, bool],
         grid_on: dict[PatchType, bool],
         heat_on: dict[str, bool],
+        selected_phase: dict[str, str],
         input_mean: tuple[float, ...] | None,
         input_std: tuple[float, ...] | None,
     ) -> None:
@@ -1616,6 +1635,7 @@ class _WatchLayerPanel:
         self._view_minmax = view_minmax
         self._grid_on = grid_on
         self._heat_on = heat_on
+        self._selected_phase = selected_phase
         self._input_mean = input_mean
         self._input_std = input_std
         self._grid_sig: tuple[object, ...] | None = None
@@ -1658,7 +1678,7 @@ class _WatchLayerPanel:
         `grids` is the output of `prepare_grids` (computed off the event
         loop by the page's refresh); `None` means the grids are unchanged.
         """
-        per_phase = snap.latest_per_phase(self.name)
+        per_phase = self._phase_view(snap)
         minmax = self._view_minmax["on"]
         self._hist_section.set_visibility(not minmax)
         self._patch_section.set_visibility(minmax)
@@ -1672,6 +1692,12 @@ class _WatchLayerPanel:
         self._act.update(per_phase)
         self._grad.update(per_phase)
 
+    def _phase_view(self, snap: WatchSnapshot) -> dict[str, LayerStatsSnapshot]:
+        """The layer's latest-epoch stats, narrowed to the selected phase."""
+        return _filter_phase(
+            snap.latest_per_phase(self.name), self._selected_phase["name"]
+        )
+
     def prepare_grids(
         self, snap: WatchSnapshot
     ) -> tuple[tuple[object, ...], str] | None:
@@ -1684,7 +1710,7 @@ class _WatchLayerPanel:
         Returns `(signature, html)` for `update` to apply, or `None` when
         the current content is already up to date.
         """
-        per_phase = snap.latest_per_phase(self.name)
+        per_phase = self._phase_view(snap)
         enabled = [t for t in PATCH_TYPES if self._grid_on[t]]
         heatmap = self._heat_on["on"]
         sig = _patch_grids_signature(per_phase, enabled, heatmap)
@@ -1698,6 +1724,13 @@ class _WatchLayerPanel:
             std=self._input_std,
         )
         return sig, html
+
+
+def _filter_phase(
+    per_phase: dict[str, LayerStatsSnapshot], phase: str
+) -> dict[str, LayerStatsSnapshot]:
+    """Narrow a `phase -> stats` mapping to the dropdown-selected phase."""
+    return {p: s for p, s in per_phase.items() if p == phase}
 
 
 _VIEW_HISTOGRAM: str = "HISTOGRAM"
