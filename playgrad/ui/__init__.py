@@ -1,4 +1,4 @@
-"""Playgrad UI: NiceGUI app + tensor-to-PNG rendering + Mermaid graph."""
+"""Playgrad UI: NiceGUI app + tensor-to-image rendering + Mermaid graph."""
 
 from __future__ import annotations
 

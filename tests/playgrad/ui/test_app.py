@@ -30,7 +30,12 @@ from playgrad.ui.app import (
     _validate_step_until_target,
     serve,
 )
-from playgrad.ui.render import INPUT_IMAGE_SIZE, render_image, render_strip
+from playgrad.ui.render import (
+    INPUT_IMAGE_SIZE,
+    image_mime,
+    render_image,
+    render_strip,
+)
 from playgrad.watch import N_BINS, ZERO_BIN, LayerStatsSnapshot, TensorStatsSnapshot
 
 
@@ -431,6 +436,7 @@ def test_strip_html_scales_native_data_and_keeps_legend_crisp() -> None:
     # One legend <img> (shown 1:1, no pixelated scaling) + one data <img>.
     assert html.count("<img") == 2
     assert html.count("image-rendering:pixelated") == 1
+    assert html.count(f"data:{image_mime()};base64,") == 2
     assert f"width:{strip.width}px" in html
     assert f"height:{strip.height}px" in html
 

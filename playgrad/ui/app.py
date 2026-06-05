@@ -49,6 +49,7 @@ from playgrad.ui.render import (
     INPUT_IMAGE_SIZE,
     StripRender,
     default_weight_dims,
+    image_mime,
     render_image,
     render_strip,
     render_weight,
@@ -2008,8 +2009,8 @@ def _strip_marker(color_class: str, label: str) -> None:
         )
 
 
-def _b64_img_src(png: bytes) -> str:
-    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+def _b64_img_src(image: bytes) -> str:
+    return f"data:{image_mime()};base64," + base64.b64encode(image).decode("ascii")
 
 
 def _strip_html(strip: StripRender | None) -> str:
@@ -2018,29 +2019,29 @@ def _strip_html(strip: StripRender | None) -> str:
     The data image holds every tile (with native-resolution separators) at
     the tensor's native resolution; explicit CSS width/height plus
     `image-rendering: pixelated` make the browser do the nearest-neighbour
-    upscale the renderer used to do server-side. The legend PNG is already at
-    display resolution and renders 1:1, so its labels stay sharp. `flex:none`
-    keeps the scroll container from squishing the images.
+    upscale the renderer used to do server-side. The legend image is already
+    at display resolution and renders 1:1, so its labels stay sharp.
+    `flex:none` keeps the scroll container from squishing the images.
     """
     if strip is None:
         return ""
     return (
         '<div style="display:flex; align-items:flex-start;">'
-        f'<img src="{_b64_img_src(strip.legend_png)}" '
+        f'<img src="{_b64_img_src(strip.legend_image)}" '
         'style="display:block; flex:none; max-width:none;" />'
-        f'<img src="{_b64_img_src(strip.data_png)}" '
+        f'<img src="{_b64_img_src(strip.data_image)}" '
         f'style="width:{strip.width}px; height:{strip.height}px; '
         'image-rendering:pixelated; display:block; flex:none; max-width:none;" />'
         "</div>"
     )
 
 
-def _input_img_tag(png: bytes | None) -> str:
-    """`<img>` for the input pane: native-res PNG, CSS-scaled to display size."""
-    if png is None:
+def _input_img_tag(image: bytes | None) -> str:
+    """`<img>` for the input pane: native-res image, CSS-scaled to display size."""
+    if image is None:
         return ""
     return (
-        f'<img src="{_b64_img_src(png)}" '
+        f'<img src="{_b64_img_src(image)}" '
         f'style="width:{INPUT_IMAGE_SIZE}px; height:{INPUT_IMAGE_SIZE}px; '
         'image-rendering:pixelated; display:block; max-width:none;" />'
     )

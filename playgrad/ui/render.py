@@ -1,26 +1,31 @@
-"""Render snapshot tensors to PNG bytes for the UI.
+"""Render snapshot tensors to image bytes for the UI.
 
 The library captures full per-batch tensors; the renderer takes a per-sample
 slice and produces one horizontal strip per layer for the right pane of the
 UI. Conv-style activations become a row of square channel tiles; 1D
 activations become a single short heatmap row.
 
-A strip is returned as a `StripRender`: one data PNG holding every tile at
+A strip is returned as a `StripRender`: one data image holding every tile at
 the tensor's *native* resolution (downsampled server-side only when larger
 than the display tile), upscaled by the browser via CSS sizing plus
 `image-rendering: pixelated` — equivalent to nearest-neighbour, but without
-inflating an 8×8 feature map to 128×128 pixels before colormapping and PNG
+inflating an 8×8 feature map to 128×128 pixels before colormapping and
 encoding. Tiles are separated by white spacers `max(1, tile_width //
 TILE_GAP_DIVISOR)` native pixels wide, so the gap scales with the tiles.
 The legend (vertical colorbar with `+x` / `0` / `-x` labels) is the
 exception to native-resolution encoding: it is rendered at display
-resolution into its own PNG so its text stays crisp.
+resolution into its own image so its text stays crisp.
 
 Every strip — activations, gradients, and weights alike — uses the same
 diverging (blue-white-red) colormap on a symmetric `[-x, +x]` scale where
-`x` is the per-strip absolute maximum. PNGs are encoded with
-`compress_level=1` to favour speed over size — bytes travel a local
-WebSocket, so wire size is irrelevant.
+`x` is the per-strip absolute maximum.
+
+Every image (strip data, legends, the input pane) is encoded in
+`STRIP_FORMAT`. The default `"BMP"` is essentially a memcpy — 30–60× faster
+to encode than PNG — at ~2× the payload, the right trade for a localhost
+WebSocket. Flip to `"PNG"` (compressed at `PNG_COMPRESS_LEVEL`) when bytes
+matter more than encode time, e.g. viewing the UI through an SSH port
+forward.
 """
 
 from __future__ import annotations
@@ -39,7 +44,11 @@ LINEAR_TILE_HEIGHT: int = 32
 LINEAR_MAX_BINS: int = 256
 LINEAR_BIN_WIDTH: int = 16
 INPUT_IMAGE_SIZE: int = 256
+# Encoding for every rendered image: "BMP" (fastest encode, ~2x payload) or
+# "PNG" (compressed; for byte-constrained links like an SSH port forward).
+STRIP_FORMAT: str = "BMP"
 PNG_COMPRESS_LEVEL: int = 1
+_MIME_TYPES: dict[str, str] = {"BMP": "image/bmp", "PNG": "image/png"}
 LEGEND_BAR_WIDTH: int = 12
 LEGEND_LABEL_WIDTH: int = 52
 LEGEND_GAP: int = 4
@@ -47,20 +56,25 @@ LEGEND_WIDTH: int = LEGEND_LABEL_WIDTH + LEGEND_GAP + LEGEND_BAR_WIDTH + LEGEND_
 LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 
 
+def image_mime() -> str:
+    """MIME type matching `STRIP_FORMAT`, for data-URI `<img>` sources."""
+    return _MIME_TYPES[STRIP_FORMAT]
+
+
 @dataclass(frozen=True)
 class StripRender:
-    """One rendered strip: a native-resolution data PNG plus a crisp legend.
+    """One rendered strip: a native-resolution data image plus a crisp legend.
 
-    `data_png` holds every tile in a single image at native (or
-    server-downsampled) resolution, with white separators `_tile_gap(w)`
-    native pixels wide between tiles; the UI displays it at `width × height`
-    CSS pixels with `image-rendering: pixelated`, so the separators scale
-    together with the tiles. `legend_png` is already at display resolution
-    and is shown 1:1.
+    `data_image` holds every tile in a single image (encoded per
+    `STRIP_FORMAT`) at native (or server-downsampled) resolution, with white
+    separators `_tile_gap(w)` native pixels wide between tiles; the UI
+    displays it at `width × height` CSS pixels with `image-rendering:
+    pixelated`, so the separators scale together with the tiles.
+    `legend_image` is already at display resolution and is shown 1:1.
     """
 
-    legend_png: bytes
-    data_png: bytes
+    legend_image: bytes
+    data_image: bytes
     width: int
     height: int
 
@@ -187,8 +201,8 @@ def _render_chw(tensor: Tensor) -> StripRender:
     # Each tile spans TILE_SIZE × TILE_SIZE CSS px, so the whole strip scales
     # by TILE_SIZE/w horizontally and TILE_SIZE/h vertically.
     return StripRender(
-        legend_png=_encode_png(_render_legend(TILE_SIZE, abs_max=abs_max)),
-        data_png=_encode_png(strip),
+        legend_image=_encode_image(_render_legend(TILE_SIZE, abs_max=abs_max)),
+        data_image=_encode_image(strip),
         width=round(strip.shape[1] * TILE_SIZE / w),
         height=TILE_SIZE,
     )
@@ -214,15 +228,15 @@ def render_image(
     mean: tuple[float, ...] | None = None,
     std: tuple[float, ...] | None = None,
 ) -> bytes | None:
-    """Render a per-sample input image as PNG bytes.
+    """Render a per-sample input image as `STRIP_FORMAT` bytes.
 
     Expects a `[B, C, H, W]` tensor with `C in (1, 3)`. Values are assumed
     to lie in `[0, 1]` unless both `mean` and `std` are provided, in which
     case the sample is denormalized as `x * std + mean` before being
-    clamped and scaled to 8-bit. The PNG keeps the sample's native `H × W`;
-    the UI scales it to `INPUT_IMAGE_SIZE` with CSS nearest-neighbour.
-    Returns `None` for unsupported shapes, out-of-range `sample_idx`, or a
-    None tensor.
+    clamped and scaled to 8-bit. The image keeps the sample's native
+    `H × W`; the UI scales it to `INPUT_IMAGE_SIZE` with CSS
+    nearest-neighbour. Returns `None` for unsupported shapes, out-of-range
+    `sample_idx`, or a None tensor.
     """
     if tensor is None or tensor.ndim != 4:
         return None
@@ -245,7 +259,7 @@ def render_image(
         pil = Image.fromarray(hwc[..., 0], mode="L")
     else:
         pil = Image.fromarray(hwc, mode="RGB")
-    return _pil_to_png(pil)
+    return _pil_to_bytes(pil)
 
 
 def _render_1d(tensor: Tensor) -> StripRender:
@@ -260,8 +274,10 @@ def _render_1d(tensor: Tensor) -> StripRender:
     rgb_row = _apply_colormap(values.numpy(), abs_max=abs_max)
     # A 1-px-tall row; the browser stretches it to the display height.
     return StripRender(
-        legend_png=_encode_png(_render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)),
-        data_png=_encode_png(rgb_row[None, :, :]),
+        legend_image=_encode_image(
+            _render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)
+        ),
+        data_image=_encode_image(rgb_row[None, :, :]),
         width=f * LINEAR_BIN_WIDTH,
         height=LINEAR_TILE_HEIGHT,
     )
@@ -312,11 +328,14 @@ def _render_legend(height: int, *, abs_max: float) -> np.ndarray:
     return np.concatenate([labels, gap, bar, gap], axis=1)
 
 
-def _encode_png(rgb: np.ndarray) -> bytes:
-    return _pil_to_png(Image.fromarray(np.ascontiguousarray(rgb), mode="RGB"))
+def _encode_image(rgb: np.ndarray) -> bytes:
+    return _pil_to_bytes(Image.fromarray(np.ascontiguousarray(rgb), mode="RGB"))
 
 
-def _pil_to_png(pil: Image.Image) -> bytes:
+def _pil_to_bytes(pil: Image.Image) -> bytes:
     buf = io.BytesIO()
-    pil.save(buf, format="PNG", compress_level=PNG_COMPRESS_LEVEL)
+    if STRIP_FORMAT == "PNG":
+        pil.save(buf, format="PNG", compress_level=PNG_COMPRESS_LEVEL)
+    else:
+        pil.save(buf, format=STRIP_FORMAT)
     return buf.getvalue()

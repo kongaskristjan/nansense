@@ -214,7 +214,7 @@ snapshot or the new one — never a torn half-written state. The UI can
 hold references to a snapshot for as long as it wants without preventing
 the next batch from running.
 
-Rendering (PNG strips, histograms, summary stats) happens on the UI
+Rendering (image strips, histograms, summary stats) happens on the UI
 thread against the published snapshot; the eager copy in
 `_publish_snapshot` only moves raw tensor data, not anything pixel-shaped.
 A per-snapshot render cache in the UI (`_RenderCache`) keeps repeat
@@ -393,8 +393,8 @@ It does not touch tensors directly until they need to be rendered.
   ovals/stadiums for `call_function` / `call_method`, circles for
   `placeholder` / `output`).
 - `playgrad.ui.render.render_strip(tensor, sample_idx)` turns per-layer
-  CPU tensors into a `StripRender`: one data PNG at the tensor's *native*
-  resolution plus a legend PNG at display resolution.
+  CPU tensors into a `StripRender`: one data image at the tensor's
+  *native* resolution plus a legend image at display resolution.
   - For per-sample shape `[C, H, W]` every channel tile lands in a single
     image, downsampled server-side (`area`) only when larger than
     `TILE_SIZE × TILE_SIZE`, with white separators between tiles
@@ -404,21 +404,24 @@ It does not touch tensors directly until they need to be rendered.
     server-side nearest-neighbour interpolation, but an 8×8 feature map
     travels as 64 pixels instead of 16k; the separators scale together
     with the tiles (`_strip_html` in `app.py` builds the two-`<img>` row).
-  - For `[F]` the data PNG is a single 1-px-tall heatmap row, downsampled
+  - For `[F]` the data image is a single 1-px-tall heatmap row, downsampled
     to at most `LINEAR_MAX_BINS` bins when `F` is large, stretched
     client-side to `LINEAR_BIN_WIDTH` per bin × `LINEAR_TILE_HEIGHT`.
   - The legend (vertical colorbar with `+x` / `0` / `-x` labels) is the
     exception to native-resolution encoding: it is rendered at display
-    resolution into its own PNG so its text stays crisp.
+    resolution into its own image so its text stays crisp.
   - Every strip — activations, gradients, and weights alike — uses the
     same diverging blue-white-red colormap; strips are told apart by a
     labelled colored marker bar on each one's left edge (emerald
     ACTIVATIONS / violet GRADIENTS on the layer cards, sky WEIGHT /
-    violet GRADIENT on the weights page). PNG `compress_level=1`
-    — wire size doesn't matter, encode speed does.
+    violet GRADIENT on the weights page). Images are encoded per
+    `STRIP_FORMAT`: the default `BMP` is essentially a memcpy (30–60×
+    faster to encode than PNG) at ~2× the payload — the right trade for a
+    localhost WebSocket. Flip to `PNG` (`compress_level=1`) when bytes
+    matter more than encode time, e.g. an SSH-port-forwarded UI.
   - Other per-sample shapes return `None`; the UI hides those images.
 - `playgrad.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
-  renders the model input as a natural RGB or grayscale PNG at the
+  renders the model input as a natural RGB or grayscale image at the
   sample's native resolution; the UI scales it to `INPUT_IMAGE_SIZE` with
   CSS nearest-neighbour. Channels are assumed to lie
   in `[0, 1]` unless both `mean` and `std` are passed, in which case the
@@ -471,7 +474,7 @@ It does not touch tensors directly until they need to be rendered.
   `RUN` / `DETACH` modes no snapshots are produced so the UI is idle.
   Per-layer renders are independent, so a frame fans out over a shared
   `ThreadPoolExecutor` (`_RENDER_POOL`); the heavy parts (torch
-  interpolate, numpy colormap, PIL PNG encode) release the GIL, so
+  interpolate, numpy colormap, PIL image encode) release the GIL, so
   layers render in parallel across cores. Rendered strip HTML is cached
   in a `_RenderCache` shared by every
   connection: entries are keyed `(name, kind, sample_idx)` and the whole

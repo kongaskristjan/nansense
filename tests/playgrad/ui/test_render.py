@@ -1,4 +1,4 @@
-"""Tests for tensor → PNG rendering."""
+"""Tests for tensor → image rendering."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 import torch
 from PIL import Image
 
+from playgrad.ui import render
 from playgrad.ui.render import (
     LEGEND_WIDTH,
     LINEAR_BIN_WIDTH,
@@ -15,14 +16,15 @@ from playgrad.ui.render import (
     LINEAR_TILE_HEIGHT,
     TILE_SIZE,
     default_weight_dims,
+    image_mime,
     render_image,
     render_strip,
     render_weight,
 )
 
 
-def _decode(png: bytes) -> Image.Image:
-    return Image.open(io.BytesIO(png)).convert("RGB")
+def _decode(image: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(image)).convert("RGB")
 
 
 def _rgb_at(img: Image.Image, x: int, y: int) -> tuple[int, int, int]:
@@ -40,7 +42,7 @@ def test_chw_strip_is_single_native_resolution_image() -> None:
     tensor = torch.randn(4, 8, 16, 12)
     strip = render_strip(tensor, sample_idx=2)
     assert strip is not None
-    assert _decode(strip.data_png).size == (8 * 12 + 7 * 1, 16)
+    assert _decode(strip.data_image).size == (8 * 12 + 7 * 1, 16)
     assert (strip.width, strip.height) == (
         round((8 * 12 + 7 * 1) * TILE_SIZE / 12),
         TILE_SIZE,
@@ -53,33 +55,33 @@ def test_chw_strip_downsamples_large_maps_to_tile_size() -> None:
     tensor = torch.randn(1, 2, 300, 200)
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
-    assert _decode(strip.data_png).size == (2 * TILE_SIZE + 2, TILE_SIZE)
+    assert _decode(strip.data_image).size == (2 * TILE_SIZE + 2, TILE_SIZE)
     assert (strip.width, strip.height) == (2 * TILE_SIZE + 2, TILE_SIZE)
 
 
 def test_chw_legend_is_display_resolution() -> None:
     strip = render_strip(torch.randn(1, 2, 8, 8), sample_idx=0)
     assert strip is not None
-    assert _decode(strip.legend_png).size == (LEGEND_WIDTH, TILE_SIZE)
+    assert _decode(strip.legend_image).size == (LEGEND_WIDTH, TILE_SIZE)
 
 
 def test_1d_strip_dimensions() -> None:
     tensor = torch.randn(4, 10)
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
-    assert _decode(strip.data_png).size == (10, 1)
+    assert _decode(strip.data_image).size == (10, 1)
     assert (strip.width, strip.height) == (
         10 * LINEAR_BIN_WIDTH,
         LINEAR_TILE_HEIGHT,
     )
-    assert _decode(strip.legend_png).size == (LEGEND_WIDTH, LINEAR_TILE_HEIGHT)
+    assert _decode(strip.legend_image).size == (LEGEND_WIDTH, LINEAR_TILE_HEIGHT)
 
 
 def test_1d_strip_caps_at_max_bins() -> None:
     tensor = torch.randn(4, LINEAR_MAX_BINS * 4)
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
-    assert _decode(strip.data_png).size == (LINEAR_MAX_BINS, 1)
+    assert _decode(strip.data_image).size == (LINEAR_MAX_BINS, 1)
     assert strip.width == LINEAR_MAX_BINS * LINEAR_BIN_WIDTH
 
 
@@ -104,7 +106,7 @@ def test_zero_variance_tensor_renders() -> None:
     tensor = torch.zeros(2, 4, 8, 8)
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
-    assert _decode(strip.data_png).size == (4 * 8 + 3 * 1, 8)
+    assert _decode(strip.data_image).size == (4 * 8 + 3 * 1, 8)
 
 
 def test_strip_uses_diverging_colormap_with_white_separator() -> None:
@@ -113,7 +115,7 @@ def test_strip_uses_diverging_colormap_with_white_separator() -> None:
     sample = torch.stack([torch.ones(8, 8), -torch.ones(8, 8)])
     strip = render_strip(sample.unsqueeze(0), sample_idx=0)
     assert strip is not None
-    img = _decode(strip.data_png)
+    img = _decode(strip.data_image)
     assert _rgb_at(img, 4, 4) == (255, 0, 0)
     assert _rgb_at(img, 8, 4) == (255, 255, 255)
     assert _rgb_at(img, 8 + 1 + 4, 4) == (0, 0, 255)
@@ -125,7 +127,34 @@ def test_separator_width_scales_with_tile_width(tile_w: int, gap: int) -> None:
     tensor = torch.randn(1, 2, 8, tile_w)
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
-    assert _decode(strip.data_png).size == (2 * tile_w + gap, 8)
+    assert _decode(strip.data_image).size == (2 * tile_w + gap, 8)
+
+
+@pytest.mark.parametrize(
+    "fmt, magic, mime",
+    [("BMP", b"BM", "image/bmp"), ("PNG", b"\x89PNG", "image/png")],
+)
+def test_strip_format_switch(
+    monkeypatch: pytest.MonkeyPatch, fmt: str, magic: bytes, mime: str
+) -> None:
+    # STRIP_FORMAT drives the encoding of every rendered image and the MIME
+    # type the UI puts in data URIs; both formats stay decodable.
+    monkeypatch.setattr(render, "STRIP_FORMAT", fmt)
+    strip = render_strip(torch.randn(1, 2, 8, 8), sample_idx=0)
+    assert strip is not None
+    assert strip.data_image.startswith(magic)
+    assert strip.legend_image.startswith(magic)
+    assert _decode(strip.data_image).size == (2 * 8 + 1, 8)
+    input_image = render_image(torch.rand(1, 3, 4, 4), sample_idx=0)
+    assert input_image is not None
+    assert input_image.startswith(magic)
+    assert image_mime() == mime
+
+
+def test_default_strip_format_is_bmp() -> None:
+    strip = render_strip(torch.randn(1, 1, 4, 4), sample_idx=0)
+    assert strip is not None
+    assert strip.data_image.startswith(b"BM")
 
 
 @pytest.mark.parametrize("channels", [1, 3])
@@ -215,7 +244,7 @@ def test_render_weight_4d_default_lays_kernels_across_in_channels() -> None:
     )
     assert strip is not None
     # 3 kernel tiles of 3×3 with 1-px separators, in a single image.
-    assert _decode(strip.data_png).size == (3 * 3 + 2 * 1, 3)
+    assert _decode(strip.data_image).size == (3 * 3 + 2 * 1, 3)
     assert (strip.width, strip.height) == (
         round((3 * 3 + 2 * 1) * TILE_SIZE / 3),
         TILE_SIZE,
@@ -229,7 +258,7 @@ def test_render_weight_2d_is_single_image_tile() -> None:
         w, x_dim=d.x_dim, y_dim=d.y_dim, tile_dim=d.tile_dim, fixed={}
     )
     assert strip is not None
-    assert _decode(strip.data_png).size == (4, 10)
+    assert _decode(strip.data_image).size == (4, 10)
     assert (strip.width, strip.height) == (TILE_SIZE, TILE_SIZE)
 
 
@@ -237,7 +266,7 @@ def test_render_weight_1d_is_single_row() -> None:
     w = torch.randn(16)
     strip = render_weight(w, x_dim=0, y_dim=None, tile_dim=None, fixed={})
     assert strip is not None
-    assert _decode(strip.data_png).size == (16, 1)
+    assert _decode(strip.data_image).size == (16, 1)
     assert (strip.width, strip.height) == (
         16 * LINEAR_BIN_WIDTH,
         LINEAR_TILE_HEIGHT,
@@ -249,7 +278,7 @@ def test_render_weight_custom_tile_axis_changes_tile_count() -> None:
     w = torch.randn(8, 3, 3, 3)
     strip = render_weight(w, x_dim=3, y_dim=2, tile_dim=0, fixed={1: 1})
     assert strip is not None
-    assert _decode(strip.data_png).size == (8 * 3 + 7 * 1, 3)
+    assert _decode(strip.data_image).size == (8 * 3 + 7 * 1, 3)
 
 
 def test_render_weight_clamps_out_of_range_fixed_index() -> None:
