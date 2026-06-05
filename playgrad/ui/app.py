@@ -532,6 +532,13 @@ def _build_page(
                         "px-3 py-2 text-slate-500 text-sm italic"
                     )
                     return
+                # Section header: the entries below scroll the main view to a
+                # layer, which is easy to misread as further actions like the
+                # "Open watch view" item above.
+                ui.label("Jump to layer").classes(
+                    "px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider "
+                    "text-slate-400 select-none"
+                )
                 for layer in layer_names:
                     if layer not in watched:
                         continue
