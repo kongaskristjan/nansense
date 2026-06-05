@@ -295,6 +295,56 @@ the cost of exposing fx intermediates and inputs to the stats
 collector without a parallel implementation. Snapshot timeline and
 pause behaviour are unaffected on non-watching sessions.
 
+### Extreme input patches (`playgrad.patches`)
+
+Alongside the histogram stats, each watch bucket owns a
+`PatchAccumulator` that keeps, per activation channel, the
+`N_PER_CHANNEL` input samples producing the most extreme activations
+under four rankings:
+
+- `max_pixel` / `min_pixel` — the channel's single largest/smallest
+  spatial value. The stored patch is an input crop around that pixel's
+  ratio-mapped location (side ≈ `PATCH_FACTOR ×` the activation→input
+  downsampling ratio, floored at `MIN_PATCH` — an approximation of the
+  receptive field, not an exact computation).
+- `max_average` / `min_average` — the channel's spatial mean; the
+  stored patch is the whole input image (there is no single location).
+
+Each entry also stores the channel's full activation map so the UI can
+blend a heatmap over the patch. 2D `(B, F)` activations degrade
+gracefully: features act as channels, pixel ≡ average, whole-image
+patches, single-cell heat.
+
+`Session._update_watch_stats` feeds the accumulator via
+`WatchAccumulator.update_patches(layer, phase, epoch, act, x)`, where
+`x` is `_patch_source_input()` — the first image-like (4D, 1- or
+3-channel) forward input captured by the pre-hook. Non-image models
+simply gather no patches.
+
+Like `TensorAccumulator`, everything stays on the training device with
+no syncs and no data-dependent branching: per batch and per type, one
+reduction over the activation produces per-sample-per-channel scores
+`(B, C)`, a per-channel `topk` over the batch axis picks
+`min(N_PER_CHANNEL, B)` candidates, one vectorised fancy-index gathers
+their patches, and a `cat`+`topk` merge folds them into the `(C, N)`
+running buffers. Ranking per channel over the batch axis doubles as
+deduplication — a sample appears in one batch per epoch, so a channel
+row can never hold the same image twice. NaN scores are demoted to the
+placeholder `∓inf` so diverged batches never enter the buffers.
+
+One memory caveat drives the eviction rule in `update_patches`:
+histogram buckets are ~2 KB and live forever, but a patch bucket holds
+`4 × C × N` image crops on the GPU. When a newer epoch starts for the
+same `(layer, phase)`, older epochs' patch buffers are released — the
+`/watch` page only renders the latest epoch per phase, so nothing
+visible is lost. `forget_layer` / `forget_epochs_from` (unwatch, time
+travel) drop patches together with the rest of the bucket.
+
+`PatchAccumulator.snapshot()` copies the buffers to CPU as a frozen
+`PatchSnapshot → TypePatches` tree carried on
+`LayerStatsSnapshot.patches`; slots never filled keep their `∓inf`
+values and are masked by the renderer.
+
 ## Probe runs (`playgrad.probe`)
 
 A probe is a playgrad-internal forward pass on a *pinned* input batch, run
@@ -582,8 +632,13 @@ It does not touch tensors directly until they need to be rendered.
   lazy rendering is the natural next step, but the current code path
   keeps the wiring simple.
 - The `/watch` page is its own NiceGUI page handler keyed to the same
-  `Session`. It builds one `_WatchLayerPanel` per watched module; each
-  holds two `_HistPlot`s (activations and gradients) and a stats table
+  `Session`. A header dropdown switches every layer card between the
+  HISTOGRAM view and the MIN/MAX extreme-patch view; each view's
+  checkbox group (**Log x** / **Log y** vs. the four grid toggles +
+  **Heatmap**) is only visible while its view is selected. The page
+  builds one `_WatchLayerPanel` per watched module; each holds both
+  views and refreshes only the visible one. The histogram view holds
+  two `_HistPlot`s (activations and gradients) and a stats table
   above each. A 2-second `ui.timer` calls
   `session.watch_snapshot()` and hands the per-phase stats to every
   `_HistPlot.update`. Routine ticks only change the bar counts (and the
@@ -654,6 +709,21 @@ It does not touch tensors directly until they need to be rendered.
   HTML table (`_stats_table_html`) in a light framed box: one column per
   phase with data (header tinted with the trace color), one row per stat
   (`n`, `mean`, `std`, `median`, `min`, `max`).
+- The `/watch` MIN/MAX view renders each enabled patch type as one
+  composite image per phase (`render_patch_grid`): channels as columns,
+  the per-channel top samples as rows (best first), denormalized with
+  the session's `input_mean` / `input_std` like the input pane, encoded
+  at native patch resolution and CSS-upscaled to `PATCH_CELL_SIZE` per
+  cell with `image-rendering: pixelated` (`max-width:none` opts out of
+  the preflight clamp so wide grids scroll horizontally). The
+  **Heatmap** checkbox blends each cell's stored activation map over
+  the patch — transparent at zero, opacifying toward red/blue at
+  `HEAT_MAX_ALPHA` for the grid-wide absolute extreme, with crop
+  windows ratio-mapped back onto the activation map. Never-filled
+  slots render flat gray. Grids re-render only when a cheap signature
+  (enabled toggles + heatmap flag + the stored extreme values) changes
+  (`_patch_grids_signature`), so routine 2-second ticks cost nothing
+  once an epoch's buffers settle.
 - The `/weights` page (one `?layer=` query param) is the per-layer weight
   viewer. It reuses the shared stepping controls (no sample spinner) and
   builds one `_WeightPanel` per name in `session.layer_weights[layer]`,

@@ -232,7 +232,12 @@ being published.
 `session.layer_weights` exposes the underlying
 `layer name -> parameter names` map.
 
-The `/watch` page renders one card per watched layer with two plotly
+The `/watch` page renders one card per watched layer. A dropdown in
+the top bar switches every card between two views — **HISTOGRAM** and
+**MIN/MAX** — each with its own checkbox group that is only shown
+while that view is selected.
+
+The HISTOGRAM view shows two plotly
 figures (activations + activation gradients), each showing one stacked
 subplot row per phase (train / val) for the most recent epoch — the
 rows share the value axis and y-range so the distributions compare
@@ -265,7 +270,21 @@ would undo these caps (landing on a different scale than the initial
 render), the button is removed — "Reset axes" and double-click return
 to the intended ranges. Above each figure a table shows one column per
 phase (`train ep N`, `val ep N`) and one row per stat: `n`, `mean`,
-`std`, histogram-derived `median`, and `min`/`max`. Any layer in `session.layer_names` is
+`std`, histogram-derived `median`, and `min`/`max`.
+
+The MIN/MAX view shows, per phase of the most recent epoch, the input
+patches that drove the layer's most extreme activations. Four grids —
+**Max pixel**, **Min pixel** (input crops around the channel's
+largest/smallest spatial activation), **Max average**, **Min average**
+(whole input images ranked by the channel's spatial mean) — lay
+activation channels out as columns and each channel's top 5 samples as
+rows, best first. A checkbox per grid toggles it on/off, and a fifth
+**Heatmap** checkbox blends each channel's activation strength over
+the patches (transparent at zero, red for positive and blue for
+negative extremes). Patch gathering needs an image-like (4D, 1- or
+3-channel) model input and runs entirely on the training device.
+
+Any layer in `session.layer_names` is
 watchable — named modules, fx-traced intermediates (scope-qualified by
 their submodule, e.g. `stage1.0.relu1`, `stage1.0.add`), and the graph
 input itself (`x`). While at least one layer

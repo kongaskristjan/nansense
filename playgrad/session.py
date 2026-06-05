@@ -733,6 +733,7 @@ class Session:
         self._hook_handles.clear()
 
     def _update_watch_stats(self, pos: BatchPosition) -> None:
+        source = self._patch_source_input()
         for name in self._watched_layers:
             tensor = self._activations.get(name)
             if tensor is None:
@@ -753,6 +754,32 @@ class Session:
                     kind="gradient",
                     x=grad,
                 )
+            if source is not None:
+                self._watch_accumulator.update_patches(
+                    layer=name,
+                    phase=pos.phase,
+                    epoch=pos.epoch,
+                    act=tensor,
+                    x=source,
+                )
+
+    def _patch_source_input(self) -> Tensor | None:
+        """The forward input to crop extreme-activation patches from.
+
+        Prefers the first image-like input (4D with 1 or 3 channels);
+        falls back to any 4D input so `PatchAccumulator.update` can apply
+        its own guards. `None` when the model takes no 4D input.
+        """
+        fallback: Tensor | None = None
+        for name in self._input_names:
+            t = self._activations.get(name)
+            if not isinstance(t, Tensor) or t.ndim != 4:
+                continue
+            if t.shape[1] in (1, 3):
+                return t
+            if fallback is None:
+                fallback = t
+        return fallback
 
     def _patch_forward(self) -> None:
         # Stash whatever .forward currently resolves to so we can put it back,

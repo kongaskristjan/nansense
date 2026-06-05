@@ -216,3 +216,42 @@ def test_watch_accumulator_forget_epochs_from() -> None:
     acc.forget_epochs_from(1)
     snap = acc.snapshot()
     assert set(snap.stats) == {("a", "train", 0)}
+
+
+def _patch_batch() -> tuple[torch.Tensor, torch.Tensor]:
+    """A (act, x) pair small enough for fast patch updates."""
+    act = torch.randn(2, 3, 4, 4)
+    x = torch.randn(2, 3, 8, 8)
+    return act, x
+
+
+def test_watch_accumulator_update_patches_lands_in_snapshot() -> None:
+    acc = WatchAccumulator()
+    act, x = _patch_batch()
+    acc.update_patches(layer="a", phase="train", epoch=0, act=act, x=x)
+    snap = acc.snapshot()
+    patches = snap.stats[("a", "train", 0)].patches
+    assert patches is not None
+    assert set(patches.by_type) == {
+        "max_pixel",
+        "min_pixel",
+        "max_average",
+        "min_average",
+    }
+    # Buckets without patch updates report None, not an empty snapshot.
+    acc.update(layer="b", phase="train", epoch=0, kind="activation", x=torch.tensor([1.0]))
+    assert acc.snapshot().stats[("b", "train", 0)].patches is None
+
+
+def test_watch_accumulator_evicts_older_epoch_patch_buffers() -> None:
+    acc = WatchAccumulator()
+    act, x = _patch_batch()
+    acc.update_patches(layer="a", phase="train", epoch=0, act=act, x=x)
+    acc.update_patches(layer="a", phase="val", epoch=0, act=act, x=x)
+    acc.update_patches(layer="a", phase="train", epoch=1, act=act, x=x)
+    snap = acc.snapshot()
+    # The newer train epoch released epoch 0's train buffers; val (still on
+    # epoch 0) and the new train bucket keep theirs.
+    assert snap.stats[("a", "train", 0)].patches is None
+    assert snap.stats[("a", "train", 1)].patches is not None
+    assert snap.stats[("a", "val", 0)].patches is not None

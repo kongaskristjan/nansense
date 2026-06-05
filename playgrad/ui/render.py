@@ -38,6 +38,8 @@ from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 from torch.nn import functional as F
 
+from playgrad.patches import TypePatches
+
 TILE_SIZE: int = 128
 TILE_GAP_DIVISOR: int = 48
 LINEAR_TILE_HEIGHT: int = 32
@@ -54,6 +56,11 @@ LEGEND_LABEL_WIDTH: int = 52
 LEGEND_GAP: int = 4
 LEGEND_WIDTH: int = LEGEND_LABEL_WIDTH + LEGEND_GAP + LEGEND_BAR_WIDTH + LEGEND_GAP
 LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
+# Extreme-patch grids: CSS pixel side of one cell, the strongest heatmap
+# overlay opacity, and the fill for never-filled slots.
+PATCH_CELL_SIZE: int = 44
+HEAT_MAX_ALPHA: float = 0.55
+_EMPTY_CELL_GRAY: int = 235
 
 
 def image_mime() -> str:
@@ -260,6 +267,140 @@ def render_image(
     else:
         pil = Image.fromarray(hwc, mode="RGB")
     return _pil_to_bytes(pil)
+
+
+@dataclass(frozen=True)
+class PatchGridRender:
+    """One extreme-patch grid: channels across, top-N samples down.
+
+    `image` is encoded at native patch resolution; the UI shows it at
+    `width × height` CSS pixels (`PATCH_CELL_SIZE` per cell) with
+    `image-rendering: pixelated`, like the activation strips.
+    """
+
+    image: bytes
+    width: int
+    height: int
+
+
+def render_patch_grid(
+    tp: TypePatches,
+    *,
+    mean: tuple[float, ...] | None = None,
+    std: tuple[float, ...] | None = None,
+    heatmap: bool = False,
+) -> PatchGridRender | None:
+    """Render one patch type's double grid as `STRIP_FORMAT` bytes.
+
+    Columns are activation channels, rows the per-channel top samples
+    (best first). Patches are denormalized like `render_image`. With
+    `heatmap`, the stored activation map is blended over each patch —
+    transparent at 0, opacifying toward red (positive) / blue (negative)
+    at the grid-wide absolute maximum. Slots never filled render as flat
+    gray. Returns `None` when no slot is filled yet.
+    """
+    values = tp.values.numpy()
+    valid = np.isfinite(values)
+    if not valid.any():
+        return None
+    cells = _denormalized_cells(tp, mean=mean, std=std)
+    c, n, ph, pw, _ = cells.shape
+    if heatmap:
+        cells = _blend_heat(cells, tp)
+    cells[~valid] = _EMPTY_CELL_GRAY
+
+    gap = 1
+    grid = np.full(
+        (n * ph + (n - 1) * gap, c * pw + (c - 1) * gap, 3), 255, dtype=np.uint8
+    )
+    for col in range(c):
+        for row in range(n):
+            y, x = row * (ph + gap), col * (pw + gap)
+            grid[y : y + ph, x : x + pw] = cells[col, row]
+    return PatchGridRender(
+        image=_encode_image(grid),
+        width=round(grid.shape[1] * PATCH_CELL_SIZE / pw),
+        height=round(grid.shape[0] * PATCH_CELL_SIZE / ph),
+    )
+
+
+def _denormalized_cells(
+    tp: TypePatches,
+    *,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+) -> np.ndarray:
+    """Patches as `(C, N, ph, pw, 3)` uint8, denormalized like `render_image`."""
+    arr = tp.patches.numpy()  # (C, N, Cin, ph, pw)
+    cin = arr.shape[2]
+    if mean is not None and std is not None and len(mean) == cin == len(std):
+        m = np.asarray(mean, dtype=np.float32).reshape(1, 1, cin, 1, 1)
+        s = np.asarray(std, dtype=np.float32).reshape(1, 1, cin, 1, 1)
+        arr = arr * s + m
+    arr = (arr.clip(0.0, 1.0) * 255).astype(np.uint8)
+    rgb = np.moveaxis(arr, 2, -1)  # (C, N, ph, pw, Cin)
+    if cin == 1:
+        rgb = np.repeat(rgb, 3, axis=-1)
+    return np.ascontiguousarray(rgb)
+
+
+def _blend_heat(cells: np.ndarray, tp: TypePatches) -> np.ndarray:
+    """Overlay each cell's activation map: 0 transparent, ±max red/blue."""
+    heat = tp.heat.numpy()  # (C, N, Hh, Wh)
+    valid = np.isfinite(tp.values.numpy())
+    finite = np.nan_to_num(heat[valid], posinf=0.0, neginf=0.0)
+    vmax = float(np.abs(finite).max()) if finite.size else 0.0
+    if vmax <= 0.0:
+        return cells
+    c, n, ph, pw, _ = cells.shape
+    out = cells.astype(np.float32)
+    top = tp.top.numpy()
+    left = tp.left.numpy()
+    hin, win = tp.input_hw
+    for col in range(c):
+        for row in range(n):
+            if not valid[col, row]:
+                continue
+            cell_heat = _cell_heat(
+                heat[col, row],
+                crop=tp.crop,
+                window=(top[col, row], left[col, row], ph, pw),
+                input_hw=(hin, win),
+            )
+            norm = (cell_heat / vmax).clip(-1.0, 1.0)
+            alpha = (np.abs(norm) * HEAT_MAX_ALPHA)[..., None]
+            color = np.zeros((ph, pw, 3), dtype=np.float32)
+            color[..., 0] = np.where(norm > 0, 255.0, 0.0)
+            color[..., 2] = np.where(norm < 0, 255.0, 0.0)
+            out[col, row] = out[col, row] * (1 - alpha) + color * alpha
+    return out.round().astype(np.uint8)
+
+
+def _cell_heat(
+    heat: np.ndarray,
+    *,
+    crop: bool,
+    window: tuple[int, int, int, int],
+    input_hw: tuple[int, int],
+) -> np.ndarray:
+    """The activation-map region under one cell, nearest-resized to it.
+
+    For crops, the input-space window `[top, top+ph) × [left, left+pw)` is
+    ratio-mapped back onto the activation map before resizing; whole-image
+    patches use the full map.
+    """
+    top, left, ph, pw = window
+    hh, wh = heat.shape
+    if crop:
+        hin, win = input_hw
+        y0 = max(0, int(np.floor(top * hh / hin)))
+        y1 = min(hh, max(y0 + 1, int(np.ceil((top + ph) * hh / hin))))
+        x0 = max(0, int(np.floor(left * wh / win)))
+        x1 = min(wh, max(x0 + 1, int(np.ceil((left + pw) * wh / win))))
+        heat = heat[y0:y1, x0:x1]
+    ys = (np.arange(ph) * heat.shape[0] / ph).astype(np.int64)
+    xs = (np.arange(pw) * heat.shape[1] / pw).astype(np.int64)
+    return heat[ys[:, None], xs[None, :]]
 
 
 def _render_1d(tensor: Tensor) -> StripRender:
