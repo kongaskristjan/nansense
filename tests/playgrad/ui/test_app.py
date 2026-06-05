@@ -6,14 +6,17 @@ import pytest
 import torch
 
 import playgrad
+from playgrad.probe import ProbeResult
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
     _BIN_WIDTHS,
     _DENSITY_TOP_BINS,
     _PLOT_HEIGHT,
+    _PROBE_NO_GRADIENTS_HTML,
     _RenderCache,
     _compute_frame,
+    _display_batch_size,
     _default_roles,
     _density_heights,
     _density_y_range,
@@ -510,6 +513,7 @@ def test_compute_frame_renders_strips_and_input() -> None:
     rendered, input_html = _compute_frame(
         ["x", "conv", "missing"],
         snap,
+        None,
         0,
         input_name="x",
         input_mean=None,
@@ -531,6 +535,7 @@ def test_compute_frame_reuses_cache_within_a_snapshot() -> None:
         return _compute_frame(
             ["conv"],
             snap,
+            None,
             sample_idx,
             input_name="x",
             input_mean=None,
@@ -545,6 +550,44 @@ def test_compute_frame_reuses_cache_within_a_snapshot() -> None:
     assert input_again is input_first
     other_sample, _ = frame(1)
     assert other_sample["conv"][0] is not first["conv"][0]
+
+
+def _frame_probe() -> ProbeResult:
+    return ProbeResult(
+        input=torch.rand(2, 3, 4, 4),
+        activations={"x": torch.rand(2, 3, 4, 4), "conv": torch.rand(2, 2, 4, 4)},
+        mode="eval",
+    )
+
+
+def test_compute_frame_prefers_probe_over_snapshot() -> None:
+    probe = _frame_probe()
+    rendered, input_html = _compute_frame(
+        ["x", "conv", "missing"],
+        _frame_snapshot(),
+        probe,
+        0,
+        input_name="x",
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    act, grad = rendered["conv"]
+    assert "<img" in act
+    # Probes are forward-only: every gradient strip is the placeholder note.
+    assert grad == _PROBE_NO_GRADIENTS_HTML
+    assert rendered["missing"][0] == ""
+    assert "<img" in input_html
+
+
+def test_display_batch_size_prefers_probe() -> None:
+    snap = _frame_snapshot()  # batch size 2
+    probe = ProbeResult(
+        input=torch.rand(5, 3, 4, 4), activations={}, mode="eval"
+    )
+    assert _display_batch_size(snap, probe) == 5
+    assert _display_batch_size(snap, None) == 2
+    assert _display_batch_size(None, None) is None
 
 
 def test_compute_frame_renders_more_layers_than_pool_workers() -> None:
@@ -567,6 +610,7 @@ def test_compute_frame_renders_more_layers_than_pool_workers() -> None:
     rendered, _ = _compute_frame(
         names,
         snap,
+        None,
         0,
         input_name=None,
         input_mean=None,

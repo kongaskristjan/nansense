@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import inspect
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -43,6 +44,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
 from playgrad.fx_names import friendly_names
+from playgrad.probe import PROBE_MODES, ProbeResult
 from playgrad.restore import (
     DEFAULT_CACHE_DIR,
     TimeTravelError,
@@ -132,6 +134,19 @@ class Session:
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
         self._watch_accumulator = WatchAccumulator()
+        # Probe state (see playgrad.probe). Config fields are mutated by the
+        # UI thread under `_cv`; `_probe_result` is published by the training
+        # thread (also under `_cv`, so a stale in-flight run can be detected
+        # via `_probe_version` and dropped instead of overwriting newer
+        # config's result).
+        self._pinned_input: Tensor | None = None
+        self._pinned_position: BatchPosition | None = None
+        self._probe_mode: str = "eval"
+        self._probe_request = False
+        self._probe_version = 0
+        self._probe_count = 0
+        self._probe_result: ProbeResult | None = None
+        self._probe_error: str | None = None
 
     @property
     def schedule(self) -> Schedule:
@@ -281,6 +296,122 @@ class Session:
         with self._cv:
             layers = list(self._watched_layers)
         return self._watch_accumulator.snapshot(layers=layers)
+
+    @property
+    def probe_result(self) -> ProbeResult | None:
+        """The last probe run's outputs, or `None` when nothing is pinned.
+
+        Same lock-free read contract as `snapshot`: an atomic reference to a
+        frozen dataclass of CPU tensors, safe to hold from any thread.
+        """
+        return self._probe_result
+
+    @property
+    def probe_error(self) -> str | None:
+        """Why the last probe run failed, or `None` when it succeeded."""
+        return self._probe_error
+
+    @property
+    def probe_count(self) -> int:
+        """Monotonic count of completed probe runs (including failed ones)."""
+        with self._cv:
+            return self._probe_count
+
+    @property
+    def probe_mode(self) -> str:
+        """Train/eval handling for probe forwards: "unchanged", "eval", or "train"."""
+        with self._cv:
+            return self._probe_mode
+
+    @property
+    def is_pinned(self) -> bool:
+        with self._cv:
+            return self._pinned_input is not None
+
+    @property
+    def pinned_position(self) -> BatchPosition | None:
+        """Where the pinned input was captured, or `None` when not pinned."""
+        return self._pinned_position
+
+    def pin_current_batch(self) -> bool:
+        """Pin the last captured batch's input as the probe input.
+
+        Returns `False` when there is nothing to pin (disabled session, no
+        snapshot yet, or a snapshot without an input tensor). While pinned,
+        every capture re-runs the model on this input (a "probe") and
+        publishes a `ProbeResult` alongside the snapshot, so the UI can show
+        the network's evolving response to one fixed batch across stepping
+        and time travel. Pinning while paused runs the probe immediately on
+        the paused training thread (see `_wait_for_proceed`).
+        """
+        if not self._enabled:
+            return False
+        snap = self._snapshot
+        input_name = self._input_names[0] if self._input_names else None
+        if snap is None or input_name is None:
+            return False
+        pinned = snap.activations.get(input_name)
+        if pinned is None:
+            return False
+        with self._cv:
+            self._pinned_input = pinned
+            self._pinned_position = snap.position
+            self._request_probe_locked()
+        return True
+
+    def unpin_batch(self) -> None:
+        """Drop the pinned input and the published probe result."""
+        with self._cv:
+            if self._pinned_input is None:
+                return
+            self._pinned_input = None
+            self._pinned_position = None
+            self._probe_version += 1
+            self._probe_request = False
+            self._probe_result = None
+            self._probe_error = None
+            self._cv.notify_all()
+
+    def set_probe_mode(self, mode: str) -> None:
+        """Set train/eval handling for probe forwards.
+
+        - `"eval"` (default): the whole model is switched to eval — BatchNorm
+          uses running stats, dropout is off — and restored afterwards.
+        - `"train"`: the whole model is switched to train and restored.
+        - `"unchanged"`: modules run with whatever `training` flags the
+          training loop left on them.
+
+        Regardless of mode, probes never mutate training state: per-module
+        flags and all buffers are restored after the run, and the RNG is
+        forked around it. A mode change while pinned re-runs the probe.
+        """
+        if mode not in PROBE_MODES:
+            raise ValueError(
+                f"unknown probe mode {mode!r}; expected one of {PROBE_MODES}"
+            )
+        with self._cv:
+            if mode == self._probe_mode:
+                return
+            self._probe_mode = mode
+            if self._probe_active_locked():
+                self._request_probe_locked()
+            else:
+                self._probe_version += 1
+
+    def wait_for_probe(
+        self, *, after_count: int = 0, timeout: float | None = None
+    ) -> bool:
+        """Block until more than `after_count` probe runs have completed.
+
+        The probe-side counterpart of `wait_until_paused`, used by tests and
+        the UI to synchronize with asynchronously-requested probe runs
+        without polling. Counts failed runs too — check `probe_error`.
+        """
+        with self._cv:
+            return self._cv.wait_for(
+                lambda: self._probe_count > after_count or self._closed,
+                timeout=timeout,
+            )
 
     def current_weights(self) -> dict[str, Tensor]:
         """CPU clones of the model's parameters, read live at call time.
@@ -532,12 +663,16 @@ class Session:
         if self._fx_graph is not None:
             self._patch_forward()
             return
-        pre = self.model.register_forward_pre_hook(self._make_pre_hook())
+        pre = self.model.register_forward_pre_hook(
+            self._make_pre_hook(self._activations)
+        )
         self._hook_handles.append(pre)
         for name, module in self.model.named_modules():
             if module is self.model:
                 continue
-            handle = module.register_forward_hook(self._make_hook(name))
+            handle = module.register_forward_hook(
+                self._make_hook(name, self._activations)
+            )
             self._hook_handles.append(handle)
 
     def _remove_hooks(self) -> None:
@@ -593,17 +728,21 @@ class Session:
         self._original_forward = None
         self._had_instance_forward = False
 
-    def _make_hook(self, name: str):
+    def _make_hook(
+        self, name: str, capture: dict[str, Tensor]
+    ) -> Callable[[nn.Module, object, object], None]:
         def hook(_module: nn.Module, _inputs: object, output: object) -> None:
             if not isinstance(output, Tensor):
                 return
             if output.requires_grad:
                 output.retain_grad()
-            self._activations[name] = output
+            capture[name] = output
 
         return hook
 
-    def _make_pre_hook(self):
+    def _make_pre_hook(
+        self, capture: dict[str, Tensor]
+    ) -> Callable[[nn.Module, tuple[object, ...]], None]:
         def hook(_module: nn.Module, inputs: tuple[object, ...]) -> None:
             for i, inp in enumerate(inputs):
                 if not isinstance(inp, Tensor):
@@ -615,7 +754,7 @@ class Session:
                 )
                 if inp.requires_grad:
                     inp.retain_grad()
-                self._activations[name] = inp
+                capture[name] = inp
 
         return hook
 
@@ -734,12 +873,169 @@ class Session:
             seen = self._resume_token
             self._pause_count += 1
             self._cv.notify_all()
-            while (
-                self._resume_token == seen
-                and not self._closed
-                and self._pending_jump is None
-            ):
-                self._cv.wait()
+        # Pause-time job loop: probe requests (pin / mode changes from the
+        # UI) also wake the paused training thread, which runs the probe
+        # forward *here* — the model is only ever touched from the training
+        # thread — and re-enters the wait. The forward runs outside the lock
+        # so UI reads (mode, pause_count, ...) stay responsive meanwhile.
+        while True:
+            with self._cv:
+                self._cv.wait_for(
+                    lambda: self._resume_token != seen
+                    or self._closed
+                    or self._pending_jump is not None
+                    or self._probe_request
+                )
+                run_probe = self._probe_request
+                self._probe_request = False
+                done = (
+                    self._resume_token != seen
+                    or self._closed
+                    or self._pending_jump is not None
+                )
+            if done:
+                # A coalesced probe request is dropped: resuming into a
+                # capture re-runs the probe anyway (_maybe_run_probe_at_capture).
+                return
+            if run_probe:
+                self._run_probe_guarded()
+
+    def _probe_active_locked(self) -> bool:
+        """Whether probe runs should happen at all (caller holds `_cv`)."""
+        return self._pinned_input is not None
+
+    def _request_probe_locked(self) -> None:
+        """Arm a probe run and wake a paused training thread (caller holds `_cv`)."""
+        self._probe_version += 1
+        self._probe_request = True
+        self._cv.notify_all()
+
+    def _maybe_run_probe_at_capture(self) -> None:
+        """Run a probe right after a capture published its snapshot.
+
+        Called by `_BatchContext.__exit__` before the pause, so every pause
+        shows a probe result consistent with the just-captured weights. Any
+        UI request armed in the meantime is consumed here — the run below
+        uses the current config either way.
+        """
+        with self._cv:
+            self._probe_request = False
+            active = self._probe_active_locked()
+        if active:
+            self._run_probe_guarded()
+
+    def _run_probe_guarded(self) -> None:
+        # A failing probe (bad input, OOM, model quirk) must not kill the
+        # training thread or wedge the pause loop; the error is published
+        # for the UI to display instead.
+        try:
+            self._run_probe()
+        except Exception as e:  # noqa: BLE001 — surfaced via probe_error
+            with self._cv:
+                self._probe_error = f"{type(e).__name__}: {e}"
+                self._probe_count += 1
+                self._cv.notify_all()
+
+    def _run_probe(self) -> None:
+        """One probe run: an isolated forward on the pinned input.
+
+        Training-thread only. Reads the probe config under `_cv`, runs the
+        forward without the lock, and publishes the result only if the config
+        is still current — a config change mid-run (re-pin, mode flip) wins
+        and its own request re-runs the probe.
+        """
+        with self._cv:
+            version = self._probe_version
+            base = self._pinned_input
+            mode = self._probe_mode
+        if base is None:
+            return
+        activations = self._probe_forwards([base], mode=mode)[0]
+        result = ProbeResult(input=base, activations=activations, mode=mode)
+        with self._cv:
+            if self._probe_version != version:
+                return
+            self._probe_result = result
+            self._probe_error = None
+            self._probe_count += 1
+            self._cv.notify_all()
+
+    def _probe_forwards(
+        self, inputs: list[Tensor], *, mode: str
+    ) -> list[dict[str, Tensor]]:
+        """Run isolated no-grad forwards, capturing every layer's output.
+
+        Isolation contract — probes never mutate training state:
+
+        - Per-module `training` flags are saved and restored ("eval"/"train"
+          probes flip them; "unchanged" runs with whatever the loop set).
+        - Every buffer is restored afterwards (a train-mode BatchNorm forward
+          updates running stats in place).
+        - The RNG is forked, so e.g. train-mode dropout doesn't perturb the
+          global stream that time-travel replays depend on.
+        - `torch.no_grad()` keeps parameters' `.grad` and autograd state
+          untouched.
+        """
+        device = self._model_device()
+        saved_flags = [(m, m.training) for m in self.model.modules()]
+        saved_buffers = [(b, b.detach().clone()) for _, b in self.model.named_buffers()]
+        try:
+            if mode == "eval":
+                self.model.eval()
+            elif mode == "train":
+                self.model.train()
+            with self._fork_rng(device), torch.no_grad():
+                return [self._capture_forward(inp.to(device)) for inp in inputs]
+        finally:
+            for module, flag in saved_flags:
+                module.training = flag
+            with torch.no_grad():
+                for buffer, saved in saved_buffers:
+                    buffer.copy_(saved)
+
+    def _capture_forward(self, inp: Tensor) -> dict[str, Tensor]:
+        """One forward pass capturing every layer output into a fresh dict.
+
+        Never touches the batch path's state (`_activations`,
+        `_hook_handles`, the patched forward): in fx mode the interpreter
+        writes straight into a local dict, and in the hook fallback temporary
+        hooks are registered and removed around the call. Safe because probes
+        only run between batches, when the batch path's hooks are
+        uninstalled.
+        """
+        capture: dict[str, Tensor] = {}
+        if self._fx_graph is not None:
+            _CaptureInterpreter(self._fx_graph, capture).run(inp)
+        else:
+            handles = [
+                self.model.register_forward_pre_hook(self._make_pre_hook(capture))
+            ]
+            handles += [
+                module.register_forward_hook(self._make_hook(name, capture))
+                for name, module in self.model.named_modules()
+                if module is not self.model
+            ]
+            try:
+                self.model(inp)
+            finally:
+                for handle in handles:
+                    handle.remove()
+        return {name: self._cpu_clone(tensor) for name, tensor in capture.items()}
+
+    def _model_device(self) -> torch.device:
+        param = next(self.model.parameters(), None)
+        if param is not None:
+            return param.device
+        buffer = next(self.model.buffers(), None)
+        if buffer is not None:
+            return buffer.device
+        return torch.device("cpu")
+
+    @staticmethod
+    def _fork_rng(device: torch.device) -> AbstractContextManager[None]:
+        if device.type in ("cuda", "mps"):
+            return torch.random.fork_rng(devices=[device], device_type=device.type)
+        return torch.random.fork_rng(devices=[])
 
 
 class _BatchContext:
@@ -807,6 +1103,7 @@ class _BatchContext:
             self._session._remove_hooks()
             if self._captured and exc is None and not self._session.closed:
                 self._session._publish_snapshot(self._position)
+                self._session._maybe_run_probe_at_capture()
                 self._session._wait_for_proceed()
             self._session._activations.clear()
         # Every batch boundary — captured, stats-only, or plain (detach) —

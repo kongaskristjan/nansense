@@ -3,20 +3,23 @@
 The app runs on a background daemon-thread-disabled uvicorn (signal handlers
 disabled so it survives being started from a non-main thread). Layout:
 
-- Top bar with the six control buttons, a position label, and a sample
-  index spinner.
+- Top bar with the six control buttons and a position label.
 - Left pane: the model architecture as a Mermaid diagram (built once at
   start).
-- Right pane: a one-column table with one row per submodule. Each row
+- Centre pane: a one-column table with one row per submodule. Each row
   holds two horizontally scrollable strips — activations on top,
   activation gradients below — sharing a single horizontal scrollbar so
   they pan together.
+- Right pane: the "Input Selection" sidebar (see `playgrad.ui.input_panel`)
+  with the sample spinner, the batch-pinning probe controls, and the input
+  image.
 
-A `ui.timer` in each connection polls `session.snapshot`; when a new
-snapshot is published, the page re-renders all per-layer strips against
-it. The same timer also refreshes the top-bar position label from
-`session.live_position` on every tick, so the displayed epoch/batch keeps
-advancing during modes that don't publish a snapshot every batch
+A `ui.timer` in each connection polls `session.snapshot` and
+`session.probe_result`; when a new one is published, the page re-renders
+all per-layer strips against it (the probe — the pinned-batch view — wins
+when present). The same timer also refreshes the top-bar position label
+from `session.live_position` on every tick, so the displayed epoch/batch
+keeps advancing during modes that don't publish a snapshot every batch
 (step-epoch, step-custom, run, detach) — a cheap label write, decoupled
 from the heavier strip rendering.
 """
@@ -41,10 +44,12 @@ from fastapi import FastAPI
 from nicegui import ui
 from torch import Tensor
 
+from playgrad.probe import ProbeResult
 from playgrad.restore import TimeTravelError
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
+from playgrad.ui.input_panel import InputPanel
 from playgrad.ui.render import (
     INPUT_IMAGE_SIZE,
     StripRender,
@@ -334,11 +339,10 @@ def serve(
 
 @dataclass
 class _PageState:
-    sample_idx: int = 0
     last_snapshot: BatchSnapshot | None = None
+    last_probe: ProbeResult | None = None
     dirty: bool = False
     rendering: bool = False
-    spinner_max: int | None = None
 
 
 # Shared pool for strip rendering. Per-layer renders are independent and the
@@ -353,12 +357,12 @@ _RENDER_POOL = ThreadPoolExecutor(
 class _RenderCache:
     """Strip-HTML cache for the main page, shared across connections.
 
-    Valid for exactly one snapshot at a time: the cache holds a strong
-    reference to the snapshot it was filled against and resets whenever a
-    different one shows up (identity comparison — snapshots are frozen and
-    every pause publishes a new object, so identity is exactly "same
-    capture"). Within a snapshot, entries are keyed by
-    `(name, kind, sample_idx)`, so flipping the sample spinner back to a
+    Valid for exactly one render source at a time — a `BatchSnapshot` or a
+    `ProbeResult`: the cache holds a strong reference to the source it was
+    filled against and resets whenever a different one shows up (identity
+    comparison — both are frozen and every publish creates a new object, so
+    identity is exactly "same capture"). Within a source, entries are keyed
+    by `(name, kind, sample_idx)`, so flipping the sample spinner back to a
     value already seen, or a second browser tab on the same session, becomes
     a dict lookup instead of a re-render. `_MAX_ENTRIES` bounds a long
     sample-scrubbing session; overflowing simply resets the cache.
@@ -368,18 +372,18 @@ class _RenderCache:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._snapshot: BatchSnapshot | None = None
+        self._source: object | None = None
         self._entries: dict[tuple[str, str, int], str] = {}
 
     def get_or_render(
         self,
-        snap: BatchSnapshot,
+        source: object,
         key: tuple[str, str, int],
         render: Callable[[], str],
     ) -> str:
         with self._lock:
-            if snap is not self._snapshot:
-                self._snapshot = snap
+            if source is not self._source:
+                self._source = source
                 self._entries = {}
             entries = self._entries
             cached = entries.get(key)
@@ -387,9 +391,9 @@ class _RenderCache:
             return cached
         html = render()
         with self._lock:
-            # Drop the result if a newer snapshot displaced the cache while
+            # Drop the result if a newer source displaced the cache while
             # this render was in flight — `entries` would be the stale dict.
-            if self._snapshot is snap:
+            if self._source is source:
                 if len(entries) >= self._MAX_ENTRIES:
                     entries.clear()
                 entries[key] = html
@@ -468,8 +472,6 @@ def _build_page(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
             position_label = _add_step_controls(session, step_until_custom)
-            ui.label("Viewing sample:").classes("ml-3 text-sm")
-            sample_input = ui.number(value=0, min=0, step=1, format="%d").classes("w-20").props("dense")
             watch_chip = ui.button(
                 str(len(session.watched_layers)),
                 icon="visibility",
@@ -497,28 +499,8 @@ def _build_page(
             input_toggle = ui.button(
                 icon="image", color="slate-500"
             ).props("dense size=md").tooltip(
-                "Toggle input image pane"
+                "Toggle input selection pane"
             )
-
-            def _defer_clamp_display(target: int) -> None:
-                # NiceGUI suppresses .value writes made from inside a value-change
-                # handler; schedule the display correction for the next event loop
-                # iteration so it actually reaches the client.
-                ui.timer(0.0, lambda: sample_input.set_value(target), once=True)
-
-            def on_sample_change(e: object) -> None:
-                value = getattr(e, "value", None)
-                idx = int(value) if value is not None else 0
-                if idx < 0:
-                    idx = 0
-                    _defer_clamp_display(idx)
-                elif state.spinner_max is not None and idx > state.spinner_max:
-                    idx = state.spinner_max
-                    _defer_clamp_display(idx)
-                state.sample_idx = idx
-                state.dirty = True
-
-            sample_input.on_value_change(on_sample_change)
 
         def refresh_chip() -> None:
             watched = session.watched_layers
@@ -581,8 +563,11 @@ def _build_page(
                 "border-l-2 border-slate-300 bg-slate-50 items-center"
             )
             with input_pane:
-                ui.label("Input").classes("font-mono text-sm self-start")
-                input_html = ui.html("")
+
+                def mark_dirty() -> None:
+                    state.dirty = True
+
+                input_panel = InputPanel(session=session, on_change=mark_dirty)
 
         def toggle_architecture() -> None:
             architecture_pane.set_visibility(not architecture_pane.visible)
@@ -618,22 +603,33 @@ def _build_page(
         live = session.live_position
         if live is not None:
             position_label.text = _format_live_position(live)
+        input_panel.refresh_status()
         snap = session.snapshot
-        if snap is None:
+        # With a probe result present (a batch is pinned), the page renders
+        # the probe instead of the snapshot — that's the point of pinning:
+        # the strips track one fixed input across stepping and time travel.
+        probe = session.probe_result
+        if snap is None and probe is None:
             return
-        _sync_spinner_max(snap, state, sample_input)
+        input_panel.sync_spinner_max(_display_batch_size(snap, probe))
         if state.rendering:
             return
-        if snap is not state.last_snapshot or state.dirty:
+        if (
+            snap is not state.last_snapshot
+            or probe is not state.last_probe
+            or state.dirty
+        ):
             state.last_snapshot = snap
+            state.last_probe = probe
             state.dirty = False
             state.rendering = True
             try:
-                sample_idx = state.sample_idx
+                sample_idx = input_panel.sample_idx
                 rendered, input_img = await asyncio.to_thread(
                     _compute_frame,
                     layer_names,
                     snap,
+                    probe,
                     sample_idx,
                     input_name=input_name,
                     input_mean=input_mean,
@@ -643,7 +639,7 @@ def _build_page(
             finally:
                 state.rendering = False
             _apply_all(layer_views, rendered)
-            input_html.set_content(input_img)
+            input_panel.set_image(input_img)
 
     ui.timer(0.2, tick)
 
@@ -1801,28 +1797,29 @@ def _snapshot_batch_size(snap: BatchSnapshot) -> int | None:
     return None
 
 
-def _sync_spinner_max(
-    snap: BatchSnapshot,
-    state: _PageState,
-    sample_input: ui.number,
-) -> None:
-    batch_size = _snapshot_batch_size(snap)
-    if batch_size is None or batch_size <= 0:
-        return
-    new_max = batch_size - 1
-    if state.spinner_max == new_max:
-        return
-    state.spinner_max = new_max
-    sample_input.max = new_max
-    if state.sample_idx > new_max:
-        state.sample_idx = new_max
-        sample_input.value = new_max
-        state.dirty = True
+def _display_batch_size(
+    snap: BatchSnapshot | None, probe: ProbeResult | None
+) -> int | None:
+    """Batch size of whatever the page is currently rendering."""
+    if probe is not None:
+        return int(probe.input.shape[0]) if probe.input.ndim > 0 else None
+    if snap is not None:
+        return _snapshot_batch_size(snap)
+    return None
+
+
+# Shown in place of the GRADIENTS strip while a probe result is displayed:
+# probes are forward-only, so there are no activation gradients to render.
+_PROBE_NO_GRADIENTS_HTML: str = (
+    '<div class="text-xs text-slate-400 italic py-1">'
+    "no gradients on probe runs</div>"
+)
 
 
 def _compute_frame(
     layer_names: list[str],
-    snap: BatchSnapshot,
+    snap: BatchSnapshot | None,
+    probe: ProbeResult | None,
     sample_idx: int,
     *,
     input_name: str | None,
@@ -1832,10 +1829,21 @@ def _compute_frame(
 ) -> tuple[dict[str, tuple[str, str]], str]:
     """Render every layer's strip pair plus the input image.
 
-    Layers render concurrently on `_RENDER_POOL`; each strip goes through
-    `cache`, so only strips not already rendered for this snapshot cost
-    anything.
+    With a probe result present it is the render source (pinned batch view);
+    otherwise the snapshot is. Layers render concurrently on `_RENDER_POOL`;
+    each strip goes through `cache`, so only strips not already rendered for
+    this source cost anything.
     """
+    if probe is not None:
+        return _compute_probe_frame(
+            layer_names,
+            probe,
+            sample_idx,
+            input_mean=input_mean,
+            input_std=input_std,
+            cache=cache,
+        )
+    assert snap is not None  # tick only renders when at least one source exists
 
     def strips(name: str) -> tuple[str, str]:
         act = cache.get_or_render(
@@ -1867,6 +1875,44 @@ def _compute_frame(
                 mean=input_mean,
                 std=input_std,
             )
+        ),
+    )
+    return rendered, input_html
+
+
+def _compute_probe_frame(
+    layer_names: list[str],
+    probe: ProbeResult,
+    sample_idx: int,
+    *,
+    input_mean: tuple[float, ...] | None,
+    input_std: tuple[float, ...] | None,
+    cache: _RenderCache,
+) -> tuple[dict[str, tuple[str, str]], str]:
+    """The probe-sourced equivalent of the snapshot frame.
+
+    Probe runs are forward-only, so every gradient strip shows a placeholder
+    note instead of an image.
+    """
+
+    def strips(name: str) -> tuple[str, str]:
+        act = cache.get_or_render(
+            probe,
+            (name, "probe-act", sample_idx),
+            lambda: _strip_html(
+                render_strip(probe.activations.get(name), sample_idx)
+            ),
+        )
+        return act, _PROBE_NO_GRADIENTS_HTML
+
+    rendered = dict(
+        zip(layer_names, _RENDER_POOL.map(strips, layer_names), strict=True)
+    )
+    input_html = cache.get_or_render(
+        probe,
+        ("", "probe-input", sample_idx),
+        lambda: _input_img_tag(
+            render_image(probe.input, sample_idx, mean=input_mean, std=input_std)
         ),
     )
     return rendered, input_html

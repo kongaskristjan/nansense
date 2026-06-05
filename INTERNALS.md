@@ -295,6 +295,57 @@ the cost of exposing fx intermediates and inputs to the stats
 collector without a parallel implementation. Snapshot timeline and
 pause behaviour are unaffected on non-watching sessions.
 
+## Probe runs (`playgrad.probe`)
+
+A probe is a playgrad-internal forward pass on a *pinned* input batch, run
+between batches so the UI can show the network's response to one fixed
+input across stepping and time travel. `Session.pin_current_batch()` pins
+the last snapshot's input tensor (already a CPU clone); from then on every
+capture re-runs the model on it right after `_publish_snapshot` and
+publishes a `ProbeResult` — CPU clones of the input and of every layer
+output, keyed like `layer_names`. Probes are forward-only: no gradients.
+
+**Execution stays on the training thread.** The model is never touched from
+the UI thread (the invariant the snapshot path already relies on). Probes
+run at two points:
+
+1. `_BatchContext.__exit__`, between `_publish_snapshot` and
+   `_wait_for_proceed` — so every pause shows a probe consistent with the
+   just-captured weights.
+2. Inside `_wait_for_proceed`'s wait loop. UI requests (`pin_current_batch`,
+   `set_probe_mode`) arm `_probe_request` under `_cv` and notify; the paused
+   training thread wakes, runs the probe *outside* the lock (so UI reads
+   stay responsive), and re-enters the wait — the same "armed request
+   consumed at a safe point" pattern as `_pending_jump`, generalized to
+   running work. A request arriving mid-`detach` stays armed until the next
+   capture.
+
+**Isolation contract** (`_probe_forwards`): probes never mutate training
+state. Per-module `training` flags are saved and restored ("eval" / "train"
+probe modes flip the whole model; "unchanged" runs as-is); every buffer is
+restored afterwards (a train-mode BatchNorm forward updates running stats
+in place); the RNG is forked (`torch.random.fork_rng`, CUDA/MPS-aware) so
+e.g. train-mode dropout doesn't perturb the global stream that time-travel
+replays depend on; and the whole run sits under `torch.no_grad()`.
+
+**Capture reuse without interference** (`_capture_forward`): in fx mode the
+probe runs `_CaptureInterpreter` against a fresh local dict — the original
+`model.forward` is never patched, since the interpreter is invoked
+directly. In the hook fallback, temporary pre/forward hooks write into the
+local dict and are removed in a `finally`. Neither path touches
+`_activations` or `_hook_handles`; both are safe because probes only run
+between batches, when the batch path's hooks are uninstalled.
+
+**Publishing and races.** Probe config (pinned input, mode) is mutated by
+the UI thread under `_cv`, bumping `_probe_version`. `_run_probe` snapshots
+the config under the lock, computes without it, then publishes under the
+lock only if the version is unchanged — a config change mid-run wins and
+its own request re-runs the probe. `_probe_count` is the monotonic
+completion counter (`wait_for_probe` mirrors `wait_until_paused` for tests
+and the UI). A probe that raises publishes `probe_error` instead of killing
+the training thread (`_run_probe_guarded`); `unpin_batch` clears the
+published result so the UI falls back to the snapshot.
+
 ## Time travel (`playgrad.restore`)
 
 Time travel jumps training back to the start of any epoch whose state was
@@ -456,11 +507,23 @@ It does not touch tensors directly until they need to be rendered.
 - The page handler creates one `_LayerView` per submodule (a card with
   two strips inside a shared horizontal scroll container, each flanked by
   a sticky marker bar with a vertical label — emerald ACTIVATIONS, violet
-  GRADIENTS) and a `ui.timer` that, every 200 ms, checks
-  `session.pause_count`. If
-  it has advanced since the last render, every layer view re-renders
-  against the new snapshot, slicing each tensor at the current
-  `sample_idx` (driven by a single `ui.number` input in the top bar).
+  GRADIENTS) and a `ui.timer` that, every 200 ms, compares
+  `session.snapshot` and `session.probe_result` against the last rendered
+  pair by identity. When either changed, every layer view re-renders,
+  slicing each tensor at the current `sample_idx`. A probe result (pinned
+  batch) takes precedence over the snapshot as the render source; its
+  gradient strips show a placeholder note (probes are forward-only). The
+  `_RenderCache` is keyed by render-source identity — snapshot or probe
+  result — so both share one cache.
+- The right sidebar is `playgrad.ui.input_panel.InputPanel`: the "Viewing
+  sample" `ui.number` (moved out of the top bar), the "Pin batch" switch
+  with a pinned-position caption, the probe-mode toggle
+  (unchanged / eval / train, enabled only while pinned via
+  `bind_enabled_from`), and the input image. Pin/mode changes call straight
+  into the session; the session reacts by publishing a new `ProbeResult`,
+  which the tick loop picks up like a new snapshot. A failed pin (no
+  snapshot yet) reverts the switch with the usual one-tick-deferred value
+  write.
 - The same timer also refreshes the top-bar position label from
   `session.live_position` — the position recorded on *every* batch's
   `__enter__`, independent of capture. This is what keeps the displayed

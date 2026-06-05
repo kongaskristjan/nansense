@@ -140,8 +140,8 @@ previous run with a different architecture) is rejected with an error
 dialog and no jump happens. Without the `training_restorer` wrapper the
 button is grayed out; hovering it explains why. The leading icon button
 toggles the architecture pane;
-a trailing icon button toggles the input-image pane. The left pane shows
-the module hierarchy as a Mermaid diagram; hovering either a Mermaid
+a trailing icon button toggles the "Input Selection" pane. The left pane
+shows the module hierarchy as a Mermaid diagram; hovering either a Mermaid
 node or a layer card highlights both ends of the pair, and clicking
 either side scrolls the *other* pane so the matching element lands at
 the top. The centre pane shows one card per
@@ -149,9 +149,30 @@ submodule with horizontally-scrollable activation and activation-gradient
 strips for the selected sample, both drawn with the same diverging
 red/blue colormap and told apart by the labelled marker bar on each
 strip's left edge (emerald ACTIVATIONS, violet GRADIENTS); the right
-pane shows the input image for that sample (RGB or grayscale),
-denormalized with the `input_mean` / `input_std` passed to `serve()` if
-any.
+"Input Selection" pane holds the "Viewing sample" spinner that picks the
+displayed sample, the batch-pinning controls described below, and the
+input image for that sample (RGB or grayscale), denormalized with the
+`input_mean` / `input_std` passed to `serve()` if any.
+
+The Input Selection pane's "Pin batch" toggle pins the currently displayed
+batch as a fixed *probe* input: from then on, every pause re-runs the model
+on that same batch (a forward-only "probe run") and the layer cards show
+its activations instead of the changing training batch's. Because the
+input is held fixed, activation changes across `step batch` / `step epoch`
+/ time-travel jumps are attributable to training alone — normally the
+displayed batch changes every step with the loader's shuffling, which
+makes such comparisons hard. Gradient strips show a placeholder note while
+pinned (probes never run backward). A mode toggle — enabled only while a
+batch is pinned — picks how probe forwards treat train/eval state:
+**Eval** (default) switches the whole model to eval so BatchNorm uses its
+running stats and dropout is off, **Train** switches it to train, and
+**Unchanged** runs with whatever modes the training loop left. In every
+mode the probe is side-effect-free: per-module `training` flags and all
+buffers (BatchNorm running stats) are restored afterwards, the RNG stream
+is forked around the run, and no gradients are produced — training and
+time-travel determinism are unaffected. Pinning while paused publishes the
+probe immediately; pinning mid-`detach` takes effect at the next pause.
+Unpinning returns the page to the live training batch.
 
 Each layer card has a "Watch" toggle in its header that marks the
 layer as "watched". Watched cards (and the matching architecture
