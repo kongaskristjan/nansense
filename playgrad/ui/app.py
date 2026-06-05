@@ -73,6 +73,7 @@ from playgrad.watch import (
     LayerStatsSnapshot,
     TensorStatsSnapshot,
     WatchSnapshot,
+    bin_midpoint,
     histogram_edges,
 )
 
@@ -780,6 +781,10 @@ _BIN_CENTERS: list[float] = [
 _BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
+# Hover labels for the signed-log view, where bars sit at plain bin indices:
+# each bin's representative value (its geometric midpoint, the same notion
+# the median stat uses) instead of the meaningless index.
+_BIN_VALUE_LABELS: list[str] = [f"{bin_midpoint(i):.3g}" for i in range(N_BINS)]
 
 # Axis trims may clip bins/bars holding up to this share of the data points
 # (see `_trimmed_bin_bounds` / `_linear_y_range`). `_axis_ranges` starts at
@@ -830,6 +835,20 @@ def _probability_densities(hist: tuple[int, ...]) -> list[float]:
 def _trace_heights(hist: tuple[int, ...], density: bool) -> list[float]:
     """Bar heights for one trace: probability densities or probabilities."""
     return _probability_densities(hist) if density else _probabilities(hist)
+
+
+def _hover_customdata(hist: tuple[int, ...], density: bool) -> list[object]:
+    """Per-bar hover payload, matching `_make_histogram_figure`'s templates.
+
+    Density mode (linear x): the raw count alone — the bar's own x position
+    is already the value. Signed-log mode: `[count, value-label]` pairs, so
+    the hover can show the bin's value instead of its meaningless index.
+    """
+    if density:
+        return list(hist)
+    return [
+        [count, label] for count, label in zip(hist, _BIN_VALUE_LABELS)
+    ]
 
 
 def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]:
@@ -1069,31 +1088,6 @@ def _axis_ranges(
         share = min(share + _CLIP_SHARE_STEP, _MAX_CLIP_SHARE)
 
 
-def _effective_log_x(
-    per_phase: dict[str, LayerStatsSnapshot], kind: str, log_x: bool
-) -> bool:
-    """Whether the figure should use the signed-log value axis.
-
-    A checked **Log x** always wins. Otherwise the signed-log view kicks in
-    automatically when even the most aggressive linear trims
-    (`_MAX_CLIP_SHARE`) would leave the bars covering less than
-    `_MIN_FILL_FRACTION` of the plot area: a distribution spanning many
-    decades — gradients routinely do — has no readable linear-value
-    rendering at all, which is exactly what the signed-log axis is for.
-    The decision ignores **Log y** so toggling it never flips the x-mode
-    (a log count axis fixes vertical visibility, not a multi-decade
-    value range).
-    """
-    if log_x:
-        return True
-    bounds = _trimmed_bin_bounds(per_phase, kind, _MAX_CLIP_SHARE)
-    y_range = _linear_y_range(per_phase, kind, True, _MAX_CLIP_SHARE)
-    if bounds is None or y_range is None:
-        return False
-    fill = _fill_fraction(per_phase, kind, True, bounds, y_range[1])
-    return fill < _MIN_FILL_FRACTION
-
-
 def _make_histogram_figure(
     per_phase: dict[str, LayerStatsSnapshot],
     kind: str,
@@ -1118,19 +1112,15 @@ def _make_histogram_figure(
 
     `log_x` / `log_y` toggle the value (x) and probability (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
-    Watching page). With `log_x` off, bars show probability density instead
-    of probabilities (see `_use_density`) — unless the distribution has no
-    readable linear rendering, in which case the figure falls back to the
-    signed-log view on its own (see `_effective_log_x`) and says so in the
-    x-axis title.
+    Watching page — the checkbox alone decides the x-mode). With `log_x`
+    off, bars show probability density instead of probabilities (see
+    `_use_density`).
 
     This builds the *whole* figure. Routine data refreshes don't call it —
     they restyle the existing figure in place (see `_HistPlot`) so client-side
     state like zoom survives; the figure is only rebuilt when the set of
-    phases, the axis scale, or the automatic log-x fallback changes.
+    phases or the axis scale changes.
     """
-    auto_log_x = not log_x and _effective_log_x(per_phase, kind, log_x)
-    log_x = log_x or auto_log_x
     x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
     density = _use_density(log_x)
     if density:
@@ -1139,9 +1129,11 @@ def _make_histogram_figure(
             "<br>count %{customdata}<extra></extra>"
         )
     else:
+        # Bars sit at bin indices on the signed-log axis; the hover shows
+        # the bin's value (via customdata), not the index.
         hover = (
-            "bin %{x}<br>probability %{y:.3g}"
-            "<br>count %{customdata}<extra></extra>"
+            "value ≈ %{customdata[1]}<br>probability %{y:.3g}"
+            "<br>count %{customdata[0]}<extra></extra>"
         )
     phases = _phases_with_data(per_phase, kind)
     names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
@@ -1158,7 +1150,7 @@ def _make_histogram_figure(
             go.Bar(
                 x=x_values,
                 y=_trace_heights(stats.hist, density),
-                customdata=list(stats.hist),
+                customdata=_hover_customdata(stats.hist, density),
                 width=None if log_x else _BIN_WIDTHS,
                 name=names[i],
                 marker_color=_phase_color(phase, i),
@@ -1197,14 +1189,6 @@ def _make_histogram_figure(
             showgrid=False,
             zeroline=False,
         )
-        if auto_log_x:
-            # Make the silent fallback visible: the Log x checkbox is off,
-            # yet this figure renders on the signed-log axis.
-            fig.update_xaxes(
-                title=dict(text="signed-log scale (auto)", font=dict(size=9)),
-                row=max(1, len(phases)),
-                col=1,
-            )
     else:
         fig.update_xaxes(
             range=x_range,
@@ -1239,10 +1223,12 @@ def _build_watch_page(
 ) -> None:
     """The deep-dive page for watched layers.
 
-    A header dropdown switches every layer card between two views:
+    A header dropdown switches every layer card between two views, and a
+    second dropdown picks which phase (train / val / …) the cards show —
+    one phase at a time, in both views:
 
     - HISTOGRAM — one plotly figure per tensor kind (activations and
-      activation gradients) with a stacked subplot row per phase, plus
+      activation gradients) for the selected phase's latest epoch, plus
       the "Log x" / "Log y" axis-scale checkboxes.
     - MIN/MAX — the extreme-activation patch grids (channels across,
       per-channel top samples down), one per patch type, each toggleable
@@ -1273,6 +1259,10 @@ def _build_watch_page(
     view_minmax = {"on": False}
     grid_on: dict[PatchType, bool] = dict.fromkeys(PATCH_TYPES, True)
     heat_on = {"on": False}
+    # Every card shows one phase at a time, picked by a header dropdown
+    # shared by both views; defaults to the schedule's first phase.
+    phase_names = list(session.schedule.phases)
+    selected_phase = {"name": phase_names[0] if phase_names else ""}
 
     async def set_axis_log(axis: str, value: bool) -> None:
         axis_log[axis] = value
@@ -1282,6 +1272,10 @@ def _build_watch_page(
         view_minmax["on"] = value == _VIEW_MINMAX
         hist_controls.set_visibility(not view_minmax["on"])
         minmax_controls.set_visibility(view_minmax["on"])
+        await refresh()
+
+    async def set_phase(value: object) -> None:
+        selected_phase["name"] = str(value)
         await refresh()
 
     async def set_grid(ptype: PatchType, value: bool) -> None:
@@ -1310,6 +1304,13 @@ def _build_watch_page(
             ).props("dense outlined options-dense").classes(
                 "ml-4 text-sm"
             ).tooltip("What each layer card shows")
+            ui.select(
+                phase_names,
+                value=selected_phase["name"],
+                on_change=lambda e: set_phase(e.value),
+            ).props("dense outlined options-dense").classes(
+                "ml-2 text-sm"
+            ).tooltip("Which phase the cards show")
             with ui.row().classes(
                 "items-center gap-x-3 no-wrap"
             ) as hist_controls:
@@ -1318,10 +1319,7 @@ def _build_watch_page(
                     value=axis_log["x"],
                     on_change=lambda e: set_axis_log("x", bool(e.value)),
                 ).props("dense").classes("text-sm ml-4").tooltip(
-                    "Log-based (signed-log) scale on the value axis. "
-                    "Unchecked, plots whose distribution spans too many "
-                    "decades for a linear axis still fall back to it "
-                    "automatically."
+                    "Log-based (signed-log) scale on the value axis"
                 )
                 ui.checkbox(
                     "Log y",
@@ -1344,12 +1342,13 @@ def _build_watch_page(
                         f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} grid"
                     )
                 ui.checkbox(
-                    "Heatmap",
+                    "Enable heatmap",
                     value=heat_on["on"],
                     on_change=lambda e: set_heat(bool(e.value)),
                 ).props("dense").classes("text-sm").tooltip(
                     "Blend each channel's activation strength over the "
-                    "patches (red positive, blue negative)"
+                    "patches (red positive, blue negative), with a scale "
+                    "next to each grid"
                 )
             minmax_controls.set_visibility(False)
             ui.button(
@@ -1387,6 +1386,7 @@ def _build_watch_page(
                     view_minmax=view_minmax,
                     grid_on=grid_on,
                     heat_on=heat_on,
+                    selected_phase=selected_phase,
                     input_mean=input_mean,
                     input_std=input_std,
                 )
@@ -1494,7 +1494,7 @@ class _HistPlot:
     """One Plotly histogram figure that refreshes its data in place.
 
     The figure (one subplot row per phase) is built once and rebuilt only
-    when the set of phases, the axis scale, or the automatic log-x fallback
+    when the set of phases or the axis scale
     changes. Routine per-tick updates go through `Plotly.update`, which
     leaves client-side state — zoom/pan — untouched.
     """
@@ -1507,7 +1507,6 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
-        self._log_x = self._axis[0]  # effective x-mode (manual or fallback)
         # Last axis ranges applied, so refreshes only push a relayout when a
         # cap actually moved (a range write resets zoom on that axis).
         self._y_range: list[float] | None = None
@@ -1526,15 +1525,11 @@ class _HistPlot:
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
-        # The effective x-mode can flip without any checkbox changing (the
-        # accumulating data crosses the fallback threshold), and with it the
-        # whole figure structure — bar positions, widths, hover — so it is
-        # part of the rebuild signature.
-        log_x = _effective_log_x(per_phase, self._kind, axis[0])
+        log_x = axis[0]
         density = _use_density(log_x)
-        if phases != self._phases or axis != self._axis or log_x != self._log_x:
-            # A phase appeared/disappeared, an axis-scale checkbox flipped,
-            # or the fallback engaged — rebuild the whole figure.
+        if phases != self._phases or axis != self._axis:
+            # A phase appeared/disappeared or an axis-scale checkbox
+            # flipped — rebuild the whole figure.
             self.element.update_figure(
                 _figure_payload(
                     _make_histogram_figure(
@@ -1548,7 +1543,6 @@ class _HistPlot:
             )
             self._phases = phases
             self._axis = axis
-            self._log_x = log_x
             self._x_range, self._y_range = _axis_ranges(
                 per_phase, self._kind, log_x=log_x, log_y=axis[1]
             )
@@ -1560,7 +1554,7 @@ class _HistPlot:
             update: dict[str, object] = {
                 "name": names,
                 "y": [_trace_heights(h, density) for h in hists],
-                "customdata": [list(h) for h in hists],
+                "customdata": [_hover_customdata(h, density) for h in hists],
             }
             # The subplot titles carry the epoch, so refresh them with the
             # data (annotation order matches row order).
@@ -1609,6 +1603,7 @@ class _WatchLayerPanel:
         view_minmax: dict[str, bool],
         grid_on: dict[PatchType, bool],
         heat_on: dict[str, bool],
+        selected_phase: dict[str, str],
         input_mean: tuple[float, ...] | None,
         input_std: tuple[float, ...] | None,
     ) -> None:
@@ -1617,6 +1612,7 @@ class _WatchLayerPanel:
         self._view_minmax = view_minmax
         self._grid_on = grid_on
         self._heat_on = heat_on
+        self._selected_phase = selected_phase
         self._input_mean = input_mean
         self._input_std = input_std
         self._grid_sig: tuple[object, ...] | None = None
@@ -1659,7 +1655,7 @@ class _WatchLayerPanel:
         `grids` is the output of `prepare_grids` (computed off the event
         loop by the page's refresh); `None` means the grids are unchanged.
         """
-        per_phase = snap.latest_per_phase(self.name)
+        per_phase = self._phase_view(snap)
         minmax = self._view_minmax["on"]
         self._hist_section.set_visibility(not minmax)
         self._patch_section.set_visibility(minmax)
@@ -1673,6 +1669,12 @@ class _WatchLayerPanel:
         self._act.update(per_phase)
         self._grad.update(per_phase)
 
+    def _phase_view(self, snap: WatchSnapshot) -> dict[str, LayerStatsSnapshot]:
+        """The layer's latest-epoch stats, narrowed to the selected phase."""
+        return _filter_phase(
+            snap.latest_per_phase(self.name), self._selected_phase["name"]
+        )
+
     def prepare_grids(
         self, snap: WatchSnapshot
     ) -> tuple[tuple[object, ...], str] | None:
@@ -1685,7 +1687,7 @@ class _WatchLayerPanel:
         Returns `(signature, html)` for `update` to apply, or `None` when
         the current content is already up to date.
         """
-        per_phase = snap.latest_per_phase(self.name)
+        per_phase = self._phase_view(snap)
         enabled = [t for t in PATCH_TYPES if self._grid_on[t]]
         heatmap = self._heat_on["on"]
         sig = _patch_grids_signature(per_phase, enabled, heatmap)
@@ -1699,6 +1701,13 @@ class _WatchLayerPanel:
             std=self._input_std,
         )
         return sig, html
+
+
+def _filter_phase(
+    per_phase: dict[str, LayerStatsSnapshot], phase: str
+) -> dict[str, LayerStatsSnapshot]:
+    """Narrow a `phase -> stats` mapping to the dropdown-selected phase."""
+    return {p: s for p, s in per_phase.items() if p == phase}
 
 
 _VIEW_HISTOGRAM: str = "HISTOGRAM"
@@ -1781,20 +1790,31 @@ def _patch_grids_html(
 def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
     """One labeled grid: channels as columns, top samples as rows.
 
-    `max-width:none` opts the image out of the preflight `max-width:100%`
+    With the heatmap enabled the grid is flanked by its crisp
+    display-resolution colorbar (the overlay's `±vmax` scale), which sits
+    outside the scroll container so it stays visible on wide grids.
+    `max-width:none` opts the images out of the preflight `max-width:100%`
     so wide grids scroll horizontally instead of being squashed.
     """
+    legend = (
+        f'<img src="{_b64_img_src(grid.heat_legend)}" '
+        'style="display:block; flex:none; max-width:none;" />'
+        if grid.heat_legend is not None
+        else ""
+    )
     return (
         '<div class="flex flex-col gap-0.5 w-full">'
         '<div class="text-[10px] uppercase tracking-wide text-slate-500 '
         f'font-mono">{label}</div>'
-        '<div class="overflow-x-auto w-full">'
+        '<div style="display:flex; align-items:flex-start;" class="w-full">'
+        f"{legend}"
+        '<div class="overflow-x-auto" style="flex:1; min-width:0;">'
         f'<img src="{_b64_img_src(grid.image, mime=grid.mime)}" '
         f'style="width:{grid.width}px; height:{grid.height}px; '
         'image-rendering:pixelated; display:block; max-width:none;" '
         f'title="{label} — columns: channels, rows: top samples '
         '(best first)" />'
-        "</div></div>"
+        "</div></div></div>"
     )
 
 

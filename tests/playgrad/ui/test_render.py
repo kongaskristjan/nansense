@@ -424,3 +424,21 @@ def test_patch_grid_grayscale_input() -> None:
     grid = render_patch_grid(tp)
     assert grid is not None
     assert _rgb_at(_decode(grid.image), 0, 0) == (127, 127, 127)
+
+
+def test_patch_grid_heat_legend_only_when_heatmap_enabled() -> None:
+    values = torch.full((1, 5), float("-inf"))
+    values[0, 0] = 1.0
+    heat = torch.zeros(1, 5, 2, 2)
+    heat[0, 0] = 1.0
+    tp = _type_patches(values, torch.ones(1, 5, 3, 4, 4), heat=heat)
+    plain = render_patch_grid(tp)
+    assert plain is not None and plain.heat_legend is None
+    grid = render_patch_grid(tp, heatmap=True)
+    assert grid is not None and grid.heat_legend is not None
+    # Display-resolution colorbar matching the grid's CSS height.
+    assert _decode(grid.heat_legend).size[1] == grid.height
+    # All-zero heat has no scale to show, even with the heatmap enabled.
+    flat = _type_patches(values, torch.ones(1, 5, 3, 4, 4))
+    rendered = render_patch_grid(flat, heatmap=True)
+    assert rendered is not None and rendered.heat_legend is None

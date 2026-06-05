@@ -695,14 +695,10 @@ It does not touch tensors directly until they need to be rendered.
   area over x-span x y-top, averaged across rows), raises the share in
   `_CLIP_SHARE_STEP` increments up to `_MAX_CLIP_SHARE` (5%), so a tall
   near-zero peak next to a long thin tail can't leave the plot nearly
-  empty. When even the max-share trims stay under the fill floor — the
-  distribution spans too many decades for any linear window (real
-  gradient distributions spread mass across ~6 decades) — the figure
-  falls back to the signed-log view on its own (`_effective_log_x`,
-  ignoring **Log y** so toggling it never flips the x-mode) and labels
-  the bottom x-axis "signed-log scale (auto)"; the effective x-mode is
-  part of `_HistPlot`'s rebuild signature since accumulating data can
-  cross the threshold without any checkbox changing. Refresh ticks
+  empty. The **Log x** checkbox alone decides the x-mode: multi-decade
+  distributions (real gradients spread mass across ~6 decades) render
+  on the linear axis as trimmed as the budget allows until the user
+  checks it. Refresh ticks
   restyle `y` + `customdata` (the raw counts shown on
   hover) and push per-row `yaxis{n}.range` (plus a single matched
   `xaxis.range`) relayouts only when a cap actually moved. Checking

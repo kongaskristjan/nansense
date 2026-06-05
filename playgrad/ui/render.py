@@ -60,7 +60,7 @@ LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 # overlay opacity, the fill for never-filled slots, and the grids' fixed
 # encoding (see `PatchGridRender` for why it isn't `STRIP_FORMAT`).
 PATCH_CELL_SIZE: int = 44
-HEAT_MAX_ALPHA: float = 0.55
+HEAT_MAX_ALPHA: float = 0.825
 _EMPTY_CELL_GRAY: int = 235
 PATCH_GRID_FORMAT: str = "PNG"
 
@@ -290,6 +290,9 @@ class PatchGridRender:
     width: int
     height: int
     mime: str
+    # Display-resolution colorbar for the heatmap overlay (`±vmax` labels),
+    # encoded in `STRIP_FORMAT`; `None` when the heatmap is off or flat.
+    heat_legend: bytes | None = None
 
 
 def render_patch_grid(
@@ -305,8 +308,10 @@ def render_patch_grid(
     (best first). Patches are denormalized like `render_image`. With
     `heatmap`, the stored activation map is blended over each patch —
     transparent at 0, opacifying toward red (positive) / blue (negative)
-    at the grid-wide absolute maximum. Slots never filled render as flat
-    gray. Returns `None` when no slot is filled yet.
+    at the grid-wide absolute maximum — and `heat_legend` carries a
+    crisp display-resolution colorbar for that `±vmax` scale. Slots
+    never filled render as flat gray. Returns `None` when no slot is
+    filled yet.
     """
     values = tp.values.numpy()
     valid = np.isfinite(values)
@@ -314,8 +319,9 @@ def render_patch_grid(
         return None
     cells = _denormalized_cells(tp, mean=mean, std=std)
     c, n, ph, pw, _ = cells.shape
-    if heatmap:
-        cells = _blend_heat(cells, tp)
+    vmax = _heat_vmax(tp) if heatmap else 0.0
+    if vmax > 0.0:
+        cells = _blend_heat(cells, tp, vmax=vmax)
     cells[~valid] = _EMPTY_CELL_GRAY
 
     gap = 1
@@ -326,11 +332,17 @@ def render_patch_grid(
         for row in range(n):
             y, x = row * (ph + gap), col * (pw + gap)
             grid[y : y + ph, x : x + pw] = cells[col, row]
+    height = round(grid.shape[0] * PATCH_CELL_SIZE / ph)
     return PatchGridRender(
         image=_encode_image(grid, fmt=PATCH_GRID_FORMAT),
         width=round(grid.shape[1] * PATCH_CELL_SIZE / pw),
-        height=round(grid.shape[0] * PATCH_CELL_SIZE / ph),
+        height=height,
         mime=_MIME_TYPES[PATCH_GRID_FORMAT],
+        heat_legend=(
+            _encode_image(_render_legend(height, abs_max=vmax))
+            if vmax > 0.0
+            else None
+        ),
     )
 
 
@@ -354,14 +366,18 @@ def _denormalized_cells(
     return np.ascontiguousarray(rgb)
 
 
-def _blend_heat(cells: np.ndarray, tp: TypePatches) -> np.ndarray:
-    """Overlay each cell's activation map: 0 transparent, ±max red/blue."""
+def _heat_vmax(tp: TypePatches) -> float:
+    """Grid-wide absolute heat maximum — the overlay's (and legend's) scale."""
     heat = tp.heat.numpy()  # (C, N, Hh, Wh)
     valid = np.isfinite(tp.values.numpy())
     finite = np.nan_to_num(heat[valid], posinf=0.0, neginf=0.0)
-    vmax = float(np.abs(finite).max()) if finite.size else 0.0
-    if vmax <= 0.0:
-        return cells
+    return float(np.abs(finite).max()) if finite.size else 0.0
+
+
+def _blend_heat(cells: np.ndarray, tp: TypePatches, *, vmax: float) -> np.ndarray:
+    """Overlay each cell's activation map: 0 transparent, ±vmax red/blue."""
+    heat = tp.heat.numpy()  # (C, N, Hh, Wh)
+    valid = np.isfinite(tp.values.numpy())
     c, n, ph, pw, _ = cells.shape
     out = cells.astype(np.float32)
     top = tp.top.numpy()
