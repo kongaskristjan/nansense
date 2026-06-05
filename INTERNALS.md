@@ -393,15 +393,17 @@ It does not touch tensors directly until they need to be rendered.
   ovals/stadiums for `call_function` / `call_method`, circles for
   `placeholder` / `output`).
 - `playgrad.ui.render.render_strip(tensor, sample_idx)` turns per-layer
-  CPU tensors into a `StripRender`: per-tile data PNGs at the tensor's
-  *native* resolution plus a legend PNG at display resolution.
-  - For per-sample shape `[C, H, W]` each channel becomes one tile PNG,
-    downsampled server-side (`area`) only when larger than
-    `TILE_SIZE × TILE_SIZE`. The browser upscales each tile to the display
-    size via CSS sizing plus `image-rendering: pixelated` — equivalent to
-    the old server-side nearest-neighbour interpolation, but an 8×8
-    feature map travels as 64 pixels instead of 16k (`_strip_html` in
-    `app.py` builds the flex row; tile gaps are `TILE_GAP`-px CSS gaps).
+  CPU tensors into a `StripRender`: one data PNG at the tensor's *native*
+  resolution plus a legend PNG at display resolution.
+  - For per-sample shape `[C, H, W]` every channel tile lands in a single
+    image, downsampled server-side (`area`) only when larger than
+    `TILE_SIZE × TILE_SIZE`, with white separators between tiles
+    `max(1, tile_width // TILE_GAP_DIVISOR)` native pixels wide. The
+    browser upscales the whole strip to `StripRender.width × height` via
+    CSS sizing plus `image-rendering: pixelated` — equivalent to the old
+    server-side nearest-neighbour interpolation, but an 8×8 feature map
+    travels as 64 pixels instead of 16k; the separators scale together
+    with the tiles (`_strip_html` in `app.py` builds the two-`<img>` row).
   - For `[F]` the data PNG is a single 1-px-tall heatmap row, downsampled
     to at most `LINEAR_MAX_BINS` bins when `F` is large, stretched
     client-side to `LINEAR_BIN_WIDTH` per bin × `LINEAR_TILE_HEIGHT`.

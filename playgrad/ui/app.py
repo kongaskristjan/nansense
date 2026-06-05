@@ -47,7 +47,6 @@ from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
 from playgrad.ui.render import (
     INPUT_IMAGE_SIZE,
-    TILE_GAP,
     StripRender,
     default_weight_dims,
     render_image,
@@ -2014,30 +2013,24 @@ def _b64_img_src(png: bytes) -> str:
 
 
 def _strip_html(strip: StripRender | None) -> str:
-    """HTML for one strip: a crisp legend `<img>` plus native-res tile `<img>`s.
+    """HTML for one strip: a crisp legend `<img>` plus one native-res data `<img>`.
 
-    The tiles are PNGs at the tensor's native resolution; explicit CSS
-    width/height plus `image-rendering: pixelated` make the browser do the
-    nearest-neighbour upscale the renderer used to do server-side. The legend
-    PNG is already at display resolution and renders 1:1, so its labels stay
-    sharp. `flex:none` keeps the scroll container from squishing the images
-    (the old single-`<img>` strips used `max-width:none` for the same reason).
+    The data image holds every tile (with native-resolution separators) at
+    the tensor's native resolution; explicit CSS width/height plus
+    `image-rendering: pixelated` make the browser do the nearest-neighbour
+    upscale the renderer used to do server-side. The legend PNG is already at
+    display resolution and renders 1:1, so its labels stay sharp. `flex:none`
+    keeps the scroll container from squishing the images.
     """
     if strip is None:
         return ""
-    tile_style = (
-        f"width:{strip.tile_width}px; height:{strip.tile_height}px; "
-        "image-rendering:pixelated; display:block; flex:none; max-width:none;"
-    )
-    tiles = "".join(
-        f'<img src="{_b64_img_src(png)}" style="{tile_style}" />'
-        for png in strip.tile_pngs
-    )
     return (
         '<div style="display:flex; align-items:flex-start;">'
         f'<img src="{_b64_img_src(strip.legend_png)}" '
         'style="display:block; flex:none; max-width:none;" />'
-        f'<div style="display:flex; gap:{TILE_GAP}px;">{tiles}</div>'
+        f'<img src="{_b64_img_src(strip.data_png)}" '
+        f'style="width:{strip.width}px; height:{strip.height}px; '
+        'image-rendering:pixelated; display:block; flex:none; max-width:none;" />'
         "</div>"
     )
 

@@ -5,14 +5,16 @@ slice and produces one horizontal strip per layer for the right pane of the
 UI. Conv-style activations become a row of square channel tiles; 1D
 activations become a single short heatmap row.
 
-A strip is returned as a `StripRender`: the data tiles are encoded at the
-tensor's *native* resolution (downsampled server-side only when larger than
-the display tile) and upscaled by the browser via CSS sizing plus
+A strip is returned as a `StripRender`: one data PNG holding every tile at
+the tensor's *native* resolution (downsampled server-side only when larger
+than the display tile), upscaled by the browser via CSS sizing plus
 `image-rendering: pixelated` — equivalent to nearest-neighbour, but without
 inflating an 8×8 feature map to 128×128 pixels before colormapping and PNG
-encoding. The legend (vertical colorbar with `+x` / `0` / `-x` labels) is
-the exception: it is rendered at display resolution into its own PNG so its
-text stays crisp.
+encoding. Tiles are separated by white spacers `max(1, tile_width //
+TILE_GAP_DIVISOR)` native pixels wide, so the gap scales with the tiles.
+The legend (vertical colorbar with `+x` / `0` / `-x` labels) is the
+exception to native-resolution encoding: it is rendered at display
+resolution into its own PNG so its text stays crisp.
 
 Every strip — activations, gradients, and weights alike — uses the same
 diverging (blue-white-red) colormap on a symmetric `[-x, +x]` scale where
@@ -32,7 +34,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 TILE_SIZE: int = 128
-TILE_GAP: int = 2
+TILE_GAP_DIVISOR: int = 48
 LINEAR_TILE_HEIGHT: int = 32
 LINEAR_MAX_BINS: int = 256
 LINEAR_BIN_WIDTH: int = 16
@@ -47,18 +49,20 @@ LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 
 @dataclass(frozen=True)
 class StripRender:
-    """One rendered strip: native-resolution data tiles plus a crisp legend.
+    """One rendered strip: a native-resolution data PNG plus a crisp legend.
 
-    `tile_pngs` hold the data at native (or server-downsampled) resolution;
-    the UI displays each tile at `tile_width × tile_height` CSS pixels with
-    `image-rendering: pixelated`, separated by `TILE_GAP`-px gaps.
-    `legend_png` is already at display resolution and is shown 1:1.
+    `data_png` holds every tile in a single image at native (or
+    server-downsampled) resolution, with white separators `_tile_gap(w)`
+    native pixels wide between tiles; the UI displays it at `width × height`
+    CSS pixels with `image-rendering: pixelated`, so the separators scale
+    together with the tiles. `legend_png` is already at display resolution
+    and is shown 1:1.
     """
 
     legend_png: bytes
-    tile_pngs: tuple[bytes, ...]
-    tile_width: int
-    tile_height: int
+    data_png: bytes
+    width: int
+    height: int
 
 
 def render_strip(tensor: Tensor | None, sample_idx: int) -> StripRender | None:
@@ -160,23 +164,47 @@ def render_weight(
     return _render_chw(chw)
 
 
+def _tile_gap(tile_width: int) -> int:
+    """White separator width between tiles, in native pixels.
+
+    Proportional to the tile so the gap stays ~2% of a tile's width after
+    the browser upscales the strip; floors at one pixel."""
+    return max(1, tile_width // TILE_GAP_DIVISOR)
+
+
 def _render_chw(tensor: Tensor) -> StripRender:
-    _, h, w = tensor.shape
     abs_max = float(tensor.detach().abs().max())
     data = tensor.detach().float()
-    if max(h, w) > TILE_SIZE:
+    if max(data.shape[1], data.shape[2]) > TILE_SIZE:
         # Downsampling needs real averaging server-side; *up*scaling small
         # maps is left to the browser's nearest-neighbour (CSS `pixelated`).
         data = F.interpolate(
             data.unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="area"
         )[0]
+    _, h, w = data.shape
     rgb = _apply_colormap(data.numpy(), abs_max=abs_max)
+    strip = _concat_tiles_with_gaps(list(rgb), _tile_gap(w))
+    # Each tile spans TILE_SIZE × TILE_SIZE CSS px, so the whole strip scales
+    # by TILE_SIZE/w horizontally and TILE_SIZE/h vertically.
     return StripRender(
         legend_png=_encode_png(_render_legend(TILE_SIZE, abs_max=abs_max)),
-        tile_pngs=tuple(_encode_png(tile) for tile in rgb),
-        tile_width=TILE_SIZE,
-        tile_height=TILE_SIZE,
+        data_png=_encode_png(strip),
+        width=round(strip.shape[1] * TILE_SIZE / w),
+        height=TILE_SIZE,
     )
+
+
+def _concat_tiles_with_gaps(tiles: list[np.ndarray], gap: int) -> np.ndarray:
+    if len(tiles) <= 1:
+        return tiles[0]
+    h = tiles[0].shape[0]
+    spacer = np.full((h, gap, 3), 255, dtype=np.uint8)
+    pieces: list[np.ndarray] = []
+    for i, tile in enumerate(tiles):
+        if i > 0:
+            pieces.append(spacer)
+        pieces.append(tile)
+    return np.concatenate(pieces, axis=1)
 
 
 def render_image(
@@ -233,9 +261,9 @@ def _render_1d(tensor: Tensor) -> StripRender:
     # A 1-px-tall row; the browser stretches it to the display height.
     return StripRender(
         legend_png=_encode_png(_render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)),
-        tile_pngs=(_encode_png(rgb_row[None, :, :]),),
-        tile_width=f * LINEAR_BIN_WIDTH,
-        tile_height=LINEAR_TILE_HEIGHT,
+        data_png=_encode_png(rgb_row[None, :, :]),
+        width=f * LINEAR_BIN_WIDTH,
+        height=LINEAR_TILE_HEIGHT,
     )
 
 
