@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import playgrad
+from playgrad.patches import PATCH_TYPES, PatchAccumulator
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot
 from playgrad.ui.app import (
@@ -22,6 +23,8 @@ from playgrad.ui.app import (
     _input_img_tag,
     _linear_x_range,
     _make_histogram_figure,
+    _patch_grids_html,
+    _patch_grids_signature,
     _phases_with_data,
     _role_options,
     _strip_html,
@@ -575,3 +578,73 @@ def test_compute_frame_renders_more_layers_than_pool_workers() -> None:
     )
     assert set(rendered) == set(names)
     assert all("<img" in rendered[name][0] for name in names)
+
+
+def _layer_snap_with_patches(phase: str, epoch: int = 0) -> LayerStatsSnapshot:
+    acc = PatchAccumulator()
+    acc.update(act=torch.randn(2, 2, 4, 4), x=torch.rand(2, 3, 8, 8))
+    patches = acc.snapshot()
+    assert patches is not None
+    stats = _tensor_stats(4)
+    return LayerStatsSnapshot(
+        layer="L",
+        phase=phase,
+        epoch=epoch,
+        activations=stats,
+        gradients=stats,
+        patches=patches,
+    )
+
+
+def test_patch_grids_html_renders_enabled_grids_per_phase() -> None:
+    per_phase = {
+        "train": _layer_snap_with_patches("train", epoch=1),
+        "val": _layer_snap_with_patches("val", epoch=1),
+    }
+    html = _patch_grids_html(
+        per_phase,
+        enabled=list(PATCH_TYPES),
+        heatmap=False,
+        mean=None,
+        std=None,
+    )
+    assert html.count("<img") == 2 * len(PATCH_TYPES)  # 4 grids × 2 phases
+    for label in ("Max pixel", "Min pixel", "Max average", "Min average"):
+        assert html.count(label) >= 2
+    assert "train (ep 1)" in html
+    assert "val (ep 1)" in html
+
+
+def test_patch_grids_html_filters_to_enabled_types() -> None:
+    per_phase = {"train": _layer_snap_with_patches("train")}
+    html = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
+    )
+    assert html.count("<img") == 1
+    assert "Max pixel" in html
+    assert "Min pixel" not in html
+
+
+def test_patch_grids_html_placeholder_without_patches() -> None:
+    assert "no patches" in _patch_grids_html(
+        {}, enabled=list(PATCH_TYPES), heatmap=False, mean=None, std=None
+    )
+    # A phase whose bucket has histogram stats but no patch data (e.g. a
+    # non-image input) also falls back to the placeholder.
+    assert "no patches" in _patch_grids_html(
+        {"train": _layer_snap("train")},
+        enabled=list(PATCH_TYPES),
+        heatmap=False,
+        mean=None,
+        std=None,
+    )
+
+
+def test_patch_grids_signature_tracks_toggles_and_values() -> None:
+    per_phase = {"train": _layer_snap_with_patches("train")}
+    base = _patch_grids_signature(per_phase, list(PATCH_TYPES), False)
+    assert base == _patch_grids_signature(per_phase, list(PATCH_TYPES), False)
+    assert base != _patch_grids_signature(per_phase, list(PATCH_TYPES), True)
+    assert base != _patch_grids_signature(per_phase, ["max_pixel"], False)
+    other = {"train": _layer_snap_with_patches("train")}  # new random extremes
+    assert base != _patch_grids_signature(other, list(PATCH_TYPES), False)

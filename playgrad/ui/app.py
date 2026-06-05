@@ -41,16 +41,19 @@ from fastapi import FastAPI
 from nicegui import ui
 from torch import Tensor
 
+from playgrad.patches import PATCH_TYPES, PatchType
 from playgrad.restore import TimeTravelError
 from playgrad.schedule import BatchPosition, Schedule
 from playgrad.session import BatchSnapshot, Session
 from playgrad.ui.graph import build_mermaid, slug
 from playgrad.ui.render import (
     INPUT_IMAGE_SIZE,
+    PatchGridRender,
     StripRender,
     default_weight_dims,
     image_mime,
     render_image,
+    render_patch_grid,
     render_strip,
     render_weight,
 )
@@ -310,7 +313,9 @@ def serve(
 
     @ui.page("/watch", favicon=str(favicon_path))
     def watch_page() -> None:
-        _build_watch_page(session, layer_names)
+        _build_watch_page(
+            session, layer_names, input_mean=input_mean, input_std=input_std
+        )
 
     @ui.page("/weights", favicon=str(favicon_path))
     def weights_page(layer: str = "") -> None:
@@ -915,16 +920,30 @@ def _make_histogram_figure(
     return fig
 
 
-def _build_watch_page(session: Session, layer_names: list[str]) -> None:
-    """The deep-dive page for watched layers — plotly histograms per layer.
+def _build_watch_page(
+    session: Session,
+    layer_names: list[str],
+    *,
+    input_mean: tuple[float, ...] | None = None,
+    input_std: tuple[float, ...] | None = None,
+) -> None:
+    """The deep-dive page for watched layers.
 
-    Each card renders one bar chart per tensor kind (activations and
-    activation gradients) with train/val overlaid. A `ui.timer` polls
-    `session.watch_snapshot()` and refreshes the figures in place.
+    A header dropdown switches every layer card between two views:
 
-    Layers can also be unwatched directly from the card header here, which
-    drops the corresponding accumulator entry — the change is reflected on
-    the main page on next navigation.
+    - HISTOGRAM — one plotly bar chart per tensor kind (activations and
+      activation gradients) with train/val overlaid, plus the "Log x" /
+      "Log y" axis-scale checkboxes.
+    - MIN/MAX — the extreme-activation patch grids (channels across,
+      per-channel top samples down), one per patch type, each toggleable
+      by its own checkbox, plus a heatmap checkbox that blends the stored
+      activation maps over the patches.
+
+    Each checkbox group is only visible while its view is selected. A
+    `ui.timer` polls `session.watch_snapshot()` and refreshes the visible
+    view in place. Layers can also be unwatched directly from the card
+    header here, which drops the corresponding accumulator entry — the
+    change is reflected on the main page on next navigation.
     """
     ui.page_title("PlayGrad — Watching")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
@@ -938,9 +957,28 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
     # default off — linear axes showing density (see `_use_density`); the
     # header checkboxes flip them and re-render every plot immediately.
     axis_log = {"x": False, "y": False}
+    # MIN/MAX view state: which of the four grids are shown and whether the
+    # activation heatmap is blended over the patches.
+    view_minmax = {"on": False}
+    grid_on: dict[PatchType, bool] = dict.fromkeys(PATCH_TYPES, True)
+    heat_on = {"on": False}
 
     def set_axis_log(axis: str, value: bool) -> None:
         axis_log[axis] = value
+        refresh()
+
+    def set_mode(value: object) -> None:
+        view_minmax["on"] = value == _VIEW_MINMAX
+        hist_controls.set_visibility(not view_minmax["on"])
+        minmax_controls.set_visibility(view_minmax["on"])
+        refresh()
+
+    def set_grid(ptype: PatchType, value: bool) -> None:
+        grid_on[ptype] = value
+        refresh()
+
+    def set_heat(value: bool) -> None:
+        heat_on["on"] = value
         refresh()
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
@@ -954,20 +992,52 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
             count_label_holder["count"] = ui.label("").classes(
                 "text-sm text-slate-500 ml-2"
             )
-            ui.checkbox(
-                "Log x",
-                value=axis_log["x"],
-                on_change=lambda e: set_axis_log("x", bool(e.value)),
-            ).props("dense").classes("text-sm ml-4").tooltip(
-                "Log-based (signed-log) scale on the value axis"
-            )
-            ui.checkbox(
-                "Log y",
-                value=axis_log["y"],
-                on_change=lambda e: set_axis_log("y", bool(e.value)),
-            ).props("dense").classes("text-sm").tooltip(
-                "Log scale on the count axis"
-            )
+            ui.select(
+                [_VIEW_MINMAX, _VIEW_HISTOGRAM],
+                value=_VIEW_HISTOGRAM,
+                on_change=lambda e: set_mode(e.value),
+            ).props("dense outlined options-dense").classes(
+                "ml-4 text-sm"
+            ).tooltip("What each layer card shows")
+            with ui.row().classes(
+                "items-center gap-x-3 no-wrap"
+            ) as hist_controls:
+                ui.checkbox(
+                    "Log x",
+                    value=axis_log["x"],
+                    on_change=lambda e: set_axis_log("x", bool(e.value)),
+                ).props("dense").classes("text-sm ml-4").tooltip(
+                    "Log-based (signed-log) scale on the value axis"
+                )
+                ui.checkbox(
+                    "Log y",
+                    value=axis_log["y"],
+                    on_change=lambda e: set_axis_log("y", bool(e.value)),
+                ).props("dense").classes("text-sm").tooltip(
+                    "Log scale on the count axis"
+                )
+            with ui.row().classes(
+                "items-center gap-x-3 no-wrap"
+            ) as minmax_controls:
+                for i, ptype in enumerate(PATCH_TYPES):
+                    ui.checkbox(
+                        _PATCH_TYPE_LABELS[ptype],
+                        value=grid_on[ptype],
+                        on_change=lambda e, p=ptype: set_grid(p, bool(e.value)),
+                    ).props("dense").classes(
+                        "text-sm ml-4" if i == 0 else "text-sm"
+                    ).tooltip(
+                        f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} grid"
+                    )
+                ui.checkbox(
+                    "Heatmap",
+                    value=heat_on["on"],
+                    on_change=lambda e: set_heat(bool(e.value)),
+                ).props("dense").classes("text-sm").tooltip(
+                    "Blend each channel's activation strength over the "
+                    "patches (red positive, blue negative)"
+                )
+            minmax_controls.set_visibility(False)
             ui.button(
                 icon="refresh",
                 on_click=lambda: refresh(),
@@ -1000,6 +1070,11 @@ def _build_watch_page(session: Session, layer_names: list[str]) -> None:
                     session=session,
                     on_unwatched=rebuild_cards,
                     axis_log=axis_log,
+                    view_minmax=view_minmax,
+                    grid_on=grid_on,
+                    heat_on=heat_on,
+                    input_mean=input_mean,
+                    input_std=input_std,
                 )
 
     def refresh() -> None:
@@ -1114,7 +1189,15 @@ class _HistPlot:
 
 
 class _WatchLayerPanel:
-    """One card per watched layer — activations + gradients histograms."""
+    """One card per watched layer — histograms or extreme-patch grids.
+
+    Both views are built up front; `update` shows the one matching the
+    header dropdown and only refreshes that view's content (hidden plotly
+    figures and patch grids are left untouched until switched back). Patch
+    grids re-render only when their cheap signature — toggles plus the
+    stored extreme values — actually changes, so idle 2s refreshes don't
+    re-encode images.
+    """
 
     def __init__(
         self,
@@ -1123,9 +1206,20 @@ class _WatchLayerPanel:
         session: Session,
         on_unwatched: Callable[[], None],
         axis_log: dict[str, bool],
+        view_minmax: dict[str, bool],
+        grid_on: dict[PatchType, bool],
+        heat_on: dict[str, bool],
+        input_mean: tuple[float, ...] | None,
+        input_std: tuple[float, ...] | None,
     ) -> None:
         self.name = name
         self._session = session
+        self._view_minmax = view_minmax
+        self._grid_on = grid_on
+        self._heat_on = heat_on
+        self._input_mean = input_mean
+        self._input_std = input_std
+        self._grid_sig: tuple[object, ...] | None = None
         with ui.card().classes("w-full p-4 gap-2"):
             with ui.row().classes("w-full items-center gap-2 no-wrap"):
                 ui.label(name).classes("font-mono text-base font-bold grow")
@@ -1134,7 +1228,8 @@ class _WatchLayerPanel:
                     color="amber-600",
                     on_click=lambda: (session.unwatch(name), on_unwatched()),
                 ).props("dense size=sm flat round").tooltip("Stop watching")
-            with ui.column().classes("w-full gap-3"):
+            self._hist_section = ui.column().classes("w-full gap-3")
+            with self._hist_section:
                 ui.label("Activations").classes(
                     "font-mono text-sm text-slate-600"
                 )
@@ -1149,13 +1244,136 @@ class _WatchLayerPanel:
                     "font-mono text-xs text-slate-500"
                 )
                 self._grad = _HistPlot("gradient", "gradients", axis_log)
+            self._patch_section = ui.column().classes("w-full gap-2")
+            with self._patch_section:
+                self._grids = ui.html(_NO_PATCHES_HTML).classes("w-full")
+            self._patch_section.set_visibility(False)
 
     def update(self, snap: WatchSnapshot) -> None:
         per_phase = snap.latest_per_phase(self.name)
+        minmax = self._view_minmax["on"]
+        self._hist_section.set_visibility(not minmax)
+        self._patch_section.set_visibility(minmax)
+        if minmax:
+            self._update_grids(per_phase)
+            return
         self._act_stats.text = _combined_summary(per_phase, "activation")
         self._grad_stats.text = _combined_summary(per_phase, "gradient")
         self._act.update(per_phase)
         self._grad.update(per_phase)
+
+    def _update_grids(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
+        enabled = [t for t in PATCH_TYPES if self._grid_on[t]]
+        sig = _patch_grids_signature(per_phase, enabled, self._heat_on["on"])
+        if sig == self._grid_sig:
+            return
+        self._grid_sig = sig
+        self._grids.set_content(
+            _patch_grids_html(
+                per_phase,
+                enabled=enabled,
+                heatmap=self._heat_on["on"],
+                mean=self._input_mean,
+                std=self._input_std,
+            )
+        )
+
+
+_VIEW_HISTOGRAM: str = "HISTOGRAM"
+_VIEW_MINMAX: str = "MIN/MAX"
+
+_PATCH_TYPE_LABELS: dict[PatchType, str] = {
+    "max_pixel": "Max pixel",
+    "min_pixel": "Min pixel",
+    "max_average": "Max average",
+    "min_average": "Min average",
+}
+
+_NO_PATCHES_HTML: str = (
+    '<div class="text-xs text-slate-400 italic py-1">no patches gathered '
+    "yet — patches need an image-like (4D) model input</div>"
+)
+
+
+def _patch_grids_signature(
+    per_phase: dict[str, LayerStatsSnapshot],
+    enabled: list[PatchType],
+    heatmap: bool,
+) -> tuple[object, ...]:
+    """Cheap change-detection key for a panel's patch grids.
+
+    The stored extreme values identify the buffer contents: any accepted
+    candidate changes its channel's value row, so unchanged values ⇒
+    unchanged patches (within one epoch bucket, which the phase/epoch part
+    of the key pins down).
+    """
+    parts: list[object] = [tuple(enabled), heatmap]
+    for phase, layer_snap in per_phase.items():
+        patches = layer_snap.patches
+        if patches is None:
+            parts.append((phase, layer_snap.epoch, None))
+            continue
+        for ptype in enabled:
+            tp = patches.by_type.get(ptype)
+            values = tp.values.numpy().tobytes() if tp is not None else None
+            parts.append((phase, layer_snap.epoch, ptype, values))
+    return tuple(parts)
+
+
+def _patch_grids_html(
+    per_phase: dict[str, LayerStatsSnapshot],
+    *,
+    enabled: list[PatchType],
+    heatmap: bool,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+) -> str:
+    """The MIN/MAX view body for one layer: per-phase blocks of grids."""
+    blocks: list[str] = []
+    for i, (phase, layer_snap) in enumerate(per_phase.items()):
+        patches = layer_snap.patches
+        if patches is None:
+            continue
+        rows: list[str] = []
+        for ptype in enabled:
+            tp = patches.by_type.get(ptype)
+            if tp is None:
+                continue
+            grid = render_patch_grid(tp, mean=mean, std=std, heatmap=heatmap)
+            if grid is None:
+                continue
+            rows.append(_patch_grid_row_html(_PATCH_TYPE_LABELS[ptype], grid))
+        if not rows:
+            continue
+        color = _phase_color(phase, i)
+        blocks.append(
+            '<div class="flex flex-col gap-2 w-full">'
+            f'<div class="font-mono text-xs font-bold" style="color:{color}">'
+            f"{phase} (ep {layer_snap.epoch})</div>" + "".join(rows) + "</div>"
+        )
+    if not blocks:
+        return _NO_PATCHES_HTML
+    return '<div class="flex flex-col gap-4 w-full">' + "".join(blocks) + "</div>"
+
+
+def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
+    """One labeled grid: channels as columns, top samples as rows.
+
+    `max-width:none` opts the image out of the preflight `max-width:100%`
+    so wide grids scroll horizontally instead of being squashed.
+    """
+    return (
+        '<div class="flex flex-col gap-0.5 w-full">'
+        '<div class="text-[10px] uppercase tracking-wide text-slate-500 '
+        f'font-mono">{label}</div>'
+        '<div class="overflow-x-auto w-full">'
+        f'<img src="{_b64_img_src(grid.image)}" '
+        f'style="width:{grid.width}px; height:{grid.height}px; '
+        'image-rendering:pixelated; display:block; max-width:none;" '
+        f'title="{label} — columns: channels, rows: top samples '
+        '(best first)" />'
+        "</div></div>"
+    )
 
 
 def _combined_summary(
