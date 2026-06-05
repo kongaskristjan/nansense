@@ -134,7 +134,7 @@ class InputPanel:
                 "dropout. All modes restore the model's state afterwards."
             )
             # Probe mode only applies to probe runs, which need a pinned batch.
-            self._mode_toggle.bind_enabled_from(self._pin_switch, "value")
+            self._mode_toggle.bind_visibility_from(self._pin_switch, "value")
             self._pinned_caption = ui.label("").classes(
                 "text-xs text-slate-500 font-mono self-start"
             )
@@ -159,6 +159,9 @@ class InputPanel:
                     # Hex only: normalized_color expects #rrggbb, so don't let
                     # the picker emit rgba()/hsl() strings.
                     picker.q_color.props("format-model=hex")
+            # Compare and clear only make sense once a pixel has been
+            # perturbed; `refresh_status` keeps their visibility in sync.
+            has_perturbations = bool(self._session.perturbations)
             self._compare_switch = ui.switch(
                 "Compare with original",
                 on_change=self._on_compare_change,
@@ -166,16 +169,21 @@ class InputPanel:
                 "Show each layer's activation diff (perturbed − original) "
                 "instead of the perturbed activations"
             )
-            with ui.row().classes("w-full items-center gap-2 no-wrap"):
+            self._compare_switch.set_visibility(has_perturbations)
+            self._clear_row = ui.row().classes(
+                "w-full items-center justify-between no-wrap"
+            )
+            self._clear_row.set_visibility(has_perturbations)
+            with self._clear_row:
+                self._perturb_caption = ui.label("").classes(
+                    "text-xs text-slate-500 font-mono"
+                )
                 ui.button(
                     "Clear",
-                    on_click=self._session.clear_perturbations,
+                    on_click=self._on_clear,
                     color="slate-500",
                 ).props("dense size=sm no-caps").tooltip(
                     "Remove all perturbations"
-                )
-                self._perturb_caption = ui.label("").classes(
-                    "text-xs text-slate-500 font-mono"
                 )
 
     @staticmethod
@@ -215,7 +223,7 @@ class InputPanel:
             self._on_change()
 
     def refresh_status(self) -> None:
-        """Cheap per-tick text updates (NiceGUI skips unchanged writes)."""
+        """Cheap per-tick text/visibility updates (no-op writes are skipped)."""
         pos = self._session.pinned_position
         self._pinned_caption.text = (
             f"pinned at epoch {pos.epoch} | {pos.phase} batch {pos.batch_idx}"
@@ -226,6 +234,11 @@ class InputPanel:
         self._perturb_caption.text = (
             f"{n} perturbed pixel{'' if n == 1 else 's'}" if n else ""
         )
+        has_perturbations = n > 0
+        if self._compare_switch.visible != has_perturbations:
+            self._compare_switch.set_visibility(has_perturbations)
+        if self._clear_row.visible != has_perturbations:
+            self._clear_row.set_visibility(has_perturbations)
         self._error_label.text = self._session.probe_error or ""
 
     def _current_input(self) -> Tensor | None:
@@ -276,13 +289,18 @@ class InputPanel:
         if value is not None:
             self._session.set_probe_mode(str(value))
 
+    def _on_clear(self) -> None:
+        self._session.clear_perturbations()
+        self.refresh_status()  # hide compare/clear now, not on the next tick
+
     def _on_perturb_change(self, e: object) -> None:
-        # Crosshair cursor while clicks paint; the toggle only gates clicking
-        # (existing perturbations stay until cleared).
         if getattr(e, "value", False):
             self._image.classes(add="cursor-crosshair")
         else:
+            # Leaving editing mode discards the edits: the image and strips
+            # revert to the unperturbed input.
             self._image.classes(remove="cursor-crosshair")
+            self._on_clear()
 
     def _on_compare_change(self, e: object) -> None:
         self.compare = bool(getattr(e, "value", False))
