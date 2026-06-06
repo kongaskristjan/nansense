@@ -415,22 +415,27 @@ clears the published result so the UI falls back to the snapshot.
 
 Experiments — deep dream and a small Captum selection (Grad-CAM, Neuron
 Gradient, Neuron Integrated Gradients, Occlusion) — are the long-running,
-cancellable extension of the probe job queue. The UI arms an
-`ExperimentRequest` (`Session.request_experiment`); the pause loop in
-`_wait_for_proceed` consumes it and calls `experiments.run(...)`, a
-generator yielding `ExperimentResult` progress snapshots that the session
-publishes one by one (`_publish_experiment`) — that's what streams the
-evolving deep-dream image to the page.
+cancellable extension of the probe job queue. Each client (browser tab)
+queues an `ExperimentRequest` (`Session.request_experiment`, returning a
+seq); the pause loop in `_wait_for_proceed` drains the queue in order and
+calls `experiments.run(...)`, a generator yielding `ExperimentResult`
+progress snapshots that the session publishes one by one
+(`_publish_experiment`) — that's what streams the evolving deep-dream
+image to the page. Results are kept per seq in a bounded map (the
+`_EXPERIMENT_RESULTS_KEPT` most recently updated seqs;
+`experiment_result_for(seq)`) plus a latest-result slot
+(`experiment_result`), so concurrent tabs each poll their own run without
+overwriting each other.
 
-**Cancellation and supersession.** The runner checks a `should_abort()`
-predicate between steps; it fires on `cancel_experiment()`, on a newer
-request (each request bumps `_experiment_seq`, and `_publish_experiment`
-drops results whose seq is stale), and on anything that ends the pause —
-resume commands, a pending time-travel jump, `close()` — so the pause loop
-regains control within one step. A request armed while training is running
-stays armed until the next pause (`experiment_pending` lets the UI say
-so). A raising experiment publishes an error result instead of killing the
-training thread.
+**Cancellation.** The runner checks a `should_abort()` predicate between
+steps; it fires on `cancel_experiment(seq)` for the running seq (no seq
+cancels everything; a queued seq is just dropped) and on anything that
+ends the pause — resume commands, a pending time-travel jump, `close()` —
+so the pause loop regains control within one step. Another client's new
+request does *not* abort a running experiment; it waits its turn in the
+queue. Requests queued while training is running stay queued until the
+next pause (`experiment_pending` lets the UI say so). A raising experiment
+publishes an error result instead of killing the training thread.
 
 **Isolation.** Experiments share the probe contract via
 `Session._isolated_model` (the refactored common core): eval-mode forwards
@@ -467,11 +472,13 @@ declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
 number/switch/select widgets and collected on Run; the deep-dream "Inputs"
 count defaults to the live `session.input_batch_size`, capped at
 `_DEFAULT_DREAM_BATCH` = 8, and the channel knob is bounded by the layer's
-captured channel count, `_layer_channel_count`). A 200 ms timer
-streams `session.experiment_result` into the page: deep-dream result and
-start batches render denormalized via `render_image` as wrapping grids
-(non-image inputs fall back to a "not renderable" note), attributions via
-the shared diverging-colormap `render_strip`, next to the input sample.
+captured channel count, `_layer_channel_count`). A 200 ms timer streams
+the page's *own* request via `session.experiment_result_for(seq)` — Run
+replaces and Cancel aborts only this page's request, so tabs don't clobber
+each other: deep-dream result and start batches render denormalized via
+`render_image` as wrapping grids (non-image inputs fall back to a "not
+renderable" note), attributions via the shared diverging-colormap
+`render_strip`, next to the input sample.
 
 ## Time travel (`playgrad.restore`)
 
