@@ -1,4 +1,4 @@
-"""Training loop primitives for the CIFAR ResNet."""
+"""Training loop primitives for the vision example."""
 
 from __future__ import annotations
 

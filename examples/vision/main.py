@@ -1,4 +1,4 @@
-"""Train the small CIFAR ResNet on CIFAR10."""
+"""Train a small ResNet or Vision Transformer on CIFAR10 or Imagenette."""
 
 from __future__ import annotations
 
@@ -12,19 +12,31 @@ import torch
 from torch import nn
 
 import playgrad
-from examples.cifar10.data import CIFAR10_MEAN, CIFAR10_STD, build_dataloaders
-from examples.cifar10.resnet import ResNetCIFAR
-from examples.cifar10.train import evaluate, train_one_epoch
+from examples.vision.data import DATASETS, DatasetConfig, build_dataloaders
+from examples.vision.resnet import ResNetCIFAR
+from examples.vision.train import evaluate, train_one_epoch
+from examples.vision.vit import SimpleViT
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dataset",
+        choices=sorted(DATASETS),
+        default="cifar10",
+        help="Dataset to train on (default cifar10).",
+    )
+    parser.add_argument(
+        "--model",
+        choices=["resnet", "vit"],
+        default="resnet",
+        help="Architecture: the small pre-activation ResNet or the simple ViT (default resnet).",
+    )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=0.1)
-    parser.add_argument("--momentum", type=float, default=0.9)
-    parser.add_argument("--weight-decay", type=float, default=5e-4)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--blocks-per-stage", type=int, default=3, help="ResNet-(6n+2) depth knob")
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
@@ -77,6 +89,17 @@ def select_device(name: str | None) -> torch.device:
     return torch.device("cpu")
 
 
+def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> nn.Module:
+    if name == "resnet":
+        return ResNetCIFAR(num_classes=config.num_classes, blocks_per_stage=blocks_per_stage)
+    # An 8x8 patch grid at either image size (32 -> patch 4, 128 -> patch 16).
+    return SimpleViT(
+        image_size=config.image_size,
+        patch_size=config.image_size // 8,
+        num_classes=config.num_classes,
+    )
+
+
 def main() -> None:
     enable_line_buffering()
     args = parse_args()
@@ -86,20 +109,20 @@ def main() -> None:
     amp_dtype = torch.bfloat16 if args.bf16 else None
     print(f"Using device: {device} (amp_dtype={amp_dtype})")
 
+    config = DATASETS[args.dataset]
     train_loader, test_loader = build_dataloaders(
+        config,
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
 
-    model = ResNetCIFAR(num_classes=10, blocks_per_stage=args.blocks_per_stage).to(device)
+    model = build_model(args.model, config, blocks_per_stage=args.blocks_per_stage).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
-        momentum=args.momentum,
         weight_decay=args.weight_decay,
-        nesterov=True,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
@@ -112,13 +135,13 @@ def main() -> None:
         phases={"train": len(train_loader), "val": len(test_loader)},
         enabled=not args.disable_playgrad,
         # Optional: lets the weights page show per-parameter optimizer state
-        # (momentum buffers) and the group's live hyperparameters (lr, ...).
+        # (Adam moments) and the group's live hyperparameters (lr, ...).
         optimizer=optimizer,
         # Optional: lets time-travel checkpoints restore the LR schedule.
         scheduler=scheduler,
         port=args.playgrad_port,
-        input_mean=CIFAR10_MEAN,
-        input_std=CIFAR10_STD,
+        input_mean=config.mean,
+        input_std=config.std,
     )
     if session.enabled:
         print(f"playgrad UI at http://127.0.0.1:{args.playgrad_port}")

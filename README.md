@@ -9,11 +9,17 @@ runs. See `INTERNALS.md` for how it works under the hood.
 
 ```bash
 uv sync
-uv run python -m examples.cifar10.main --playgrad-port 8080
+uv run python -m examples.vision.main --playgrad-port 8080
 ```
 
 Open `http://localhost:8080`. Training pauses on the first batch; drive it
 from the top bar (step batch / epoch / custom, detach, time travel).
+
+Available examples:
+
+- `examples.vision.main` — a small pre-activation ResNet (default) or a
+  simple ViT (`--model vit`) on CIFAR10 (default) or Imagenette
+  (`--dataset imagenette`), trained with AdamW + a cosine schedule.
 
 ## Minimal example
 
@@ -78,7 +84,7 @@ session.close()
 
 `enabled=False` on `playgrad.start()` turns the whole thing into a
 near-zero-overhead no-op, so the wiring can stay in place for plain training
-runs. The runnable version of this loop is `examples/cifar10/main.py`.
+runs. The runnable version of this loop is `examples/vision/main.py`.
 
 ## Views
 
