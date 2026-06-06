@@ -19,6 +19,8 @@ Available examples:
 
 - `examples.mnist_linear.main` — a single linear layer on MNIST with the
   minimal playgrad wiring (no scheduler, no time travel).
+- `examples.mnist_lenet.main` — LeNet-5 on MNIST: SGD + momentum, basic
+  augmentation, and the full wiring (scheduler, time travel, checkpoints).
 - `examples.vision.main` — a small pre-activation ResNet (default) or a
   simple ViT (`--model vit`) on CIFAR10 (default) or Imagenette
   (`--dataset imagenette`), trained with AdamW + a cosine schedule.
