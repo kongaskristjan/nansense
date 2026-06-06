@@ -1239,13 +1239,13 @@ def _build_watch_page(
     second dropdown picks which phase (train / val / …) the cards show —
     one phase at a time, in both views:
 
+    - MIN/MAX (the default) — the extreme-activation patch grids
+      (channels across, per-channel top samples down), one per patch
+      type, each toggleable by its own checkbox, plus a heatmap checkbox
+      that blends the stored activation maps over the patches.
     - HISTOGRAM — one plotly figure per tensor kind (activations and
       activation gradients) for the selected phase's latest epoch, plus
       the "Log x" / "Log y" axis-scale checkboxes.
-    - MIN/MAX — the extreme-activation patch grids (channels across,
-      per-channel top samples down), one per patch type, each toggleable
-      by its own checkbox, plus a heatmap checkbox that blends the stored
-      activation maps over the patches.
 
     Each checkbox group is only visible while its view is selected. A
     `ui.timer` polls `session.watch_snapshot()` and refreshes the visible
@@ -1266,9 +1266,9 @@ def _build_watch_page(
     # `_use_density`); the header checkboxes flip them and re-render every
     # plot immediately.
     axis_log = {"x": False, "y": False}
-    # MIN/MAX view state: which of the four grids are shown and whether the
-    # activation heatmap is blended over the patches.
-    view_minmax = {"on": False}
+    # MIN/MAX view state (the default view): which of the four grids are
+    # shown and whether the activation heatmap is blended over the patches.
+    view_minmax = {"on": True}
     grid_on: dict[PatchType, bool] = dict.fromkeys(PATCH_TYPES, True)
     heat_on = {"on": False}
     # Every card shows one phase at a time, picked by a header dropdown
@@ -1311,7 +1311,7 @@ def _build_watch_page(
             )
             ui.select(
                 [_VIEW_MINMAX, _VIEW_HISTOGRAM],
-                value=_VIEW_HISTOGRAM,
+                value=_VIEW_MINMAX,
                 on_change=lambda e: set_mode(e.value),
             ).props("dense outlined options-dense").classes(
                 "ml-4 text-sm"
@@ -1362,7 +1362,7 @@ def _build_watch_page(
                     "patches (red positive, blue negative), with a scale "
                     "next to each grid"
                 )
-            minmax_controls.set_visibility(False)
+            hist_controls.set_visibility(False)
             ui.button(
                 icon="refresh",
                 on_click=lambda: refresh(),
@@ -1655,7 +1655,8 @@ class _WatchLayerPanel:
             self._patch_section = ui.column().classes("w-full gap-2")
             with self._patch_section:
                 self._grids = ui.html(_NO_PATCHES_HTML).classes("w-full")
-            self._patch_section.set_visibility(False)
+            self._hist_section.set_visibility(not view_minmax["on"])
+            self._patch_section.set_visibility(view_minmax["on"])
 
     def update(
         self,

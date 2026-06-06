@@ -41,8 +41,8 @@ from torch import Tensor
 N_PER_CHANNEL: int = 5
 # Crop side ≈ PATCH_FACTOR × the activation→input downsampling ratio,
 # floored at MIN_PATCH input pixels and capped at the image side.
-PATCH_FACTOR: int = 3
-MIN_PATCH: int = 8
+PATCH_FACTOR: int = 4
+MIN_PATCH: int = 10
 
 PatchType = Literal["max_pixel", "min_pixel", "max_average", "min_average"]
 PATCH_TYPES: tuple[PatchType, ...] = (
