@@ -56,20 +56,39 @@ class PreActBlock(nn.Module):
 
 
 class ResNetCIFAR(nn.Module):
-    """Pre-activation CIFAR ResNet with `blocks_per_stage` blocks at 3 stages.
+    """Pre-activation CIFAR ResNet with `blocks_per_stage` blocks per stage.
 
-    Total depth = 6 * blocks_per_stage + 2 (e.g. ResNet-20 -> blocks_per_stage=3).
+    Stages are registered as `stage1` .. `stage{num_stages}`; the first runs
+    at stride 1 and every later one downsamples by 2, doubling the channel
+    count (16, 32, 64, ...). Total depth = 2 * num_stages * blocks_per_stage
+    + 2 (e.g. ResNet-20 -> 3 stages of 3 blocks).
     """
 
-    def __init__(self, num_classes: int = 10, blocks_per_stage: int = 3) -> None:
+    STEM_CHANNELS: int = 16
+
+    def __init__(
+        self, num_classes: int = 10, blocks_per_stage: int = 3, num_stages: int = 3
+    ) -> None:
         super().__init__()
-        self.stem = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
-        self.stage1 = self._make_stage(16, 16, blocks_per_stage, stride=1)
-        self.stage2 = self._make_stage(16, 32, blocks_per_stage, stride=2)
-        self.stage3 = self._make_stage(32, 64, blocks_per_stage, stride=2)
-        self.head_bn = nn.BatchNorm2d(64)
+        if num_stages < 1:
+            raise ValueError(f"num_stages must be >= 1, got {num_stages}")
+        self.num_stages = num_stages
+        self.stem = nn.Conv2d(
+            3, self.STEM_CHANNELS, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        in_channels = self.STEM_CHANNELS
+        for i in range(num_stages):
+            out_channels = self.STEM_CHANNELS * 2**i
+            self.add_module(
+                f"stage{i + 1}",
+                self._make_stage(
+                    in_channels, out_channels, blocks_per_stage, stride=1 if i == 0 else 2
+                ),
+            )
+            in_channels = out_channels
+        self.head_bn = nn.BatchNorm2d(in_channels)
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(64, num_classes)
+        self.fc = nn.Linear(in_channels, num_classes)
 
         self._init_weights()
 
@@ -95,9 +114,8 @@ class ResNetCIFAR(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.stem(x)
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
+        for i in range(self.num_stages):
+            x = getattr(self, f"stage{i + 1}")(x)
         x = torch.relu(self.head_bn(x))
         x = self.pool(x).flatten(1)
         return self.fc(x)
@@ -105,3 +123,10 @@ class ResNetCIFAR(nn.Module):
 
 def resnet20(num_classes: int = 10) -> ResNetCIFAR:
     return ResNetCIFAR(num_classes=num_classes, blocks_per_stage=3)
+
+
+def resnet_deep(num_classes: int = 10, blocks_per_stage: int = 3) -> ResNetCIFAR:
+    """Five-stage variant: two more downsampling stages, up to 256 channels."""
+    return ResNetCIFAR(
+        num_classes=num_classes, blocks_per_stage=blocks_per_stage, num_stages=5
+    )

@@ -34,7 +34,7 @@ def test_enable_line_buffering_tolerates_non_textiowrapper_stdout(
 @pytest.mark.parametrize("dataset", sorted(DATASETS))
 @pytest.mark.parametrize(
     ("model_name", "model_cls"),
-    [("resnet", ResNetCIFAR), ("vit", SimpleViT)],
+    [("resnet", ResNetCIFAR), ("resnet_deep", ResNetCIFAR), ("vit", SimpleViT)],
 )
 def test_build_model(dataset: str, model_name: str, model_cls: type) -> None:
     config = DATASETS[dataset]

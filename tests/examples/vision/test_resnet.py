@@ -6,7 +6,7 @@ import pytest
 import torch
 from torch import nn
 
-from examples.vision.resnet import PreActBlock, ResNetCIFAR, resnet20
+from examples.vision.resnet import PreActBlock, ResNetCIFAR, resnet20, resnet_deep
 from examples.vision.train import evaluate, train_one_epoch
 
 
@@ -54,6 +54,44 @@ def test_resnet20_param_count() -> None:
     model = resnet20()
     n_params = sum(p.numel() for p in model.parameters())
     assert 250_000 < n_params < 300_000
+
+
+@pytest.mark.parametrize(
+    ("num_stages", "expected_stages", "expected_width"),
+    [
+        (3, ["stage1", "stage2", "stage3"], 64),
+        (5, ["stage1", "stage2", "stage3", "stage4", "stage5"], 256),
+    ],
+)
+def test_resnet_stage_layout(
+    num_stages: int, expected_stages: list[str], expected_width: int
+) -> None:
+    """Stages keep their `stageN` names and double channels per downsample."""
+    model = ResNetCIFAR(blocks_per_stage=1, num_stages=num_stages)
+    stage_names = [n for n, _ in model.named_children() if n.startswith("stage")]
+    assert stage_names == expected_stages
+    assert model.fc.in_features == expected_width
+    assert model.head_bn.num_features == expected_width
+
+
+@pytest.mark.parametrize("image_size", [32, 128])
+def test_resnet_deep_forward_shape(image_size: int) -> None:
+    model = resnet_deep(num_classes=10, blocks_per_stage=1)
+    x = torch.randn(2, 3, image_size, image_size)
+    assert model(x).shape == (2, 10)
+
+
+def test_resnet_deep_is_fx_traceable() -> None:
+    """The stage loop in `forward` must unroll statically under fx tracing."""
+    model = ResNetCIFAR(blocks_per_stage=1, num_stages=5)
+    traced = torch.fx.symbolic_trace(model)
+    x = torch.randn(2, 3, 32, 32)
+    assert torch.allclose(traced(x), model(x))
+
+
+def test_resnet_rejects_zero_stages() -> None:
+    with pytest.raises(ValueError):
+        ResNetCIFAR(num_stages=0)
 
 
 def test_training_step_reduces_loss() -> None:

@@ -28,16 +28,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=["resnet", "vit"],
+        choices=["resnet", "resnet_deep", "vit"],
         default="resnet",
-        help="Architecture: the small pre-activation ResNet or the simple ViT (default resnet).",
+        help=(
+            "Architecture: the small pre-activation ResNet, its five-stage "
+            "variant, or the simple ViT (default resnet)."
+        ),
     )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
-    parser.add_argument("--blocks-per-stage", type=int, default=3, help="ResNet-(6n+2) depth knob")
+    parser.add_argument(
+        "--blocks-per-stage",
+        type=int,
+        default=3,
+        help="ResNet depth knob: 2 * stages * n + 2 layers (e.g. ResNet-20 at 3 stages)",
+    )
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
     parser.add_argument(
@@ -90,8 +98,13 @@ def select_device(name: str | None) -> torch.device:
 
 
 def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> nn.Module:
-    if name == "resnet":
-        return ResNetCIFAR(num_classes=config.num_classes, blocks_per_stage=blocks_per_stage)
+    if name in ("resnet", "resnet_deep"):
+        # resnet_deep adds two more downsampling stages (5 total, 256 channels).
+        return ResNetCIFAR(
+            num_classes=config.num_classes,
+            blocks_per_stage=blocks_per_stage,
+            num_stages=5 if name == "resnet_deep" else 3,
+        )
     # An 8x8 patch grid at either image size (32 -> patch 4, 128 -> patch 16).
     return SimpleViT(
         image_size=config.image_size,

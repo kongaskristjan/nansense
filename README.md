@@ -21,8 +21,9 @@ Available examples:
   minimal playgrad wiring (no scheduler, no time travel).
 - `examples.mnist_lenet.main` — LeNet-5 on MNIST: SGD + momentum, basic
   augmentation, and the full wiring (scheduler, time travel, checkpoints).
-- `examples.vision.main` — a small pre-activation ResNet (default) or a
-  simple ViT (`--model vit`) on CIFAR10 (default) or Imagenette
+- `examples.vision.main` — a small pre-activation ResNet (default), a
+  deeper five-stage variant (`--model resnet_deep`), or a simple ViT
+  (`--model vit`) on CIFAR10 (default) or Imagenette
   (`--dataset imagenette`), trained with AdamW + a cosine schedule.
 
 ## Minimal example
