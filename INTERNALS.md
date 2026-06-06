@@ -655,17 +655,32 @@ It does not touch tensors directly until they need to be rendered.
   a non-main thread. The thread is non-daemon, so the UI stays alive
   even after the training script's main thread returns — the user
   closes the browser / Ctrl-Cs when they're done browsing post-mortem.
-- The page handler creates one `_LayerView` per submodule (a card with
+- The page handler creates one `_LayerView` per layer (a card with
   two strips inside a shared horizontal scroll container, each flanked by
   a sticky marker bar with a vertical label — emerald ACTIVATIONS, violet
-  GRADIENTS) and a `ui.timer` that, every 200 ms, compares
-  `session.snapshot` and `session.probe_result` against the last rendered
-  pair by identity. When either changed, every layer view re-renders,
-  slicing each tensor at the current `sample_idx`. A probe result (pinned
-  batch) takes precedence over the snapshot as the render source; its
-  gradient strips show a placeholder note (probes are forward-only). The
-  `_RenderCache` is keyed by render-source identity — snapshot or probe
-  result — so both share one cache.
+  GRADIENTS), but a card is only *visible* while its layer is watched —
+  visible is synonymous with watched (`session.watch`), so the center
+  pane starts empty (a hint points at the diagram) and each shown card
+  carries a permanent "Unwatch" button. Clicking a Mermaid node emits a
+  `playgrad_toggle_layer` event (JS `emitEvent` → `ui.on`) whose handler
+  toggles the watched state; `sync_watch_ui` then diffs the watched set
+  against the connection's last-known one (`_PageState.last_watched`) and
+  pushes only the changes: card visibility, the diagram's amber classes,
+  the chip menu, and the empty-pane hint. The tick runs the same diff, so
+  watch changes from other tabs propagate. The top-bar eye menu carries
+  "Watch all layers…" — gated behind a performance-warning dialog, since
+  watching everything re-enables full rendering and per-batch stats for
+  every layer — and "Clear all watches". A `ui.timer`, every 200 ms,
+  compares `session.snapshot` and `session.probe_result` against the last
+  rendered pair by identity. When either changed (or the watched set
+  did), the *watched* layer views re-render, slicing each tensor at the
+  current `sample_idx`; unwatched layers are never rendered or shipped to
+  the browser, which is what keeps large models responsive. A probe
+  result (pinned batch) takes precedence over the snapshot as the render
+  source; its gradient strips show a placeholder note (probes are
+  forward-only). The `_RenderCache` is keyed by render-source identity —
+  snapshot or probe result — so both share one cache, and a card
+  re-shown under an unchanged source is a cache hit.
 - The right sidebar is `playgrad.ui.input_panel.InputPanel`, laid out
   top-down as: the input image (what every control below acts on), the
   "Viewing sample" `ui.number` (moved out of the top bar), a "Probe"

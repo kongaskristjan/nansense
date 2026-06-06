@@ -97,10 +97,14 @@ runs. The runnable version of this loop is `examples/vision/main.py`.
 
 The landing page. The top bar drives the training loop: stop, step batch /
 epoch / custom, detach (run without pauses), and time travel (jump back to
-any checkpointed epoch). The left pane shows the architecture as a diagram,
-two-way linked with the center pane's layer cards: one card per layer, with
-activation and gradient strips for the selected sample. Clicking a diagram
-node or a card scrolls the other pane to the matching element.
+any checkpointed epoch). The left pane shows the architecture as a diagram;
+clicking a node toggles that layer's card in the center pane — visible is
+synonymous with watched, so each shown card carries activation and gradient
+strips for the selected sample plus an "Unwatch" button that hides it
+again. The center pane starts empty and only visible layers are rendered
+and sent to the browser, which keeps large models responsive. The top-bar
+eye menu jumps to watched layers, watches all layers at once (behind a
+performance warning), or clears every watch.
 
 The right "Input Selection" pane shows the input image and sample picker.
 "Pin batch" freezes the current batch as a probe input that is re-run on
@@ -113,8 +117,8 @@ far the edit propagates (the receptive field).
 
 ### Watch
 
-Toggling "Watch" on layer cards marks layers for the deep-dive `/watch`
-page, which renders one card per watched layer. The MIN/MAX view (the
+Layers watched on the main page (diagram clicks or the eye menu) also feed
+the deep-dive `/watch` page, which renders one card per watched layer. The MIN/MAX view (the
 default) shows the input patches that drove the layer's most extreme
 activations: per channel, the top input crops around the largest/smallest
 spatial activation and whole inputs ranked by spatial mean, with an optional

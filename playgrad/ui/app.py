@@ -5,23 +5,29 @@ disabled so it survives being started from a non-main thread). Layout:
 
 - Top bar with the six control buttons and a position label.
 - Left pane: the model architecture as a Mermaid diagram (built once at
-  start).
-- Centre pane: a one-column table with one row per submodule. Each row
-  holds two horizontally scrollable strips — activations on top,
-  activation gradients below — sharing a single horizontal scrollbar so
-  they pan together.
+  start). Clicking a node toggles its layer's visibility in the centre
+  pane — visible is synonymous with watched (`session.watch`).
+- Centre pane: one card per *watched* layer (empty by default — a hint
+  points at the diagram). Each card holds two horizontally scrollable
+  strips — activations on top, activation gradients below — sharing a
+  single horizontal scrollbar so they pan together, and an "Unwatch"
+  button that hides the card again. The watch-chip menu in the top bar
+  offers "Watch all layers" (behind a performance-warning dialog, since
+  watching everything renders every card and accumulates stats for every
+  layer on every batch) and "Clear all watches".
 - Right pane: the "Input Selection" sidebar (see `playgrad.ui.input_panel`)
   with the sample spinner, the batch-pinning probe controls, and the input
   image.
 
 A `ui.timer` in each connection polls `session.snapshot` and
 `session.probe_result`; when a new one is published, the page re-renders
-all per-layer strips against it (the probe — the pinned-batch view — wins
-when present). The same timer also refreshes the top-bar position label
-from `session.live_position` on every tick, so the displayed epoch/batch
-keeps advancing during modes that don't publish a snapshot every batch
-(step-epoch, step-custom, run, detach) — a cheap label write, decoupled
-from the heavier strip rendering.
+the *watched* layers' strips against it (the probe — the pinned-batch view
+— wins when present). Unwatched layers are never rendered or shipped to
+the browser, which is what keeps large models responsive. The same timer
+also refreshes the top-bar position label from `session.live_position` on
+every tick, so the displayed epoch/batch keeps advancing during modes that
+don't publish a snapshot every batch (step-epoch, step-custom, run,
+detach) — a cheap label write, decoupled from the heavier strip rendering.
 """
 
 from __future__ import annotations
@@ -44,6 +50,7 @@ import uvicorn
 from fastapi import FastAPI
 from plotly.subplots import make_subplots
 from nicegui import ui
+from nicegui.events import GenericEventArguments
 import torch
 from torch import Tensor
 
@@ -125,11 +132,13 @@ _ARCHITECTURE_CLICK_CSS: str = """
 # Mermaid SVG node ids look like "<element>-flowchart-<slug>-<counter>"; the
 # matching layer card carries `data-layer="<slug>"` so we can cross-link
 # the two. Hovering either side adds `.playgrad-highlight` to both ends
-# of the pair; clicking either side scrolls the *other* pane so the
-# matching element lands at the top. Scroll positions are computed
-# directly instead of via `scrollIntoView`, because the latter leaves the
-# target several dozen pixels below the column's top edge here (the
-# previous item's tail stays visible), even with `block: 'start'`.
+# of the pair. Clicking a diagram node emits `playgrad_toggle_layer` to
+# the server, which toggles the layer's watched state (and with it the
+# card's visibility); clicking a card header scrolls the diagram to the
+# matching node. Scroll positions are computed directly instead of via
+# `scrollIntoView`, because the latter leaves the target several dozen
+# pixels below the column's top edge here (the previous item's tail stays
+# visible), even with `block: 'start'`.
 _ARCHITECTURE_CLICK_JS: str = """
 <script>
 (function() {
@@ -220,9 +229,9 @@ _ARCHITECTURE_CLICK_JS: str = """
     if (node) {
       const slug = slugFromMermaidId(node.id);
       if (!slug) return;
-      const card = findCard(slug);
-      if (!card) return;
-      scrollTargetToTop(card);
+      // Toggling watched state lives server-side (session.watch); the
+      // server answers by updating card visibility and amber classes.
+      emitEvent('playgrad_toggle_layer', slug);
       return;
     }
     const card = e.target.closest('[data-layer]');
@@ -254,6 +263,13 @@ _ARCHITECTURE_CLICK_JS: str = """
     if (card) scrollTargetToTop(card);
     const node = findMermaidNode(slug);
     if (node) scrollTargetToTop(node);
+  };
+  // Card-only variant: used right after a diagram click reveals a card,
+  // where also scrolling the diagram would yank the just-clicked node away
+  // from under the cursor.
+  window.playgradScrollToCard = function(slug) {
+    const card = findCard(slug);
+    if (card) scrollTargetToTop(card);
   };
 
   // Re-apply watched classes to any matching mermaid node / card that
@@ -363,6 +379,11 @@ class _PageState:
     last_probe: ProbeResult | None = None
     dirty: bool = False
     rendering: bool = False
+    # The watched set this connection last reflected in its DOM (card
+    # visibility, amber classes, chip). The tick compares it against
+    # `session.watched_layers` so changes made elsewhere (another tab)
+    # propagate here too.
+    last_watched: frozenset[str] = frozenset()
 
 
 # Shared pool for strip rendering. Per-layer renders are independent and the
@@ -474,6 +495,7 @@ def _build_page(
     render_cache: _RenderCache,
 ) -> None:
     state = _PageState()
+    state.last_watched = session.watched_layers
     layer_views: dict[str, _LayerView] = {}
 
     ui.page_title("PlayGrad")
@@ -485,6 +507,36 @@ def _build_page(
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
 
     step_until_custom = _build_step_until_custom_dialog(session)
+
+    def watch_all() -> None:
+        for name in layer_names:
+            session.watch(name)
+        sync_watch_ui()
+
+    def clear_all() -> None:
+        for name in list(session.watched_layers):
+            session.unwatch(name)
+        sync_watch_ui()
+
+    # Watching everything turns the lazy-rendering optimization off again:
+    # every card renders on every pause and stats accumulate for every
+    # layer on every batch. Worth an explicit confirmation.
+    watch_all_dialog = ui.dialog()
+    with watch_all_dialog, ui.card().classes("max-w-md"):
+        ui.label("Watch all layers?").classes("text-lg font-medium")
+        ui.label(
+            "Every layer card will be rendered on every pause and per-layer "
+            "statistics will accumulate on every batch. On larger models this "
+            "can make the interface very slow and may even crash the browser "
+            "tab."
+        ).classes("text-sm text-slate-600")
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=watch_all_dialog.close).props("flat")
+            ui.button(
+                "Watch all",
+                color="red",
+                on_click=lambda: (watch_all(), watch_all_dialog.close()),
+            )
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
@@ -514,6 +566,15 @@ def _build_page(
                             "Open watch view  →",
                             on_click=lambda: ui.navigate.to("/watch", new_tab=True),
                         ).classes("font-medium")
+                        ui.separator()
+                        ui.menu_item(
+                            "Watch all layers…",
+                            on_click=watch_all_dialog.open,
+                        ).classes("text-sm")
+                        ui.menu_item(
+                            "Clear all watches",
+                            on_click=lambda: clear_all(),
+                        ).classes("text-sm")
                         ui.separator()
                         watch_list_container = ui.element("div").classes("py-1")
             input_toggle = ui.button(
@@ -549,23 +610,47 @@ def _build_page(
                         ),
                     ).classes("font-mono text-sm")
 
-        def toggle_layer(name: str) -> None:
-            was_watched = name in session.watched_layers
-            if was_watched:
-                session.unwatch(name)
-                now_watched = False
-            else:
-                # `session.watch` returns False for non-modules (fx
-                # intermediates, graph inputs). Treat that as a no-op.
-                now_watched = session.watch(name)
-            if was_watched == now_watched:
-                return
-            ui.run_javascript(
-                f"window.playgradSetWatched({json.dumps(slug(name))}, "
-                f"{'true' if now_watched else 'false'})"
-            )
+        def sync_watch_ui() -> None:
+            """Reflect `session.watched_layers` in this connection's DOM.
+
+            Visible is synonymous with watched: cards for newly watched
+            layers appear (and get rendered on the next tick via the dirty
+            flag), unwatched ones hide, the diagram's amber classes follow,
+            and the chip menu / empty-pane hint refresh. Diffing against
+            `state.last_watched` keeps the JS push proportional to the
+            change, not the model size.
+            """
+            watched = session.watched_layers
+            added = watched - state.last_watched
+            removed = state.last_watched - watched
+            state.last_watched = watched
+            for name in added | removed:
+                view = layer_views.get(name)
+                if view is not None:
+                    view.set_visible(name in watched)
+            if added or removed:
+                changes = "; ".join(
+                    f"window.playgradSetWatched({json.dumps(slug(n))}, "
+                    f"{'true' if n in watched else 'false'})"
+                    for n in added | removed
+                )
+                ui.run_javascript(changes)
+                state.dirty = True
+            empty_hint.set_visibility(not watched)
             refresh_chip()
-            layer_views[name].refresh_eye()
+
+        def toggle_layer(name: str) -> None:
+            # Any name in `session.layer_names` is watchable (modules, fx
+            # intermediates, graph inputs); False means an unknown name.
+            if name in session.watched_layers:
+                session.unwatch(name)
+            elif not session.watch(name):
+                return
+            sync_watch_ui()
+            if name in session.watched_layers:
+                ui.run_javascript(
+                    f"window.playgradScrollToCard({json.dumps(slug(name))})"
+                )
 
         with ui.row().classes("w-full no-wrap gap-0 grow min-h-0"):
             architecture_pane = ui.column().classes(
@@ -578,6 +663,15 @@ def _build_page(
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-3 bg-slate-200 gap-3"
             ):
+                empty_hint = ui.label(
+                    "No layers shown — click a node in the architecture "
+                    "diagram to show a layer's card and start watching it."
+                ).classes("text-slate-500 italic text-sm p-2")
+                empty_hint.set_visibility(not state.last_watched)
+                # Every card is built once (cheap: header + empty strips) but
+                # only watched ones are visible — and only visible cards get
+                # strip data, so hidden layers cost neither render time nor
+                # websocket bytes.
                 for name in layer_names:
                     layer_views[name] = _LayerView(
                         name,
@@ -611,11 +705,23 @@ def _build_page(
         architecture_toggle.on_click(toggle_architecture)
         input_toggle.on_click(toggle_input)
 
+    # Diagram clicks arrive as custom events carrying the node's slug; map
+    # it back to the layer name and toggle. Unknown slugs (e.g. a node
+    # whose label isn't a captured layer) are ignored.
+    slug_to_name = {slug(n): n for n in layer_names}
+
+    def on_diagram_toggle(e: GenericEventArguments) -> None:
+        name = slug_to_name.get(e.args)
+        if name is not None:
+            toggle_layer(name)
+
+    ui.on("playgrad_toggle_layer", on_diagram_toggle)
+
     # Populate the chip menu and, if anything is already watched, push the
     # set into JS so the MutationObserver applies the amber treatment to
     # mermaid nodes once Mermaid finishes rendering them client-side.
     refresh_chip()
-    initial_watched = list(session.watched_layers)
+    initial_watched = list(state.last_watched)
     if initial_watched:
         slugs_js = json.dumps([slug(n) for n in initial_watched])
         ui.timer(
@@ -637,6 +743,11 @@ def _build_page(
         if live is not None:
             position_label.text = _format_live_position(live)
         input_panel.refresh_status()
+        # Watched-set changes made elsewhere (another tab, the watch page)
+        # propagate here: sync flips card visibility and marks the frame
+        # dirty so newly visible cards render from the current snapshot.
+        if session.watched_layers != state.last_watched:
+            sync_watch_ui()
         snap = session.snapshot
         # With a probe result present (a batch is pinned), the page renders
         # the probe instead of the snapshot — that's the point of pinning:
@@ -658,9 +769,13 @@ def _build_page(
             state.rendering = True
             try:
                 sample_idx = input_panel.sample_idx
+                # Only the visible (= watched) layers render; hidden cards
+                # keep whatever stale content they had, which is invisible
+                # and re-rendered (cache-assisted) when they reappear.
+                visible_names = [n for n in layer_names if n in state.last_watched]
                 rendered, input_src = await asyncio.to_thread(
                     _compute_frame,
-                    layer_names,
+                    visible_names,
                     snap,
                     probe,
                     sample_idx,
@@ -3051,7 +3166,12 @@ def _apply_all(
 
 
 class _LayerView:
-    """One card per submodule, with activation + activation-gradient strips.
+    """One card per layer, with activation + activation-gradient strips.
+
+    Cards are built for every layer but shown only while the layer is
+    watched (`set_visible`) — visible is synonymous with watched, so the
+    header carries a permanent "Unwatch" button and hidden cards receive
+    no strip data at all.
 
     The strips are raw `<img>` elements (see `_strip_html`) with fixed CSS
     sizes and `flex:none`, so each strip renders at its display pixel width
@@ -3076,7 +3196,6 @@ class _LayerView:
         on_toggle_watch: Callable[[str], None],
     ) -> None:
         self.name = name
-        self._session = session
         card = ui.element("div").classes(
             "w-full min-w-0 bg-white rounded border border-slate-300 shadow-sm "
             "hover:border-blue-400 transition-colors"
@@ -3124,15 +3243,18 @@ class _LayerView:
                     ).tooltip(
                         "Run deep dream / Captum experiments on this layer"
                     )
+                # Visible is synonymous with watched: this card only shows
+                # while the layer is watched, so the button is always the
+                # "off" direction.
                 with ui.element("div").props("data-card-action"):
-                    self._eye_btn = ui.button(
-                        "Watch",
-                        icon="visibility",
+                    ui.button(
+                        "Unwatch",
+                        icon="visibility_off",
                         on_click=lambda: on_toggle_watch(name),
-                        color="green",
+                        color="red",
                     ).props("dense no-caps").style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
-                    ).tooltip("Watch this layer (toggle)")
+                    ).tooltip("Unwatch this layer and hide its card")
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
                 # The max-content wrapper makes every row span the widest
                 # strip. Without it a row is only as wide as the visible
@@ -3146,16 +3268,13 @@ class _LayerView:
                     with ui.element("div").classes("flex no-wrap items-stretch"):
                         _strip_marker("bg-violet-500", "GRADIENTS")
                         self.grad_html = ui.html("")
-        # Sync the icon now in case the page is being rebuilt with a layer
-        # that's already in the watched set (e.g. after navigating from
-        # `/watch` back to `/`).
-        self.refresh_eye()
+        self._card = card
+        # A page (re)built with layers already in the watched set (e.g.
+        # after navigating back from `/watch`) shows those cards right away.
+        self.set_visible(name in session.watched_layers)
 
-    def refresh_eye(self) -> None:
-        on = self.name in self._session.watched_layers
-        self._eye_btn.text = "Unwatch" if on else "Watch"
-        self._eye_btn.icon = "visibility_off" if on else "visibility"
-        self._eye_btn.props(f"color={'red' if on else 'green'}")
+    def set_visible(self, visible: bool) -> None:
+        self._card.set_visibility(visible)
 
     def apply(self, act_html: str, grad_html: str) -> None:
         self.act_html.set_content(act_html)
