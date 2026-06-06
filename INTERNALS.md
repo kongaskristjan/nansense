@@ -592,6 +592,22 @@ It does not touch tensors directly until they need to be rendered.
   - For `[F]` the data image is a single 1-px-tall heatmap row, downsampled
     to at most `LINEAR_MAX_BINS` bins when `F` is large, stretched
     client-side to `LINEAR_BIN_WIDTH` per bin × `LINEAR_TILE_HEIGHT`.
+  - A 2D per-sample shape (flattened transformer tokens, `[tokens, dim]`)
+    is unflattened back onto the model input's patch grid when the caller
+    passes `input_hw` — the input's spatial size, threaded in by
+    `_compute_frame` / `_compute_probe_frame` and the experiment page's
+    attribution strip. `_token_grid` accepts an axis as the token axis
+    when an integer patch stride `s` yields `(H/s)·(W/s)` tokens
+    (preserving the input's aspect ratio) after skipping 0, 1 (CLS),
+    2 (CLS + distillation), or 4 (registers) leading special tokens,
+    which are dropped from the strip. Token order is assumed row-major
+    (the standard ViT raster flatten — a permuted order like Swin's
+    window partitioning would render scrambled); tokens-first wins when
+    both axes fit, matching `batch_first` slicing. The matched sample
+    renders through `_render_chw` as one `h × w` tile per embedding dim —
+    the same view conv channels get. With no fit (or no `input_hw`) the
+    sample renders as a single 2D heatmap tile, so no activation card is
+    left imageless for being token-shaped.
   - The legend (vertical colorbar with `+x` / `0` / `-x` labels) is the
     exception to native-resolution encoding: it is rendered at display
     resolution into its own image so its text stays crisp.
@@ -604,7 +620,8 @@ It does not touch tensors directly until they need to be rendered.
     faster to encode than PNG) at ~2× the payload — the right trade for a
     localhost WebSocket. Flip to `PNG` (`compress_level=1`) when bytes
     matter more than encode time, e.g. an SSH-port-forwarded UI.
-  - Other per-sample shapes return `None`; the UI hides those images.
+  - Per-sample shapes of 4D and beyond return `None`; the UI hides those
+    images.
 - `playgrad.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
   renders the model input as a natural RGB or grayscale image at the
   sample's native resolution; the UI scales it to `INPUT_IMAGE_SIZE` with

@@ -8,9 +8,10 @@ layers and `F.scaled_dot_product_attention` (a tuple-returning
 tensor-valued node outputs), and the classification head global-average-
 pools the tokens instead of using a class token.
 
-Note that token-shaped activations (`[tokens, dim]` per sample) are
-neither `[C, H, W]` nor `[F]`, so playgrad's layer cards show these
-layers without activation/gradient strips.
+Token-shaped activations (`[tokens, dim]` per sample) render as channel
+tiles in playgrad's layer cards: the renderer recovers the patch grid
+from the model input's spatial size and unflattens the tokens back to
+`h x w` tiles, one per embedding dim.
 """
 
 from __future__ import annotations

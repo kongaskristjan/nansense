@@ -2580,7 +2580,18 @@ def _build_experiment_page(
                         "font-mono text-xs text-slate-600"
                     )
                     with ui.element("div").classes("max-w-full overflow-x-auto"):
-                        ui.html(_strip_html(render_strip(result.attribution, 0)))
+                        # `reference` is the input batch the attribution
+                        # explains; its spatial size lets token-shaped
+                        # attributions unflatten onto the patch grid.
+                        ui.html(
+                            _strip_html(
+                                render_strip(
+                                    result.attribution,
+                                    0,
+                                    input_hw=_tensor_hw(result.reference),
+                                )
+                            )
+                        )
             if result.reference is not None:
                 render_batch_images("Input", result.reference)
 
@@ -2861,6 +2872,17 @@ _PROBE_NO_GRADIENTS_HTML: str = (
 )
 
 
+def _tensor_hw(tensor: Tensor | None) -> tuple[int, int] | None:
+    """Spatial size of a `[B, C, H, W]` input, or `None` when not image-like.
+
+    Threaded into `render_strip` as `input_hw` so 2D (token-shaped)
+    activations can be unflattened back onto the input's patch grid.
+    """
+    if tensor is None or tensor.ndim != 4:
+        return None
+    return int(tensor.shape[-2]), int(tensor.shape[-1])
+
+
 def _compute_frame(
     layer_names: list[str],
     snap: BatchSnapshot | None,
@@ -2892,6 +2914,7 @@ def _compute_frame(
             cache=cache,
         )
     assert snap is not None  # tick only renders when at least one source exists
+    input_hw = _tensor_hw(snap.activations.get(input_name) if input_name else None)
 
     def strips(name: str) -> tuple[str, str]:
         if compare:
@@ -2903,7 +2926,9 @@ def _compute_frame(
                 (name, "act-diff", sample_idx),
                 lambda: _strip_html(
                     render_strip(
-                        _zeros_like(snap.activations.get(name)), sample_idx
+                        _zeros_like(snap.activations.get(name)),
+                        sample_idx,
+                        input_hw=input_hw,
                     )
                 ),
             )
@@ -2912,14 +2937,20 @@ def _compute_frame(
                 snap,
                 (name, "act", sample_idx),
                 lambda: _strip_html(
-                    render_strip(snap.activations.get(name), sample_idx)
+                    render_strip(
+                        snap.activations.get(name), sample_idx, input_hw=input_hw
+                    )
                 ),
             )
         grad = cache.get_or_render(
             snap,
             (name, "grad", sample_idx),
             lambda: _strip_html(
-                render_strip(snap.activation_gradients.get(name), sample_idx)
+                render_strip(
+                    snap.activation_gradients.get(name),
+                    sample_idx,
+                    input_hw=input_hw,
+                )
             ),
         )
         return act, grad
@@ -2968,6 +2999,7 @@ def _compute_probe_frame(
     kind = "probe-diff" if compare else (
         "probe-perturbed" if perturbed_acts is not None else "probe-act"
     )
+    input_hw = _tensor_hw(probe.input)
 
     def act_tensor(name: str) -> Tensor | None:
         base = probe.activations.get(name)
@@ -2988,7 +3020,9 @@ def _compute_probe_frame(
         act = cache.get_or_render(
             probe,
             (name, kind, sample_idx),
-            lambda: _strip_html(render_strip(act_tensor(name), sample_idx)),
+            lambda: _strip_html(
+                render_strip(act_tensor(name), sample_idx, input_hw=input_hw)
+            ),
         )
         return act, _PROBE_NO_GRADIENTS_HTML
 

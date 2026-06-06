@@ -105,6 +105,72 @@ def test_returns_none_for_unsupported_shape() -> None:
     assert render_strip(tensor, sample_idx=0) is None
 
 
+@pytest.mark.parametrize(
+    ("n_tokens", "input_hw", "expected"),
+    [
+        (64, (32, 32), (0, 8, 8)),  # plain 8x8 grid, stride 4
+        (64, (128, 128), (0, 8, 8)),  # same grid at stride 16
+        (65, (32, 32), (1, 8, 8)),  # class token
+        (66, (32, 32), (2, 8, 8)),  # class + distillation (DeiT)
+        (68, (32, 32), (4, 8, 8)),  # four registers
+        (48, (96, 128), (0, 6, 8)),  # non-square input, stride 16
+        (1024, (32, 32), (0, 32, 32)),  # stride 1: a token per pixel
+        (192, (32, 32), None),  # a ViT embedding dim — no integer stride
+        (50, (32, 32), None),
+    ],
+)
+def test_token_grid(
+    n_tokens: int, input_hw: tuple[int, int], expected: tuple[int, int, int] | None
+) -> None:
+    assert render._token_grid(n_tokens, input_hw) == expected
+
+
+def test_2d_tokens_unflatten_onto_input_grid() -> None:
+    # [tokens, dim] with a fitting token axis renders exactly like the
+    # explicitly unflattened [dim, h, w] conv-style view of the same data.
+    tensor = torch.randn(3, 64, 24)
+    strip = render_strip(tensor, sample_idx=1, input_hw=(32, 32))
+    grid = tensor[1].T.reshape(24, 8, 8).unsqueeze(0)
+    assert strip == render_strip(grid, sample_idx=0)
+
+
+def test_2d_tokens_drop_leading_class_token() -> None:
+    tensor = torch.randn(1, 65, 24)
+    strip = render_strip(tensor, sample_idx=0, input_hw=(32, 32))
+    grid = tensor[0, 1:].T.reshape(24, 8, 8).unsqueeze(0)
+    assert strip == render_strip(grid, sample_idx=0)
+
+
+def test_2d_tokens_fit_on_second_axis() -> None:
+    # [dim, tokens]: only axis 1 matches the grid, so it is the token axis.
+    tensor = torch.randn(1, 24, 64)
+    strip = render_strip(tensor, sample_idx=0, input_hw=(32, 32))
+    grid = tensor[0].reshape(24, 8, 8).unsqueeze(0)
+    assert strip == render_strip(grid, sample_idx=0)
+
+
+def test_2d_ambiguous_axes_prefer_tokens_first() -> None:
+    # Both axes fit the grid (64 tokens, 64 dims); batch_first slicing makes
+    # [tokens, dim] the common layout, so axis 0 wins.
+    tensor = torch.randn(1, 64, 64)
+    strip = render_strip(tensor, sample_idx=0, input_hw=(32, 32))
+    grid = tensor[0].T.reshape(64, 8, 8).unsqueeze(0)
+    assert strip == render_strip(grid, sample_idx=0)
+
+
+def test_2d_without_grid_fit_renders_single_heatmap_tile() -> None:
+    # Neither 7 nor 13 fits a 32x32 patch grid: a single [7, 13] tile.
+    tensor = torch.randn(2, 7, 13)
+    strip = render_strip(tensor, sample_idx=0, input_hw=(32, 32))
+    assert strip == render_strip(tensor[0].reshape(1, 1, 7, 13), sample_idx=0)
+
+
+def test_2d_without_input_hw_renders_single_heatmap_tile() -> None:
+    tensor = torch.randn(2, 64, 24)
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip == render_strip(tensor[0].reshape(1, 1, 64, 24), sample_idx=0)
+
+
 def test_zero_variance_tensor_renders() -> None:
     # All-zero input must not crash the diverging colormap (abs_max=0 edge).
     tensor = torch.zeros(2, 4, 8, 8)
