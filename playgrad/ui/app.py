@@ -48,7 +48,11 @@ import torch
 from torch import Tensor
 
 from playgrad.patches import PATCH_TYPES, PatchType
-from playgrad.experiments import EXPERIMENT_KINDS, ExperimentResult
+from playgrad.experiments import (
+    _DEFAULT_DREAM_BATCH,
+    EXPERIMENT_KINDS,
+    ExperimentResult,
+)
 from playgrad.probe import ProbeResult
 from playgrad.restore import TimeTravelError
 from playgrad.schedule import BatchPosition, Schedule
@@ -2314,7 +2318,7 @@ _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
             minimum=1,
             tooltip=(
                 "How many inputs to dream on; defaults to the size of the "
-                "currently processed batch"
+                f"currently processed batch, capped at {_DEFAULT_DREAM_BATCH}"
             ),
         ),
         _ExperimentParam(
@@ -2502,7 +2506,9 @@ def _build_experiment_page(
                 else:
                     default = spec.default
                     if spec.key == "batch":  # tracks the live batch size
-                        default = session.input_batch_size or default
+                        live = session.input_batch_size
+                        if live is not None:
+                            default = min(_DEFAULT_DREAM_BATCH, live)
                     default_number = (
                         default if isinstance(default, (int, float)) else 0
                     )

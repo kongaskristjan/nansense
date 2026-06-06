@@ -56,6 +56,9 @@ EXPERIMENT_KINDS: dict[str, str] = {
 # How many intermediate publishes a deep-dream run spreads over its steps.
 _PUBLISH_COUNT: int = 20
 
+# Default cap on how many inputs a deep dream covers (the UI mirrors it).
+_DEFAULT_DREAM_BATCH: int = 8
+
 
 @dataclass(frozen=True)
 class ExperimentRequest:
@@ -163,7 +166,8 @@ def _dream_start(
     fresh samples matching the real input's per-sample shape and overall
     mean/std from `rng` — seeded per request, so successive runs explore
     different noise; `start="sample"` takes the first `batch` samples of
-    the real input batch.
+    the real input batch. `batch` defaults to the real batch size, capped
+    at `_DEFAULT_DREAM_BATCH`.
     """
     base = session._snapshot_input()
     if base is None:
@@ -173,7 +177,8 @@ def _dream_start(
     if base.ndim < 2:
         return _error(request, "deep dream needs a batched input [B, ...]")
     base = base.detach().float()
-    batch = max(1, _i(request.params, "batch", int(base.shape[0])))
+    default = min(_DEFAULT_DREAM_BATCH, int(base.shape[0]))
+    batch = max(1, _i(request.params, "batch", default))
     if str(request.params.get("start", "noise")) != "noise":
         return base[:batch].clone()
     noise = torch.randn((batch, *base.shape[1:]), generator=rng)

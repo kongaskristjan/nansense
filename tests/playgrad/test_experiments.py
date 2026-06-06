@@ -30,22 +30,24 @@ class TinyClassifier(nn.Module):
         return self.fc(h.flatten(1))
 
 
-def _train_step(model: TinyClassifier) -> None:
-    x = torch.randn(2, 3, 4, 4)
-    y = torch.randint(0, 3, (2,))
+def _train_step(model: TinyClassifier, batch_size: int) -> None:
+    x = torch.randn(batch_size, 3, 4, 4)
+    y = torch.randint(0, 3, (batch_size,))
     model.zero_grad(set_to_none=True)
     loss = nn.functional.cross_entropy(model(x), y)
     loss.backward()
 
 
-def _paused_session() -> tuple[Session, TinyClassifier, threading.Thread]:
+def _paused_session(
+    batch_size: int = 2,
+) -> tuple[Session, TinyClassifier, threading.Thread]:
     model = TinyClassifier()
     session = playgrad.start(model, epochs=1, phases={"train": 2})
 
     def loop() -> None:
         for _ in range(2):
             with session.batch(phase="train", epoch=0):
-                _train_step(model)
+                _train_step(model, batch_size)
 
     thread = threading.Thread(target=loop, daemon=True)
     thread.start()
@@ -93,6 +95,20 @@ def test_deep_dream_publishes_done_result_with_image() -> None:
     assert result.image.device.type == "cpu"
     assert result.reference is not None and result.reference.shape == (2, 3, 4, 4)
     assert isinstance(result.objective, float)
+    _finish(session, thread)
+
+
+def test_deep_dream_default_batch_caps_at_eight() -> None:
+    session, _, thread = _paused_session(batch_size=10)
+    session.request_experiment(
+        kind="deep_dream",
+        layer="conv",
+        params=_dream_params(start="noise", steps=1),  # no "batch" param
+    )
+    assert session.wait_for_experiment(timeout=10)
+    result = session.experiment_result
+    assert result is not None and result.error is None
+    assert result.image is not None and result.image.shape == (8, 3, 4, 4)
     _finish(session, thread)
 
 
