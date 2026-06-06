@@ -466,7 +466,8 @@ card): the kind dropdown defaults to deep dream; each kind's knobs are
 declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
 number/switch/select widgets and collected on Run; the deep-dream "Inputs"
 count defaults to the live `session.input_batch_size`, capped at
-`_DEFAULT_DREAM_BATCH` = 8). A 200 ms timer
+`_DEFAULT_DREAM_BATCH` = 8, and the channel knob is bounded by the layer's
+captured channel count, `_layer_channel_count`). A 200 ms timer
 streams `session.experiment_result` into the page: deep-dream result and
 start batches render denormalized via `render_image` as wrapping grids
 (non-image inputs fall back to a "not renderable" note), attributions via

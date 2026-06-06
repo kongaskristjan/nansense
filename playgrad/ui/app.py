@@ -2392,6 +2392,14 @@ def _experiment_img_html(image: bytes | None) -> str:
     )
 
 
+def _layer_channel_count(snap: BatchSnapshot | None, layer: str) -> int | None:
+    """Channel count of `layer`'s last captured activation (None if unknown)."""
+    act = snap.activations.get(layer) if snap is not None else None
+    if act is None or act.ndim < 2:
+        return None
+    return int(act.shape[1])
+
+
 def _build_experiment_page(
     session: Session,
     layer: str,
@@ -2509,6 +2517,11 @@ def _build_experiment_page(
                         live = session.input_batch_size
                         if live is not None:
                             default = min(_DEFAULT_DREAM_BATCH, live)
+                    maximum: float | None = None
+                    if spec.key == "channel":  # bound to the layer's channels
+                        channels = _layer_channel_count(session.snapshot, layer)
+                        if channels is not None:
+                            maximum = channels - 1
                     default_number = (
                         default if isinstance(default, (int, float)) else 0
                     )
@@ -2516,6 +2529,7 @@ def _build_experiment_page(
                         label=spec.label,
                         value=default_number,
                         min=spec.minimum,
+                        max=maximum,
                         step=1 if spec.kind == "int" else spec.step,
                         format="%d" if spec.kind == "int" else None,
                     ).props("dense outlined").classes("w-full")

@@ -1042,6 +1042,17 @@ def test_experiment_params_cover_every_kind() -> None:
                 assert isinstance(spec.default, (int, float)), spec.key
 
 
+def test_layer_channel_count_reads_snapshot_activation() -> None:
+    from playgrad.ui.app import _layer_channel_count
+
+    snap = _frame_snapshot()
+    snap.activations["vec"] = torch.rand(5)  # channel-less activation
+    assert _layer_channel_count(snap, "conv") == 2
+    assert _layer_channel_count(snap, "vec") is None
+    assert _layer_channel_count(snap, "missing") is None
+    assert _layer_channel_count(None, "conv") is None
+
+
 def test_display_batch_size_prefers_probe() -> None:
     snap = _frame_snapshot()  # batch size 2
     probe = ProbeResult(
