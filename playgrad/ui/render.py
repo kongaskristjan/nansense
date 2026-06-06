@@ -31,6 +31,7 @@ forward.
 from __future__ import annotations
 
 import io
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -88,12 +89,21 @@ class StripRender:
     height: int
 
 
-def render_strip(tensor: Tensor | None, sample_idx: int) -> StripRender | None:
+def render_strip(
+    tensor: Tensor | None,
+    sample_idx: int,
+    *,
+    input_hw: tuple[int, int] | None = None,
+) -> StripRender | None:
     """Render a per-channel horizontal strip.
 
-    Returns `None` if the tensor is `None`, `sample_idx` is out of range, or
-    the per-sample shape is unsupported (anything other than `[C, H, W]` or
-    `[F]`).
+    Per-sample `[C, H, W]` renders as channel tiles and `[F]` as a heatmap
+    row. A 2D per-sample shape (e.g. flattened transformer tokens
+    `[tokens, dim]`) renders as channel tiles too when one axis matches a
+    token grid of the `input_hw` image (see `_render_tokens_2d`), and as a
+    single 2D heatmap tile otherwise. Returns `None` if the tensor is
+    `None`, `sample_idx` is out of range, or the per-sample shape is
+    unsupported (4D and beyond).
     """
     if tensor is None or tensor.ndim == 0:
         return None
@@ -102,9 +112,63 @@ def render_strip(tensor: Tensor | None, sample_idx: int) -> StripRender | None:
     sample = tensor[sample_idx]
     if sample.ndim == 3:
         return _render_chw(sample)
+    if sample.ndim == 2:
+        return _render_tokens_2d(sample, input_hw)
     if sample.ndim == 1:
         return _render_1d(sample)
     return None
+
+
+# Leading non-spatial tokens a grid fit may skip: none, a class token, class
+# + distillation tokens (DeiT), or four register tokens (ViT-with-registers).
+_SPECIAL_TOKEN_COUNTS: tuple[int, ...] = (0, 1, 2, 4)
+
+
+def _token_grid(n_tokens: int, input_hw: tuple[int, int]) -> tuple[int, int, int] | None:
+    """Match a token count to a patch grid of the `input_hw` image.
+
+    Returns `(extra, h, w)` where `h * w == n_tokens - extra` is the grid
+    produced by an integer patch stride `s` over the input (`h = H/s`,
+    `w = W/s` — preserving the input's aspect ratio) and `extra` is the
+    smallest number of leading special tokens (`_SPECIAL_TOKEN_COUNTS`)
+    that makes a stride fit. Returns `None` when no stride fits.
+    """
+    height, width = input_hw
+    for extra in _SPECIAL_TOKEN_COUNTS:
+        t = n_tokens - extra
+        if t <= 0 or (height * width) % t:
+            continue
+        stride = math.isqrt(height * width // t)
+        if stride == 0 or stride * stride != height * width // t:
+            continue
+        if height % stride or width % stride:
+            continue
+        return extra, height // stride, width // stride
+    return None
+
+
+def _render_tokens_2d(sample: Tensor, input_hw: tuple[int, int] | None) -> StripRender:
+    """Render a 2D per-sample tensor, recovering a token grid when possible.
+
+    When one axis matches a token grid of the input (`_token_grid`), the
+    tokens unflatten to one `h x w` tile per embedding dim — the same view
+    a conv layer's channels get. Special tokens detected by the fit (CLS /
+    distillation / registers) are assumed to lead the sequence and are
+    dropped from the strip. The token axis is assumed row-major over the
+    grid (standard ViT raster flatten); tokens-first (`[tokens, dim]`) is
+    preferred when both axes fit, matching the `batch_first` slicing
+    convention. Without `input_hw` or a fitting axis, the sample renders
+    as a single 2D heatmap tile.
+    """
+    if input_hw is not None:
+        for token_axis in (0, 1):
+            fit = _token_grid(int(sample.shape[token_axis]), input_hw)
+            if fit is None:
+                continue
+            extra, h, w = fit
+            tokens = sample if token_axis == 0 else sample.T
+            return _render_chw(tokens[extra:].T.reshape(-1, h, w))
+    return _render_chw(sample.unsqueeze(0))
 
 
 @dataclass(frozen=True)
