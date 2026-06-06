@@ -438,12 +438,19 @@ with per-module flags and all buffers restored, forked RNG. Gradients are
 taken w.r.t. the *input* only (`torch.autograd.grad`), so parameter
 `.grad` — which the snapshot path reads at `__exit__` — is never touched.
 
-**Deep dream** (`_run_deep_dream`) is normalized-gradient ascent on a
-channel's mean activation (`_target_activation`: the fx interpreter against
-a local dict, so any name in `layer_names` is a valid target; a single
-temporary hook in the fallback). Regularizers per step: jitter (random
-roll, undone after the update — forked RNG only), diffusion (blend with a
-3×3 box blur), optional center zoom, and clamping to `_value_bounds` — the
+**Deep dream** (`_run_deep_dream`) is per-sample-normalized gradient
+ascent on a channel's mean activation (`_target_activation`: the fx
+interpreter against a local dict, so any name in `layer_names` is a valid
+target; a single temporary hook in the fallback). It runs on a *batch*
+built from the network's real input (`_dream_start` — any input shape, not
+just images): by default `batch` fresh noise samples matching the real
+input's per-sample shape and overall mean/std, drawn from a generator
+seeded by the request seq so successive Runs explore different noise;
+`start="sample"` takes the first `batch` samples of the real input batch
+instead. Regularizers per step, applied only to `[B, C, H, W]` inputs:
+jitter (random roll, undone after the update — drawn from the same
+request-seeded generator), diffusion (blend with a 3×3 box blur), center
+zoom (a per-step multiplier, ≥ 1), and clamping to `_value_bounds` — the
 displayable `[0, 1]` range mapped through the input mean/std.
 
 **Captum** (`_run_captum`) imports lazily and runs the *unpatched* model
@@ -457,10 +464,12 @@ a selector callable (per-example mean of that channel).
 **UI** (`/experiment?layer=...`, one yellow "Experiment" button per layer
 card): the kind dropdown defaults to deep dream; each kind's knobs are
 declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
-number/switch/select widgets and collected on Run). A 200 ms timer streams
-`session.experiment_result` into the page: deep-dream images render
-denormalized via `render_image`, attributions via the shared
-diverging-colormap `render_strip`, each next to the input sample.
+number/switch/select widgets and collected on Run; the deep-dream "Inputs"
+count defaults to the live `session.input_batch_size`). A 200 ms timer
+streams `session.experiment_result` into the page: deep-dream result and
+start batches render denormalized via `render_image` as wrapping grids
+(non-image inputs fall back to a "not renderable" note), attributions via
+the shared diverging-colormap `render_strip`, next to the input sample.
 
 ## Time travel (`playgrad.restore`)
 

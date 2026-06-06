@@ -2238,6 +2238,7 @@ class _ExperimentParam:
     default: object
     options: dict[str, str] | None = None
     minimum: float | None = None
+    step: float | None = None
     tooltip: str = ""
 
 
@@ -2270,13 +2271,16 @@ _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
     "deep_dream": [
         _CHANNEL_PARAM,
         _ExperimentParam("steps", "Steps", "int", 100, minimum=1),
-        _ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0),
+        _ExperimentParam(
+            "lr", "Learning rate", "float", 0.05, minimum=0, step=0.01
+        ),
         _ExperimentParam(
             "diffusion",
             "Diffusion",
             "float",
             0.05,
             minimum=0,
+            step=0.01,
             tooltip="Per-step blend with a 3×3 blur; damps high-frequency noise",
         ),
         _ExperimentParam(
@@ -2292,22 +2296,38 @@ _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
         ),
         _ExperimentParam(
             "zoom",
-            "Zoom per step",
+            "Zoom multiplier per step",
             "float",
-            0.0,
-            minimum=0,
+            1.0,
+            minimum=1,
+            step=0.01,
             tooltip=(
-                "Fractional center zoom-in per step (0 disables; on small "
-                "inputs it only takes effect above ~1/size)"
+                "Per-step center zoom-in factor (1 = no zoom; on small "
+                "inputs it only takes effect above ~1 + 1/size)"
             ),
         ),
-        _SAMPLE_PARAM,
+        _ExperimentParam(
+            "batch",
+            "Inputs",
+            "int",
+            1,
+            minimum=1,
+            tooltip=(
+                "How many inputs to dream on; defaults to the size of the "
+                "currently processed batch"
+            ),
+        ),
         _ExperimentParam(
             "start",
             "Start from",
             "select",
-            "sample",
-            options={"sample": "Current sample", "noise": "Noise"},
+            "noise",
+            options={"noise": "Noise", "sample": "Current batch"},
+            tooltip=(
+                "Noise draws fresh inputs shaped and scaled like the "
+                "network's real input — different on every Run; Current "
+                "batch starts from the real input batch itself"
+            ),
         ),
         _ExperimentParam(
             "clamp",
@@ -2480,33 +2500,47 @@ def _build_experiment_page(
                         spec.options or {}, label=spec.label, value=spec.default
                     ).props("dense outlined").classes("w-full")
                 else:
+                    default = spec.default
+                    if spec.key == "batch":  # tracks the live batch size
+                        default = session.input_batch_size or default
                     default_number = (
-                        spec.default if isinstance(spec.default, (int, float)) else 0
+                        default if isinstance(default, (int, float)) else 0
                     )
                     widget = ui.number(
                         label=spec.label,
                         value=default_number,
                         min=spec.minimum,
-                        step=1 if spec.kind == "int" else None,
+                        step=1 if spec.kind == "int" else spec.step,
                         format="%d" if spec.kind == "int" else None,
                     ).props("dense outlined").classes("w-full")
                 if spec.tooltip:
                     widget.tooltip(spec.tooltip)
                 widgets[spec.key] = widget
 
+    def render_batch_images(title: str, tensor: Tensor) -> None:
+        """A labelled, wrapping grid of every sample in `tensor`.
+
+        Non-image tensors (deep dream runs on the network's real input,
+        whatever its shape) fall back to a single "not renderable" note.
+        """
+        rendered = [
+            render_image(tensor, i, mean=input_mean, std=input_std)
+            for i in range(int(tensor.shape[0]))
+        ]
+        with ui.column().classes("gap-1 min-w-0"):
+            ui.label(title).classes("font-mono text-xs text-slate-600")
+            if not any(r is not None for r in rendered):
+                ui.html(_experiment_img_html(None))
+                return
+            with ui.row().classes("gap-2 flex-wrap"):
+                for image in rendered:
+                    ui.html(_experiment_img_html(image))
+
     def render_result(result: ExperimentResult) -> None:
         results_row.clear()
         with results_row:
             if result.image is not None:
-                with ui.column().classes("gap-1"):
-                    ui.label("Result").classes("font-mono text-xs text-slate-600")
-                    ui.html(
-                        _experiment_img_html(
-                            render_image(
-                                result.image, 0, mean=input_mean, std=input_std
-                            )
-                        )
-                    )
+                render_batch_images("Result", result.image)
             if result.attribution is not None:
                 with ui.column().classes("gap-1 min-w-0"):
                     ui.label("Attribution").classes(
@@ -2515,15 +2549,7 @@ def _build_experiment_page(
                     with ui.element("div").classes("max-w-full overflow-x-auto"):
                         ui.html(_strip_html(render_strip(result.attribution, 0)))
             if result.reference is not None:
-                with ui.column().classes("gap-1"):
-                    ui.label("Input").classes("font-mono text-xs text-slate-600")
-                    ui.html(
-                        _experiment_img_html(
-                            render_image(
-                                result.reference, 0, mean=input_mean, std=input_std
-                            )
-                        )
-                    )
+                render_batch_images("Input", result.reference)
 
     def tick() -> None:
         live = session.live_position

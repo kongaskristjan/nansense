@@ -66,8 +66,7 @@ def _dream_params(**overrides: object) -> dict[str, object]:
         "lr": 0.1,
         "diffusion": 0.1,
         "jitter": 1,
-        "zoom": 0.0,
-        "sample": 0,
+        "zoom": 1.0,
         "start": "sample",
         "clamp": True,
         "mean": CIFARISH_MEAN,
@@ -79,6 +78,7 @@ def _dream_params(**overrides: object) -> dict[str, object]:
 
 def test_deep_dream_publishes_done_result_with_image() -> None:
     session, _, thread = _paused_session()
+    assert session.input_batch_size == 2
     session.request_experiment(
         kind="deep_dream", layer="conv", params=_dream_params()
     )
@@ -88,10 +88,53 @@ def test_deep_dream_publishes_done_result_with_image() -> None:
     assert result.error is None
     assert result.done and result.step == result.total_steps == 5
     assert result.kind == "deep_dream" and result.layer == "conv"
-    assert result.image is not None and result.image.shape == (1, 3, 4, 4)
+    # Without a "batch" param the dream covers the whole current batch.
+    assert result.image is not None and result.image.shape == (2, 3, 4, 4)
     assert result.image.device.type == "cpu"
-    assert result.reference is not None and result.reference.shape == (1, 3, 4, 4)
+    assert result.reference is not None and result.reference.shape == (2, 3, 4, 4)
     assert isinstance(result.objective, float)
+    _finish(session, thread)
+
+
+@pytest.mark.parametrize(
+    "start, batch, expected",
+    [
+        ("noise", 3, 3),  # noise draws exactly the requested count
+        ("sample", 5, 2),  # the real input batch caps sample starts
+        ("sample", 1, 1),
+    ],
+)
+def test_deep_dream_batch_param(start: str, batch: int, expected: int) -> None:
+    session, _, thread = _paused_session()
+    session.request_experiment(
+        kind="deep_dream",
+        layer="conv",
+        params=_dream_params(start=start, batch=batch, steps=2),
+    )
+    assert session.wait_for_experiment(timeout=10)
+    result = session.experiment_result
+    assert result is not None and result.error is None
+    assert result.image is not None and result.image.shape == (expected, 3, 4, 4)
+    assert result.reference is not None
+    assert result.reference.shape == (expected, 3, 4, 4)
+    _finish(session, thread)
+
+
+def test_deep_dream_noise_differs_across_runs() -> None:
+    session, _, thread = _paused_session()
+    references: list[Tensor] = []
+    for _ in range(2):
+        session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params=_dream_params(start="noise", batch=2, steps=1),
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        assert result.reference is not None
+        references.append(result.reference)
+    assert not torch.equal(references[0], references[1])
     _finish(session, thread)
 
 
@@ -162,6 +205,45 @@ def test_deep_dream_works_on_fx_intermediate_layer() -> None:
     assert session.wait_for_experiment(timeout=10)
     result = session.experiment_result
     assert result is not None and result.error is None and result.image is not None
+    _finish(session, thread)
+
+
+class VectorNet(nn.Module):
+    """Vector input [B, 8]: deep dream must accept non-image network inputs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(8, 6)
+        self.fc2 = nn.Linear(6, 3)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.fc2(torch.relu(self.fc1(x)))
+
+
+def test_deep_dream_works_on_vector_input() -> None:
+    model = VectorNet()
+    session = playgrad.start(model, epochs=1, phases={"train": 2})
+
+    def loop() -> None:
+        for _ in range(2):
+            with session.batch(phase="train", epoch=0):
+                x = torch.randn(2, 8)
+                y = torch.randint(0, 3, (2,))
+                model.zero_grad(set_to_none=True)
+                nn.functional.cross_entropy(model(x), y).backward()
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    assert session.wait_until_paused(timeout=5)
+    session.request_experiment(
+        kind="deep_dream",
+        layer="fc1",
+        params={"channel": 0, "steps": 3, "lr": 0.1, "start": "noise", "batch": 3},
+    )
+    assert session.wait_for_experiment(timeout=10)
+    result = session.experiment_result
+    assert result is not None and result.error is None
+    assert result.image is not None and result.image.shape == (3, 8)
     _finish(session, thread)
 
 
@@ -249,8 +331,9 @@ def test_value_bounds_inverts_display_normalization() -> None:
 @pytest.mark.parametrize(
     "size, zoom, changes",
     [
-        (32, 0.1, True),
-        (32, 0.001, False),  # rounds below one pixel — no-op
+        (32, 1.1, True),
+        (32, 1.0, False),
+        (32, 1.001, False),  # rounds below one pixel — no-op
     ],
 )
 def test_zoom_in_keeps_shape(size: int, zoom: float, changes: bool) -> None:

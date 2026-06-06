@@ -136,10 +136,12 @@ demand, even mid-training.
 Each layer card's "Experiment" button opens `/experiment?layer=...`, which
 runs per-layer experiments on the paused training thread without side
 effects on training or time-travel determinism. Deep Dream runs gradient
-ascent on a channel's mean activation with configurable regularizers,
-streaming the evolving image live. Four Captum attribution methods —
-Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, and Occlusion —
-render attributions next to the input sample they explain.
+ascent on a channel's mean activation over a batch of inputs — by default
+fresh noise shaped like the network's real input, different on every Run —
+with configurable regularizers, streaming the evolving images live. Four
+Captum attribution methods — Grad-CAM, Neuron Gradient, Neuron Integrated
+Gradients, and Occlusion — render attributions next to the input sample
+they explain.
 
 ![Experiment page](assets/view-experiment.png)
 

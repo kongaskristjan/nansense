@@ -80,8 +80,8 @@ class ExperimentResult:
     image); the final yield has `done=True` — also when aborted early, in
     which case `step < total_steps`. Exactly one of `image` (input-space,
     shown denormalized) or `attribution` (signed, shown with the diverging
-    colormap) is set on success; `reference` carries the input sample the
-    experiment worked on.
+    colormap) is set on success; `reference` carries the input batch the
+    experiment started from.
     """
 
     seq: int
@@ -151,6 +151,33 @@ def _sample_input(
         return _error(request, "experiments need an image input [B, C, H, W]")
     sample = min(max(0, _i(request.params, "sample", 0)), int(base.shape[0]) - 1)
     return base[sample : sample + 1].detach().clone().float()
+
+
+def _dream_start(
+    session: Session, request: ExperimentRequest, rng: torch.Generator
+) -> Tensor | ExperimentResult:
+    """The `[batch, ...]` starting batch for deep dream, or an error.
+
+    Built from the network's *real* input (the snapshot's input-node
+    tensor), so non-image inputs work too. `start="noise"` draws `batch`
+    fresh samples matching the real input's per-sample shape and overall
+    mean/std from `rng` — seeded per request, so successive runs explore
+    different noise; `start="sample"` takes the first `batch` samples of
+    the real input batch.
+    """
+    base = session._snapshot_input()
+    if base is None:
+        return _error(
+            request, "no input available yet — run at least one batch first"
+        )
+    if base.ndim < 2:
+        return _error(request, "deep dream needs a batched input [B, ...]")
+    base = base.detach().float()
+    batch = max(1, _i(request.params, "batch", int(base.shape[0])))
+    if str(request.params.get("start", "noise")) != "noise":
+        return base[:batch].clone()
+    noise = torch.randn((batch, *base.shape[1:]), generator=rng)
+    return float(base.mean()) + float(base.std()) * noise
 
 
 def _float_tuple(value: object, length: int) -> tuple[float, ...] | None:
@@ -233,10 +260,11 @@ def _channel_objective(act: Tensor, channel: int) -> Tensor:
 
 
 def _zoom_in(x: Tensor, zoom: float) -> Tensor:
-    """Zoom into the image center by a fraction `zoom` (no-op when it rounds
-    below one pixel — relevant for small inputs and small factors)."""
+    """Zoom into the image center by a multiplier `zoom` (no-op when the
+    upscale rounds below one pixel — relevant for small inputs and factors
+    close to one)."""
     h, w = int(x.shape[2]), int(x.shape[3])
-    zh, zw = int(round(h * (1 + zoom))), int(round(w * (1 + zoom)))
+    zh, zw = int(round(h * zoom)), int(round(w * zoom))
     if zh <= h or zw <= w:
         return x
     big = F.interpolate(x, size=(zh, zw), mode="bilinear", align_corners=False)
@@ -249,29 +277,34 @@ def _run_deep_dream(
     request: ExperimentRequest,
     should_abort: Callable[[], bool],
 ) -> Iterator[ExperimentResult]:
-    """Gradient ascent on a channel's mean activation w.r.t. the input.
+    """Gradient ascent on a channel's mean activation w.r.t. a batch of inputs.
 
-    The classic bag of regularizers, each optional: per-step jitter (random
-    roll, undone after the update — uses the forked RNG only), "diffusion"
-    (blend with a 3×3 box blur, damping high-frequency noise), center zoom,
-    and clamping to the displayable value range. Gradients are normalized by
-    their mean magnitude so `lr` behaves comparably across layers.
+    The starting batch comes from the network's real input (`_dream_start`):
+    fresh per-request noise by default, or the current input batch. The
+    classic bag of regularizers, each optional and image-only (applied when
+    the input is `[B, C, H, W]`): per-step jitter (random roll, undone after
+    the update — drawn from the request-seeded generator), "diffusion"
+    (blend with a 3×3 box blur, damping high-frequency noise), center zoom
+    (a per-step multiplier), and clamping to the displayable value range.
+    Gradients are normalized per sample by their mean magnitude so `lr`
+    behaves comparably across layers and batch sizes.
     """
     p = request.params
     steps = max(1, _i(p, "steps", 100))
     lr = _f(p, "lr", 0.05)
     diffusion = min(1.0, max(0.0, _f(p, "diffusion", 0.05)))
     jitter = max(0, _i(p, "jitter", 2))
-    zoom = max(0.0, _f(p, "zoom", 0.0))
+    zoom = max(1.0, _f(p, "zoom", 1.0))
     channel = _i(p, "channel", 0)
     clamp = _b(p, "clamp", True)
-    start = str(p.get("start", "sample"))
 
-    x0 = _sample_input(session, request)
+    rng = torch.Generator().manual_seed(request.seq)
+    x0 = _dream_start(session, request, rng)
     if isinstance(x0, ExperimentResult):
         yield x0
         return
     reference = x0.clone()
+    spatial = x0.ndim == 4  # the regularizers below act on image axes only
     lo, hi = _value_bounds(int(x0.shape[1]), p.get("mean"), p.get("std"))
     publish_every = max(1, steps // _PUBLISH_COUNT)
 
@@ -293,8 +326,6 @@ def _run_deep_dream(
     with session._isolated_model("eval") as device:
         lo, hi = lo.to(device), hi.to(device)
         x = x0.to(device)
-        if start == "noise":
-            x = (lo + hi) / 2 + 0.1 * (hi - lo) * torch.randn_like(x)
         objective_value = 0.0
         step_done = 0
         for step in range(steps):
@@ -302,9 +333,9 @@ def _run_deep_dream(
                 break
             dy = dx = 0
             x_step = x
-            if jitter > 0:
-                dy = int(torch.randint(-jitter, jitter + 1, (1,)).item())
-                dx = int(torch.randint(-jitter, jitter + 1, (1,)).item())
+            if spatial and jitter > 0:
+                dy = int(torch.randint(-jitter, jitter + 1, (1,), generator=rng).item())
+                dx = int(torch.randint(-jitter, jitter + 1, (1,), generator=rng).item())
                 x_step = torch.roll(x, shifts=(dy, dx), dims=(2, 3))
             x_step = x_step.detach().requires_grad_(True)
             with torch.enable_grad():
@@ -312,16 +343,18 @@ def _run_deep_dream(
                 objective = _channel_objective(act, channel)
                 (grad,) = torch.autograd.grad(objective, x_step)
             objective_value = float(objective.detach())
-            x = x_step.detach() + lr * grad / (grad.abs().mean() + 1e-8)
-            if jitter > 0:
+            sample_dims = tuple(range(1, grad.ndim))
+            norm = grad.abs().mean(dim=sample_dims, keepdim=True)
+            x = x_step.detach() + lr * grad / (norm + 1e-8)
+            if spatial and jitter > 0:
                 x = torch.roll(x, shifts=(-dy, -dx), dims=(2, 3))
-            if diffusion > 0:
+            if spatial and diffusion > 0:
                 x = (1 - diffusion) * x + diffusion * F.avg_pool2d(
                     x, 3, stride=1, padding=1
                 )
-            if zoom > 0:
+            if spatial:
                 x = _zoom_in(x, zoom)
-            if clamp:
+            if spatial and clamp:
                 x = torch.min(torch.max(x, lo), hi)
             step_done = step + 1
             if step_done % publish_every == 0 and step_done < steps:

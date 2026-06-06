@@ -224,6 +224,14 @@ class Session:
         return list(self._input_names)
 
     @property
+    def input_batch_size(self) -> int | None:
+        """Batch size of the last snapshot's input (None before any batch)."""
+        base = self._snapshot_input()
+        if base is None or base.ndim < 1:
+            return None
+        return int(base.shape[0])
+
+    @property
     def layer_names(self) -> list[str]:
         """Ordered list of every per-batch tensor key the snapshot may carry.
 
