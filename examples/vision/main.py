@@ -13,7 +13,7 @@ from torch import nn
 
 import playgrad
 from examples.vision.data import DATASETS, DatasetConfig, build_dataloaders
-from examples.vision.resnet import ResNetCIFAR
+from examples.vision.resnet import PreActResNet
 from examples.vision.train import evaluate, train_one_epoch
 from examples.vision.vit import SimpleViT
 
@@ -100,7 +100,7 @@ def select_device(name: str | None) -> torch.device:
 def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> nn.Module:
     if name in ("resnet", "resnet_deep"):
         # resnet_deep adds two more downsampling stages (5 total, 256 channels).
-        return ResNetCIFAR(
+        return PreActResNet(
             num_classes=config.num_classes,
             blocks_per_stage=blocks_per_stage,
             num_stages=5 if name == "resnet_deep" else 3,

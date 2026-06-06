@@ -1,4 +1,4 @@
-"""Pre-activation CIFAR ResNet (ResNet v2) with ResNet-D shortcuts.
+"""Pre-activation ResNet (ResNet v2) with ResNet-D shortcuts.
 
 The block layout follows He et al. 2016, "Identity Mappings in Deep Residual
 Networks": each block applies BN -> ReLU -> Conv -> BN -> ReLU -> Conv before
@@ -55,8 +55,8 @@ class PreActBlock(nn.Module):
         return out + residual
 
 
-class ResNetCIFAR(nn.Module):
-    """Pre-activation CIFAR ResNet with `blocks_per_stage` blocks per stage.
+class PreActResNet(nn.Module):
+    """Pre-activation ResNet with `blocks_per_stage` blocks per stage.
 
     Stages are registered as `stage1` .. `stage{num_stages}`; the first runs
     at stride 1 and every later one downsamples by 2, doubling the channel
@@ -121,12 +121,12 @@ class ResNetCIFAR(nn.Module):
         return self.fc(x)
 
 
-def resnet20(num_classes: int = 10) -> ResNetCIFAR:
-    return ResNetCIFAR(num_classes=num_classes, blocks_per_stage=3)
+def resnet20(num_classes: int = 10) -> PreActResNet:
+    return PreActResNet(num_classes=num_classes, blocks_per_stage=3)
 
 
-def resnet_deep(num_classes: int = 10, blocks_per_stage: int = 3) -> ResNetCIFAR:
+def resnet_deep(num_classes: int = 10, blocks_per_stage: int = 3) -> PreActResNet:
     """Five-stage variant: two more downsampling stages, up to 256 channels."""
-    return ResNetCIFAR(
+    return PreActResNet(
         num_classes=num_classes, blocks_per_stage=blocks_per_stage, num_stages=5
     )
