@@ -113,20 +113,21 @@ far the edit propagates (the receptive field).
 ### Watch
 
 Toggling "Watch" on layer cards marks layers for the deep-dive `/watch`
-page, which renders one card per watched layer. The HISTOGRAM view shows
-activation and activation-gradient distributions over the most recent epoch
-as signed-log histograms with a stats table (`n`, `mean`, `std`, `median`,
-`min`/`max`); a phase dropdown switches between train/val, and Log x / Log y
-checkboxes handle distributions spanning many decades.
-
-![Watch page, histogram view](assets/view-watch-histogram.png)
-
-The MIN/MAX view shows the input patches that drove the layer's most extreme
+page, which renders one card per watched layer. The MIN/MAX view (the
+default) shows the input patches that drove the layer's most extreme
 activations: per channel, the top input crops around the largest/smallest
 spatial activation and whole inputs ranked by spatial mean, with an optional
 activation-heatmap overlay.
 
 ![Watch page, min/max view](assets/view-watch-minmax.png)
+
+The HISTOGRAM view shows activation and activation-gradient distributions
+over the most recent epoch as signed-log histograms with a stats table (`n`,
+`mean`, `std`, `median`, `min`/`max`); a phase dropdown switches between
+train/val, and Log x / Log y checkboxes handle distributions spanning many
+decades.
+
+![Watch page, histogram view](assets/view-watch-histogram.png)
 
 ### Weights
 
