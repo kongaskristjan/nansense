@@ -59,7 +59,7 @@ LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 # Extreme-patch grids: CSS pixel side of one cell, the strongest heatmap
 # overlay opacity, the fill for never-filled slots, and the grids' fixed
 # encoding (see `PatchGridRender` for why it isn't `STRIP_FORMAT`).
-PATCH_CELL_SIZE: int = 44
+PATCH_CELL_SIZE: int = 132
 HEAT_MAX_ALPHA: float = 0.825
 _EMPTY_CELL_GRAY: int = 235
 PATCH_GRID_FORMAT: str = "PNG"
