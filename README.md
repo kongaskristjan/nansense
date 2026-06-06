@@ -17,6 +17,8 @@ from the top bar (step batch / epoch / custom, detach, time travel).
 
 Available examples:
 
+- `examples.mnist_linear.main` — a single linear layer on MNIST with the
+  minimal playgrad wiring (no scheduler, no time travel).
 - `examples.vision.main` — a small pre-activation ResNet (default) or a
   simple ViT (`--model vit`) on CIFAR10 (default) or Imagenette
   (`--dataset imagenette`), trained with AdamW + a cosine schedule.
