@@ -1,8 +1,7 @@
-"""Training loop primitives for the CIFAR ResNet."""
+"""Training loop primitives for LeNet on MNIST."""
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -22,15 +21,6 @@ class EpochStats:
 def _accuracy(logits: Tensor, targets: Tensor) -> float:
     preds = logits.argmax(dim=1)
     return (preds == targets).float().mean().item()
-
-
-@contextlib.contextmanager
-def _autocast(device: torch.device, amp_dtype: torch.dtype | None) -> Iterator[None]:
-    if amp_dtype is None:
-        yield
-        return
-    with torch.autocast(device_type=device.type, dtype=amp_dtype):
-        yield
 
 
 def _batches(
@@ -58,7 +48,6 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
-    amp_dtype: torch.dtype | None = None,
     *,
     session: Session | None = None,
     epoch: int = 0,
@@ -72,9 +61,8 @@ def train_one_epoch(
         targets = targets.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
-        with _autocast(device, amp_dtype):
-            logits = model(inputs)
-            loss = criterion(logits, targets)
+        logits = model(inputs)
+        loss = criterion(logits, targets)
         loss.backward()
         optimizer.step()
 
@@ -91,7 +79,6 @@ def evaluate(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-    amp_dtype: torch.dtype | None = None,
     *,
     session: Session | None = None,
     epoch: int = 0,
@@ -104,9 +91,8 @@ def evaluate(
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
-        with _autocast(device, amp_dtype):
-            logits = model(inputs)
-            loss = criterion(logits, targets)
+        logits = model(inputs)
+        loss = criterion(logits, targets)
 
         total_loss += loss.item() * targets.size(0)
         total_correct += int((logits.argmax(dim=1) == targets).sum().item())

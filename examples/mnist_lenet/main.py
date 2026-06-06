@@ -1,4 +1,4 @@
-"""Train the small CIFAR ResNet on CIFAR10."""
+"""Train LeNet-5 on MNIST with SGD + momentum and basic augmentation."""
 
 from __future__ import annotations
 
@@ -12,33 +12,27 @@ import torch
 from torch import nn
 
 import playgrad
-from examples.cifar10.data import CIFAR10_MEAN, CIFAR10_STD, build_dataloaders
-from examples.cifar10.resnet import ResNetCIFAR
-from examples.cifar10.train import evaluate, train_one_epoch
+from examples.mnist_lenet.data import MNIST_MEAN, MNIST_STD, build_dataloaders
+from examples.mnist_lenet.lenet import LeNet
+from examples.mnist_lenet.train import evaluate, train_one_epoch
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
-    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=0.1)
+    parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--weight-decay", type=float, default=5e-4)
-    parser.add_argument("--blocks-per-stage", type=int, default=3, help="ResNet-(6n+2) depth knob")
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
-    parser.add_argument(
-        "--bf16",
-        action="store_true",
-        help="Use torch.autocast with bfloat16 for forward/loss (no GradScaler needed)",
-    )
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/latest"),
-        help="Directory for time-travel epoch checkpoints (default models/latest).",
+        default=Path("models/mnist_lenet"),
+        help="Directory for time-travel epoch checkpoints (default models/mnist_lenet).",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -83,8 +77,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     device = select_device(args.device)
-    amp_dtype = torch.bfloat16 if args.bf16 else None
-    print(f"Using device: {device} (amp_dtype={amp_dtype})")
+    print(f"Using device: {device}")
 
     train_loader, test_loader = build_dataloaders(
         data_dir=args.data_dir,
@@ -92,7 +85,7 @@ def main() -> None:
         num_workers=args.num_workers,
     )
 
-    model = ResNetCIFAR(num_classes=10, blocks_per_stage=args.blocks_per_stage).to(device)
+    model = LeNet(num_classes=10).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -117,8 +110,8 @@ def main() -> None:
         # Optional: lets time-travel checkpoints restore the LR schedule.
         scheduler=scheduler,
         port=args.playgrad_port,
-        input_mean=CIFAR10_MEAN,
-        input_std=CIFAR10_STD,
+        input_mean=MNIST_MEAN,
+        input_std=MNIST_STD,
     )
     if session.enabled:
         print(f"playgrad UI at http://127.0.0.1:{args.playgrad_port}")
@@ -136,11 +129,11 @@ def main() -> None:
                 epoch_start = time.time()
                 train_stats = train_one_epoch(
                     model, train_loader, optimizer, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch,
+                    session=session, epoch=epoch,
                 )
                 test_stats = evaluate(
                     model, test_loader, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch,
+                    session=session, epoch=epoch,
                 )
                 scheduler.step()
 

@@ -1,4 +1,4 @@
-"""CIFAR10 data loading with standard augmentations."""
+"""MNIST data loading with basic augmentation."""
 
 from __future__ import annotations
 
@@ -7,38 +7,38 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-CIFAR10_MEAN: tuple[float, float, float] = (0.4914, 0.4822, 0.4465)
-CIFAR10_STD: tuple[float, float, float] = (0.2470, 0.2435, 0.2616)
+MNIST_MEAN: tuple[float, ...] = (0.1307,)
+MNIST_STD: tuple[float, ...] = (0.3081,)
 
 
 def build_transforms(train: bool) -> transforms.Compose:
     if train:
         return transforms.Compose(
             [
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(28, padding=2),
+                transforms.RandomRotation(10),
                 transforms.ToTensor(),
-                transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
+                transforms.Normalize(MNIST_MEAN, MNIST_STD),
             ]
         )
     return transforms.Compose(
         [
             transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
+            transforms.Normalize(MNIST_MEAN, MNIST_STD),
         ]
     )
 
 
 def build_dataloaders(
     data_dir: Path,
-    batch_size: int = 128,
+    batch_size: int = 256,
     num_workers: int = 2,
     download: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
-    train_set = datasets.CIFAR10(
+    train_set = datasets.MNIST(
         root=str(data_dir), train=True, download=download, transform=build_transforms(train=True)
     )
-    test_set = datasets.CIFAR10(
+    test_set = datasets.MNIST(
         root=str(data_dir), train=False, download=download, transform=build_transforms(train=False)
     )
 
