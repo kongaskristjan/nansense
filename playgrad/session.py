@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import inspect
 import threading
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
@@ -75,6 +76,11 @@ class Mode(StrEnum):
     UNTIL_END = "until_end"
     UNTIL_POSITION = "until_position"
     DETACH = "detach"
+
+
+# How many per-seq experiment results stay retrievable (oldest evicted
+# first); generous enough for every open client plus a little history.
+_EXPERIMENT_RESULTS_KEPT: int = 8
 
 
 @dataclass(frozen=True)
@@ -159,14 +165,17 @@ class Session:
         self._probe_count = 0
         self._probe_result: ProbeResult | None = None
         self._probe_error: str | None = None
-        # Experiment state (see playgrad.experiments): one armed request at a
-        # time, consumed by the pause loop; a newer request supersedes a
-        # running one via the seq counter, which `_publish_experiment` checks
-        # before every write.
-        self._experiment_request: ExperimentRequest | None = None
+        # Experiment state (see playgrad.experiments): requests queue up and
+        # the pause loop drains them in order, so concurrent clients (browser
+        # tabs) don't supersede each other. Results are kept per request seq
+        # (bounded; each client polls its own via `experiment_result_for`)
+        # alongside the latest one; cancellation is per seq too.
+        self._experiment_queue: deque[ExperimentRequest] = deque()
         self._experiment_seq = 0
+        self._experiment_results: OrderedDict[int, ExperimentResult] = OrderedDict()
         self._experiment_result: ExperimentResult | None = None
-        self._experiment_cancel = False
+        self._experiment_cancelled: set[int] = set()
+        self._experiment_running: int | None = None
 
     @property
     def schedule(self) -> Schedule:
@@ -498,22 +507,34 @@ class Session:
         first run."""
         return self._experiment_result
 
+    def experiment_result_for(self, seq: int) -> ExperimentResult | None:
+        """The latest progress/outcome of one request, by its seq.
+
+        Each client (browser tab) polls its own request this way, so
+        concurrent experiments don't overwrite each other's view. Returns
+        `None` before the request's first publish — and again once the
+        result has been evicted (only the `_EXPERIMENT_RESULTS_KEPT` most
+        recently updated seqs are retained).
+        """
+        with self._cv:
+            return self._experiment_results.get(seq)
+
     @property
     def experiment_pending(self) -> bool:
-        """Whether a request is armed but not yet picked up by a pause."""
+        """Whether any request is queued but not yet picked up."""
         with self._cv:
-            return self._experiment_request is not None
+            return bool(self._experiment_queue)
 
     def request_experiment(
         self, *, kind: str, layer: str, params: dict[str, object]
     ) -> int:
-        """Arm an experiment for the paused training thread to run.
+        """Queue an experiment for the paused training thread to run.
 
         Like probe requests, experiments execute only on the training thread
-        — immediately when paused, otherwise at the next pause. A new request
-        supersedes the previous one: a still-running experiment notices the
-        bumped seq via its abort check and stops; its late results are
-        dropped by `_publish_experiment`. Returns the request's seq.
+        — immediately when paused, otherwise at the next pause. Requests
+        from concurrent clients queue up and run in order; none of them
+        supersedes a running one (use `cancel_experiment(seq)` to replace
+        your own). Returns the request's seq.
         """
         if kind not in EXPERIMENT_KINDS:
             raise ValueError(
@@ -522,18 +543,35 @@ class Session:
             )
         with self._cv:
             self._experiment_seq += 1
-            self._experiment_cancel = False
-            self._experiment_request = ExperimentRequest(
-                kind=kind, layer=layer, params=dict(params), seq=self._experiment_seq
+            self._experiment_queue.append(
+                ExperimentRequest(
+                    kind=kind,
+                    layer=layer,
+                    params=dict(params),
+                    seq=self._experiment_seq,
+                )
             )
             self._cv.notify_all()
             return self._experiment_seq
 
-    def cancel_experiment(self) -> None:
-        """Drop an armed request and abort a running experiment."""
+    def cancel_experiment(self, seq: int | None = None) -> None:
+        """Cancel one request by seq, or every request when `seq` is None.
+
+        A queued request is dropped; a running one notices the cancel flag
+        at its next abort check and stops. Other clients' requests are
+        untouched when a seq is given.
+        """
         with self._cv:
-            self._experiment_request = None
-            self._experiment_cancel = True
+            if seq is None:
+                self._experiment_queue.clear()
+                if self._experiment_running is not None:
+                    self._experiment_cancelled.add(self._experiment_running)
+            else:
+                queued = [r for r in self._experiment_queue if r.seq != seq]
+                if len(queued) != len(self._experiment_queue):
+                    self._experiment_queue = deque(queued)
+                elif self._experiment_running == seq:
+                    self._experiment_cancelled.add(seq)
             self._cv.notify_all()
 
     def wait_for_experiment(self, *, timeout: float | None = None) -> bool:
@@ -1052,7 +1090,7 @@ class Session:
                     or self._closed
                     or self._pending_jump is not None
                     or self._probe_request
-                    or self._experiment_request is not None
+                    or bool(self._experiment_queue)
                 )
                 done = (
                     self._resume_token != seen
@@ -1064,12 +1102,12 @@ class Session:
                 if not done:
                     run_probe = self._probe_request
                     self._probe_request = False
-                    experiment = self._experiment_request
-                    self._experiment_request = None
+                    if self._experiment_queue:
+                        experiment = self._experiment_queue.popleft()
             if done:
                 # A coalesced probe request is dropped (resuming into a
-                # capture re-runs the probe anyway); an armed experiment
-                # stays armed for the next pause.
+                # capture re-runs the probe anyway); queued experiments
+                # stay queued for the next pause.
                 return
             if run_probe:
                 self._run_probe_guarded()
@@ -1204,20 +1242,21 @@ class Session:
         """Drive one experiment to completion on the training thread.
 
         Streams every yielded progress result through `_publish_experiment`.
-        The abort predicate stops the run on `cancel_experiment()`, on a
-        newer request (seq bumped), and on anything that ends the pause —
-        resume commands, a pending time-travel jump, `close()` — so the
-        pause loop regains control promptly. A failing experiment publishes
-        an error result instead of killing the training thread.
+        The abort predicate stops the run on `cancel_experiment` (for this
+        seq) and on anything that ends the pause — resume commands, a
+        pending time-travel jump, `close()` — so the pause loop regains
+        control promptly; queued requests from other clients wait their
+        turn instead of aborting the run. A failing experiment publishes an
+        error result instead of killing the training thread.
         """
         with self._cv:
             resume_seen = self._resume_token
+            self._experiment_running = request.seq
 
         def should_abort() -> bool:
             with self._cv:
                 return (
-                    self._experiment_cancel
-                    or self._experiment_seq != request.seq
+                    request.seq in self._experiment_cancelled
                     or self._closed
                     or self._pending_jump is not None
                     or self._resume_token != resume_seen
@@ -1238,11 +1277,17 @@ class Session:
                     error=f"{type(e).__name__}: {e}",
                 )
             )
+        finally:
+            with self._cv:
+                self._experiment_running = None
+                self._experiment_cancelled.discard(request.seq)
 
     def _publish_experiment(self, result: ExperimentResult) -> None:
         with self._cv:
-            if result.seq != self._experiment_seq:
-                return  # superseded by a newer request
+            self._experiment_results[result.seq] = result
+            self._experiment_results.move_to_end(result.seq)
+            while len(self._experiment_results) > _EXPERIMENT_RESULTS_KEPT:
+                self._experiment_results.popitem(last=False)
             self._experiment_result = result
             self._cv.notify_all()
 

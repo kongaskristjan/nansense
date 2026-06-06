@@ -2414,10 +2414,13 @@ def _build_experiment_page(
     execute on the paused training thread, so the user can pause right from
     this page. The left pane holds the selected kind's parameter form
     (rebuilt on every dropdown change); the right pane streams status and
-    results from `session.experiment_result`. Deep dream results render as
-    a denormalized input-space image (updating live while the run
-    progresses); attributions render with the shared diverging-colormap
-    strip machinery, next to the input sample they explain.
+    results for *this page's own request* (`experiment_result_for`), so
+    concurrent tabs running their own experiments never overwrite each
+    other — Run replaces only this page's previous request, Cancel aborts
+    only this page's. Deep dream results render as a denormalized
+    input-space image (updating live while the run progresses);
+    attributions render with the shared diverging-colormap strip machinery,
+    next to the input sample they explain.
     """
     title = f"Experiment · {layer}" if layer else "Experiment"
     ui.page_title(f"PlayGrad — {title}")
@@ -2429,6 +2432,7 @@ def _build_experiment_page(
     step_until_custom = _build_step_until_custom_dialog(session)
     widgets: dict[str, ui.element] = {}
     kind_holder = {"kind": "deep_dream"}
+    my_seq: list[int | None] = [None]  # this page's own request
     last_result: list[ExperimentResult | None] = [None]
 
     def collect_params() -> dict[str, object]:
@@ -2447,9 +2451,17 @@ def _build_experiment_page(
         return params
 
     def run() -> None:
-        session.request_experiment(
+        if my_seq[0] is not None:  # a re-Run replaces this page's request
+            session.cancel_experiment(my_seq[0])
+        my_seq[0] = session.request_experiment(
             kind=kind_holder["kind"], layer=layer, params=collect_params()
         )
+        last_result[0] = None
+        error_label.text = ""
+
+    def cancel() -> None:
+        if my_seq[0] is not None:
+            session.cancel_experiment(my_seq[0])
 
     def on_kind_change(e: object) -> None:
         value = getattr(e, "value", None)
@@ -2477,8 +2489,8 @@ def _build_experiment_page(
                 "dense size=md"
             ).tooltip("Run the experiment (training must be paused)")
             ui.button(
-                "Cancel", on_click=session.cancel_experiment, color="slate-500"
-            ).props("dense size=md").tooltip("Abort the running experiment")
+                "Cancel", on_click=cancel, color="slate-500"
+            ).props("dense size=md").tooltip("Abort this page's experiment")
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
             params_pane = ui.column().classes(
@@ -2575,16 +2587,19 @@ def _build_experiment_page(
         live = session.live_position
         if live is not None:
             position_label.text = _format_live_position(live)
-        result = session.experiment_result
-        if session.experiment_pending:
-            status_label.text = (
-                "queued — waiting for the training thread to pause "
-                "(use Stop / Step Batch above)"
-            )
-        elif result is not None:
-            status_label.text = _experiment_status(result)
-        error_label.text = result.error or "" if result is not None else ""
-        if result is not None and result is not last_result[0]:
+        if my_seq[0] is None:
+            return  # nothing requested from this page yet
+        result = session.experiment_result_for(my_seq[0])
+        if result is None:
+            if last_result[0] is None:
+                status_label.text = (
+                    "queued — waiting for the training thread to pause "
+                    "or for earlier experiments (use Stop / Step Batch above)"
+                )
+            return
+        status_label.text = _experiment_status(result)
+        error_label.text = result.error or ""
+        if result is not last_result[0]:
             last_result[0] = result
             if result.error is None:
                 render_result(result)

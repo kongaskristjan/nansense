@@ -305,22 +305,56 @@ def test_captum_on_fx_intermediate_publishes_module_hint() -> None:
     _finish(session, thread)
 
 
-def test_new_request_supersedes_previous_result() -> None:
+def test_queued_experiments_publish_per_seq_results() -> None:
+    # Two clients (browser tabs) request back to back: both run to
+    # completion in order, and each result stays retrievable by its seq.
     session, _, thread = _paused_session()
-    session.request_experiment(
+    seq_a = session.request_experiment(
         kind="deep_dream", layer="conv", params=_dream_params(steps=2)
     )
-    assert session.wait_for_experiment(timeout=10)
-    first = session.experiment_result
-    assert first is not None
-
-    seq = session.request_experiment(
-        kind="neuron_gradient", layer="conv", params={"channel": 0}
+    seq_b = session.request_experiment(
+        kind="neuron_gradient", layer="conv", params={"channel": 0, "sample": 0}
     )
     assert session.wait_for_experiment(timeout=10)
-    second = session.experiment_result
-    assert second is not None and second.seq == seq
-    assert second.kind == "neuron_gradient"
+    first = session.experiment_result_for(seq_a)
+    assert first is not None and first.done and first.error is None
+    assert first.kind == "deep_dream" and first.seq == seq_a
+    assert first.image is not None
+    second = session.experiment_result_for(seq_b)
+    assert second is not None and second.done and second.error is None
+    assert second.kind == "neuron_gradient" and second.seq == seq_b
+    latest = session.experiment_result
+    assert latest is not None and latest.seq == seq_b
+    _finish(session, thread)
+
+
+def test_cancel_experiment_drops_one_seq_or_all() -> None:
+    # No training loop is running, so requests stay queued.
+    session = playgrad.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    seq_a = session.request_experiment(
+        kind="deep_dream", layer="conv", params={}
+    )
+    session.request_experiment(kind="deep_dream", layer="conv", params={})
+    assert session.experiment_pending
+    session.cancel_experiment(seq_a)
+    assert session.experiment_pending  # the other request is untouched
+    session.cancel_experiment()  # no seq: drop everything
+    assert not session.experiment_pending
+
+
+def test_experiment_results_evict_oldest_seq() -> None:
+    session, _, thread = _paused_session()
+    seqs = [
+        session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params(steps=1)
+        )
+        for _ in range(9)  # one more than _EXPERIMENT_RESULTS_KEPT
+    ]
+    assert session.wait_for_experiment(timeout=30)
+    assert session.experiment_result_for(seqs[0]) is None  # evicted
+    for seq in seqs[1:]:
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.seq == seq
     _finish(session, thread)
 
 
