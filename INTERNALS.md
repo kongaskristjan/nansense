@@ -467,7 +467,9 @@ require a `[batch, classes]` output. Neuron methods address a channel via
 a selector callable (per-example mean of that channel).
 
 **UI** (`/experiment?layer=...`, one yellow "Experiment" button per layer
-card): the kind dropdown defaults to deep dream; each kind's knobs are
+card): the left pane stacks the kind dropdown (defaulting to deep dream)
+and Run / Cancel above the parameter form, so the whole experiment setup
+reads top-down in one place; each kind's knobs are
 declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
 number/switch/select widgets and collected on Run; the deep-dream "Inputs"
 count defaults to the live `session.input_batch_size`, capped at

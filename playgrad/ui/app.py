@@ -2525,18 +2525,19 @@ def _build_experiment_page(
 ) -> None:
     """Per-layer experiments: deep dream and selected Captum attributions.
 
-    The top bar carries the experiment-kind dropdown (deep dream by
-    default), Run / Cancel, and the shared stepping controls — experiments
-    execute on the paused training thread, so the user can pause right from
-    this page. The left pane holds the selected kind's parameter form
-    (rebuilt on every dropdown change); the right pane streams status and
-    results for *this page's own request* (`experiment_result_for`), so
-    concurrent tabs running their own experiments never overwrite each
-    other — Run replaces only this page's previous request, Cancel aborts
-    only this page's. Deep dream results render as a denormalized
-    input-space image (updating live while the run progresses);
-    attributions render with the shared diverging-colormap strip machinery,
-    next to the input sample they explain.
+    The top bar carries the shared stepping controls — experiments execute
+    on the paused training thread, so the user can pause right from this
+    page. The left pane holds the experiment-kind dropdown (deep dream by
+    default) with Run / Cancel right below it, followed by the selected
+    kind's parameter form (rebuilt on every dropdown change); the right
+    pane streams status and results for *this page's own request*
+    (`experiment_result_for`), so concurrent tabs running their own
+    experiments never overwrite each other — Run replaces only this page's
+    previous request, Cancel aborts only this page's. Deep dream results
+    render as a denormalized input-space image (updating live while the
+    run progresses); attributions render with the shared
+    diverging-colormap strip machinery, next to the input sample they
+    explain.
     """
     title = f"Experiment · {layer}" if layer else "Experiment"
     ui.page_title(f"PlayGrad — {title}")
@@ -2596,23 +2597,34 @@ def _build_experiment_page(
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
             position_label = _add_step_controls(session, step_until_custom)
-            ui.select(
-                dict(EXPERIMENT_KINDS),
-                value=kind_holder["kind"],
-                on_change=on_kind_change,
-            ).props("dense outlined").classes("w-72 ml-3")
-            ui.button("Run", icon="science", on_click=run, color="yellow-8").props(
-                "dense size=md"
-            ).tooltip("Run the experiment (training must be paused)")
-            ui.button(
-                "Cancel", on_click=cancel, color="slate-500"
-            ).props("dense size=md").tooltip("Abort this page's experiment")
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
-            params_pane = ui.column().classes(
+            with ui.column().classes(
                 "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
                 "border-r-2 border-slate-300 bg-slate-50"
-            )
+            ):
+                # The experiment kind and its Run / Cancel sit above the
+                # parameter form; only the form below is rebuilt when the
+                # kind changes.
+                ui.select(
+                    dict(EXPERIMENT_KINDS),
+                    label="Experiment",
+                    value=kind_holder["kind"],
+                    on_change=on_kind_change,
+                ).props("dense outlined").classes("w-full")
+                with ui.row().classes("w-full no-wrap gap-2"):
+                    ui.button(
+                        "Run", icon="science", on_click=run, color="yellow-8"
+                    ).props("dense size=md").classes("grow").tooltip(
+                        "Run the experiment (training must be paused)"
+                    )
+                    ui.button(
+                        "Cancel", on_click=cancel, color="slate-500"
+                    ).props("dense size=md").classes("grow").tooltip(
+                        "Abort this page's experiment"
+                    )
+                ui.separator()
+                params_pane = ui.column().classes("w-full gap-2 p-0")
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             ):
