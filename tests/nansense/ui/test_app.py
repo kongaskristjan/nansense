@@ -1,16 +1,16 @@
-"""Tests for pure helpers in `playgrad.ui.app`."""
+"""Tests for pure helpers in `nansense.ui.app`."""
 
 from __future__ import annotations
 
 import pytest
 import torch
 
-import playgrad
-from playgrad.patches import PATCH_TYPES, PatchAccumulator
-from playgrad.probe import ProbeResult
-from playgrad.schedule import BatchPosition, Schedule
-from playgrad.session import BatchSnapshot
-from playgrad.ui.app import (
+import nansense
+from nansense.patches import PATCH_TYPES, PatchAccumulator
+from nansense.probe import ProbeResult
+from nansense.schedule import BatchPosition, Schedule
+from nansense.session import BatchSnapshot
+from nansense.ui.app import (
     _BIN_WIDTHS,
     _HIST_EDGES,
     _PLOT_HEIGHT,
@@ -45,13 +45,13 @@ from playgrad.ui.app import (
     _validate_step_until_target,
     serve,
 )
-from playgrad.ui.render import (
+from nansense.ui.render import (
     INPUT_IMAGE_SIZE,
     image_mime,
     render_image,
     render_strip,
 )
-from playgrad.watch import (
+from nansense.watch import (
     N_BINS,
     ZERO_BIN,
     LayerStatsSnapshot,
@@ -755,7 +755,7 @@ def test_histogram_height_scales_with_phase_rows() -> None:
 def test_serve_on_disabled_session_is_noop() -> None:
     """`serve()` returns None without starting a server for a disabled session."""
     model = torch.nn.Linear(4, 2)
-    session = playgrad.start(model, epochs=1, phases={"train": 1}, enabled=False)
+    session = nansense.start(model, epochs=1, phases={"train": 1}, enabled=False)
     assert serve(session) is None
 
 
@@ -1028,8 +1028,8 @@ def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
 
 
 def test_experiment_params_cover_every_kind() -> None:
-    from playgrad.experiments import EXPERIMENT_KINDS
-    from playgrad.ui.app import _EXPERIMENT_PARAMS
+    from nansense.experiments import EXPERIMENT_KINDS
+    from nansense.ui.app import _EXPERIMENT_PARAMS
 
     assert set(_EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
     for kind, specs in _EXPERIMENT_PARAMS.items():
@@ -1043,7 +1043,7 @@ def test_experiment_params_cover_every_kind() -> None:
 
 
 def test_layer_channel_count_reads_snapshot_activation() -> None:
-    from playgrad.ui.app import _layer_channel_count
+    from nansense.ui.app import _layer_channel_count
 
     snap = _frame_snapshot()
     snap.activations["vec"] = torch.rand(5)  # channel-less activation

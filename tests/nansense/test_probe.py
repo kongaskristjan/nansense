@@ -9,9 +9,9 @@ import pytest
 import torch
 from torch import Tensor, nn
 
-import playgrad
-from playgrad.probe import apply_perturbations
-from playgrad.session import Session
+import nansense
+from nansense.probe import apply_perturbations
+from nansense.session import Session
 
 
 class BnDropNet(nn.Module):
@@ -64,7 +64,7 @@ def _paused_session[M: nn.Module](
 ) -> tuple[Session, threading.Thread]:
     """Start a session, run `batches` STEP-mode batches on a thread, and
     return once the worker is paused on the first capture."""
-    session = playgrad.start(model, epochs=1, phases={"train": batches})
+    session = nansense.start(model, epochs=1, phases={"train": batches})
 
     def loop() -> None:
         for _ in range(batches):
@@ -84,14 +84,14 @@ def _finish(session: Session, thread: threading.Thread) -> None:
 
 
 def test_pin_before_any_snapshot_returns_false() -> None:
-    session = playgrad.start(BnDropNet(), epochs=1, phases={"train": 1})
+    session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
     assert session.pin_current_batch() is False
     assert session.is_pinned is False
     assert session.probe_result is None
 
 
 def test_pin_on_disabled_session_returns_false() -> None:
-    session = playgrad.start(
+    session = nansense.start(
         BnDropNet(), epochs=1, phases={"train": 1}, enabled=False
     )
     assert session.pin_current_batch() is False
@@ -243,7 +243,7 @@ def test_unpin_clears_probe_result() -> None:
 
 
 def test_set_probe_mode_rejects_unknown_mode() -> None:
-    session = playgrad.start(BnDropNet(), epochs=1, phases={"train": 1})
+    session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
     with pytest.raises(ValueError, match="unknown probe mode"):
         session.set_probe_mode("bogus")
 

@@ -9,8 +9,8 @@ import pytest
 import torch
 from torch import Tensor, nn
 
-import playgrad
-from playgrad.session import Mode, Session, _BatchContext
+import nansense
+from nansense.session import Mode, Session, _BatchContext
 
 
 class TinyNet(nn.Module):
@@ -35,7 +35,7 @@ def _make_session(epochs: int = 2, phases: dict[str, int] | None = None) -> tupl
     if phases is None:
         phases = {"train": 2, "val": 2}
     model = TinyNet()
-    return playgrad.start(model, epochs=epochs, phases=phases), model
+    return nansense.start(model, epochs=epochs, phases=phases), model
 
 
 def _run_in_thread(target) -> threading.Thread:
@@ -313,7 +313,7 @@ def test_input_name_comes_from_forward_signature() -> None:
             return self.fc(image)
 
     model = NamedInput()
-    session = playgrad.start(model, epochs=1, phases={"train": 1})
+    session = nansense.start(model, epochs=1, phases={"train": 1})
     assert session.input_names == ["image"]
 
     def loop() -> None:
@@ -348,7 +348,7 @@ def test_fx_mode_captures_function_call_outputs() -> None:
             return torch.relu(self.bn1(self.conv1(x)))
 
     model = BasicBlockLike()
-    session = playgrad.start(model, epochs=1, phases={"train": 1})
+    session = nansense.start(model, epochs=1, phases={"train": 1})
     assert session.fx_traced
     assert "relu" in session.layer_names
     assert "conv1" in session.layer_names
@@ -398,7 +398,7 @@ def test_fx_mode_scopes_repeated_function_ops_by_submodule() -> None:
             return self.block(self.conv(x))
 
     model = Wrapper()
-    session = playgrad.start(model, epochs=1, phases={"train": 1})
+    session = nansense.start(model, epochs=1, phases={"train": 1})
     assert session.fx_traced
     # The two functional relus are disambiguated by their submodule scope.
     assert "block.relu1" in session.layer_names
@@ -439,7 +439,7 @@ def test_fx_mode_restores_original_forward_after_batch() -> None:
             return torch.relu(self.fc(x))
 
     model = Tiny()
-    session = playgrad.start(model, epochs=1, phases={"train": 1})
+    session = nansense.start(model, epochs=1, phases={"train": 1})
     original_forward = model.forward
     assert "forward" not in model.__dict__
 
@@ -475,7 +475,7 @@ def test_fx_failure_falls_back_to_hooks() -> None:
             return self.fc(-x)
 
     model = Dynamic()
-    session = playgrad.start(model, epochs=1, phases={"train": 1})
+    session = nansense.start(model, epochs=1, phases={"train": 1})
     assert not session.fx_traced
     # Hook-mode layer_names: inputs + module names.
     assert session.layer_names == ["x", "fc"]
@@ -494,7 +494,7 @@ def test_layer_weights_maps_modules_to_their_parameters_fx() -> None:
         def forward(self, x: Tensor) -> Tensor:
             return torch.relu(self.bn1(self.conv1(x)))
 
-    session = playgrad.start(ConvBlock(), epochs=1, phases={"train": 1})
+    session = nansense.start(ConvBlock(), epochs=1, phases={"train": 1})
     assert session.fx_traced
     lw = session.layer_weights
     # Every layer name has an entry; weightless ones map to [].
@@ -527,7 +527,7 @@ def test_layer_weights_detects_functional_parameter_use() -> None:
         def forward(self, x: Tensor) -> Tensor:
             return nn.functional.conv2d(x, self.weight, padding=1)
 
-    session = playgrad.start(Functional(), epochs=1, phases={"train": 1})
+    session = nansense.start(Functional(), epochs=1, phases={"train": 1})
     assert session.fx_traced
     assert session.layer_weights["conv2d"] == ["weight"]
 
@@ -545,7 +545,7 @@ def test_layer_weights_uses_module_subtree_in_hook_fallback() -> None:
                 return self.fc(x)
             return self.fc(-x)
 
-    session = playgrad.start(Dynamic(), epochs=1, phases={"train": 1})
+    session = nansense.start(Dynamic(), epochs=1, phases={"train": 1})
     assert not session.fx_traced
     assert session.layer_weights == {"x": [], "fc": ["fc.bias", "fc.weight"]}
 
@@ -646,7 +646,7 @@ def test_current_optimizer_state_gathers_per_parameter_entries(
     need no per-optimizer code. Empty before the first step (lazy init)."""
     model = TinyNet()
     optimizer = make_optimizer(model)
-    session = playgrad.start(
+    session = nansense.start(
         model, epochs=1, phases={"train": 1}, optimizer=optimizer
     )
     assert session.current_optimizer_state() == {}
@@ -674,7 +674,7 @@ def test_current_optimizer_hyperparams_numeric_only_and_eager() -> None:
     optimizer = torch.optim.SGD(
         model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4, nesterov=True
     )
-    session = playgrad.start(
+    session = nansense.start(
         model, epochs=1, phases={"train": 1}, optimizer=optimizer
     )
     hp = session.current_optimizer_hyperparams()
@@ -697,7 +697,7 @@ def test_optimizer_methods_empty_without_optimizer() -> None:
 def test_snapshot_carries_optimizer_values_when_attached() -> None:
     model = TinyNet()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-    session = playgrad.start(
+    session = nansense.start(
         model, epochs=1, phases={"train": 1}, optimizer=optimizer
     )
 
@@ -922,7 +922,7 @@ class TinyConvNet(nn.Module):
 
 def test_watch_gathers_patches_for_image_inputs() -> None:
     model = TinyConvNet()
-    session = playgrad.start(model, epochs=1, phases={"train": 2})
+    session = nansense.start(model, epochs=1, phases={"train": 2})
     session.watch("conv")
     session.detach()
 
@@ -990,7 +990,7 @@ def test_watch_fx_intermediate_accumulates_stats() -> None:
     assert ("relu", "train", 0) in snap.stats
     relu_stats = snap.stats[("relu", "train", 0)].activations
     # ReLU output is non-negative — the histogram's negative half is empty.
-    from playgrad.watch import ZERO_BIN
+    from nansense.watch import ZERO_BIN
     neg_count = sum(relu_stats.hist[:ZERO_BIN])
     assert neg_count == 0
     assert relu_stats.n == 16  # batch 2 × 8 hidden features
@@ -1014,7 +1014,7 @@ def test_watch_input_x_accumulates_stats() -> None:
 
 def test_start_enabled_by_default() -> None:
     model = TinyNet()
-    session = playgrad.start(model, epochs=1, phases={"train": 1})
+    session = nansense.start(model, epochs=1, phases={"train": 1})
     assert session.enabled is True
     assert session.fx_traced is True  # TinyNet traces cleanly
     assert session.layer_names  # non-empty
@@ -1023,7 +1023,7 @@ def test_start_enabled_by_default() -> None:
 def test_disabled_session_skips_trace_and_name_discovery() -> None:
     """`enabled=False` skips the fx trace and leaves the name lists empty."""
     model = TinyNet()
-    session = playgrad.start(model, epochs=1, phases={"train": 1}, enabled=False)
+    session = nansense.start(model, epochs=1, phases={"train": 1}, enabled=False)
 
     assert session.enabled is False
     assert session.fx_traced is False  # would be True if we had traced
@@ -1042,7 +1042,7 @@ def test_disabled_session_batch_captures_nothing_and_never_pauses() -> None:
     enabled STEP-mode batch would), this test would hang instead of completing.
     """
     model = TinyNet()
-    session = playgrad.start(model, epochs=1, phases={"train": 2}, enabled=False)
+    session = nansense.start(model, epochs=1, phases={"train": 2}, enabled=False)
 
     for _ in range(2):
         with session.batch(phase="train", epoch=0) as ctx:
@@ -1062,7 +1062,7 @@ def test_disabled_session_does_not_advance_the_schedule() -> None:
     """Disabled batches skip `schedule.advance`, so the declared batch count
     is never enforced — an enabled session would raise on the 2nd batch here."""
     model = TinyNet()
-    session = playgrad.start(model, epochs=1, phases={"train": 1}, enabled=False)
+    session = nansense.start(model, epochs=1, phases={"train": 1}, enabled=False)
 
     for _ in range(5):  # far more than the single declared batch
         with session.batch(phase="train", epoch=0):
@@ -1090,7 +1090,7 @@ def test_batches_runs_each_item_inside_a_batch_context() -> None:
 
 def test_batches_yields_loader_items_unchanged_when_disabled() -> None:
     model = TinyNet()
-    session = playgrad.start(model, epochs=1, phases={"train": 2}, enabled=False)
+    session = nansense.start(model, epochs=1, phases={"train": 2}, enabled=False)
     assert list(session.batches([1, 2, 3], phase="train", epoch=0)) == [1, 2, 3]
 
 
@@ -1098,7 +1098,7 @@ def test_start_with_scheduler_exposes_it() -> None:
     model = TinyNet()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
-    session = playgrad.start(
+    session = nansense.start(
         model,
         epochs=1,
         phases={"train": 1},

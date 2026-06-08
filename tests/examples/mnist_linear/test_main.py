@@ -15,7 +15,7 @@ def test_model_forward_shape() -> None:
 
 
 def test_model_is_fx_traceable() -> None:
-    """playgrad's preferred capture path requires a successful symbolic trace."""
+    """nansense's preferred capture path requires a successful symbolic trace."""
     torch.fx.symbolic_trace(build_model())
 
 

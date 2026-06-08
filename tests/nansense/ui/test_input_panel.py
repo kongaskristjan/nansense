@@ -1,10 +1,10 @@
-"""Tests for pure helpers in `playgrad.ui.input_panel`."""
+"""Tests for pure helpers in `nansense.ui.input_panel`."""
 
 from __future__ import annotations
 
 import pytest
 
-from playgrad.ui.input_panel import normalized_color
+from nansense.ui.input_panel import normalized_color
 
 CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR_STD = (0.2470, 0.2435, 0.2616)

@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from torch import nn
 
-import playgrad
+import nansense
 from examples.vision.data import DATASETS, DatasetConfig, build_dataloaders
 from examples.vision.resnet import PreActResNet
 from examples.vision.train import evaluate, train_one_epoch
@@ -62,15 +62,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
-        "--playgrad-port",
+        "--nansense-port",
         type=int,
         default=8080,
-        help="Port for the playgrad UI (default 8080).",
+        help="Port for the nansense UI (default 8080).",
     )
     parser.add_argument(
-        "--disable-playgrad",
+        "--disable-nansense",
         action="store_true",
-        help="Disable playgrad with near-zero overhead (run as plain training).",
+        help="Disable nansense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
 
@@ -140,24 +140,24 @@ def main() -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     # Always create the session; `enabled=False` makes it a near-zero-overhead
-    # no-op so the training loop below needs no playgrad-specific branching.
+    # no-op so the training loop below needs no nansense-specific branching.
     # `port=` serves the UI immediately (skipped automatically when disabled).
-    session = playgrad.start(
+    session = nansense.start(
         model,
         epochs=args.epochs,
         phases={"train": len(train_loader), "val": len(test_loader)},
-        enabled=not args.disable_playgrad,
+        enabled=not args.disable_nansense,
         # Optional: lets the weights page show per-parameter optimizer state
         # (Adam moments) and the group's live hyperparameters (lr, ...).
         optimizer=optimizer,
         # Optional: lets time-travel checkpoints restore the LR schedule.
         scheduler=scheduler,
-        port=args.playgrad_port,
+        port=args.nansense_port,
         input_mean=config.mean,
         input_std=config.std,
     )
     if session.enabled:
-        print(f"playgrad UI at http://127.0.0.1:{args.playgrad_port}")
+        print(f"nansense UI at http://127.0.0.1:{args.nansense_port}")
 
     # Opting into time travel: each epoch start is checkpointed to
     # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and

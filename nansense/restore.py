@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, cast
 import torch
 
 if TYPE_CHECKING:
-    from playgrad.session import Session
+    from nansense.session import Session
 
 _EPOCH_FILE_RE = re.compile(r"^epoch_(\d+)\.pt$")
 
@@ -143,7 +143,7 @@ class EpochCache:
         except Exception as e:  # corrupt file, unpicklable content, ...
             raise TimeTravelError(f"failed to load {path}: {e}") from e
         if not isinstance(payload, dict) or "model" not in payload:
-            raise TimeTravelError(f"{path} is not a playgrad epoch checkpoint")
+            raise TimeTravelError(f"{path} is not a nansense epoch checkpoint")
         return payload
 
 

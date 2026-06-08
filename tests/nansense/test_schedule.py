@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from playgrad.schedule import Schedule
+from nansense.schedule import Schedule
 
 
 def test_advance_through_full_run() -> None:

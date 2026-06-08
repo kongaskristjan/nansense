@@ -7,7 +7,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from playgrad.ui.graph import CONFIG_HEADER, ROOT_ID, build_mermaid, slug
+from nansense.ui.graph import CONFIG_HEADER, ROOT_ID, build_mermaid, slug
 
 
 class TwoLayer(nn.Module):

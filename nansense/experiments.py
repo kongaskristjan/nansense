@@ -2,7 +2,7 @@
 
 An experiment is a long-running, cancellable job executed by the *training
 thread* while it is paused — the heavyweight cousin of a probe run (see
-`playgrad.probe`). The UI arms an `ExperimentRequest` on the session; the
+`nansense.probe`). The UI arms an `ExperimentRequest` on the session; the
 pause loop in `Session._wait_for_proceed` consumes it and drives `run()`,
 a generator that yields `ExperimentResult` progress snapshots (the session
 publishes each one, so the UI can stream e.g. the evolving deep-dream
@@ -43,7 +43,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 if TYPE_CHECKING:
-    from playgrad.session import Session
+    from nansense.session import Session
 
 EXPERIMENT_KINDS: dict[str, str] = {
     "deep_dream": "Deep Dream",
@@ -224,8 +224,8 @@ def _target_activation(session: Session, x: Tensor, layer: str) -> Tensor:
     flow through it like through any tensor ops. The hook fallback registers
     a single temporary hook on the target module.
     """
-    # Imported lazily: playgrad.session imports this module at the top level.
-    from playgrad.session import _CaptureInterpreter
+    # Imported lazily: nansense.session imports this module at the top level.
+    from nansense.session import _CaptureInterpreter
 
     if session._fx_graph is not None:
         capture: dict[str, Tensor] = {}

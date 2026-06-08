@@ -1,9 +1,9 @@
-"""Playgrad session: state machine, hook installation, snapshot publishing.
+"""Nansense session: state machine, hook installation, snapshot publishing.
 
-A `Session` is created once per training run via `playgrad.start(...)`.
+A `Session` is created once per training run via `nansense.start(...)`.
 The user wraps each batch with `with session.batch(phase=..., epoch=...)`:
 
-    session = playgrad.start(model, epochs=50, phases={"train": 196, "val": 40})
+    session = nansense.start(model, epochs=50, phases={"train": 196, "val": 40})
     for epoch in range(50):
         for batch in train_loader:
             with session.batch(phase="train", epoch=epoch):
@@ -44,20 +44,20 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
-from playgrad import experiments
-from playgrad.experiments import (
+from nansense import experiments
+from nansense.experiments import (
     EXPERIMENT_KINDS,
     ExperimentRequest,
     ExperimentResult,
 )
-from playgrad.fx_names import friendly_names
-from playgrad.probe import (
+from nansense.fx_names import friendly_names
+from nansense.probe import (
     PROBE_MODES,
     PerturbationMap,
     ProbeResult,
     apply_perturbations,
 )
-from playgrad.restore import (
+from nansense.restore import (
     DEFAULT_CACHE_DIR,
     TimeTravelError,
     TimeTravelJump,
@@ -65,8 +65,8 @@ from playgrad.restore import (
     TrainingRestorer,
     validate_model_state,
 )
-from playgrad.schedule import BatchPosition, Schedule
-from playgrad.watch import WatchAccumulator, WatchSnapshot
+from nansense.schedule import BatchPosition, Schedule
+from nansense.watch import WatchAccumulator, WatchSnapshot
 
 
 class Mode(StrEnum):
@@ -151,7 +151,7 @@ class Session:
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
         self._watch_accumulator = WatchAccumulator()
-        # Probe state (see playgrad.probe). Config fields are mutated by the
+        # Probe state (see nansense.probe). Config fields are mutated by the
         # UI thread under `_cv`; `_probe_result` is published by the training
         # thread (also under `_cv`, so a stale in-flight run can be detected
         # via `_probe_version` and dropped instead of overwriting newer
@@ -165,7 +165,7 @@ class Session:
         self._probe_count = 0
         self._probe_result: ProbeResult | None = None
         self._probe_error: str | None = None
-        # Experiment state (see playgrad.experiments): requests queue up and
+        # Experiment state (see nansense.experiments): requests queue up and
         # the pause loop drains them in order, so concurrent clients (browser
         # tabs) don't supersede each other. Results are kept per request seq
         # (bounded; each client polls its own via `experiment_result_for`)
@@ -224,7 +224,7 @@ class Session:
         A disabled session is fully inert: `batch()` is a no-op context
         manager, `serve()` does nothing, and no model hooks are ever
         installed — the intended near-zero-overhead off switch for leaving
-        playgrad wiring in place in a training script.
+        nansense wiring in place in a training script.
         """
         return self._enabled
 
@@ -1439,7 +1439,7 @@ def start(
 
     With `enabled=False` the session is a near-zero-overhead no-op: no fx
     trace at construction, `batch()` does nothing, and the UI is skipped.
-    This lets a training script keep its playgrad wiring in place and turn
+    This lets a training script keep its nansense wiring in place and turn
     the whole UI off with a single flag.
 
     `optimizer` is optional: when given, snapshots (and the weights page)
@@ -1452,7 +1452,7 @@ def start(
     automatically along with the model and optimizer.
 
     `port` is optional: when given, the UI is served immediately on that
-    port (equivalent to a separate `playgrad.serve(session, port=...)`
+    port (equivalent to a separate `nansense.serve(session, port=...)`
     call, which remains available for finer control). `host`, `input_mean`,
     and `input_std` are forwarded to `serve`.
     """
@@ -1465,8 +1465,8 @@ def start(
         scheduler=scheduler,
     )
     if port is not None:
-        # Imported lazily: playgrad.ui imports this module at the top level.
-        from playgrad.ui import serve
+        # Imported lazily: nansense.ui imports this module at the top level.
+        from nansense.ui import serve
 
         serve(
             session, port=port, host=host, input_mean=input_mean, input_std=input_std

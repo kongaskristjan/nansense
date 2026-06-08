@@ -6,11 +6,11 @@
 - Package manager: `uv`
 - Dependencies: `uv sync`, `uv add <package>` etc.
 - Directory structure:
-  - 'playgrad/' - Playgrad visualization library (no training)
+  - 'nansense/' - Nansense visualization library (no training)
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)
-  - `tests/` - Tests for both examples and the playgrad library
-  - `README.md` - How to run examples and the playgrad library API usage
-  - `INTERNALS.md` - High level overview of playgrad library internals
+  - `tests/` - Tests for both examples and the nansense library
+  - `README.md` - How to run examples and the nansense library API usage
+  - `INTERNALS.md` - High level overview of nansense library internals
 
 ## Worktrees
 
@@ -45,6 +45,6 @@
 - Most commits should include corresponding test additions or changes. High level changes should incorporate documentation changes.
 - Before committing: `uv run pytest && uv run ty check`
 - Before committing: run the code. For UI testing, you can run some of the examples and use the playwright MCP.
-  - Use any `--playgrad-port [NUMBER]`. If a port has been taken, just try another one. Don't kill sessions on other ports, as they may have been started by the user or other concurrent agents.
+  - Use any `--nansense-port [NUMBER]`. If a port has been taken, just try another one. Don't kill sessions on other ports, as they may have been started by the user or other concurrent agents.
 - `README.md` and `INTERNALS.md` should be kept up to date
 

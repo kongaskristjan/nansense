@@ -1,12 +1,12 @@
-# Playgrad internals
+# Nansense internals
 
-This document explains how the `playgrad` library is structured under the
+This document explains how the `nansense` library is structured under the
 hood. For *using* the library, see `README.md`. For agent-facing guidelines,
 see `AGENTS.md`.
 
 ## Threading model
 
-A playgrad session lives across two threads:
+A nansense session lives across two threads:
 
 - **Training thread.** The user's training loop. Forward / backward / step
   run here, and `with session.batch(phase=..., epoch=...)` is entered here.
@@ -31,7 +31,7 @@ GIL.
 
 ## Schedule
 
-A `Schedule` is constructed once at `playgrad.start(model, epochs=...,
+A `Schedule` is constructed once at `nansense.start(model, epochs=...,
 phases=...)`. The `phases` dict is order-preserving (the last key in
 insertion order is treated as the final phase of each epoch).
 
@@ -82,7 +82,7 @@ resulting `fx.GraphModule` and `_install_hooks` monkey-patches
 subclass against that graph. The interpreter overrides `run_node` so that
 after every node executes — placeholders, `call_module`, `call_function`,
 `call_method` — it stores the returned tensor in `Session._activations`
-under a friendly key built by `playgrad.fx_names.friendly_names`. Module
+under a friendly key built by `nansense.fx_names.friendly_names`. Module
 calls use the dotted target (`stage1.0.bn1`); function/method ops are
 prefixed with the innermost submodule scope fx records in
 `node.meta["nn_module_stack"]`, so `torch.relu(...)` inside a block becomes
@@ -295,7 +295,7 @@ the cost of exposing fx intermediates and inputs to the stats
 collector without a parallel implementation. Snapshot timeline and
 pause behaviour are unaffected on non-watching sessions.
 
-### Extreme input patches (`playgrad.patches`)
+### Extreme input patches (`nansense.patches`)
 
 Alongside the histogram stats, each watch bucket owns a
 `PatchAccumulator` that keeps, per activation channel, the
@@ -345,9 +345,9 @@ travel) drop patches together with the rest of the bucket.
 `LayerStatsSnapshot.patches`; slots never filled keep their `∓inf`
 values and are masked by the renderer.
 
-## Probe runs (`playgrad.probe`)
+## Probe runs (`nansense.probe`)
 
-A probe is a playgrad-internal forward pass on a *pinned* input batch, run
+A probe is a nansense-internal forward pass on a *pinned* input batch, run
 between batches so the UI can show the network's response to one fixed
 input across stepping and time travel. `Session.pin_current_batch()` pins
 the last snapshot's input tensor (already a CPU clone); from then on every
@@ -411,7 +411,7 @@ of killing the training thread (`_run_probe_guarded`); deactivating the
 probe (`unpin_batch` / `clear_perturbations` with nothing else active)
 clears the published result so the UI falls back to the snapshot.
 
-## Experiments (`playgrad.experiments`)
+## Experiments (`nansense.experiments`)
 
 Experiments — deep dream and a small Captum selection (Grad-CAM, Neuron
 Gradient, Neuron Integrated Gradients, Occlusion) — are the long-running,
@@ -482,7 +482,7 @@ each other: deep-dream result and start batches render denormalized via
 renderable" note), attributions via the shared diverging-colormap
 `render_strip`, next to the input sample.
 
-## Time travel (`playgrad.restore`)
+## Time travel (`nansense.restore`)
 
 Time travel jumps training back to the start of any epoch whose state was
 checkpointed to disk. It is opt-in at the training-loop level: the user
@@ -566,11 +566,11 @@ button itself.
 
 ## UI layer
 
-`playgrad.ui` is a thin NiceGUI app that reads `Session.snapshot` and
+`nansense.ui` is a thin NiceGUI app that reads `Session.snapshot` and
 drives `Session` via the five control methods plus `detach` and `close`.
 It does not touch tensors directly until they need to be rendered.
 
-- `playgrad.ui.graph.build_mermaid(model)` produces the Mermaid TD source
+- `nansense.ui.graph.build_mermaid(model)` produces the Mermaid TD source
   for the architecture view. It tries `torch.fx.symbolic_trace(model)`
   first, which yields a real data-flow graph — vertical chains, with
   branches and merges at residual blocks. For models that aren't
@@ -579,7 +579,7 @@ It does not touch tensors directly until they need to be rendered.
   use different Mermaid shapes per fx op (rectangles for `call_module`,
   ovals/stadiums for `call_function` / `call_method`, circles for
   `placeholder` / `output`).
-- `playgrad.ui.render.render_strip(tensor, sample_idx)` turns per-layer
+- `nansense.ui.render.render_strip(tensor, sample_idx)` turns per-layer
   CPU tensors into a `StripRender`: one data image at the tensor's
   *native* resolution plus a legend image at display resolution.
   - For per-sample shape `[C, H, W]` every channel tile lands in a single
@@ -624,7 +624,7 @@ It does not touch tensors directly until they need to be rendered.
     matter more than encode time, e.g. an SSH-port-forwarded UI.
   - Per-sample shapes of 4D and beyond return `None`; the UI hides those
     images.
-- `playgrad.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
+- `nansense.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
   renders the model input as a natural RGB or grayscale image at the
   sample's native resolution; the UI scales it to `INPUT_IMAGE_SIZE` with
   CSS nearest-neighbour. Channels are assumed to lie
@@ -632,7 +632,7 @@ It does not touch tensors directly until they need to be rendered.
   sample is denormalized (`x * std + mean`) before being clamped and
   scaled to 8-bit. Anything other than `C == 1` or `C == 3` returns
   `None`.
-- `playgrad.ui.render.render_weight(tensor, x_dim=, y_dim=, tile_dim=,
+- `nansense.ui.render.render_weight(tensor, x_dim=, y_dim=, tile_dim=,
   fixed=)` renders an arbitrary-rank weight under a chosen axis layout.
   Unlike `render_strip`, a weight has no batch axis, so instead of slicing
   a sample it pins every axis not assigned to X/Y/tile to a single index
@@ -649,7 +649,7 @@ It does not touch tensors directly until they need to be rendered.
   refresh through `_format_live_position`). The main page, `/watch`, and
   `/weights` all build their bars from these, differing only in the
   leading/trailing widgets they add around the shared controls.
-- `playgrad.ui.app.serve(session, port=..., host=...)` runs the NiceGUI
+- `nansense.ui.app.serve(session, port=..., host=...)` runs the NiceGUI
   app on a background thread. NiceGUI is mounted onto a bare FastAPI
   app via `ui.run_with`, which is then served by `uvicorn.Server` from
   the thread. `install_signal_handlers` is patched to a no-op because
@@ -664,7 +664,7 @@ It does not touch tensors directly until they need to be rendered.
   visible is synonymous with watched (`session.watch`), so the center
   pane starts empty (a hint points at the diagram) and each shown card
   carries a permanent "Unwatch" button. Clicking a Mermaid node emits a
-  `playgrad_toggle_layer` event (JS `emitEvent` → `ui.on`) whose handler
+  `nansense_toggle_layer` event (JS `emitEvent` → `ui.on`) whose handler
   toggles the watched state; `sync_watch_ui` then diffs the watched set
   against the connection's last-known one (`_PageState.last_watched`) and
   pushes only the changes: card visibility, the diagram's amber classes,
@@ -683,7 +683,7 @@ It does not touch tensors directly until they need to be rendered.
   forward-only). The `_RenderCache` is keyed by render-source identity —
   snapshot or probe result — so both share one cache, and a card
   re-shown under an unchanged source is a cache hit.
-- The right sidebar is `playgrad.ui.input_panel.InputPanel`, laid out
+- The right sidebar is `nansense.ui.input_panel.InputPanel`, laid out
   top-down as: the input image (what every control below acts on), the
   "Viewing sample" `ui.number` (moved out of the top bar), a "Probe"
   section — the "Pin batch" switch, the probe-mode toggle (unchanged /
@@ -880,8 +880,8 @@ It does not touch tensors directly until they need to be rendered.
 
 ## Enabled flag (zero-overhead off switch)
 
-`playgrad.start(model, ..., enabled=False)` returns a fully inert session,
-the intended way to leave playgrad wiring in a training script and turn it
+`nansense.start(model, ..., enabled=False)` returns a fully inert session,
+the intended way to leave nansense wiring in a training script and turn it
 off with one flag:
 
 - **Construction** skips `_try_trace(model)` (the proxy forward pass is the
@@ -899,7 +899,7 @@ off with one flag:
 ## Lifecycle summary
 
 ```text
-playgrad.start(model, epochs, phases, enabled=True)
+nansense.start(model, epochs, phases, enabled=True)
         │
         ▼
    Session (mode=STEP)

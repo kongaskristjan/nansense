@@ -9,7 +9,7 @@ import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from playgrad import Session
+from nansense import Session
 
 
 @dataclass

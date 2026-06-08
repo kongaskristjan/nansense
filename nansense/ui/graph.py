@@ -15,7 +15,7 @@ from collections.abc import Iterator
 import torch
 from torch import fx, nn
 
-from playgrad.fx_names import friendly_names
+from nansense.fx_names import friendly_names
 
 CONFIG_HEADER: str = """---
 config:

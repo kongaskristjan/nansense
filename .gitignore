@@ -10,5 +10,5 @@ __pycache__/
 data/
 *.pt
 *.pth
-playgrad-*.png
+nansense-*.png
 models/

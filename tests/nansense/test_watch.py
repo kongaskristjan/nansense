@@ -7,7 +7,7 @@ import math
 import pytest
 import torch
 
-from playgrad.watch import (
+from nansense.watch import (
     BINS_PER_DECADE,
     LOG10_MAX,
     LOG10_MIN,

@@ -8,9 +8,9 @@ import pytest
 import torch
 from PIL import Image
 
-from playgrad.patches import TypePatches
-from playgrad.ui import render
-from playgrad.ui.render import (
+from nansense.patches import TypePatches
+from nansense.ui import render
+from nansense.ui.render import (
     HEAT_MAX_ALPHA,
     LEGEND_WIDTH,
     LINEAR_BIN_WIDTH,

@@ -9,14 +9,14 @@ import pytest
 import torch
 from torch import Tensor, nn
 
-import playgrad
-from playgrad.restore import (
+import nansense
+from nansense.restore import (
     EpochCache,
     TimeTravelError,
     TrainingRestorer,
     validate_model_state,
 )
-from playgrad.session import Session
+from nansense.session import Session
 
 
 class TinyNet(nn.Module):
@@ -59,7 +59,7 @@ def _make_training(
     model = TinyNet()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
-    session = playgrad.start(
+    session = nansense.start(
         model,
         epochs=epochs,
         phases={"train": 2},
@@ -172,7 +172,7 @@ def test_disabled_session_restorer_is_inert(tmp_path: Path) -> None:
 
 
 def test_request_time_travel_without_restorer_raises() -> None:
-    session = playgrad.start(TinyNet(), epochs=2, phases={"train": 2})
+    session = nansense.start(TinyNet(), epochs=2, phases={"train": 2})
     with pytest.raises(TimeTravelError, match="training restorer"):
         session.request_time_travel(0)
 
@@ -198,7 +198,7 @@ def test_request_time_travel_rejects_mismatched_model(tmp_path: Path) -> None:
 
 
 def test_time_travel_status_reports_reason_and_cached_epochs(tmp_path: Path) -> None:
-    session = playgrad.start(TinyNet(), epochs=3, phases={"train": 2})
+    session = nansense.start(TinyNet(), epochs=3, phases={"train": 2})
     status = session.time_travel_status()
     assert not status.available
     assert status.reason is not None and "restorer" in status.reason

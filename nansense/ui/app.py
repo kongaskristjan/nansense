@@ -15,7 +15,7 @@ disabled so it survives being started from a non-main thread). Layout:
   offers "Watch all layers" (behind a performance-warning dialog, since
   watching everything renders every card and accumulates stats for every
   layer on every batch) and "Clear all watches".
-- Right pane: the "Input Selection" sidebar (see `playgrad.ui.input_panel`)
+- Right pane: the "Input Selection" sidebar (see `nansense.ui.input_panel`)
   with the sample spinner, the batch-pinning probe controls, and the input
   image.
 
@@ -54,19 +54,19 @@ from nicegui.events import GenericEventArguments
 import torch
 from torch import Tensor
 
-from playgrad.patches import PATCH_TYPES, PatchType
-from playgrad.experiments import (
+from nansense.patches import PATCH_TYPES, PatchType
+from nansense.experiments import (
     _DEFAULT_DREAM_BATCH,
     EXPERIMENT_KINDS,
     ExperimentResult,
 )
-from playgrad.probe import ProbeResult
-from playgrad.restore import TimeTravelError
-from playgrad.schedule import BatchPosition, Schedule
-from playgrad.session import BatchSnapshot, Session
-from playgrad.ui.graph import build_mermaid, slug
-from playgrad.ui.input_panel import InputPanel
-from playgrad.ui.render import (
+from nansense.probe import ProbeResult
+from nansense.restore import TimeTravelError
+from nansense.schedule import BatchPosition, Schedule
+from nansense.session import BatchSnapshot, Session
+from nansense.ui.graph import build_mermaid, slug
+from nansense.ui.input_panel import InputPanel
+from nansense.ui.render import (
     INPUT_IMAGE_SIZE,
     PatchGridRender,
     StripRender,
@@ -77,7 +77,7 @@ from playgrad.ui.render import (
     render_strip,
     render_weight,
 )
-from playgrad.watch import (
+from nansense.watch import (
     BINS_PER_DECADE,
     LOG10_MAX,
     LOG10_MIN,
@@ -94,34 +94,34 @@ _ARCHITECTURE_CLICK_CSS: str = """
 <style>
   g.node { cursor: pointer; }
   [data-layer] > :first-child { cursor: pointer; }
-  [data-layer].playgrad-highlight {
+  [data-layer].nansense-highlight {
     box-shadow: 0 0 0 3px rgb(96 165 250);
   }
   /* SVG nodes don't honour `box-shadow`, so the matching highlight uses
      an SVG filter that glows around the node's shape. */
-  g.node.playgrad-highlight {
+  g.node.nansense-highlight {
     filter: drop-shadow(0 0 4px rgb(96 165 250));
   }
   /* Watched: stronger, amber-tinted treatment that persists across hover.
      Distinct from the blue hover highlight so the two signals don't
      blur into one. */
-  [data-layer].playgrad-watched {
+  [data-layer].nansense-watched {
     box-shadow:
       0 0 0 3px rgb(245 158 11),
       0 0 12px rgba(245, 158, 11, 0.55);
   }
-  g.node.playgrad-watched {
+  g.node.nansense-watched {
     filter:
       drop-shadow(0 0 6px rgb(245 158 11))
       drop-shadow(0 0 3px rgb(245 158 11));
   }
   /* Watched + hovered: amber ring stays, blue layered around it. */
-  [data-layer].playgrad-watched.playgrad-highlight {
+  [data-layer].nansense-watched.nansense-highlight {
     box-shadow:
       0 0 0 3px rgb(245 158 11),
       0 0 0 6px rgba(96, 165, 250, 0.6);
   }
-  g.node.playgrad-watched.playgrad-highlight {
+  g.node.nansense-watched.nansense-highlight {
     filter:
       drop-shadow(0 0 6px rgb(245 158 11))
       drop-shadow(0 0 4px rgb(96 165 250));
@@ -131,8 +131,8 @@ _ARCHITECTURE_CLICK_CSS: str = """
 
 # Mermaid SVG node ids look like "<element>-flowchart-<slug>-<counter>"; the
 # matching layer card carries `data-layer="<slug>"` so we can cross-link
-# the two. Hovering either side adds `.playgrad-highlight` to both ends
-# of the pair. Clicking a diagram node emits `playgrad_toggle_layer` to
+# the two. Hovering either side adds `.nansense-highlight` to both ends
+# of the pair. Clicking a diagram node emits `nansense_toggle_layer` to
 # the server, which toggles the layer's watched state (and with it the
 # card's visibility); clicking a card header scrolls the diagram to the
 # matching node. Scroll positions are computed directly instead of via
@@ -204,13 +204,13 @@ _ARCHITECTURE_CLICK_JS: str = """
   function setHighlight(pair) {
     if (highlighted && pair && highlighted.node === pair.node) return;
     if (highlighted) {
-      highlighted.node.classList.remove('playgrad-highlight');
-      highlighted.card.classList.remove('playgrad-highlight');
+      highlighted.node.classList.remove('nansense-highlight');
+      highlighted.card.classList.remove('nansense-highlight');
     }
     highlighted = pair;
     if (pair) {
-      pair.node.classList.add('playgrad-highlight');
-      pair.card.classList.add('playgrad-highlight');
+      pair.node.classList.add('nansense-highlight');
+      pair.card.classList.add('nansense-highlight');
     }
   }
   document.addEventListener('mouseover', function(e) {
@@ -231,7 +231,7 @@ _ARCHITECTURE_CLICK_JS: str = """
       if (!slug) return;
       // Toggling watched state lives server-side (session.watch); the
       // server answers by updating card visibility and amber classes.
-      emitEvent('playgrad_toggle_layer', slug);
+      emitEvent('nansense_toggle_layer', slug);
       return;
     }
     const card = e.target.closest('[data-layer]');
@@ -246,19 +246,19 @@ _ARCHITECTURE_CLICK_JS: str = """
     scrollTargetToTop(mNode);
   });
 
-  // Toggle the `playgrad-watched` class on both the card and the matching
+  // Toggle the `nansense-watched` class on both the card and the matching
   // mermaid node. Mermaid renders the SVG asynchronously, so the node may
   // not exist yet when this runs; the MutationObserver below catches it.
-  window.playgradSetWatched = function(slug, on) {
+  window.nansenseSetWatched = function(slug, on) {
     if (on) { watchedSlugs.add(slug); } else { watchedSlugs.delete(slug); }
     const card = findCard(slug);
-    if (card) card.classList.toggle('playgrad-watched', on);
+    if (card) card.classList.toggle('nansense-watched', on);
     const node = findMermaidNode(slug);
-    if (node) node.classList.toggle('playgrad-watched', on);
+    if (node) node.classList.toggle('nansense-watched', on);
   };
   // Jump both panes to a layer: the right pane's card and the architecture
   // pane's mermaid node each scroll within their own container.
-  window.playgradScrollToLayer = function(slug) {
+  window.nansenseScrollToLayer = function(slug) {
     const card = findCard(slug);
     if (card) scrollTargetToTop(card);
     const node = findMermaidNode(slug);
@@ -267,7 +267,7 @@ _ARCHITECTURE_CLICK_JS: str = """
   // Card-only variant: used right after a diagram click reveals a card,
   // where also scrolling the diagram would yank the just-clicked node away
   // from under the cursor.
-  window.playgradScrollToCard = function(slug) {
+  window.nansenseScrollToCard = function(slug) {
     const card = findCard(slug);
     if (card) scrollTargetToTop(card);
   };
@@ -278,12 +278,12 @@ _ARCHITECTURE_CLICK_JS: str = """
     if (watchedSlugs.size === 0) return;
     for (const slug of watchedSlugs) {
       const card = findCard(slug);
-      if (card && !card.classList.contains('playgrad-watched')) {
-        card.classList.add('playgrad-watched');
+      if (card && !card.classList.contains('nansense-watched')) {
+        card.classList.add('nansense-watched');
       }
       const node = findMermaidNode(slug);
-      if (node && !node.classList.contains('playgrad-watched')) {
-        node.classList.add('playgrad-watched');
+      if (node && !node.classList.contains('nansense-watched')) {
+        node.classList.add('nansense-watched');
       }
     }
   });
@@ -305,7 +305,7 @@ def serve(
     """Start the NiceGUI app on a background thread and return that thread.
 
     Returns `None` without starting anything when `session` is disabled
-    (`playgrad.start(..., enabled=False)`), so a training script can call
+    (`nansense.start(..., enabled=False)`), so a training script can call
     `serve()` unconditionally and pay nothing when the UI is turned off.
 
     NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is
@@ -357,7 +357,7 @@ def serve(
             session, layer, input_mean=input_mean, input_std=input_std
         )
 
-    ui.run_with(fastapi_app, storage_secret="playgrad")
+    ui.run_with(fastapi_app, storage_secret="nansense")
 
     config = uvicorn.Config(
         app=fastapi_app,
@@ -368,7 +368,7 @@ def serve(
     server = uvicorn.Server(config)
     setattr(server, "install_signal_handlers", lambda: None)
 
-    thread = threading.Thread(target=server.run, name="playgrad-ui", daemon=False)
+    thread = threading.Thread(target=server.run, name="nansense-ui", daemon=False)
     thread.start()
     return thread
 
@@ -391,7 +391,7 @@ class _PageState:
 # GIL, so a new snapshot's strips render in parallel across cores. Workers
 # spawn lazily, so the pool costs nothing until the first frame.
 _RENDER_POOL = ThreadPoolExecutor(
-    max_workers=min(8, os.cpu_count() or 1), thread_name_prefix="playgrad-render"
+    max_workers=min(8, os.cpu_count() or 1), thread_name_prefix="nansense-render"
 )
 
 
@@ -498,7 +498,7 @@ def _build_page(
     state.last_watched = session.watched_layers
     layer_views: dict[str, _LayerView] = {}
 
-    ui.page_title("PlayGrad")
+    ui.page_title("Nansense")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
@@ -606,7 +606,7 @@ def _build_page(
                     ui.menu_item(
                         layer,
                         on_click=lambda n=layer: ui.run_javascript(
-                            f"window.playgradScrollToLayer({json.dumps(slug(n))})"
+                            f"window.nansenseScrollToLayer({json.dumps(slug(n))})"
                         ),
                     ).classes("font-mono text-sm")
 
@@ -630,7 +630,7 @@ def _build_page(
                     view.set_visible(name in watched)
             if added or removed:
                 changes = "; ".join(
-                    f"window.playgradSetWatched({json.dumps(slug(n))}, "
+                    f"window.nansenseSetWatched({json.dumps(slug(n))}, "
                     f"{'true' if n in watched else 'false'})"
                     for n in added | removed
                 )
@@ -649,7 +649,7 @@ def _build_page(
             sync_watch_ui()
             if name in session.watched_layers:
                 ui.run_javascript(
-                    f"window.playgradScrollToCard({json.dumps(slug(name))})"
+                    f"window.nansenseScrollToCard({json.dumps(slug(name))})"
                 )
 
         with ui.row().classes("w-full no-wrap gap-0 grow min-h-0"):
@@ -715,7 +715,7 @@ def _build_page(
         if name is not None:
             toggle_layer(name)
 
-    ui.on("playgrad_toggle_layer", on_diagram_toggle)
+    ui.on("nansense_toggle_layer", on_diagram_toggle)
 
     # Populate the chip menu and, if anything is already watched, push the
     # set into JS so the MutationObserver applies the amber treatment to
@@ -727,7 +727,7 @@ def _build_page(
         ui.timer(
             0.0,
             lambda: ui.run_javascript(
-                f"({slugs_js}).forEach(s => window.playgradSetWatched(s, true))"
+                f"({slugs_js}).forEach(s => window.nansenseSetWatched(s, true))"
             ),
             once=True,
         )
@@ -1368,7 +1368,7 @@ def _build_watch_page(
     header here, which drops the corresponding accumulator entry — the
     change is reflected on the main page on next navigation.
     """
-    ui.page_title("PlayGrad — Watching")
+    ui.page_title("Nansense — Watching")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
@@ -1999,7 +1999,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     by index.
     """
     title = f"Weights · {layer}" if layer else "Weights"
-    ui.page_title(f"PlayGrad — {title}")
+    ui.page_title(f"Nansense — {title}")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
@@ -2095,9 +2095,9 @@ _NO_GRADIENT_HTML: str = (
 # tiles clear the threshold comfortably.
 _STRIP_MARKER_CSS: str = """
 <style>
-  .playgrad-marker { container-type: size; }
+  .nansense-marker { container-type: size; }
   @container (max-height: 88px) {
-    .playgrad-marker-label { display: none; }
+    .nansense-marker-label { display: none; }
   }
 </style>
 """
@@ -2540,7 +2540,7 @@ def _build_experiment_page(
     explain.
     """
     title = f"Experiment · {layer}" if layer else "Experiment"
-    ui.page_title(f"PlayGrad — {title}")
+    ui.page_title(f"Nansense — {title}")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
@@ -3310,11 +3310,11 @@ def _strip_marker(color_class: str, label: str) -> None:
     full name regardless.
     """
     with ui.element("div").classes(
-        f"playgrad-marker w-5 shrink-0 rounded mr-2 sticky left-0 z-10 "
+        f"nansense-marker w-5 shrink-0 rounded mr-2 sticky left-0 z-10 "
         f"overflow-hidden {color_class}"
     ).tooltip(label.capitalize()):
         ui.label(label).classes(
-            "playgrad-marker-label absolute text-white font-bold select-none"
+            "nansense-marker-label absolute text-white font-bold select-none"
         ).style(
             "writing-mode: vertical-rl; top: 50%; left: 50%; "
             "transform: translate(-50%, -50%) rotate(180deg); "

@@ -1,4 +1,4 @@
-# playgrad
+# Complete nansense!
 
 A visualization library for deep learning experiments: hook a `Session` into
 your PyTorch training loop and inspect activations, gradients, weights, and
@@ -9,7 +9,7 @@ runs. See `INTERNALS.md` for how it works under the hood.
 
 ```bash
 uv sync
-uv run python -m examples.vision.main --playgrad-port 8080
+uv run python -m examples.vision.main --nansense-port 8080
 ```
 
 Open `http://localhost:8080`. Training pauses on the first batch; drive it
@@ -18,7 +18,7 @@ from the top bar (step batch / epoch / custom, detach, time travel).
 Available examples:
 
 - `examples.mnist_linear.main` — a single linear layer on MNIST with the
-  minimal playgrad wiring (no scheduler, no time travel).
+  minimal nansense wiring (no scheduler, no time travel).
 - `examples.mnist_lenet.main` — LeNet-5 on MNIST: SGD + momentum, basic
   augmentation, and the full wiring (scheduler, time travel, checkpoints).
 - `examples.vision.main` — a small pre-activation ResNet (default), a
@@ -29,9 +29,9 @@ Available examples:
 ## Minimal example
 
 ```python
-import playgrad
+import nansense
 
-session = playgrad.start(
+session = nansense.start(
     model,
     epochs=10,
     phases={"train": len(train_loader)},
@@ -54,9 +54,9 @@ denormalization for display, and time travel:
 ```python
 from pathlib import Path
 
-import playgrad
+import nansense
 
-session = playgrad.start(
+session = nansense.start(
     model,
     epochs=50,
     phases={"train": len(train_loader), "val": len(val_loader)},
@@ -87,7 +87,7 @@ while restorer.pending():
 session.close()
 ```
 
-`enabled=False` on `playgrad.start()` turns the whole thing into a
+`enabled=False` on `nansense.start()` turns the whole thing into a
 near-zero-overhead no-op, so the wiring can stay in place for plain training
 runs. The runnable version of this loop is `examples/vision/main.py`.
 

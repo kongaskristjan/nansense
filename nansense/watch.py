@@ -36,7 +36,7 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from playgrad.patches import PatchAccumulator, PatchSnapshot
+from nansense.patches import PatchAccumulator, PatchSnapshot
 
 BINS_PER_DECADE: int = 7
 LOG10_MIN: int = -9

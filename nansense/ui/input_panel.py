@@ -1,7 +1,7 @@
 """The "Input Selection" sidebar of the main page.
 
 Hosts the per-sample spinner (moved out of the top bar), the batch-pinning
-and click-to-perturb controls for probe runs (see `playgrad.probe`), and the
+and click-to-perturb controls for probe runs (see `nansense.probe`), and the
 input image. The panel owns the per-connection view state the page's tick
 loop reads (`sample_idx`, `compare`) and forwards pin / probe-mode /
 perturbation changes to the session; the session reacts asynchronously by
@@ -22,8 +22,8 @@ from collections.abc import Callable
 from nicegui import ui
 from torch import Tensor
 
-from playgrad.session import Session
-from playgrad.ui.render import INPUT_IMAGE_SIZE
+from nansense.session import Session
+from nansense.ui.render import INPUT_IMAGE_SIZE
 
 _PROBE_MODE_OPTIONS: dict[str, str] = {
     "unchanged": "Unchanged",

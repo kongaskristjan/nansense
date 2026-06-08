@@ -48,7 +48,7 @@ def test_vit_rejects_indivisible_patch_size() -> None:
 
 
 def test_vit_is_fx_traceable() -> None:
-    """playgrad's preferred capture path requires a successful symbolic trace."""
+    """nansense's preferred capture path requires a successful symbolic trace."""
     model = SimpleViT(image_size=32, patch_size=4, dim=32, depth=2, num_heads=2)
     traced = torch.fx.symbolic_trace(model)
     x = torch.randn(2, 3, 32, 32)

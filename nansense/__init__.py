@@ -1,4 +1,4 @@
-"""Playgrad — visualization library for deep learning experiments.
+"""Nansense — visualization library for deep learning experiments.
 
 The library provides a `Session` that hooks into a PyTorch model and
 publishes per-batch activation/gradient snapshots for inspection in a
@@ -8,16 +8,16 @@ web UI. It deliberately contains no training logic; training lives in
 
 from __future__ import annotations
 
-from playgrad.restore import (
+from nansense.restore import (
     TimeTravelError,
     TimeTravelJump,
     TimeTravelStatus,
     TrainingRestorer,
 )
-from playgrad.schedule import BatchPosition, Schedule
-from playgrad.session import BatchSnapshot, Mode, Session, start
-from playgrad.ui import serve
-from playgrad.watch import (
+from nansense.schedule import BatchPosition, Schedule
+from nansense.session import BatchSnapshot, Mode, Session, start
+from nansense.ui import serve
+from nansense.watch import (
     LayerStatsSnapshot,
     TensorStatsSnapshot,
     WatchSnapshot,

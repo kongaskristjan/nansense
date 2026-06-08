@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from playgrad.patches import (
+from nansense.patches import (
     N_PER_CHANNEL,
     PATCH_TYPES,
     PatchAccumulator,

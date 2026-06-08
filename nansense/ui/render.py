@@ -39,7 +39,7 @@ from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 from torch.nn import functional as F
 
-from playgrad.patches import TypePatches
+from nansense.patches import TypePatches
 
 TILE_SIZE: int = 128
 TILE_GAP_DIVISOR: int = 48

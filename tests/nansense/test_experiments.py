@@ -8,9 +8,9 @@ import pytest
 import torch
 from torch import Tensor, nn
 
-import playgrad
-from playgrad.experiments import _value_bounds, _zoom_in
-from playgrad.session import Session
+import nansense
+from nansense.experiments import _value_bounds, _zoom_in
+from nansense.session import Session
 
 CIFARISH_MEAN = (0.5, 0.4, 0.3)
 CIFARISH_STD = (0.25, 0.2, 0.3)
@@ -42,7 +42,7 @@ def _paused_session(
     batch_size: int = 2,
 ) -> tuple[Session, TinyClassifier, threading.Thread]:
     model = TinyClassifier()
-    session = playgrad.start(model, epochs=1, phases={"train": 2})
+    session = nansense.start(model, epochs=1, phases={"train": 2})
 
     def loop() -> None:
         for _ in range(2):
@@ -238,7 +238,7 @@ class VectorNet(nn.Module):
 
 def test_deep_dream_works_on_vector_input() -> None:
     model = VectorNet()
-    session = playgrad.start(model, epochs=1, phases={"train": 2})
+    session = nansense.start(model, epochs=1, phases={"train": 2})
 
     def loop() -> None:
         for _ in range(2):
@@ -330,7 +330,7 @@ def test_queued_experiments_publish_per_seq_results() -> None:
 
 def test_cancel_experiment_drops_one_seq_or_all() -> None:
     # No training loop is running, so requests stay queued.
-    session = playgrad.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
     seq_a = session.request_experiment(
         kind="deep_dream", layer="conv", params={}
     )
@@ -359,7 +359,7 @@ def test_experiment_results_evict_oldest_seq() -> None:
 
 
 def test_request_experiment_rejects_unknown_kind() -> None:
-    session = playgrad.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
     with pytest.raises(ValueError, match="unknown experiment kind"):
         session.request_experiment(kind="bogus", layer="conv", params={})
 

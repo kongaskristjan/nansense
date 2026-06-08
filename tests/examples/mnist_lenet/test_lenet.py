@@ -19,7 +19,7 @@ def test_lenet_forward_shape(batch_size: int) -> None:
 
 
 def test_lenet_is_fx_traceable() -> None:
-    """playgrad's preferred capture path requires a successful symbolic trace."""
+    """nansense's preferred capture path requires a successful symbolic trace."""
     torch.fx.symbolic_trace(LeNet())
 
 

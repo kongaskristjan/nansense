@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import fx, nn
 
-from playgrad.fx_names import friendly_names
+from nansense.fx_names import friendly_names
 
 
 class Block(nn.Module):

@@ -1280,7 +1280,7 @@ wheels = [
 ]
 
 [[package]]
-name = "playgrad"
+name = "nansense"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

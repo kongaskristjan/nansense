@@ -1,7 +1,7 @@
-"""Train a single linear layer on MNIST — the most trivial playgrad example.
+"""Train a single linear layer on MNIST — the most trivial nansense example.
 
 Everything lives in this one file: a `Flatten -> Linear` model, plain SGD,
-and the minimal playgrad wiring (`playgrad.start` + `session.batches`).
+and the minimal nansense wiring (`nansense.start` + `session.batches`).
 No scheduler, no time travel, no checkpointing — see `examples/mnist_lenet`
 and `examples/vision` for the full wiring.
 """
@@ -16,7 +16,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-import playgrad
+import nansense
 
 MNIST_MEAN: tuple[float, ...] = (0.1307,)
 MNIST_STD: tuple[float, ...] = (0.3081,)
@@ -29,10 +29,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument(
-        "--playgrad-port",
+        "--nansense-port",
         type=int,
         default=8080,
-        help="Port for the playgrad UI (default 8080).",
+        help="Port for the nansense UI (default 8080).",
     )
     return parser.parse_args()
 
@@ -63,16 +63,16 @@ def main() -> None:
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
 
-    session = playgrad.start(
+    session = nansense.start(
         model,
         epochs=args.epochs,
         phases={"train": len(train_loader), "val": len(test_loader)},
         optimizer=optimizer,
-        port=args.playgrad_port,
+        port=args.nansense_port,
         input_mean=MNIST_MEAN,
         input_std=MNIST_STD,
     )
-    print(f"playgrad UI at http://127.0.0.1:{args.playgrad_port}", flush=True)
+    print(f"nansense UI at http://127.0.0.1:{args.nansense_port}", flush=True)
 
     for epoch in range(args.epochs):
         model.train()
