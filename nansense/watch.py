@@ -4,6 +4,9 @@ For each watched layer, we accumulate per `(phase, epoch)`:
 
 - scalar reductions: count, sum, sum_of_squares, min, max
 - a signed-log histogram with 211 bins covering `(-1e6, 1e6)`
+- a per-channel `(C, 211)` variant of the same histogram, where channels
+  are dim 1 of the batch-first tensor (features act as channels for 2D
+  activations, matching the patch accumulator's convention)
 
 The histogram has 7 bins per decade in log10 space on each sign:
 
@@ -16,6 +19,15 @@ between consecutive powers, so axis labels at the powers of 10 line up
 with bin boundaries instead of bisecting bins. The two end bins are
 open-ended: anything below `-1e6` or above `+1e6` saturates into them,
 and the UI marks these as overflow.
+
+The universal histogram is ~2 KB and lives forever, but a per-channel
+buffer is `C × 211` int64 (≈ 0.9 MB at 512 channels), so only the most
+recent epoch per `(layer, phase)` keeps one: when a new epoch of a phase
+starts, that same phase's older epochs collapse to the universal
+histogram — the phase-scoped release rule the patch buffers already use.
+Per-channel binning also turns off permanently for an accumulator whose
+dim-1 size changes mid-stream (e.g. variable token counts) or whose
+tensors are 1D.
 
 All running stats live on the device of the first tensor seen for that
 accumulator (typically the model's training device). Inputs are cast to
@@ -103,6 +115,10 @@ class TensorStatsSnapshot:
     min: float
     max: float
     hist: tuple[int, ...]
+    # Per-channel histogram rows summing to `hist`; `None` when per-channel
+    # tracking is off for this accumulator (1D tensors, a dim-1 size change,
+    # or an older epoch collapsed when a newer one started for its phase).
+    channel_hists: tuple[tuple[int, ...], ...] | None = None
 
     @property
     def mean(self) -> float:
@@ -215,6 +231,10 @@ class TensorAccumulator:
         self._min: Tensor | None = None
         self._max: Tensor | None = None
         self._hist: Tensor | None = None
+        # `(C, N_BINS)` per-channel counts; allocated on the first update
+        # with a usable channel axis, dropped by `collapse_channels`.
+        self._channel_hist: Tensor | None = None
+        self._channels_off = False
 
     def _lazy_init(self, device: torch.device) -> None:
         if self._device is not None:
@@ -245,7 +265,61 @@ class TensorAccumulator:
         self._sum_sq += flat.square().sum()
         self._min = torch.minimum(self._min, flat.min())
         self._max = torch.maximum(self._max, flat.max())
-        self._hist += torch.bincount(_bin_indices(flat), minlength=N_BINS)
+        idx = _bin_indices(flat)
+        channels = self._usable_channels(x)
+        if channels is None:
+            self._hist += torch.bincount(idx, minlength=N_BINS)
+            return
+        # One fused bincount over `channel * N_BINS + bin` gives the
+        # per-channel counts; the universal histogram is their sum, so the
+        # per-channel path costs one cheap reduction over what the universal
+        # one already paid.
+        view = [1, channels] + [1] * (x.ndim - 2)
+        ch_idx = (
+            torch.arange(channels, device=x.device)
+            .view(view)
+            .expand(x.shape)
+            .reshape(-1)
+        )
+        counts = torch.bincount(
+            ch_idx * N_BINS + idx, minlength=channels * N_BINS
+        ).reshape(channels, N_BINS)
+        assert self._channel_hist is not None
+        self._channel_hist += counts
+        self._hist += counts.sum(dim=0)
+
+    def _usable_channels(self, x: Tensor) -> int | None:
+        """Channel count to bin `x` under, managing the per-channel buffer.
+
+        Returns `None` when per-channel tracking is off: 1D tensors have no
+        channel axis, and a dim-1 size change mid-stream (variable token
+        counts) makes per-channel rows meaningless, so either turns the
+        tracking off for good and falls back to the universal histogram.
+        """
+        if self._channels_off:
+            return None
+        if x.ndim < 2:
+            self.collapse_channels()
+            return None
+        channels = x.shape[1]
+        if self._channel_hist is None:
+            self._channel_hist = torch.zeros(
+                channels, N_BINS, dtype=torch.int64, device=x.device
+            )
+        elif self._channel_hist.shape[0] != channels:
+            self.collapse_channels()
+            return None
+        return channels
+
+    def collapse_channels(self) -> None:
+        """Drop the per-channel histogram for good, keeping the universal one.
+
+        Called by `WatchAccumulator` when a newer epoch starts for the same
+        `(layer, phase)` — only the latest epoch renders per-channel — and
+        internally when per-channel binning isn't applicable.
+        """
+        self._channel_hist = None
+        self._channels_off = True
 
     def snapshot(self) -> TensorStatsSnapshot:
         if self._device is None:
@@ -268,6 +342,11 @@ class TensorAccumulator:
         scalars = torch.stack([self._sum, self._sum_sq, self._min, self._max]).cpu()
         n = int(self._n.cpu().item())
         hist_cpu = self._hist.cpu()
+        channel_hists: tuple[tuple[int, ...], ...] | None = None
+        if self._channel_hist is not None:
+            channel_hists = tuple(
+                tuple(row) for row in self._channel_hist.cpu().tolist()
+            )
         return TensorStatsSnapshot(
             n=n,
             sum=float(scalars[0].item()),
@@ -275,6 +354,7 @@ class TensorAccumulator:
             min=float(scalars[2].item()),
             max=float(scalars[3].item()),
             hist=tuple(int(c) for c in hist_cpu.tolist()),
+            channel_hists=channel_hists,
         )
 
 
@@ -313,6 +393,14 @@ class WatchAccumulator:
             if stats is None:
                 stats = _LayerStats()
                 self._stats[key] = stats
+                # A new epoch of this phase begins: the *same* phase's older
+                # epochs release their per-channel histogram buffers (only
+                # the latest epoch per phase renders per-channel). Other
+                # phases keep theirs until their own next epoch starts.
+                for (l, ph, ep), other in self._stats.items():
+                    if l == layer and ph == phase and ep < epoch:
+                        other.activations.collapse_channels()
+                        other.gradients.collapse_channels()
             acc = stats.activations if kind == "activation" else stats.gradients
         acc.update(x)
 
