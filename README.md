@@ -199,19 +199,28 @@ so), tracing how far the edit propagates (the receptive field).
 ### Watch
 
 Layers watched on the main page (diagram clicks or the eye menu) also feed
-the deep-dive `/watch` page, which renders one card per watched layer. The MIN/MAX view (the
-default) shows the input patches that drove the layer's most extreme
-activations: per channel, the top input crops around the largest/smallest
-spatial activation and whole inputs ranked by spatial mean, with an optional
-activation-heatmap overlay.
+the deep-dive `/watch` page, which renders one card per watched layer.
+
+The HISTOGRAM view (the default) shows activation and activation-gradient
+distributions over the most recent epoch as signed-log histograms with a
+stats table (`n`, `mean`, `std`, `median`, `min`/`max`); a phase dropdown
+switches between train/val, and Log x / Log y checkboxes handle
+distributions spanning many decades. Each histogram has a "Per channel"
+switch that narrows it to a single channel (stepped with an index spinner);
+while per-channel, hovering a bar shows a few random input samples whose
+values fell in that bar — drawn from the last captured batch only, since
+the running histogram's source values are discarded every batch (the strip
+names the batch it sampled from).
+
+![Watch page, histogram view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
+
+The MIN/MAX view shows the input patches that drove the layer's most
+extreme activations: per channel, the top input crops around the
+largest/smallest spatial activation and whole inputs ranked by spatial
+mean, with an optional activation-heatmap overlay. Only the "Max pixel"
+grid starts enabled; the other three have their own checkboxes.
 
 ![Watch page, min/max view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-minmax.png)
-
-The HISTOGRAM view shows activation and activation-gradient distributions
-over the most recent epoch as signed-log histograms with a stats table (`n`,
-`mean`, `std`, `median`, `min`/`max`); a phase dropdown switches between
-train/val, and Log x / Log y checkboxes handle distributions spanning many
-decades.
 
 ![Watch page, histogram view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
 

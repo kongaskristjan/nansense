@@ -18,6 +18,7 @@ from nansense.ui.app import (
     _PROBE_NO_GRADIENTS_HTML,
     _RenderCache,
     _axis_ranges,
+    _bin_samples_html,
     _compute_frame,
     _display_batch_size,
     _default_roles,
@@ -57,6 +58,7 @@ from nansense.watch import (
     ZERO_BIN,
     LayerStatsSnapshot,
     TensorStatsSnapshot,
+    bin_index,
     bin_midpoint,
 )
 
@@ -1246,3 +1248,53 @@ def test_linear_hover_keeps_value_from_bar_position() -> None:
     )
     assert "value %{x:.2e}" in fig.data[0].hovertemplate
     assert fig.data[0].customdata[ZERO_BIN] == 9
+
+
+def _hover_snapshot() -> BatchSnapshot:
+    act = torch.zeros(2, 2, 4, 4)
+    act[0, 1, 2, 3] = 5.0
+    return BatchSnapshot(
+        position=BatchPosition(
+            phase="train",
+            epoch=3,
+            batch_idx=7,
+            is_last_in_phase=False,
+            is_last_in_epoch=False,
+            is_last_overall=False,
+        ),
+        activations={"x": torch.rand(2, 3, 16, 16), "conv": act},
+        activation_gradients={},
+        weights={},
+        weight_gradients={},
+    )
+
+
+def test_bin_samples_html_without_snapshot_notes_missing_batch() -> None:
+    out = _bin_samples_html(None, "conv", "activation", 0, ZERO_BIN, "x", None, None)
+    assert "no batch captured yet" in out
+
+
+def test_bin_samples_html_names_the_source_batch() -> None:
+    """The strip must make the last-batch-only population explicit."""
+    out = _bin_samples_html(
+        _hover_snapshot(), "conv", "activation", 1, bin_index(5.0), "x", None, None
+    )
+    assert "last captured batch only" in out
+    assert "train ep 3, batch 7" in out
+    assert "<img" in out  # the matching element rendered as an input crop
+    assert "sample 0" in out
+
+
+def test_bin_samples_html_empty_bin_notes_no_values() -> None:
+    out = _bin_samples_html(
+        _hover_snapshot(), "conv", "activation", 0, bin_index(5.0), "x", None, None
+    )
+    assert "no values in this bar" in out
+    assert "last captured batch" in out
+
+
+def test_bin_samples_html_missing_gradients_notes_kind() -> None:
+    out = _bin_samples_html(
+        _hover_snapshot(), "conv", "gradient", 0, ZERO_BIN, "x", None, None
+    )
+    assert "no captured gradients" in out

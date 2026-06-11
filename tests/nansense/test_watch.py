@@ -265,3 +265,65 @@ def test_watch_accumulator_evicts_older_epoch_patch_buffers() -> None:
     assert snap.stats[("a", "train", 0)].patches is None
     assert snap.stats[("a", "train", 1)].patches is not None
     assert snap.stats[("a", "val", 0)].patches is not None
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(2, 3), (2, 3, 4), (2, 3, 2, 2)],
+    ids=["2d", "3d", "4d"],
+)
+def test_accumulator_channel_hists_match_per_channel_counts(
+    shape: tuple[int, ...],
+) -> None:
+    """Each dim-1 slice's values land in its own row, rows sum to `hist`."""
+    torch.manual_seed(0)
+    x = torch.randn(shape)
+    acc = TensorAccumulator()
+    acc.update(x)
+    snap = acc.snapshot()
+    assert snap.channel_hists is not None
+    assert len(snap.channel_hists) == shape[1]
+    for c in range(shape[1]):
+        expected = [0] * N_BINS
+        for v in x[:, c].reshape(-1).tolist():
+            expected[bin_index(v)] += 1
+        assert list(snap.channel_hists[c]) == expected
+    summed = [sum(col) for col in zip(*snap.channel_hists)]
+    assert tuple(summed) == snap.hist
+
+
+def test_accumulator_1d_input_has_no_channel_hists() -> None:
+    acc = TensorAccumulator()
+    acc.update(torch.tensor([1.0, 2.0]))
+    assert acc.snapshot().channel_hists is None
+
+
+def test_accumulator_channel_count_change_collapses_to_universal() -> None:
+    """A dim-1 size change (variable tokens) turns per-channel off for good."""
+    acc = TensorAccumulator()
+    acc.update(torch.ones(2, 3))
+    assert acc.snapshot().channel_hists is not None
+    acc.update(torch.ones(2, 4))
+    snap = acc.snapshot()
+    assert snap.channel_hists is None
+    assert sum(snap.hist) == 14  # the universal histogram kept counting
+    # Re-appearing with the original channel count does not re-enable it.
+    acc.update(torch.ones(2, 3))
+    assert acc.snapshot().channel_hists is None
+
+
+def test_watch_accumulator_new_epoch_collapses_same_phase_channels_only() -> None:
+    """A phase's new epoch releases only that phase's older channel buffers."""
+    acc = WatchAccumulator()
+    x = torch.ones(2, 3)
+    for phase, epoch in [("train", 0), ("val", 0), ("train", 1)]:
+        acc.update(layer="a", phase=phase, epoch=epoch, kind="activation", x=x)
+        acc.update(layer="a", phase=phase, epoch=epoch, kind="gradient", x=x)
+    snap = acc.snapshot(include_patches=False)
+    old_train = snap.stats[("a", "train", 0)]
+    assert old_train.activations.channel_hists is None
+    assert old_train.gradients.channel_hists is None
+    # The universal histogram of the collapsed bucket is untouched.
+    assert sum(old_train.activations.hist) == 6
+    assert snap.stats[("a", "val", 0)].activations.channel_hists is not None
+    assert snap.stats[("a", "train", 1)].activations.channel_hists is not None

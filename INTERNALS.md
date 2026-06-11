@@ -265,11 +265,28 @@ Inside `TensorAccumulator.update(x)`:
    hundred unit-magnitude samples; fp32 keeps the running sum precise
    for typical epoch sizes.
 2. Reductions stay on the input's device: `sum()`, `square().sum()`,
-   `min()`, `max()`, plus a `torch.bincount(_bin_indices(x))` over the
-   211-bin signed-log histogram.
+   `min()`, `max()`, plus one fused `torch.bincount` over
+   `channel * N_BINS + _bin_indices(x)` that yields a `(C, 211)`
+   per-channel signed-log histogram in one pass — the universal 211-bin
+   histogram is its channel sum, so per-channel tracking adds only a
+   cheap reduction and the channel-index expansion to what the universal
+   histogram already paid. Channels are dim 1 of the batch-first tensor
+   (features act as channels for 2D activations, matching the patch
+   accumulator); 1D tensors and accumulators whose dim-1 size changes
+   mid-stream (variable token counts) fall back to a plain universal
+   bincount for good (`collapse_channels`).
 3. All running state — `_n`, `_sum`, `_sum_sq`, `_min`, `_max`,
-   `_hist` — lives on that same device. No GPU→CPU sync happens
-   during training.
+   `_hist`, `_channel_hist` — lives on that same device. No GPU→CPU sync
+   happens during training.
+
+The universal histogram is ~2 KB and is kept for every epoch, but a
+per-channel buffer is `C × 211` int64 (≈ 0.9 MB at 512 channels), so only
+the most recent epoch per `(layer, phase)` keeps one: when
+`WatchAccumulator.update` creates the bucket for a new epoch of a phase,
+the *same* phase's older epochs collapse to their universal histogram —
+the phase-scoped release rule the patch buffers already use (a new train
+epoch releases only older train buffers; val keeps its own until the next
+val epoch starts).
 
 Histogram bin assignment (`_bin_indices`) is a vectorised log10:
 
@@ -795,9 +812,10 @@ It does not touch tensors directly until they need to be rendered.
   keeps the wiring simple.
 - The `/watch` page is its own NiceGUI page handler keyed to the same
   `Session`. A header dropdown switches every layer card between the
-  HISTOGRAM view and the MIN/MAX extreme-patch view; each view's
-  checkbox group (**Log x** / **Log y** vs. the four grid toggles +
-  **Heatmap**) is only visible while its view is selected. The page
+  HISTOGRAM view (the default) and the MIN/MAX extreme-patch view; each
+  view's checkbox group (**Log x** / **Log y** vs. the four grid toggles +
+  **Heatmap**, of which only **Max pixel** starts checked) is only visible
+  while its view is selected. The page
   builds one `_WatchLayerPanel` per watched module; each holds both
   views and refreshes only the visible one. The histogram view holds
   two `_HistPlot`s (activations and gradients) and a stats table
@@ -812,7 +830,29 @@ It does not touch tensors directly until they need to be rendered.
   (`plot.update_figure(_figure_payload(new_fig))`) when the *structure* changes —
   a phase appears/disappears, or a **Log x** / **Log y** checkbox flips
   an axis scale — which `_HistPlot` detects by comparing the current
-  `(phases, axis)` signature against the last render. Each figure is a
+  `(phases, axis)` signature against the last render. Each `_HistPlot`
+  carries a **Per channel** switch with an index spinner: the plot then
+  swaps each phase's `hist` for the selected row of
+  `TensorStatsSnapshot.channel_hists` (a `dataclasses.replace` view —
+  channel and mode changes reuse the restyle path, and the spinner's max
+  follows the channel count), falling back to the universal histogram
+  where rows are absent (1D layers, collapsed older epochs). While
+  per-channel, hovering a bar samples that `(channel, bin)` cell from the
+  **last captured batch** — the running histogram's source values are
+  discarded every batch, so `session.snapshot` is the only population
+  available, and the strip's caption names it (`phase ep N, batch M`)
+  to make the narrower population explicit. The wiring: Plotly events
+  fire on the graph div's own emitter (not as DOM events), so
+  `_hover_attach_js` attaches a `gd.on('plotly_hover')` handler — with
+  retries until Plotly has drawn, idempotent per div, throttled to one
+  event per 200 ms — that `emitEvent`s the bar's bin index back to a
+  per-element `ui.on` handler; the handler runs
+  `_bin_samples_html` in a worker thread: `sample_bin`
+  (`nansense.ui.bin_samples`) re-uses `_bin_indices` for exact bin
+  membership, picks up to 4 uniformly random matching elements, and crops
+  the snapshot input around each element's ratio-mapped location (the
+  same receptive-field approximation as the patch grids; whole images for
+  2D activations, value-only chips for non-image inputs). Each figure is a
   `make_subplots` column with one stacked row per phase (no overlay), so
   one phase never obscures another: the rows share the x-axis, each row
   is `_PLOT_HEIGHT` tall, and the subplot titles — phase + epoch, tinted
