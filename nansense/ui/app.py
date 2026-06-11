@@ -460,22 +460,20 @@ def _top_bar_row() -> ui.row:
 def _add_step_controls(
     session: Session,
     step_until_custom: ui.dialog,
-    record_view: Callable[[], RecordedView | None] | None = None,
 ) -> ui.label:
     """Add the stepping buttons + a live-position label to the open row.
 
     Shared by every page's top bar so they all drive the session
-    identically. `record_view` is the page's factory for its own
-    `RecordedView` (None when the page's current state can't be recorded
-    yet); the RECORD dialog uses it for "Add this view to recording".
-    The returned label is refreshed from `session.live_position`
-    by each page's timer (see `format_position`).
+    identically. The settings (gear) button lives in the top bar's
+    right-side cluster instead — each page adds it via
+    `_add_settings_button`. The returned label is refreshed from
+    `session.live_position` by each page's timer (see `format_position`).
     """
     ui.button("Stop", on_click=session.stop, color="red").props(
         "dense size=md"
     ).tooltip("Pause at the next batch boundary")
     with ui.dropdown_button(
-        "Step",
+        "Step Batch",
         on_click=session.step_batch,
         split=True,
         auto_close=True,
@@ -497,7 +495,6 @@ def _add_step_controls(
             step_until_custom.open,
         )
     _add_time_travel_button(session)
-    _add_settings_button(session, record_view)
     return ui.label("(waiting for first snapshot)").classes(
         "ml-3 font-mono text-sm"
     )
@@ -600,9 +597,7 @@ def _build_page(
             architecture_toggle = ui.button(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
-            position_label = _add_step_controls(
-                session, step_until_custom, record_view
-            )
+            position_label = _add_step_controls(session, step_until_custom)
             watch_chip = ui.button(
                 str(len(session.watched_layers)),
                 icon="visibility",
@@ -638,6 +633,7 @@ def _build_page(
                         ).classes("text-sm")
                         ui.separator()
                         watch_list_container = ui.element("div").classes("py-1")
+            _add_settings_button(session, record_view)
             input_toggle = ui.button(
                 icon="image", color="slate-500"
             ).props("dense size=md").tooltip(
@@ -1540,14 +1536,13 @@ def _build_watch_page(
                 on_click=lambda: ui.navigate.to("/"),
                 color="slate-500",
             ).props("dense size=md").tooltip("Back to the main page")
-            position_label = _add_step_controls(
-                session, step_until_custom, record_view
-            )
+            position_label = _add_step_controls(session, step_until_custom)
+            _add_settings_button(session, record_view).classes("ml-auto")
             ui.button(
                 icon="refresh",
                 on_click=lambda: refresh(),
                 color="slate-500",
-            ).classes("ml-auto").props("dense size=md flat").tooltip("Refresh now")
+            ).props("dense size=md flat").tooltip("Refresh now")
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
             with ui.column().classes(
@@ -2530,14 +2525,13 @@ def _build_weights_page(session: Session, layer: str) -> None:
             ui.label(title).classes(
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
-            position_label = _add_step_controls(
-                session, step_until_custom, record_view
-            )
+            position_label = _add_step_controls(session, step_until_custom)
+            _add_settings_button(session, record_view).classes("ml-auto")
             ui.button(
                 icon="refresh",
                 on_click=lambda: do_refresh(),
                 color="slate-500",
-            ).classes("ml-auto").props("dense size=md flat").tooltip(
+            ).props("dense size=md flat").tooltip(
                 "Show the model's current weights (works while training)"
             )
 
@@ -3154,9 +3148,8 @@ def _build_experiment_page(
                 on_click=lambda: ui.navigate.to("/"),
                 color="slate-500",
             ).props("dense size=md").tooltip("Back to the main page")
-            position_label = _add_step_controls(
-                session, step_until_custom, record_view
-            )
+            position_label = _add_step_controls(session, step_until_custom)
+            _add_settings_button(session, record_view).classes("ml-auto")
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
             with ui.column().classes(
@@ -3473,8 +3466,11 @@ _ANY_PHASE: str = "(any phase)"
 def _add_settings_button(
     session: Session,
     record_view: Callable[[], RecordedView | None] | None,
-) -> None:
-    """The gear button (every page's top bar) and its settings dialog.
+) -> ui.button:
+    """The gear button (every top bar's right-side cluster) + settings dialog.
+
+    Returned so the page can right-align it (`ml-auto`) when it is the
+    first element of the cluster.
 
     The dialog hosts two sections. "Update frequency" configures
     `Session.set_update_frequency`: visualizations refresh every nth epoch
@@ -3699,8 +3695,8 @@ def _add_settings_button(
         rebuild()
         dialog.open()
 
-    button = ui.button(icon="settings", on_click=open_dialog, color="slate-600").props(
-        "dense size=md flat round"
+    button = ui.button(icon="settings", on_click=open_dialog, color="slate-500").props(
+        "dense size=md"
     )
     button.tooltip("Settings — update frequency and MP4 recording")
     with button:
@@ -3713,6 +3709,7 @@ def _add_settings_button(
 
     refresh_badge()
     ui.timer(0.5, refresh_badge)
+    return button
 
 
 def _watch_views_recording(session: Session) -> bool:

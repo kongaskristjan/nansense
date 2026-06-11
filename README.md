@@ -176,11 +176,11 @@ jump they see the replayed epochs again.
 ### Main view
 
 The landing page. The top bar drives the training loop: stop, a split Step
-button (clicking it steps one batch; its dropdown offers step epoch, step
-until end, and step custom — pick a phase/epoch/batch to pause at), time
-travel (jump back to any checkpointed epoch), and a gear button opening the
-settings dialog (update frequency and MP4 recording — see below). The left
-pane shows the architecture as a diagram;
+Batch button (clicking it steps one batch; its dropdown offers step epoch,
+step until end, and step custom — pick a phase/epoch/batch to pause at),
+and time travel (jump back to any checkpointed epoch); on the bar's right
+side, a gear button opens the settings dialog (update frequency and MP4
+recording — see below). The left pane shows the architecture as a diagram;
 clicking a node toggles that layer's card in the center pane — visible is
 synonymous with watched, so each shown card carries activation and gradient
 strips for the selected sample plus an "Unwatch" button that hides it
