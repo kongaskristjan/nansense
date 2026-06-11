@@ -59,6 +59,7 @@ from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 
 from nansense.patches import PATCH_TYPES, PatchType
+from nansense.schedule import BatchPosition, format_position
 from nansense.watch import N_BINS, LayerStatsSnapshot, TensorStatsSnapshot
 
 if TYPE_CHECKING:
@@ -194,17 +195,22 @@ class ViewRecorder:
         self._streams: dict[str, _VideoStream] = {}
 
     def capture(self, session: Session) -> None:
-        frames = _render_view_frames(self.view, session)  # unlocked: slow
+        # Rendering and position-stamping are unlocked: slow image work.
+        frames = _render_view_frames(self.view, session)
+        position = _capture_position(session)
+        stamped: dict[str, np.ndarray] = {}
+        for suffix, frame in frames.items():
+            if frame is None:
+                continue
+            if position is not None:
+                frame = _stamp_position(frame, format_position(position))
+            stamped[suffix] = frame
         with self._lock:
             if self._closed:
                 return
-            appended = False
-            for suffix, frame in frames.items():
-                if frame is None:
-                    continue
+            for suffix, frame in stamped.items():
                 self._stream_locked(suffix).append(frame)
-                appended = True
-            if appended:
+            if stamped:
                 self.frames += 1
 
     def _stream_locked(self, suffix: str) -> _VideoStream:
@@ -230,6 +236,36 @@ class ViewRecorder:
             self._closed = True
             for stream in self._streams.values():
                 stream.delete()
+
+
+_POSITION_BANNER_HEIGHT: int = 18
+
+
+def _capture_position(session: Session) -> BatchPosition | None:
+    """The training position the captured frame corresponds to.
+
+    Frames are captured at frequency updates on the training thread, where
+    `live_position` is the batch being visualized; the snapshot covers the
+    brief window before the first batch publishes a live position.
+    """
+    if session.live_position is not None:
+        return session.live_position
+    snapshot = session.snapshot
+    return snapshot.position if snapshot is not None else None
+
+
+def _stamp_position(frame: np.ndarray, text: str) -> np.ndarray:
+    """Prepend a white banner with the training position to a frame."""
+    image = Image.fromarray(frame)
+    canvas = Image.new(
+        "RGB", (image.width, image.height + _POSITION_BANNER_HEIGHT), (255, 255, 255)
+    )
+    draw = ImageDraw.Draw(canvas)
+    draw.text(
+        (_FRAME_PAD, 3), text, fill=_LABEL_COLOR, font=ImageFont.load_default()
+    )
+    canvas.paste(image, (0, _POSITION_BANNER_HEIGHT))
+    return np.asarray(canvas)
 
 
 def _sanitize(key: str) -> str:

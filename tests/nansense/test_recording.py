@@ -16,8 +16,10 @@ import nansense.recording
 from nansense.recording import (
     RecordedView,
     RecordingManager,
+    _POSITION_BANNER_HEIGHT,
     _fit_frame,
     _sanitize,
+    _stamp_position,
 )
 from nansense.session import Session
 
@@ -94,6 +96,16 @@ def test_fit_frame_pads_and_crops() -> None:
 )
 def test_sanitize_keys(key: str, expected: str) -> None:
     assert _sanitize(key) == expected
+
+
+def test_stamp_position_adds_banner() -> None:
+    frame = np.zeros((20, 120, 3), dtype=np.uint8)
+    stamped = _stamp_position(frame, "epoch 0 | train batch 0")
+    assert stamped.shape == (20 + _POSITION_BANNER_HEIGHT, 120, 3)
+    banner = stamped[:_POSITION_BANNER_HEIGHT]
+    assert (banner == 255).any()  # white background
+    assert (banner != 255).any()  # dark text pixels
+    assert (stamped[_POSITION_BANNER_HEIGHT:] == 0).all()  # frame below, intact
 
 
 def test_manager_start_end_delete(tmp_path: Path) -> None:

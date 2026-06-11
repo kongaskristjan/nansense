@@ -535,7 +535,7 @@ registered request so it runs exactly once per update.
 
 Each recorded view writes one MP4 (10 fps) per visualization update under
 `nansense_recordings/<run timestamp>/`. `Session.recording` lazily creates
-the per-session `RecordingManager`; the UI's RECORD dialog starts a
+the per-session `RecordingManager`; the UI's settings dialog starts a
 `ViewRecorder` from a `RecordedView` — the view's identity key (`"main"`,
 `"weights:<layer>"`, `"watch_histogram"`, `"watch_minmax"`,
 `"experiment:<layer>"`; one recording per key), its renderer page, and the
