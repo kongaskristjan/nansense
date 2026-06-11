@@ -2935,7 +2935,36 @@ def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
             ui.button("Cancel", on_click=dialog.close)
             ui.button("Step", on_click=submit)
 
+        def apply_current_position() -> None:
+            position = _step_until_default_position(
+                session.live_position, session.snapshot
+            )
+            if position is None:
+                return
+            epoch_input.value = position.epoch
+            phase_select.value = position.phase
+            batch_input.value = position.batch_idx
+            error_label.text = ""
+
+        dialog.on("before-show", apply_current_position)
+
     return dialog
+
+
+def _step_until_default_position(
+    live_position: BatchPosition | None, snapshot: BatchSnapshot | None
+) -> BatchPosition | None:
+    """Position to prefill the step-until dialog with on open.
+
+    Prefilling with where training currently is means the user only tweaks
+    the field they care about. `live_position` tracks every batch even in
+    modes where `snapshot.position` is frozen between boundaries, so it wins;
+    the snapshot covers the brief window before the first batch publishes a
+    live position.
+    """
+    if live_position is not None:
+        return live_position
+    return snapshot.position if snapshot is not None else None
 
 
 def _validate_step_until_target(
