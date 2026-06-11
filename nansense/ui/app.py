@@ -66,7 +66,7 @@ from nansense.experiments import (
 )
 from nansense.probe import ProbeResult
 from nansense.restore import TimeTravelError
-from nansense.schedule import BatchPosition, Schedule
+from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.bin_samples import sample_bin
 from nansense.ui.graph import build_mermaid, slug
@@ -469,7 +469,7 @@ def _add_step_controls(
     `RecordedView` (None when the page's current state can't be recorded
     yet); the RECORD dialog uses it for "Add this view to recording".
     The returned label is refreshed from `session.live_position`
-    by each page's timer (see `_format_live_position`).
+    by each page's timer (see `format_position`).
     """
     ui.button("Stop", on_click=session.stop, color="red").props(
         "dense size=md"
@@ -510,10 +510,6 @@ def _step_menu_item(
     with ui.item(on_click=on_click), ui.item_section():
         ui.item_label(title)
         ui.item_label(caption).props("caption")
-
-
-def _format_live_position(live: BatchPosition) -> str:
-    return f"epoch {live.epoch} | {live.phase} batch {live.batch_idx}"
 
 
 def _build_page(
@@ -815,7 +811,7 @@ def _build_page(
         # unchanged. The strips still re-render only when a new snapshot lands.
         live = session.live_position
         if live is not None:
-            position_label.text = _format_live_position(live)
+            position_label.text = format_position(live)
         input_panel.refresh_status()
         # While the main view records, its render parameters (sample, pin,
         # perturbations, probe mode) are frozen: the recording renders with
@@ -1731,7 +1727,7 @@ def _build_watch_page(
     def tick() -> None:
         live = session.live_position
         if live is not None:
-            position_label.text = _format_live_position(live)
+            position_label.text = format_position(live)
         sync_frozen()
 
     ui.timer(0.2, tick)
@@ -2579,7 +2575,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     def tick() -> None:
         live = session.live_position
         if live is not None:
-            position_label.text = _format_live_position(live)
+            position_label.text = format_position(live)
         frozen = session.recording.is_recording(record_key)
         for panel in panels:
             panel.set_frozen(frozen)
@@ -3302,7 +3298,7 @@ def _build_experiment_page(
     def tick() -> None:
         live = session.live_position
         if live is not None:
-            position_label.text = _format_live_position(live)
+            position_label.text = format_position(live)
         # Keep this page's auto experiment alive while the page is open.
         session.touch_auto_experiment(page_key)
         # While this experiment records, its request must stay as-is: Run

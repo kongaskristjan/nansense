@@ -26,7 +26,6 @@ from nansense.ui.app import (
     _figure_payload,
     _fill_fraction,
     _filter_phase,
-    _format_live_position,
     _input_img_src,
     _linear_x_range,
     _linear_y_range,
@@ -222,18 +221,6 @@ def test_step_until_default_position(
     else:
         assert result is not None
         assert (result.phase, result.epoch, result.batch_idx) == expected
-
-
-def test_format_live_position() -> None:
-    pos = BatchPosition(
-        phase="val",
-        epoch=3,
-        batch_idx=7,
-        is_last_in_phase=False,
-        is_last_in_epoch=False,
-        is_last_overall=False,
-    )
-    assert _format_live_position(pos) == "epoch 3 | val batch 7"
 
 
 @pytest.mark.parametrize(

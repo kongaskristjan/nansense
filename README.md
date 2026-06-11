@@ -277,7 +277,8 @@ page's top bar; a red badge on the gear carries the count of active
 recordings) records visualizations to MP4 — one file per view, one frame
 per visualization update (the frequency above, not per user step), written
 to `nansense_recordings/<timestamp>/` in the training process's working
-directory at 10 fps.
+directory at 10 fps. Each frame carries a banner with the training
+position it was captured at (e.g. `epoch 0 | train batch 0`).
 
 The section offers a red "Record this view" button for the page you're on,
 the list of currently recorded views — each can be ended (finalize the

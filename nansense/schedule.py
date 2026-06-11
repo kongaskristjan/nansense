@@ -22,6 +22,12 @@ class BatchPosition:
     is_last_overall: bool
 
 
+def format_position(position: BatchPosition) -> str:
+    """The "epoch 0 | train batch 0" rendering shared by the top bar's
+    live-position label and recorded frames' position banner."""
+    return f"epoch {position.epoch} | {position.phase} batch {position.batch_idx}"
+
+
 class Schedule:
     def __init__(self, epochs: int, phases: dict[str, int]) -> None:
         self._validate(epochs, phases)
