@@ -456,7 +456,7 @@ def _top_bar_row() -> ui.row:
 def _add_step_controls(session: Session, step_until_custom: ui.dialog) -> ui.label:
     """Add the five stepping buttons + a live-position label to the open row.
 
-    Shared by the main page and the weights page so both drive the session
+    Shared by every page's top bar so they all drive the session
     identically. The returned label is refreshed from `session.live_position`
     by each page's timer (see `_format_live_position`).
     """
@@ -1353,9 +1353,10 @@ def _build_watch_page(
 ) -> None:
     """The deep-dive page for watched layers.
 
-    A header dropdown switches every layer card between two views, and a
-    second dropdown picks which phase (train / val / …) the cards show —
-    one phase at a time, in both views:
+    The top bar carries the shared stepping controls, like the main page.
+    A left-sidebar dropdown switches every layer card between two views,
+    and a second dropdown picks which phase (train / val / …) the cards
+    show — one phase at a time, in both views:
 
     - MIN/MAX (the default) — the extreme-activation patch grids
       (channels across, per-channel top samples down), one per patch
@@ -1381,7 +1382,7 @@ def _build_watch_page(
     body_container: ui.column
     # Whether the value (x) and probability (y) axes use a log-based scale.
     # Both default off — linear axes showing probability density (see
-    # `_use_density`); the header checkboxes flip them and re-render every
+    # `_use_density`); the sidebar checkboxes flip them and re-render every
     # plot immediately.
     axis_log = {"x": False, "y": False}
     # MIN/MAX view state (the default view): which of the four grids are
@@ -1416,6 +1417,8 @@ def _build_watch_page(
         heat_on["on"] = value
         await refresh()
 
+    step_until_custom = _build_step_until_custom_dialog(session)
+
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
             ui.button(
@@ -1423,73 +1426,78 @@ def _build_watch_page(
                 on_click=lambda: ui.navigate.to("/"),
                 color="slate-500",
             ).props("dense size=md").tooltip("Back to the main page")
-            ui.label("Watching").classes("font-mono text-base font-bold ml-2")
-            count_label_holder["count"] = ui.label("").classes(
-                "text-sm text-slate-500 ml-2"
-            )
-            ui.select(
-                [_VIEW_MINMAX, _VIEW_HISTOGRAM],
-                value=_VIEW_MINMAX,
-                on_change=lambda e: set_mode(e.value),
-            ).props("dense outlined options-dense").classes(
-                "ml-4 text-sm"
-            ).tooltip("What each layer card shows")
-            ui.select(
-                phase_names,
-                value=selected_phase["name"],
-                on_change=lambda e: set_phase(e.value),
-            ).props("dense outlined options-dense").classes(
-                "ml-2 text-sm"
-            ).tooltip("Which phase the cards show")
-            with ui.row().classes(
-                "items-center gap-x-3 no-wrap"
-            ) as hist_controls:
-                ui.checkbox(
-                    "Log x",
-                    value=axis_log["x"],
-                    on_change=lambda e: set_axis_log("x", bool(e.value)),
-                ).props("dense").classes("text-sm ml-4").tooltip(
-                    "Log-based (signed-log) scale on the value axis"
-                )
-                ui.checkbox(
-                    "Log y",
-                    value=axis_log["y"],
-                    on_change=lambda e: set_axis_log("y", bool(e.value)),
-                ).props("dense").classes("text-sm").tooltip(
-                    "Log scale on the probability axis"
-                )
-            with ui.row().classes(
-                "items-center gap-x-3 no-wrap"
-            ) as minmax_controls:
-                for i, ptype in enumerate(PATCH_TYPES):
-                    ui.checkbox(
-                        _PATCH_TYPE_LABELS[ptype],
-                        value=grid_on[ptype],
-                        on_change=lambda e, p=ptype: set_grid(p, bool(e.value)),
-                    ).props("dense").classes(
-                        "text-sm ml-4" if i == 0 else "text-sm"
-                    ).tooltip(
-                        f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} grid"
-                    )
-                ui.checkbox(
-                    "Enable heatmap",
-                    value=heat_on["on"],
-                    on_change=lambda e: set_heat(bool(e.value)),
-                ).props("dense").classes("text-sm").tooltip(
-                    "Blend each channel's activation strength over the "
-                    "patches (red positive, blue negative), with a scale "
-                    "next to each grid"
-                )
-            hist_controls.set_visibility(False)
+            position_label = _add_step_controls(session, step_until_custom)
             ui.button(
                 icon="refresh",
                 on_click=lambda: refresh(),
                 color="slate-500",
             ).classes("ml-auto").props("dense size=md flat").tooltip("Refresh now")
 
-        body_container = ui.column().classes(
-            "w-full grow min-h-0 overflow-auto p-4 gap-3 bg-slate-200"
-        )
+        with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
+            with ui.column().classes(
+                "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
+                "border-r-2 border-slate-300 bg-slate-50"
+            ):
+                with ui.row().classes("items-baseline gap-2 no-wrap"):
+                    ui.label("Watching").classes("font-mono text-base font-bold")
+                    count_label_holder["count"] = ui.label("").classes(
+                        "text-sm text-slate-500"
+                    )
+                ui.separator()
+                ui.select(
+                    [_VIEW_MINMAX, _VIEW_HISTOGRAM],
+                    label="View",
+                    value=_VIEW_MINMAX,
+                    on_change=lambda e: set_mode(e.value),
+                ).props("dense outlined options-dense").classes(
+                    "w-full text-sm"
+                ).tooltip("What each layer card shows")
+                ui.select(
+                    phase_names,
+                    label="Phase",
+                    value=selected_phase["name"],
+                    on_change=lambda e: set_phase(e.value),
+                ).props("dense outlined options-dense").classes(
+                    "w-full text-sm"
+                ).tooltip("Which phase the cards show")
+                with ui.column().classes("w-full gap-1") as hist_controls:
+                    ui.checkbox(
+                        "Log x",
+                        value=axis_log["x"],
+                        on_change=lambda e: set_axis_log("x", bool(e.value)),
+                    ).props("dense").classes("text-sm").tooltip(
+                        "Log-based (signed-log) scale on the value axis"
+                    )
+                    ui.checkbox(
+                        "Log y",
+                        value=axis_log["y"],
+                        on_change=lambda e: set_axis_log("y", bool(e.value)),
+                    ).props("dense").classes("text-sm").tooltip(
+                        "Log scale on the probability axis"
+                    )
+                with ui.column().classes("w-full gap-1") as minmax_controls:
+                    for ptype in PATCH_TYPES:
+                        ui.checkbox(
+                            _PATCH_TYPE_LABELS[ptype],
+                            value=grid_on[ptype],
+                            on_change=lambda e, p=ptype: set_grid(p, bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} grid"
+                        )
+                    ui.checkbox(
+                        "Enable heatmap",
+                        value=heat_on["on"],
+                        on_change=lambda e: set_heat(bool(e.value)),
+                    ).props("dense").classes("text-sm").tooltip(
+                        "Blend each channel's activation strength over the "
+                        "patches (red positive, blue negative), with a scale "
+                        "next to each grid"
+                    )
+                hist_controls.set_visibility(False)
+
+            body_container = ui.column().classes(
+                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
+            )
 
     def rebuild_cards() -> None:
         layer_panels.clear()
@@ -1572,6 +1580,12 @@ def _build_watch_page(
         finally:
             refresh_state["running"] = False
 
+    def tick() -> None:
+        live = session.live_position
+        if live is not None:
+            position_label.text = _format_live_position(live)
+
+    ui.timer(0.2, tick)
     ui.timer(0.0, refresh, once=True)
     ui.timer(2.0, refresh)
 
@@ -2530,7 +2544,8 @@ def _build_experiment_page(
 
     The top bar carries the shared stepping controls — experiments execute
     on the paused training thread, so the user can pause right from this
-    page. The left pane holds the experiment-kind dropdown (deep dream by
+    page. The left pane is headed by the page title (with the layer name)
+    and holds the experiment-kind dropdown (deep dream by
     default) with Run / Cancel right below it, followed by the selected
     kind's parameter form (rebuilt on every dropdown change); the right
     pane streams status and results for *this page's own request*
@@ -2596,9 +2611,6 @@ def _build_experiment_page(
                 on_click=lambda: ui.navigate.to("/"),
                 color="slate-500",
             ).props("dense size=md").tooltip("Back to the main page")
-            ui.label(title).classes(
-                "font-mono text-base font-bold ml-2 truncate max-w-64"
-            )
             position_label = _add_step_controls(session, step_until_custom)
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
@@ -2606,6 +2618,13 @@ def _build_experiment_page(
                 "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
                 "border-r-2 border-slate-300 bg-slate-50"
             ):
+                with ui.row().classes("items-baseline gap-2 no-wrap"):
+                    ui.label("Experiment").classes("font-mono text-base font-bold")
+                    if layer:
+                        ui.label(layer).classes(
+                            "font-mono text-sm text-slate-500 truncate"
+                        )
+                ui.separator()
                 # The experiment kind and its Run / Cancel sit above the
                 # parameter form; only the form below is rebuilt when the
                 # kind changes.

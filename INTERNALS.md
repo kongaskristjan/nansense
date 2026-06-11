@@ -470,7 +470,8 @@ require a `[batch, classes]` output. Neuron methods address a channel via
 a selector callable (per-example mean of that channel).
 
 **UI** (`/experiment?layer=...`, one yellow "Experiment" button per layer
-card): the left pane stacks the kind dropdown (defaulting to deep dream)
+card): the left pane is headed by the page title (with the layer name) and
+stacks the kind dropdown (defaulting to deep dream)
 and Run / Cancel above the parameter form, so the whole experiment setup
 reads top-down in one place; each kind's knobs are
 declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
@@ -698,9 +699,9 @@ It does not touch tensors directly until they need to be rendered.
 - The top-bar control row is shared via `_top_bar_row()` (the row
   container) and `_add_step_controls(session, dialog)` (the five stepping
   buttons + a live-position label, returned for the page's timer to
-  refresh through `_format_live_position`). The main page, `/watch`, and
-  `/weights` all build their bars from these, differing only in the
-  leading/trailing widgets they add around the shared controls.
+  refresh through `_format_live_position`). The main page, `/watch`,
+  `/weights`, and `/experiment` all build their bars from these, differing
+  only in the leading/trailing widgets they add around the shared controls.
 - `nansense.ui.app.serve(session, port=..., host=...)` runs the NiceGUI
   app on a background thread. NiceGUI is mounted onto a bare FastAPI
   app via `ui.run_with`, which is then served by `uvicorn.Server` from
@@ -794,7 +795,9 @@ It does not touch tensors directly until they need to be rendered.
   lazy rendering is the natural next step, but the current code path
   keeps the wiring simple.
 - The `/watch` page is its own NiceGUI page handler keyed to the same
-  `Session`. A header dropdown switches every layer card between the
+  `Session`. Its top bar carries the shared stepping controls; a left
+  sidebar (headed by the "Watching" title and layer count) holds a
+  dropdown that switches every layer card between the
   HISTOGRAM view and the MIN/MAX extreme-patch view; each view's
   checkbox group (**Log x** / **Log y** vs. the four grid toggles +
   **Heatmap**) is only visible while its view is selected. The page
