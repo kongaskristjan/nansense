@@ -39,7 +39,7 @@ variants are pinned in the same `uv.lock`, so switching groups is
 reproducible and doesn't re-lock.
 
 Open `http://localhost:8080`. Training pauses on the first batch; drive it
-from the top bar (step batch / epoch / custom, detach, time travel).
+from the top bar (stop, the Step button, time travel).
 
 Available examples:
 
@@ -175,11 +175,12 @@ jump they see the replayed epochs again.
 
 ### Main view
 
-The landing page. The top bar drives the training loop: stop, step batch /
-epoch / custom, detach (run without pauses), time travel (jump back to
-any checkpointed epoch), Update Frequency (how often visualizations refresh
-while training runs — see below), and a red RECORD button that records
-views to MP4 files. The left pane shows the architecture as a diagram;
+The landing page. The top bar drives the training loop: stop, a split Step
+button (clicking it steps one batch; its dropdown offers step epoch, step
+until end, and step custom — pick a phase/epoch/batch to pause at), time
+travel (jump back to any checkpointed epoch), and a gear button opening the
+settings dialog (update frequency and MP4 recording — see below). The left
+pane shows the architecture as a diagram;
 clicking a node toggles that layer's card in the center pane — visible is
 synonymous with watched, so each shown card carries activation and gradient
 strips for the selected sample plus an "Unwatch" button that hides it
@@ -260,7 +261,8 @@ tracks the evolving weights instead of the changing noise.
 
 ### Update frequency
 
-The purple "Update Frequency" button (every page's top bar) sets how often
+The "Update frequency" section of the settings dialog (the gear button in
+every page's top bar) sets how often
 all visualizations refresh while training runs freely: every nth epoch (the
 default, n=1) or every nth batch, optionally counting only one phase's
 batches. A frequency update publishes a fresh snapshot, re-runs the probe
@@ -270,16 +272,17 @@ still refreshes everything, exactly as before.
 
 ### Recording
 
-The red "RECORD" button (every page's top bar; its label carries the count
-of active recordings) records visualizations to MP4 — one file per view,
-one frame per visualization update (the frequency above, not per user
-step), written to `nansense_recordings/<timestamp>/` in the training
-process's working directory at 10 fps.
+The "Recording" section of the settings dialog (the gear button in every
+page's top bar; a red badge on the gear carries the count of active
+recordings) records visualizations to MP4 — one file per view, one frame
+per visualization update (the frequency above, not per user step), written
+to `nansense_recordings/<timestamp>/` in the training process's working
+directory at 10 fps.
 
-Clicking RECORD opens a dialog with a red "Add this view to recording"
-button for the page you're on, the list of currently recorded views — each
-can be ended (finalize the MP4) or deleted (discard it) individually — and
-end-all / delete-all buttons. Recordable views:
+The section offers a red "Record this view" button for the page you're on,
+the list of currently recorded views — each can be ended (finalize the
+MP4) or deleted (discard it) individually — and end-all / delete-all
+buttons. Recordable views:
 
 - **Main view** — the input image plus every watched layer's activation and
   gradient strips packed into a single video; a pinned batch and

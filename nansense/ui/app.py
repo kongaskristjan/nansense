@@ -474,27 +474,42 @@ def _add_step_controls(
     ui.button("Stop", on_click=session.stop, color="red").props(
         "dense size=md"
     ).tooltip("Pause at the next batch boundary")
-    ui.button("Step Batch", on_click=session.step_batch, color="orange").props(
-        "dense size=md"
-    ).tooltip("Advance one batch, then pause")
-    ui.button("Step Epoch", on_click=session.step_epoch, color="orange").props(
-        "dense size=md"
-    ).tooltip("Run until the epoch changes, then pause")
-    ui.button(
-        "Step Custom", on_click=step_until_custom.open, color="orange"
-    ).props("dense size=md").tooltip("Pick a phase/epoch/batch to pause at")
-    ui.button("Detach", on_click=session.detach, color="green").props(
-        "dense size=md"
-    ).tooltip(
-        "Release the training loop — no more pauses; visualizations keep "
-        "refreshing at the update frequency"
-    )
+    with ui.dropdown_button(
+        "Step",
+        on_click=session.step_batch,
+        split=True,
+        auto_close=True,
+        color="orange",
+    ).props("dense size=md").tooltip("Advance one batch, then pause"):
+        _step_menu_item(
+            "Step epoch",
+            "Run until the epoch changes, then pause",
+            session.step_epoch,
+        )
+        _step_menu_item(
+            "Step until end",
+            "Run to the last batch of training, then pause",
+            session.step_run,
+        )
+        _step_menu_item(
+            "Step custom…",
+            "Pick a phase/epoch/batch to pause at",
+            step_until_custom.open,
+        )
     _add_time_travel_button(session)
-    _add_update_frequency_button(session)
-    _add_record_button(session, record_view)
+    _add_settings_button(session, record_view)
     return ui.label("(waiting for first snapshot)").classes(
         "ml-3 font-mono text-sm"
     )
+
+
+def _step_menu_item(
+    title: str, caption: str, on_click: Callable[[], object]
+) -> None:
+    """One entry of the Step dropdown: an action title + explanatory caption."""
+    with ui.item(on_click=on_click), ui.item_section():
+        ui.item_label(title)
+        ui.item_label(caption).props("caption")
 
 
 def _format_live_position(live: BatchPosition) -> str:
@@ -3459,49 +3474,70 @@ _FREQUENCY_UNIT_OPTIONS: dict[str, str] = {
 _ANY_PHASE: str = "(any phase)"
 
 
-def _add_update_frequency_button(session: Session) -> None:
-    """The purple Update Frequency button (right of Time Travel) + dialog.
+def _add_settings_button(
+    session: Session,
+    record_view: Callable[[], RecordedView | None] | None,
+) -> None:
+    """The gear button (every page's top bar) and its settings dialog.
 
-    Configures `Session.set_update_frequency`: visualizations refresh every
-    nth epoch (the default, n=1) or every nth batch, optionally counting
-    only one phase's batches. The setting is locked while recordings are
-    active — recording frames advance at this frequency, so changing it
+    The dialog hosts two sections. "Update frequency" configures
+    `Session.set_update_frequency`: visualizations refresh every nth epoch
+    (the default, n=1) or every nth batch, optionally counting only one
+    phase's batches. The setting is locked while recordings are active —
+    recording frames advance at this frequency, so changing it
     mid-recording would change the videos' time base.
+
+    "Recording" offers "Add this view to recording" for the page's own view
+    (built by `record_view` with the page's *current* parameters, frozen
+    for the recording's lifetime; None when the page's current state can't
+    be recorded yet) plus the list of all active recordings, each endable
+    (finalize the MP4) or deletable (discard it), and end/delete-all
+    buttons. A red badge on the gear carries the active-recording count.
     """
     phase_names = list(session.schedule.phases)
 
-    with ui.dialog() as dialog, ui.card().classes("min-w-96 p-6 gap-3"):
+    with ui.dialog() as dialog, ui.card().classes("min-w-[30rem] p-6 gap-3"):
         ui.label("Update frequency").classes("text-lg font-bold")
         ui.label(
             "How often all visualizations refresh while training runs. "
             "They additionally refresh whenever training stops."
         ).classes("text-sm text-slate-600")
-        unit_select = ui.select(
-            _FREQUENCY_UNIT_OPTIONS,
-            label="Update every",
-            value="epoch",
-            on_change=lambda: sync_phase_visibility(),
-        ).props("dense outlined").classes("w-full")
-        n_input = ui.number(
-            label="n", value=1, min=1, step=1, format="%d"
-        ).props("dense outlined").classes("w-full").tooltip(
-            "Update on every nth epoch/batch"
-        )
-        phase_select = ui.select(
-            [_ANY_PHASE] + phase_names,
-            label="Phase",
-            value=_ANY_PHASE,
-        ).props("dense outlined").classes("w-full").tooltip(
-            "Count only this phase's batches (batch unit only)"
-        )
+        with ui.row().classes("w-full gap-2 no-wrap items-start"):
+            unit_select = ui.select(
+                _FREQUENCY_UNIT_OPTIONS,
+                label="Update every",
+                value="epoch",
+                on_change=lambda: sync_phase_visibility(),
+            ).props("dense outlined").classes("flex-1")
+            n_input = ui.number(
+                label="n", value=1, min=1, step=1, format="%d"
+            ).props("dense outlined").classes("w-20").tooltip(
+                "Update on every nth epoch/batch"
+            )
+            phase_select = ui.select(
+                [_ANY_PHASE] + phase_names,
+                label="Phase",
+                value=_ANY_PHASE,
+            ).props("dense outlined").classes("flex-1").tooltip(
+                "Count only this phase's batches (batch unit only)"
+            )
         error_label = ui.label("").classes("text-red-500 text-sm min-h-4")
         lock_note = ui.label(
             "The frequency is locked while recordings are active — frames "
             "are recorded at this cadence."
         ).classes("text-xs text-amber-700")
-        with ui.row():
-            ui.button("Cancel", on_click=dialog.close)
-            apply_button = ui.button("Apply", on_click=lambda: apply(), color="purple")
+        apply_button = ui.button("Apply", on_click=lambda: apply(), color="purple").props(
+            "dense size=md"
+        )
+        ui.separator()
+        ui.label("Recording").classes("text-lg font-bold")
+        ui.label(
+            "Each recorded view becomes an MP4 file — one frame per "
+            "visualization update."
+        ).classes("text-sm text-slate-600")
+        recording_section = ui.column().classes("w-full gap-3")
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Close", on_click=dialog.close)
 
     def sync_phase_visibility() -> None:
         phase_select.set_visibility(unit_select.value == "batch")
@@ -3519,61 +3555,8 @@ def _add_update_frequency_button(session: Session) -> None:
         except (TypeError, ValueError) as e:
             error_label.text = str(e)
             return
-        dialog.close()
-
-    def open_dialog() -> None:
-        freq = session.update_frequency
-        unit_select.value = freq.unit
-        n_input.value = freq.n
-        phase_select.value = freq.phase if freq.phase is not None else _ANY_PHASE
-        sync_phase_visibility()
         error_label.text = ""
-        locked = session.recording.count() > 0
-        lock_note.set_visibility(locked)
-        if locked:
-            apply_button.disable()
-        else:
-            apply_button.enable()
-        dialog.open()
-
-    ui.button("Update Frequency", on_click=open_dialog, color="purple").props(
-        "dense size=md"
-    ).tooltip(
-        "How often visualizations refresh while training runs "
-        "(default: every epoch)"
-    )
-
-
-def _watch_views_recording(session: Session) -> bool:
-    """Whether any watch-page view records (its layer set is then frozen).
-
-    The histogram and MIN/MAX recordings render from the watch
-    accumulators, and unwatching a layer *drops* its accumulated stats —
-    so while either records, unwatch actions are refused.
-    """
-    recording = session.recording
-    return recording.is_recording("watch_histogram") or recording.is_recording(
-        "watch_minmax"
-    )
-
-
-def _add_record_button(
-    session: Session,
-    record_view: Callable[[], RecordedView | None] | None,
-) -> None:
-    """The red RECORD button and its dialog (every page's top bar).
-
-    The button label carries the active-recording count. The dialog offers
-    "Add this view to recording" for the page's own view (built by
-    `record_view` with the page's *current* parameters, frozen for the
-    recording's lifetime) plus the list of all active recordings, each
-    endable (finalize the MP4) or deletable (discard it), and end/delete-all
-    buttons. Frames are captured at the configured update frequency; while
-    a view records, the matching page controls are disabled.
-    """
-    with ui.dialog() as dialog, ui.card().classes("min-w-[30rem] p-6 gap-3"):
-        ui.label("Record visualizations").classes("text-lg font-bold")
-        content = ui.column().classes("w-full gap-3")
+        ui.notify("Update frequency applied")
 
     def unpin(view: RecordedView) -> None:
         # An experiment recording pins the page's auto experiment so it
@@ -3595,6 +3578,7 @@ def _add_record_button(
         if view.page == "experiment":
             session.pin_auto_experiment(str(view.params.get("auto_key", "")))
         ui.notify(f"Recording into {session.recording.directory}/")
+        refresh_recording_lock()
         rebuild()
 
     def end_view(key: str, view: RecordedView) -> None:
@@ -3604,11 +3588,13 @@ def _add_record_button(
             ui.notify("Saved " + ", ".join(str(p) for p in paths))
         else:
             ui.notify("Recording ended before any frame was captured")
+        refresh_recording_lock()
         rebuild()
 
     def delete_view(key: str, view: RecordedView) -> None:
         session.recording.delete(key)
         unpin(view)
+        refresh_recording_lock()
         rebuild()
 
     def end_all() -> None:
@@ -3617,24 +3603,26 @@ def _add_record_button(
         paths = session.recording.end_all()
         if paths:
             ui.notify("Saved " + ", ".join(str(p) for p in paths))
+        refresh_recording_lock()
         rebuild()
 
     def delete_all() -> None:
         for status in session.recording.statuses():
             unpin(status.view)
         session.recording.delete_all()
+        refresh_recording_lock()
         rebuild()
 
     def rebuild() -> None:
-        content.clear()
+        recording_section.clear()
         statuses = session.recording.statuses()
         current = record_view() if record_view is not None else None
-        with content:
+        with recording_section:
             if current is None:
                 ui.label(
                     "This page has nothing recordable yet (watch a layer / "
                     "run an experiment first)."
-                ).classes("text-sm text-slate-600")
+                ).classes("text-sm text-slate-500 italic")
             elif session.recording.is_recording(current.key):
                 ui.label(
                     f"This view ({current.label}) is being recorded — its "
@@ -3642,12 +3630,11 @@ def _add_record_button(
                 ).classes("text-sm text-slate-600")
             else:
                 ui.button(
-                    f"Add this view to recording — {current.label}",
+                    f"Record this view — {current.label}",
                     on_click=add_view,
                     color="red",
                 ).props("dense size=md no-caps").classes("w-full")
             if statuses:
-                ui.separator()
                 ui.label("Currently recording").classes(
                     "text-xs uppercase tracking-wider text-slate-400"
                 )
@@ -3696,27 +3683,53 @@ def _add_record_button(
                 ui.label(f"Files: {session.recording.directory}/").classes(
                     "text-xs text-slate-500 font-mono"
                 )
-            with ui.row():
-                ui.button("Close", on_click=dialog.close)
+
+    def refresh_recording_lock() -> None:
+        locked = session.recording.count() > 0
+        lock_note.set_visibility(locked)
+        if locked:
+            apply_button.disable()
+        else:
+            apply_button.enable()
 
     def open_dialog() -> None:
+        freq = session.update_frequency
+        unit_select.value = freq.unit
+        n_input.value = freq.n
+        phase_select.value = freq.phase if freq.phase is not None else _ANY_PHASE
+        sync_phase_visibility()
+        error_label.text = ""
+        refresh_recording_lock()
         rebuild()
         dialog.open()
 
-    button = ui.button("RECORD", on_click=open_dialog, color="red").props(
-        "dense size=md no-caps"
+    button = ui.button(icon="settings", on_click=open_dialog, color="slate-600").props(
+        "dense size=md flat round"
     )
-    button.tooltip(
-        "Record visualizations to MP4 — one file per view, one frame per "
-        "visualization update"
-    )
+    button.tooltip("Settings — update frequency and MP4 recording")
+    with button:
+        badge = ui.badge("").props("color=red floating")
 
-    def refresh_label() -> None:
+    def refresh_badge() -> None:
         n = session.recording.count()
-        button.text = f"RECORD [{n} recording]" if n else "RECORD"
+        badge.set_text(str(n))
+        badge.set_visibility(n > 0)
 
-    refresh_label()
-    ui.timer(0.5, refresh_label)
+    refresh_badge()
+    ui.timer(0.5, refresh_badge)
+
+
+def _watch_views_recording(session: Session) -> bool:
+    """Whether any watch-page view records (its layer set is then frozen).
+
+    The histogram and MIN/MAX recordings render from the watch
+    accumulators, and unwatching a layer *drops* its accumulated stats —
+    so while either records, unwatch actions are refused.
+    """
+    recording = session.recording
+    return recording.is_recording("watch_histogram") or recording.is_recording(
+        "watch_minmax"
+    )
 
 
 def _summarize_epoch_ranges(epochs: list[int]) -> str:
