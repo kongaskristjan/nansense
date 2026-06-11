@@ -3634,22 +3634,34 @@ def _add_record_button(
         statuses = session.recording.statuses()
         current = record_view() if record_view is not None else None
         with content:
+            ui.label("This view").classes(
+                "text-xs uppercase tracking-wider text-slate-400"
+            )
             if current is None:
                 ui.label(
-                    "This page has nothing recordable yet (watch a layer / "
-                    "run an experiment first)."
-                ).classes("text-sm text-slate-600")
-            elif session.recording.is_recording(current.key):
-                ui.label(
-                    f"This view ({current.label}) is being recorded — its "
-                    "parameters are frozen."
-                ).classes("text-sm text-slate-600")
+                    "Nothing recordable on this page yet — watch a layer or "
+                    "run an experiment first."
+                ).classes("text-sm text-slate-500 italic")
             else:
-                ui.button(
-                    f"Add this view to recording — {current.label}",
-                    on_click=add_view,
-                    color="red",
-                ).props("dense size=md no-caps").classes("w-full")
+                with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                    with ui.column().classes("grow min-w-0 gap-0"):
+                        ui.label(current.label).classes(
+                            "text-sm font-medium truncate"
+                        )
+                        if session.recording.is_recording(current.key):
+                            ui.label("recording — parameters frozen").classes(
+                                "text-xs text-red-600"
+                            )
+                    if not session.recording.is_recording(current.key):
+                        ui.button(
+                            "Record",
+                            icon="fiber_manual_record",
+                            on_click=add_view,
+                            color="red",
+                        ).props("dense size=sm no-caps").tooltip(
+                            "Add this view to recording — one frame per "
+                            "visualization update"
+                        )
             if statuses:
                 ui.separator()
                 ui.label("Currently recording").classes(
