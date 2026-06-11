@@ -103,6 +103,60 @@ session.close()
 near-zero-overhead no-op, so the wiring can stay in place for plain training
 runs. The runnable version of this loop is `examples/vision/main.py`.
 
+## PyTorch Lightning
+
+With the `lightning` package installed (`uv add lightning` or
+`pip install nansense[lightning]`), a stock `Trainer` gets the full
+experience through a callback — no changes to the training code:
+
+```python
+import lightning as L
+
+from nansense.lightning import NansenseCallback
+
+callback = NansenseCallback(
+    port=8080,
+    model="net",  # attribute path to the network inside the LightningModule
+    input_mean=(0.4914, 0.4822, 0.4465),
+    input_std=(0.2470, 0.2435, 0.2616),
+)
+trainer = L.Trainer(max_epochs=50, callbacks=[callback])
+trainer.fit(module, datamodule)
+
+callback.session  # the live Session (None until fit starts)
+```
+
+`model=` is recommended whenever the LightningModule wraps its layers in a
+submodule: nansense then traces and probes the actual network instead of
+the module wrapper. `enabled=False` is the same zero-overhead off switch as
+on `nansense.start()`.
+
+For time travel, the retry loop around `trainer.fit` must live outside the
+callback, so it ships as a wrapper. Pass a trainer *factory* — each jump
+re-resumes from a Lightning checkpoint on a fresh trainer:
+
+```python
+from nansense.lightning import fit_with_time_travel
+
+fit_with_time_travel(
+    lambda: L.Trainer(max_epochs=50),
+    module,
+    callback=callback,
+    datamodule=datamodule,
+    cache_dir=Path("models/latest"),
+)
+```
+
+Epoch boundaries are checkpointed via `trainer.save_checkpoint` (with RNG
+states stashed alongside), and a jump re-invokes
+`trainer.fit(ckpt_path=...)`, so the replay is exactly as deterministic as
+the hand-written loop's. Supported: automatic optimization and
+epoch-boundary validation, including `check_val_every_n_epoch > 1`.
+Rejected with a clear error: mid-epoch validation
+(`val_check_interval < 1.0` or step-driven) and unsized dataloaders — the
+schedule is declared up-front. Metric loggers cannot time-travel: after a
+jump they see the replayed epochs again.
+
 ## Views
 
 ### Main view

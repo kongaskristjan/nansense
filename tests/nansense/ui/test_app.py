@@ -38,6 +38,7 @@ from nansense.ui.app import (
     _probability_densities,
     _role_options,
     _stats_table_html,
+    _step_until_default_position,
     _strip_html,
     _summarize_epoch_ranges,
     _trimmed_bin_bounds,
@@ -181,6 +182,44 @@ def test_validate_rejects_batch_out_of_range(schedule: Schedule) -> None:
     )
     assert msg is not None
     assert "Batch" in msg
+
+
+def _position_at(phase: str, epoch: int, batch_idx: int) -> BatchPosition:
+    return BatchPosition(
+        phase=phase,
+        epoch=epoch,
+        batch_idx=batch_idx,
+        is_last_in_phase=False,
+        is_last_in_epoch=False,
+        is_last_overall=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "live, snapshot, expected",
+    [
+        # Live position wins over the snapshot's frozen position.
+        (("val", 1, 3), ("train", 0, 0), ("val", 1, 3)),
+        # No live position yet: fall back to the snapshot.
+        (None, ("train", 2, 4), ("train", 2, 4)),
+        # Nothing published yet: keep the dialog's existing values.
+        (None, None, None),
+    ],
+)
+def test_step_until_default_position(
+    live: tuple[str, int, int] | None,
+    snapshot: tuple[str, int, int] | None,
+    expected: tuple[str, int, int] | None,
+) -> None:
+    result = _step_until_default_position(
+        _position_at(*live) if live is not None else None,
+        _snapshot_at(*snapshot) if snapshot is not None else None,
+    )
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert (result.phase, result.epoch, result.batch_idx) == expected
 
 
 def test_format_live_position() -> None:

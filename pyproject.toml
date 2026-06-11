@@ -20,9 +20,13 @@ rocm7-2 = [
     "torchvision>=0.27.0",
     "triton-rocm ; sys_platform == 'linux'",
 ]
+lightning = [
+    "lightning>=2.4",
+]
 
 [dependency-groups]
 dev = [
+    "lightning>=2.4",
     "pytest>=9.0.3",
     "ty>=0.0.38",
 ]

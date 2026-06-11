@@ -212,7 +212,12 @@ class TrainingRestorer:
     that), so any other exception still propagates normally.
     """
 
-    def __init__(self, session: Session, *, cache_dir: Path = DEFAULT_CACHE_DIR) -> None:
+    def __init__(
+        self, session: Session | None = None, *, cache_dir: Path = DEFAULT_CACHE_DIR
+    ) -> None:
+        # `session` may be None for restorers created before the session
+        # exists (e.g. the Lightning integration, where the session is built
+        # inside the first `trainer.fit`); `Session.attach_restorer` binds it.
         self._session = session
         self.cache = EpochCache(Path(cache_dir))
         self._start_epoch = 0
@@ -233,9 +238,14 @@ class TrainingRestorer:
         """Whether a `with` block completed without a time-travel jump."""
         return self._finished
 
+    def _require_session(self) -> Session:
+        if self._session is None:
+            raise RuntimeError("restorer is not attached to a session yet")
+        return self._session
+
     def epochs(self) -> range:
         """Epochs the current attempt should run: `start_epoch` to the end."""
-        return range(self._start_epoch, self._session.schedule.epochs)
+        return range(self._start_epoch, self._require_session().schedule.epochs)
 
     def pending(self) -> bool:
         """Whether another `with restorer:` attempt should run."""
@@ -277,11 +287,12 @@ class TrainingRestorer:
         epoch should restore (including any between-epoch user code such as
         `scheduler.step()` that already ran).
         """
+        session = self._require_session()
         self.cache.save(
             epoch,
-            model=self._session.model,
-            optimizer=self._session.optimizer,
-            scheduler=self._session.scheduler,
+            model=session.model,
+            optimizer=session.optimizer,
+            scheduler=session.scheduler,
         )
 
     def _restore(self, epoch: int) -> None:
@@ -292,18 +303,19 @@ class TrainingRestorer:
         at request time (`Session.request_time_travel`), making a failing
         `load_state_dict` here practically impossible.
         """
+        session = self._require_session()
         payload = self.cache.load(epoch)
         model_state = _state_dict(payload, "model")
         assert model_state is not None  # request-time validation guarantees this
-        self._session.model.load_state_dict(model_state)
+        session.model.load_state_dict(model_state)
         optimizer_state = _state_dict(payload, "optimizer")
-        if self._session.optimizer is not None and optimizer_state is not None:
-            self._session.optimizer.load_state_dict(optimizer_state)
+        if session.optimizer is not None and optimizer_state is not None:
+            session.optimizer.load_state_dict(optimizer_state)
         scheduler_state = _state_dict(payload, "scheduler")
-        if self._session.scheduler is not None and scheduler_state is not None:
-            self._session.scheduler.load_state_dict(scheduler_state)
+        if session.scheduler is not None and scheduler_state is not None:
+            session.scheduler.load_state_dict(scheduler_state)
         self._restore_rng(_state_dict(payload, "rng"))
-        self._session._rewind_to_epoch(epoch)
+        session._rewind_to_epoch(epoch)
 
     @staticmethod
     def _restore_rng(rng: dict[str, Any] | None) -> None:
