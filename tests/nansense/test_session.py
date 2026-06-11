@@ -57,7 +57,12 @@ def test_detach_skips_capture_for_every_batch() -> None:
                 captured.append(ctx.captured)
 
     assert captured == [False] * 8
-    assert session.snapshot is None
+    # No batch *captured* (no pause), but the default update frequency
+    # (every epoch) still publishes a snapshot at each epoch's last batch.
+    snap = session.snapshot
+    assert snap is not None
+    assert snap.position.is_last_in_epoch
+    assert snap.position.epoch == 1
 
 
 def test_step_run_pauses_only_at_last_overall() -> None:
@@ -201,16 +206,20 @@ def test_live_position_starts_none_and_tracks_every_batch_under_detach() -> None
     assert session.live_position is None  # nothing has entered a batch yet
 
     seen: list[tuple[str, int, int]] = []
-    for _ in range(3):
+    for i in range(3):
         with session.batch(phase="train", epoch=0) as ctx:
             _train_step(model)
             assert ctx.captured is False  # detach: no capture
-        assert session.snapshot is None  # ...and no snapshot ever published
+        if i < 2:
+            # No snapshot until the default update frequency (every epoch)
+            # publishes one at the epoch's last batch.
+            assert session.snapshot is None
         lp = session.live_position
         assert lp is not None
         seen.append((lp.phase, lp.epoch, lp.batch_idx))
 
     assert seen == [("train", 0, 0), ("train", 0, 1), ("train", 0, 2)]
+    assert session.snapshot is not None  # the epoch-end frequency update
 
 
 def test_live_position_tracks_non_captured_batches_during_step_epoch() -> None:

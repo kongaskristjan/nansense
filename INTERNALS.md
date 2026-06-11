@@ -71,6 +71,20 @@ hooks?" and "pause after this batch?". Capture and pause are intentionally
 the same predicate — there is no implicit pause that the user did not ask
 for, and there is no orphan capture without a pause to consume it.
 
+### Frequency updates
+
+Orthogonally to the mode, `_should_freq_update(pos)` decides whether the
+batch publishes a non-pausing *frequency update* — the cadence configured
+via `Session.set_update_frequency` (an `UpdateFrequency` of `unit`
+`"epoch"` or `"batch"`, multiplier `n`, and an optional phase filter for
+the batch unit; the default is every epoch). A frequency-update batch
+installs the same hooks as a capture and, at `__exit__`, publishes a
+snapshot, re-runs the probe, re-runs every live auto experiment, and feeds
+one frame to each active recording — but never calls `_wait_for_proceed`.
+This is what keeps the UI (and recordings) refreshing during `step_epoch`,
+`step_run`, and `detach`. The batch-unit counter (`_freq_counter`) lives on
+the training thread and resets when the setting changes.
+
 ## Hook lifecycle, gradient pickup, snapshot copy
 
 There are two capture paths, picked once at session construction by
@@ -502,6 +516,55 @@ each other: deep-dream result and start batches render denormalized via
 `render_image` as wrapping grids (non-image inputs fall back to a "not
 renderable" note), attributions via the shared diverging-colormap
 `render_strip`, next to the input sample.
+
+**Auto experiments.** The experiment page's Run goes through
+`session.register_auto_experiment(key, ...)` rather than the plain
+`request_experiment`: besides queueing the request, the session remembers
+it under the page's key (`_AutoExperiment`) and re-runs it on *every*
+snapshot publish — mode captures and frequency updates alike — keeping the
+request's seq, so `experiment_result_for(seq)` keeps returning the
+freshest rerun and the deep-dream noise (seeded by the seq) is identical
+on every update. A registration expires `_AUTO_EXPERIMENT_TTL` (5 s) after
+the page's last `touch_auto_experiment` heartbeat (its 200 ms tick), so
+closing the page stops the reruns; an active experiment recording pins the
+entry (`pin_auto_experiment`) for its own lifetime. At each update,
+`_run_auto_experiments` first removes any still-queued duplicate of a
+registered request so it runs exactly once per update.
+
+## Recording (`nansense.recording`)
+
+Each recorded view writes one MP4 (10 fps) per visualization update under
+`nansense_recordings/<run timestamp>/`. `Session.recording` lazily creates
+the per-session `RecordingManager`; the UI's RECORD dialog starts a
+`ViewRecorder` from a `RecordedView` — the view's identity key (`"main"`,
+`"weights:<layer>"`, `"watch_histogram"`, `"watch_minmax"`,
+`"experiment:<layer>"`; one recording per key), its renderer page, and the
+page parameters frozen at record start (watched layers, sample index,
+phase, axis toggles, weight-axis layouts, the experiment seq). While a
+view records, the matching page controls are disabled each tick (e.g.
+`InputPanel.set_frozen`), unwatch actions are refused for the watch-page
+views (their frames render from the accumulators that `unwatch` drops),
+and the update-frequency dialog locks Apply — recordings advance at that
+frequency, so changing it would change the videos' time base.
+
+Frames are produced on the training thread: `_BatchContext.__exit__` calls
+`Session._record_frames()` on frequency-update batches only (not on plain
+mode captures — recordings advance at the show frequency, not per user
+step), after the snapshot/probe/auto-experiment refresh, so each frame is
+consistent with one update. The renderers reuse the UI's server-side
+machinery (`render_strip`, `render_weight`, `render_patch_grid`,
+`render_image`), nearest-upscaling the native-resolution data images to
+their CSS display size like the browser does; histograms — Plotly on the
+live page, hence client-side — are re-rendered with matplotlib (Agg)
+using the same bar heights and axis-range helpers the page uses. The
+MIN/MAX view writes pixel-grid (crops) and average-grid (whole inputs)
+frames to *separate* `*_pixel.mp4` / `*_average.mp4` streams because
+their frame sizes differ. Every stream is locked to its first frame's
+dimensions (rounded up to even, as libx264's yuv420p requires; capped at
+`MAX_FRAME_SIZE`) and later frames are white-padded/cropped to fit. A
+renderer failure is stored on the recorder and shown in the dialog rather
+than propagating into the training loop, and `Session.close()` calls
+`end_all()` so files are playable when a run simply finishes.
 
 ## Time travel (`nansense.restore`)
 

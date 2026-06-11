@@ -176,8 +176,10 @@ jump they see the replayed epochs again.
 ### Main view
 
 The landing page. The top bar drives the training loop: stop, step batch /
-epoch / custom, detach (run without pauses), and time travel (jump back to
-any checkpointed epoch). The left pane shows the architecture as a diagram;
+epoch / custom, detach (run without pauses), time travel (jump back to
+any checkpointed epoch), Update Frequency (how often visualizations refresh
+while training runs — see below), and a red RECORD button that records
+views to MP4 files. The left pane shows the architecture as a diagram;
 clicking a node toggles that layer's card in the center pane — visible is
 synonymous with watched, so each shown card carries activation and gradient
 strips for the selected sample plus an "Unwatch" button that hides it
@@ -249,7 +251,53 @@ Captum attribution methods — Grad-CAM, Neuron Gradient, Neuron Integrated
 Gradients, and Occlusion — render attributions next to the input sample
 they explain.
 
+Run also registers the experiment for automatic re-runs: while the page
+stays open (or its view is being recorded), the experiment re-executes at
+every visualization update with the *same* random seed, so the result
+tracks the evolving weights instead of the changing noise.
+
 ![Experiment page](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-experiment.png)
+
+### Update frequency
+
+The purple "Update Frequency" button (every page's top bar) sets how often
+all visualizations refresh while training runs freely: every nth epoch (the
+default, n=1) or every nth batch, optionally counting only one phase's
+batches. A frequency update publishes a fresh snapshot, re-runs the probe
+(pinned batch / perturbations) and any registered experiments — without
+pausing training, in every mode including detach. Stopping or stepping
+still refreshes everything, exactly as before.
+
+### Recording
+
+The red "RECORD" button (every page's top bar; its label carries the count
+of active recordings) records visualizations to MP4 — one file per view,
+one frame per visualization update (the frequency above, not per user
+step), written to `nansense_recordings/<timestamp>/` in the training
+process's working directory at 10 fps.
+
+Clicking RECORD opens a dialog with a red "Add this view to recording"
+button for the page you're on, the list of currently recorded views — each
+can be ended (finalize the MP4) or deleted (discard it) individually — and
+end-all / delete-all buttons. Recordable views:
+
+- **Main view** — the input image plus every watched layer's activation and
+  gradient strips packed into a single video; a pinned batch and
+  perturbations are respected exactly like on the page.
+- **Weights** — one video per recorded layer: weight, gradient, and
+  optimizer-state strips under the page's current axis layout.
+- **Watch · histograms** — server-side matplotlib re-renders of the
+  activation/gradient histograms for the selected phase.
+- **Watch · MIN/MAX** — the enabled patch grids; pixel (crop) and average
+  (whole input) grids have different image sizes, so they record into
+  separate `*_pixel.mp4` / `*_average.mp4` files.
+- **Experiment** — the page's experiment result, re-run automatically at
+  every update with a fixed random seed.
+
+A view's parameters are frozen while it records: the matching page controls
+are disabled (and unwatching layers is refused while a watch view records),
+so the video stays consistent from the first frame to the last. The update
+frequency itself is likewise locked while any recording is active.
 
 ## Tests
 

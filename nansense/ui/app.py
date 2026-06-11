@@ -39,22 +39,25 @@ import json
 import math
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 import plotly.graph_objects as go
 import uvicorn
 from fastapi import FastAPI
 from plotly.subplots import make_subplots
 from nicegui import ui
+from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 import torch
 from torch import Tensor
 
 from nansense.patches import PATCH_TYPES, PatchType
+from nansense.recording import RecordedView
 from nansense.experiments import (
     _DEFAULT_DREAM_BATCH,
     EXPERIMENT_KINDS,
@@ -454,11 +457,18 @@ def _top_bar_row() -> ui.row:
     return ui.row().classes(_TOP_BAR_CLASSES)
 
 
-def _add_step_controls(session: Session, step_until_custom: ui.dialog) -> ui.label:
-    """Add the five stepping buttons + a live-position label to the open row.
+def _add_step_controls(
+    session: Session,
+    step_until_custom: ui.dialog,
+    record_view: Callable[[], RecordedView | None] | None = None,
+) -> ui.label:
+    """Add the stepping buttons + a live-position label to the open row.
 
     Shared by every page's top bar so they all drive the session
-    identically. The returned label is refreshed from `session.live_position`
+    identically. `record_view` is the page's factory for its own
+    `RecordedView` (None when the page's current state can't be recorded
+    yet); the RECORD dialog uses it for "Add this view to recording".
+    The returned label is refreshed from `session.live_position`
     by each page's timer (see `_format_live_position`).
     """
     ui.button("Stop", on_click=session.stop, color="red").props(
@@ -475,8 +485,13 @@ def _add_step_controls(session: Session, step_until_custom: ui.dialog) -> ui.lab
     ).props("dense size=md").tooltip("Pick a phase/epoch/batch to pause at")
     ui.button("Detach", on_click=session.detach, color="green").props(
         "dense size=md"
-    ).tooltip("Release the training loop and stop capturing snapshots")
+    ).tooltip(
+        "Release the training loop — no more pauses; visualizations keep "
+        "refreshing at the update frequency"
+    )
     _add_time_travel_button(session)
+    _add_update_frequency_button(session)
+    _add_record_button(session, record_view)
     return ui.label("(waiting for first snapshot)").classes(
         "ml-3 font-mono text-sm"
     )
@@ -500,6 +515,29 @@ def _build_page(
     state.last_watched = session.watched_layers
     layer_views: dict[str, _LayerView] = {}
 
+    def record_view() -> RecordedView | None:
+        # `input_panel` is created further down; the dialog only calls this
+        # after the page is fully built.
+        if session.snapshot is None and session.probe_result is None:
+            return None
+        watched = [n for n in layer_names if n in session.watched_layers]
+        plural = "" if len(watched) == 1 else "s"
+        return RecordedView(
+            key="main",
+            page="main",
+            label=(
+                f"Main view ({len(watched)} watched layer{plural}, "
+                f"sample {input_panel.sample_idx})"
+            ),
+            params={
+                "layers": tuple(watched),
+                "sample_idx": input_panel.sample_idx,
+                "input_name": input_name or "",
+                "input_mean": input_mean,
+                "input_std": input_std,
+            },
+        )
+
     ui.page_title("Nansense")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
@@ -516,6 +554,12 @@ def _build_page(
         sync_watch_ui()
 
     def clear_all() -> None:
+        if _watch_views_recording(session):
+            ui.notify(
+                "Watched layers are frozen while a watch view is recording",
+                type="warning",
+            )
+            return
         for name in list(session.watched_layers):
             session.unwatch(name)
         sync_watch_ui()
@@ -545,7 +589,9 @@ def _build_page(
             architecture_toggle = ui.button(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
-            position_label = _add_step_controls(session, step_until_custom)
+            position_label = _add_step_controls(
+                session, step_until_custom, record_view
+            )
             watch_chip = ui.button(
                 str(len(session.watched_layers)),
                 icon="visibility",
@@ -647,6 +693,15 @@ def _build_page(
             # Any name in `session.layer_names` is watchable (modules, fx
             # intermediates, graph inputs); False means an unknown name.
             if name in session.watched_layers:
+                # Unwatching drops the layer's accumulated stats, which the
+                # watch-page recordings render from — refuse while one runs.
+                if _watch_views_recording(session):
+                    ui.notify(
+                        "Watched layers are frozen while a watch view is "
+                        "recording",
+                        type="warning",
+                    )
+                    return
                 session.unwatch(name)
             elif not session.watch(name):
                 return
@@ -747,6 +802,10 @@ def _build_page(
         if live is not None:
             position_label.text = _format_live_position(live)
         input_panel.refresh_status()
+        # While the main view records, its render parameters (sample, pin,
+        # perturbations, probe mode) are frozen: the recording renders with
+        # the live probe state, so the input controls must not change it.
+        input_panel.set_frozen(session.recording.is_recording("main"))
         # Watched-set changes made elsewhere (another tab, the watch page)
         # propagate here: sync flips card visibility and marks the frame
         # dirty so newly visible cards render from the current snapshot.
@@ -1429,6 +1488,40 @@ def _build_watch_page(
 
     step_until_custom = _build_step_until_custom_dialog(session)
 
+    def record_view() -> RecordedView | None:
+        watched = [n for n in layer_names if n in session.watched_layers]
+        if not watched:
+            return None
+        phase = selected_phase["name"]
+        if view_minmax["on"]:
+            grids = tuple(t for t in PATCH_TYPES if grid_on[t])
+            if not grids:
+                return None
+            return RecordedView(
+                key="watch_minmax",
+                page="watch_minmax",
+                label=f"Watch · MIN/MAX grids ({phase})",
+                params={
+                    "layers": tuple(watched),
+                    "phase": phase,
+                    "grids": grids,
+                    "heatmap": heat_on["on"],
+                    "input_mean": input_mean,
+                    "input_std": input_std,
+                },
+            )
+        return RecordedView(
+            key="watch_histogram",
+            page="watch_histogram",
+            label=f"Watch · histograms ({phase})",
+            params={
+                "layers": tuple(watched),
+                "phase": phase,
+                "log_x": axis_log["x"],
+                "log_y": axis_log["y"],
+            },
+        )
+
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
             ui.button(
@@ -1436,7 +1529,9 @@ def _build_watch_page(
                 on_click=lambda: ui.navigate.to("/"),
                 color="slate-500",
             ).props("dense size=md").tooltip("Back to the main page")
-            position_label = _add_step_controls(session, step_until_custom)
+            position_label = _add_step_controls(
+                session, step_until_custom, record_view
+            )
             ui.button(
                 icon="refresh",
                 on_click=lambda: refresh(),
@@ -1462,7 +1557,7 @@ def _build_watch_page(
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
                 ).tooltip("What each layer card shows")
-                ui.select(
+                phase_select = ui.select(
                     phase_names,
                     label="Phase",
                     value=selected_phase["name"],
@@ -1470,38 +1565,51 @@ def _build_watch_page(
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
                 ).tooltip("Which phase the cards show")
+                hist_boxes: list[ui.checkbox] = []
+                minmax_boxes: list[ui.checkbox] = []
                 with ui.column().classes("w-full gap-1") as hist_controls:
-                    ui.checkbox(
-                        "Log x",
-                        value=axis_log["x"],
-                        on_change=lambda e: set_axis_log("x", bool(e.value)),
-                    ).props("dense").classes("text-sm").tooltip(
-                        "Log-based (signed-log) scale on the value axis"
+                    hist_boxes.append(
+                        ui.checkbox(
+                            "Log x",
+                            value=axis_log["x"],
+                            on_change=lambda e: set_axis_log("x", bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Log-based (signed-log) scale on the value axis"
+                        )
                     )
-                    ui.checkbox(
-                        "Log y",
-                        value=axis_log["y"],
-                        on_change=lambda e: set_axis_log("y", bool(e.value)),
-                    ).props("dense").classes("text-sm").tooltip(
-                        "Log scale on the probability axis"
+                    hist_boxes.append(
+                        ui.checkbox(
+                            "Log y",
+                            value=axis_log["y"],
+                            on_change=lambda e: set_axis_log("y", bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Log scale on the probability axis"
+                        )
                     )
                 with ui.column().classes("w-full gap-1") as minmax_controls:
                     for ptype in PATCH_TYPES:
-                        ui.checkbox(
-                            _PATCH_TYPE_LABELS[ptype],
-                            value=grid_on[ptype],
-                            on_change=lambda e, p=ptype: set_grid(p, bool(e.value)),
-                        ).props("dense").classes("text-sm").tooltip(
-                            f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} grid"
+                        minmax_boxes.append(
+                            ui.checkbox(
+                                _PATCH_TYPE_LABELS[ptype],
+                                value=grid_on[ptype],
+                                on_change=lambda e, p=ptype: set_grid(
+                                    p, bool(e.value)
+                                ),
+                            ).props("dense").classes("text-sm").tooltip(
+                                f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} "
+                                "grid"
+                            )
                         )
-                    ui.checkbox(
-                        "Enable heatmap",
-                        value=heat_on["on"],
-                        on_change=lambda e: set_heat(bool(e.value)),
-                    ).props("dense").classes("text-sm").tooltip(
-                        "Blend each channel's activation strength over the "
-                        "patches (red positive, blue negative), with a scale "
-                        "next to each grid"
+                    minmax_boxes.append(
+                        ui.checkbox(
+                            "Enable heatmap",
+                            value=heat_on["on"],
+                            on_change=lambda e: set_heat(bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Blend each channel's activation strength over the "
+                            "patches (red positive, blue negative), with a scale "
+                            "next to each grid"
+                        )
                     )
                 minmax_controls.set_visibility(False)
 
@@ -1590,14 +1698,41 @@ def _build_watch_page(
         finally:
             refresh_state["running"] = False
 
+    # Last frozen flags pushed to the client, so the per-tick sync only
+    # sends enable/disable when something actually changed.
+    frozen_state: dict[str, bool | None] = {"hist": None, "minmax": None}
+
+    def sync_frozen() -> None:
+        hist = session.recording.is_recording("watch_histogram")
+        minmax = session.recording.is_recording("watch_minmax")
+        if hist != frozen_state["hist"] or minmax != frozen_state["minmax"]:
+            frozen_state["hist"] = hist
+            frozen_state["minmax"] = minmax
+            # The phase applies to both views, so either recording locks it.
+            _set_controls_enabled([phase_select], not (hist or minmax))
+            _set_controls_enabled(hist_boxes, not hist)
+            _set_controls_enabled(minmax_boxes, not minmax)
+
     def tick() -> None:
         live = session.live_position
         if live is not None:
             position_label.text = _format_live_position(live)
+        sync_frozen()
 
     ui.timer(0.2, tick)
     ui.timer(0.0, refresh, once=True)
     ui.timer(2.0, refresh)
+
+
+def _set_controls_enabled(
+    controls: Sequence[DisableableElement], enabled: bool
+) -> None:
+    """Enable/disable a group of widgets (recording freeze helper)."""
+    for control in controls:
+        if enabled:
+            control.enable()
+        else:
+            control.disable()
 
 
 def _plotly_restyle(
@@ -2053,13 +2188,27 @@ class _WatchLayerPanel:
         self._input_mean = input_mean
         self._input_std = input_std
         self._grid_sig: tuple[object, ...] | None = None
+
+        def unwatch() -> None:
+            # The watch recordings render from this layer's accumulators,
+            # which unwatching drops — refuse while one is active.
+            if _watch_views_recording(session):
+                ui.notify(
+                    "Watched layers are frozen while a watch view is "
+                    "recording",
+                    type="warning",
+                )
+                return
+            session.unwatch(name)
+            on_unwatched()
+
         with ui.card().classes("w-full p-4 gap-2"):
             with ui.row().classes("w-full items-center gap-2 no-wrap"):
                 ui.label(name).classes("font-mono text-base font-bold grow")
                 ui.button(
                     icon="visibility_off",
                     color="amber-600",
-                    on_click=lambda: (session.unwatch(name), on_unwatched()),
+                    on_click=unwatch,
                 ).props("dense size=sm flat round").tooltip("Stop watching")
             self._hist_section = ui.column().classes("w-full gap-3")
             with self._hist_section:
@@ -2339,6 +2488,26 @@ def _build_weights_page(session: Session, layer: str) -> None:
     }
     step_until_custom = _build_step_until_custom_dialog(session)
     panels: list[_WeightPanel] = []
+    record_key = f"weights:{layer}"
+
+    def record_view() -> RecordedView | None:
+        if not panels:
+            return None
+        return RecordedView(
+            key=record_key,
+            page="weights",
+            label=f"Weights · {layer}",
+            params={
+                "layer": layer,
+                # One (name, roles, indices) spec per panel, frozen at
+                # record start; `indices` travels as item pairs so the
+                # params stay plain immutable-friendly structures.
+                "panels": tuple(
+                    (p.name, tuple(p.roles), tuple(p.indices.items()))
+                    for p in panels
+                ),
+            },
+        )
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
@@ -2350,7 +2519,9 @@ def _build_weights_page(session: Session, layer: str) -> None:
             ui.label(title).classes(
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
-            position_label = _add_step_controls(session, step_until_custom)
+            position_label = _add_step_controls(
+                session, step_until_custom, record_view
+            )
             ui.button(
                 icon="refresh",
                 on_click=lambda: do_refresh(),
@@ -2394,6 +2565,9 @@ def _build_weights_page(session: Session, layer: str) -> None:
         live = session.live_position
         if live is not None:
             position_label.text = _format_live_position(live)
+        frozen = session.recording.is_recording(record_key)
+        for panel in panels:
+            panel.set_frozen(frozen)
         snap = session.snapshot
         if snap is None:
             return
@@ -2452,6 +2626,7 @@ class _WeightPanel:
         self._opt_hparams: dict[str, dict[str, float]] = {}
         self._role_selects: list[ui.select] = []
         self._index_numbers: dict[int, ui.number] = {}
+        self._frozen = False
 
         options = _role_options(self._ndim)
         with ui.card().classes("w-full p-4 gap-3"):
@@ -2514,6 +2689,25 @@ class _WeightPanel:
             )
             self._opt_scalars.set_visibility(False)
         self._sync_index_visibility()
+
+    @property
+    def roles(self) -> list[str]:
+        """The current per-dimension role assignment (for recordings)."""
+        return list(self._roles)
+
+    @property
+    def indices(self) -> dict[int, int]:
+        """The current per-dimension pinned indices (for recordings)."""
+        return dict(self._indices)
+
+    def set_frozen(self, frozen: bool) -> None:
+        """Disable the axis controls while this layer's weights record."""
+        if frozen == self._frozen:
+            return
+        self._frozen = frozen
+        _set_controls_enabled(
+            [*self._role_selects, *self._index_numbers.values()], not frozen
+        )
 
     def _on_role(self, dim: int, value: object) -> None:
         role = str(value) if value is not None else "index"
@@ -2878,6 +3072,13 @@ def _build_experiment_page(
     kind_holder = {"kind": "deep_dream"}
     my_seq: list[int | None] = [None]  # this page's own request
     last_result: list[ExperimentResult | None] = [None]
+    # This page's auto-experiment registration: Run registers the request
+    # so it re-runs on every visualization update (same seq → same seeded
+    # noise); the page's tick heartbeats it and it expires when the page
+    # closes, unless a recording pins it.
+    page_key = f"experiment-page-{uuid4().hex}"
+    record_key = f"experiment:{layer}"
+    frozen_state: dict[str, bool | None] = {"on": None}
 
     def collect_params() -> dict[str, object]:
         params: dict[str, object] = {"mean": input_mean, "std": input_std}
@@ -2897,15 +3098,37 @@ def _build_experiment_page(
     def run() -> None:
         if my_seq[0] is not None:  # a re-Run replaces this page's request
             session.cancel_experiment(my_seq[0])
-        my_seq[0] = session.request_experiment(
-            kind=kind_holder["kind"], layer=layer, params=collect_params()
+        my_seq[0] = session.register_auto_experiment(
+            page_key, kind=kind_holder["kind"], layer=layer, params=collect_params()
         )
         last_result[0] = None
         error_label.text = ""
 
     def cancel() -> None:
-        if my_seq[0] is not None:
-            session.cancel_experiment(my_seq[0])
+        if my_seq[0] is None:
+            return
+        session.cancel_experiment(my_seq[0])
+        # Stop the auto reruns too — unless a recording pinned the request
+        # (Cancel is disabled while recorded, but another tab may differ).
+        if not session.recording.is_recording(record_key):
+            session.unregister_auto_experiment(page_key)
+
+    def record_view() -> RecordedView | None:
+        if my_seq[0] is None:
+            return None  # nothing to record until an experiment has run
+        kind = kind_holder["kind"]
+        return RecordedView(
+            key=record_key,
+            page="experiment",
+            label=f"Experiment · {EXPERIMENT_KINDS.get(kind, kind)} · {layer}",
+            params={
+                "layer": layer,
+                "seq": my_seq[0],
+                "auto_key": page_key,
+                "input_mean": input_mean,
+                "input_std": input_std,
+            },
+        )
 
     def on_kind_change(e: object) -> None:
         value = getattr(e, "value", None)
@@ -2920,7 +3143,9 @@ def _build_experiment_page(
                 on_click=lambda: ui.navigate.to("/"),
                 color="slate-500",
             ).props("dense size=md").tooltip("Back to the main page")
-            position_label = _add_step_controls(session, step_until_custom)
+            position_label = _add_step_controls(
+                session, step_until_custom, record_view
+            )
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
             with ui.column().classes(
@@ -2937,22 +3162,23 @@ def _build_experiment_page(
                 # The experiment kind and its Run / Cancel sit above the
                 # parameter form; only the form below is rebuilt when the
                 # kind changes.
-                ui.select(
+                kind_select = ui.select(
                     available_experiment_kinds(),
                     label="Experiment",
                     value=kind_holder["kind"],
                     on_change=on_kind_change,
                 ).props("dense outlined").classes("w-full")
                 with ui.row().classes("w-full no-wrap gap-2"):
-                    ui.button(
+                    run_button = ui.button(
                         "Run", icon="science", on_click=run, color="yellow-8"
                     ).props("dense size=md").classes("grow").tooltip(
-                        "Run the experiment (training must be paused)"
+                        "Run the experiment (training must be paused), then "
+                        "re-run it automatically on every visualization update"
                     )
-                    ui.button(
+                    cancel_button = ui.button(
                         "Cancel", on_click=cancel, color="slate-500"
                     ).props("dense size=md").classes("grow").tooltip(
-                        "Abort this page's experiment"
+                        "Abort this page's experiment and its automatic reruns"
                     )
                 ui.separator()
                 params_pane = ui.column().classes("w-full gap-2 p-0")
@@ -3007,6 +3233,11 @@ def _build_experiment_page(
                 if spec.tooltip:
                     widget.tooltip(spec.tooltip)
                 widgets[spec.key] = widget
+        if frozen_state["on"]:
+            _set_controls_enabled(_param_controls(), False)
+
+    def _param_controls() -> list[DisableableElement]:
+        return [w for w in widgets.values() if isinstance(w, DisableableElement)]
 
     def render_batch_images(title: str, tensor: Tensor) -> None:
         """A labelled, wrapping grid of every sample in `tensor`.
@@ -3057,6 +3288,17 @@ def _build_experiment_page(
         live = session.live_position
         if live is not None:
             position_label.text = _format_live_position(live)
+        # Keep this page's auto experiment alive while the page is open.
+        session.touch_auto_experiment(page_key)
+        # While this experiment records, its request must stay as-is: Run
+        # would replace the recorded seq and parameter edits would lie.
+        frozen = session.recording.is_recording(record_key)
+        if frozen != frozen_state["on"]:
+            frozen_state["on"] = frozen
+            _set_controls_enabled(
+                [kind_select, run_button, cancel_button, *_param_controls()],
+                not frozen,
+            )
         if my_seq[0] is None:
             return  # nothing requested from this page yet
         result = session.experiment_result_for(my_seq[0])
@@ -3206,6 +3448,275 @@ def _add_time_travel_button(session: Session) -> None:
         )
         if not status.available:
             button.props("disable")
+
+
+_FREQUENCY_UNIT_OPTIONS: dict[str, str] = {
+    "epoch": "Every nth epoch",
+    "batch": "Every nth batch",
+}
+
+# Phase-select sentinel for "count batches of every phase".
+_ANY_PHASE: str = "(any phase)"
+
+
+def _add_update_frequency_button(session: Session) -> None:
+    """The purple Update Frequency button (right of Time Travel) + dialog.
+
+    Configures `Session.set_update_frequency`: visualizations refresh every
+    nth epoch (the default, n=1) or every nth batch, optionally counting
+    only one phase's batches. The setting is locked while recordings are
+    active — recording frames advance at this frequency, so changing it
+    mid-recording would change the videos' time base.
+    """
+    phase_names = list(session.schedule.phases)
+
+    with ui.dialog() as dialog, ui.card().classes("min-w-96 p-6 gap-3"):
+        ui.label("Update frequency").classes("text-lg font-bold")
+        ui.label(
+            "How often all visualizations refresh while training runs. "
+            "They additionally refresh whenever training stops."
+        ).classes("text-sm text-slate-600")
+        unit_select = ui.select(
+            _FREQUENCY_UNIT_OPTIONS,
+            label="Update every",
+            value="epoch",
+            on_change=lambda: sync_phase_visibility(),
+        ).props("dense outlined").classes("w-full")
+        n_input = ui.number(
+            label="n", value=1, min=1, step=1, format="%d"
+        ).props("dense outlined").classes("w-full").tooltip(
+            "Update on every nth epoch/batch"
+        )
+        phase_select = ui.select(
+            [_ANY_PHASE] + phase_names,
+            label="Phase",
+            value=_ANY_PHASE,
+        ).props("dense outlined").classes("w-full").tooltip(
+            "Count only this phase's batches (batch unit only)"
+        )
+        error_label = ui.label("").classes("text-red-500 text-sm min-h-4")
+        lock_note = ui.label(
+            "The frequency is locked while recordings are active — frames "
+            "are recorded at this cadence."
+        ).classes("text-xs text-amber-700")
+        with ui.row():
+            ui.button("Cancel", on_click=dialog.close)
+            apply_button = ui.button("Apply", on_click=lambda: apply(), color="purple")
+
+    def sync_phase_visibility() -> None:
+        phase_select.set_visibility(unit_select.value == "batch")
+
+    def apply() -> None:
+        unit = str(unit_select.value)
+        phase = str(phase_select.value)
+        try:
+            n = int(n_input.value) if n_input.value is not None else 1
+            session.set_update_frequency(
+                unit=unit,
+                n=n,
+                phase=phase if unit == "batch" and phase != _ANY_PHASE else None,
+            )
+        except (TypeError, ValueError) as e:
+            error_label.text = str(e)
+            return
+        dialog.close()
+
+    def open_dialog() -> None:
+        freq = session.update_frequency
+        unit_select.value = freq.unit
+        n_input.value = freq.n
+        phase_select.value = freq.phase if freq.phase is not None else _ANY_PHASE
+        sync_phase_visibility()
+        error_label.text = ""
+        locked = session.recording.count() > 0
+        lock_note.set_visibility(locked)
+        if locked:
+            apply_button.disable()
+        else:
+            apply_button.enable()
+        dialog.open()
+
+    ui.button("Update Frequency", on_click=open_dialog, color="purple").props(
+        "dense size=md"
+    ).tooltip(
+        "How often visualizations refresh while training runs "
+        "(default: every epoch)"
+    )
+
+
+def _watch_views_recording(session: Session) -> bool:
+    """Whether any watch-page view records (its layer set is then frozen).
+
+    The histogram and MIN/MAX recordings render from the watch
+    accumulators, and unwatching a layer *drops* its accumulated stats —
+    so while either records, unwatch actions are refused.
+    """
+    recording = session.recording
+    return recording.is_recording("watch_histogram") or recording.is_recording(
+        "watch_minmax"
+    )
+
+
+def _add_record_button(
+    session: Session,
+    record_view: Callable[[], RecordedView | None] | None,
+) -> None:
+    """The red RECORD button and its dialog (every page's top bar).
+
+    The button label carries the active-recording count. The dialog offers
+    "Add this view to recording" for the page's own view (built by
+    `record_view` with the page's *current* parameters, frozen for the
+    recording's lifetime) plus the list of all active recordings, each
+    endable (finalize the MP4) or deletable (discard it), and end/delete-all
+    buttons. Frames are captured at the configured update frequency; while
+    a view records, the matching page controls are disabled.
+    """
+    with ui.dialog() as dialog, ui.card().classes("min-w-[30rem] p-6 gap-3"):
+        ui.label("Record visualizations").classes("text-lg font-bold")
+        content = ui.column().classes("w-full gap-3")
+
+    def unpin(view: RecordedView) -> None:
+        # An experiment recording pins the page's auto experiment so it
+        # keeps re-running even after the page closes; ending the recording
+        # puts it back on the page-heartbeat clock.
+        if view.page == "experiment":
+            session.unpin_auto_experiment(str(view.params.get("auto_key", "")))
+
+    def add_view() -> None:
+        view = record_view() if record_view is not None else None
+        if view is None:
+            ui.notify(
+                "Nothing to record on this page yet", type="warning"
+            )
+            return
+        if not session.recording.start(view):
+            ui.notify("This view is already being recorded", type="warning")
+            return
+        if view.page == "experiment":
+            session.pin_auto_experiment(str(view.params.get("auto_key", "")))
+        ui.notify(f"Recording into {session.recording.directory}/")
+        rebuild()
+
+    def end_view(key: str, view: RecordedView) -> None:
+        paths = session.recording.end(key)
+        unpin(view)
+        if paths:
+            ui.notify("Saved " + ", ".join(str(p) for p in paths))
+        else:
+            ui.notify("Recording ended before any frame was captured")
+        rebuild()
+
+    def delete_view(key: str, view: RecordedView) -> None:
+        session.recording.delete(key)
+        unpin(view)
+        rebuild()
+
+    def end_all() -> None:
+        for status in session.recording.statuses():
+            unpin(status.view)
+        paths = session.recording.end_all()
+        if paths:
+            ui.notify("Saved " + ", ".join(str(p) for p in paths))
+        rebuild()
+
+    def delete_all() -> None:
+        for status in session.recording.statuses():
+            unpin(status.view)
+        session.recording.delete_all()
+        rebuild()
+
+    def rebuild() -> None:
+        content.clear()
+        statuses = session.recording.statuses()
+        current = record_view() if record_view is not None else None
+        with content:
+            if current is None:
+                ui.label(
+                    "This page has nothing recordable yet (watch a layer / "
+                    "run an experiment first)."
+                ).classes("text-sm text-slate-600")
+            elif session.recording.is_recording(current.key):
+                ui.label(
+                    f"This view ({current.label}) is being recorded — its "
+                    "parameters are frozen."
+                ).classes("text-sm text-slate-600")
+            else:
+                ui.button(
+                    f"Add this view to recording — {current.label}",
+                    on_click=add_view,
+                    color="red",
+                ).props("dense size=md no-caps").classes("w-full")
+            if statuses:
+                ui.separator()
+                ui.label("Currently recording").classes(
+                    "text-xs uppercase tracking-wider text-slate-400"
+                )
+                for status in statuses:
+                    with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                        with ui.column().classes("grow min-w-0 gap-0"):
+                            ui.label(status.view.label).classes(
+                                "text-sm font-medium truncate"
+                            )
+                            note = f"{status.frames} frame" + (
+                                "" if status.frames == 1 else "s"
+                            )
+                            if status.error is not None:
+                                note += f" · {status.error}"
+                            ui.label(note).classes(
+                                "text-xs "
+                                + (
+                                    "text-red-600"
+                                    if status.error is not None
+                                    else "text-slate-500"
+                                )
+                            )
+                        ui.button(
+                            "End",
+                            on_click=lambda s=status: end_view(s.view.key, s.view),
+                            color="slate-700",
+                        ).props("dense size=sm no-caps").tooltip(
+                            "Finalize this view's MP4 file(s)"
+                        )
+                        ui.button(
+                            "Delete",
+                            on_click=lambda s=status: delete_view(
+                                s.view.key, s.view
+                            ),
+                            color="red",
+                        ).props("dense size=sm no-caps flat").tooltip(
+                            "Discard this view's recording"
+                        )
+                with ui.row().classes("w-full gap-2"):
+                    ui.button(
+                        "End all", on_click=end_all, color="slate-700"
+                    ).props("dense size=sm no-caps")
+                    ui.button(
+                        "Delete all", on_click=delete_all, color="red"
+                    ).props("dense size=sm no-caps flat")
+                ui.label(f"Files: {session.recording.directory}/").classes(
+                    "text-xs text-slate-500 font-mono"
+                )
+            with ui.row():
+                ui.button("Close", on_click=dialog.close)
+
+    def open_dialog() -> None:
+        rebuild()
+        dialog.open()
+
+    button = ui.button("RECORD", on_click=open_dialog, color="red").props(
+        "dense size=md no-caps"
+    )
+    button.tooltip(
+        "Record visualizations to MP4 — one file per view, one frame per "
+        "visualization update"
+    )
+
+    def refresh_label() -> None:
+        n = session.recording.count()
+        button.text = f"RECORD [{n} recording]" if n else "RECORD"
+
+    refresh_label()
+    ui.timer(0.5, refresh_label)
 
 
 def _summarize_epoch_ranges(epochs: list[int]) -> str:

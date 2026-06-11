@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import inspect
 import threading
+import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -36,7 +37,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 import torch
 from torch import Tensor, fx, nn
@@ -68,6 +69,9 @@ from nansense.restore import (
 from nansense.schedule import BatchPosition, Schedule
 from nansense.watch import WatchAccumulator, WatchSnapshot
 
+if TYPE_CHECKING:
+    from nansense.recording import RecordingManager
+
 
 class Mode(StrEnum):
     STEP = "step"
@@ -81,6 +85,45 @@ class Mode(StrEnum):
 # How many per-seq experiment results stay retrievable (oldest evicted
 # first); generous enough for every open client plus a little history.
 _EXPERIMENT_RESULTS_KEPT: int = 8
+
+# How long an auto-experiment registration survives without a heartbeat
+# (`touch_auto_experiment`). UI pages tick every ~0.2 s, so anything beyond
+# a few seconds means the page is gone.
+_AUTO_EXPERIMENT_TTL: float = 5.0
+
+FREQUENCY_UNITS: tuple[str, ...] = ("batch", "epoch")
+
+
+@dataclass(frozen=True)
+class UpdateFrequency:
+    """How often visualizations refresh while training runs.
+
+    `unit="epoch"` updates at the last batch of every `n`-th epoch;
+    `unit="batch"` updates on every `n`-th batch — counting only `phase`'s
+    batches when one is given. A frequency update publishes a snapshot,
+    re-runs the probe and any live auto experiments, and feeds recording
+    frames — all *without pausing*, in addition to the mode-driven captures
+    that pause training. The default is one update per epoch.
+    """
+
+    unit: str = "epoch"
+    n: int = 1
+    phase: str | None = None
+
+
+@dataclass
+class _AutoExperiment:
+    """One experiment re-run on every visualization update.
+
+    The request keeps its seq for the registration's whole lifetime, so
+    `experiment_result_for(seq)` always returns the freshest rerun and a
+    seeded experiment (deep dream derives its noise from the seq) draws the
+    same start on every update. `expires_at` is a `time.monotonic` deadline
+    refreshed by page heartbeats; `None` pins the entry (an active
+    recording holds the view)."""
+
+    request: ExperimentRequest
+    expires_at: float | None
 
 
 @dataclass(frozen=True)
@@ -176,6 +219,18 @@ class Session:
         self._experiment_result: ExperimentResult | None = None
         self._experiment_cancelled: set[int] = set()
         self._experiment_running: int | None = None
+        # Visualization update frequency (see `UpdateFrequency`): mutated by
+        # the UI under `_cv`; `_freq_counter` counts frequency-eligible
+        # batches and is touched by the training thread only.
+        self._update_frequency = UpdateFrequency()
+        self._freq_counter = 0
+        # Experiments re-run on every update, keyed by the registering
+        # client (a UI page or a recording). Mutated under `_cv`.
+        self._auto_experiments: dict[str, _AutoExperiment] = {}
+        # Per-view video recording (see `nansense.recording`); created
+        # lazily on first UI access so headless sessions never import the
+        # rendering stack.
+        self._recording_manager: RecordingManager | None = None
 
     @property
     def schedule(self) -> Schedule:
@@ -591,6 +646,116 @@ class Session:
                 timeout=timeout,
             )
 
+    @property
+    def update_frequency(self) -> UpdateFrequency:
+        """The current visualization update frequency setting."""
+        with self._cv:
+            return self._update_frequency
+
+    def set_update_frequency(
+        self, *, unit: str, n: int = 1, phase: str | None = None
+    ) -> None:
+        """Set how often visualizations refresh while training runs.
+
+        `unit="epoch"` updates at the end of every `n`-th epoch (the
+        default, with `n=1`); `unit="batch"` updates every `n`-th batch,
+        counting only `phase`'s batches when one is given. Raises
+        `ValueError` for an unknown unit/phase, `n < 1`, or a phase
+        combined with the epoch unit. Changing the setting restarts the
+        batch counter.
+        """
+        if unit not in FREQUENCY_UNITS:
+            raise ValueError(
+                f"unknown frequency unit {unit!r}; expected one of "
+                f"{FREQUENCY_UNITS}"
+            )
+        if n < 1:
+            raise ValueError(f"n must be at least 1, got {n}")
+        if phase is not None:
+            if unit != "batch":
+                raise ValueError("a phase filter only applies to unit='batch'")
+            if phase not in self._schedule.phases:
+                raise ValueError(
+                    f"unknown phase {phase!r}; declared: "
+                    f"{list(self._schedule.phases)}"
+                )
+        with self._cv:
+            self._update_frequency = UpdateFrequency(unit=unit, n=n, phase=phase)
+            self._freq_counter = 0
+
+    @property
+    def recording(self) -> RecordingManager:
+        """The session's per-view video recording manager (lazily created)."""
+        if self._recording_manager is None:
+            # Imported lazily: nansense.recording pulls in the UI rendering
+            # stack, which imports this module at the top level.
+            from nansense.recording import RecordingManager
+
+            self._recording_manager = RecordingManager()
+        return self._recording_manager
+
+    def register_auto_experiment(
+        self, key: str, *, kind: str, layer: str, params: dict[str, object]
+    ) -> int:
+        """Queue an experiment and re-run it on every visualization update.
+
+        Like `request_experiment`, but the request is also remembered under
+        `key` and re-executed (with the *same* seq, so deep dream redraws
+        the same seeded noise and `experiment_result_for(seq)` keeps
+        returning the freshest rerun) at every frequency update and capture.
+        The registration expires a few seconds after the last
+        `touch_auto_experiment(key)` heartbeat unless pinned by an active
+        recording (`pin_auto_experiment`). Re-registering a key replaces its
+        request. Returns the request's seq.
+        """
+        if kind not in EXPERIMENT_KINDS:
+            raise ValueError(
+                f"unknown experiment kind {kind!r}; "
+                f"expected one of {list(EXPERIMENT_KINDS)}"
+            )
+        with self._cv:
+            self._experiment_seq += 1
+            request = ExperimentRequest(
+                kind=kind, layer=layer, params=dict(params), seq=self._experiment_seq
+            )
+            self._auto_experiments[key] = _AutoExperiment(
+                request=request,
+                expires_at=time.monotonic() + _AUTO_EXPERIMENT_TTL,
+            )
+            self._experiment_queue.append(request)
+            self._cv.notify_all()
+            return request.seq
+
+    def touch_auto_experiment(self, key: str) -> None:
+        """Heartbeat: keep `key`'s auto experiment alive (no-op when pinned)."""
+        with self._cv:
+            entry = self._auto_experiments.get(key)
+            if entry is not None and entry.expires_at is not None:
+                entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+
+    def pin_auto_experiment(self, key: str) -> bool:
+        """Keep `key`'s auto experiment alive indefinitely (recordings).
+
+        Returns `False` when no such registration exists."""
+        with self._cv:
+            entry = self._auto_experiments.get(key)
+            if entry is None:
+                return False
+            entry.expires_at = None
+            return True
+
+    def unpin_auto_experiment(self, key: str) -> None:
+        """Put `key`'s auto experiment back on the heartbeat clock."""
+        with self._cv:
+            entry = self._auto_experiments.get(key)
+            if entry is not None and entry.expires_at is None:
+                entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+
+    def unregister_auto_experiment(self, key: str) -> None:
+        """Drop `key`'s auto experiment (already-published results remain)."""
+        with self._cv:
+            self._auto_experiments.pop(key, None)
+
     def current_weights(self) -> dict[str, Tensor]:
         """CPU clones of the model's parameters, read live at call time.
 
@@ -807,6 +972,10 @@ class Session:
         with self._cv:
             self._closed = True
             self._cv.notify_all()
+        # Finalize any in-flight recordings so their MP4 files are playable
+        # even when the training script simply runs to completion.
+        if self._recording_manager is not None:
+            self._recording_manager.end_all()
 
     def wait_until_paused(
         self,
@@ -848,6 +1017,64 @@ class Session:
                 return (pos.phase, pos.epoch, pos.batch_idx) == target
             case Mode.DETACH:
                 return False
+
+    def _should_freq_update(self, pos: BatchPosition) -> bool:
+        """Whether this batch publishes a non-pausing frequency update.
+
+        Training thread only (it advances `_freq_counter` for the batch
+        unit). Frequency updates fire in every mode — including detach and
+        the run-until modes — so the visualizations keep refreshing at the
+        configured cadence while training runs freely.
+        """
+        with self._cv:
+            if self._closed:
+                return False
+            freq = self._update_frequency
+        if freq.unit == "epoch":
+            return pos.is_last_in_epoch and (pos.epoch + 1) % freq.n == 0
+        if freq.phase is not None and pos.phase != freq.phase:
+            return False
+        self._freq_counter += 1
+        return self._freq_counter % freq.n == 0
+
+    def _run_auto_experiments(self) -> None:
+        """Re-run every live auto experiment (training thread, post-publish).
+
+        Runs at every snapshot publish — frequency updates and mode
+        captures alike — so open experiment pages and recordings track the
+        evolving weights. Expired registrations (no page heartbeat, not
+        pinned by a recording) are dropped first. A registration whose
+        initial request is still queued is taken over here: the queued
+        duplicate is removed so the request runs exactly once per update.
+        """
+        now = time.monotonic()
+        with self._cv:
+            for key in [
+                k
+                for k, e in self._auto_experiments.items()
+                if e.expires_at is not None and e.expires_at < now
+            ]:
+                del self._auto_experiments[key]
+            requests = [e.request for e in self._auto_experiments.values()]
+            seqs = {r.seq for r in requests}
+            if seqs:
+                self._experiment_queue = deque(
+                    r for r in self._experiment_queue if r.seq not in seqs
+                )
+        for request in requests:
+            self._run_experiment_guarded(request)
+
+    def _record_frames(self) -> None:
+        """Append one frame to every active recording (training thread).
+
+        Called at frequency updates only — recordings advance at the
+        configured show frequency, not on every user step. The manager
+        guards per-recorder failures internally, so a broken view never
+        kills the training thread.
+        """
+        manager = self._recording_manager
+        if manager is not None:
+            manager.capture_frames(self)
 
     def _install_hooks(self) -> None:
         self._activations.clear()
@@ -1356,6 +1583,7 @@ class _BatchContext:
         self._epoch = epoch
         self._position: BatchPosition | None = None
         self._captured = False
+        self._freq_update = False
         self._stats_only = False
 
     def __enter__(self) -> Self:
@@ -1388,15 +1616,21 @@ class _BatchContext:
         ):
             restorer.save_epoch_start(self._epoch)
         self._captured = self._session._should_capture(self._position)
+        # A frequency update publishes like a capture but never pauses; it
+        # is decided independently of the mode, so visualizations keep
+        # refreshing during step-epoch / run / detach.
+        self._freq_update = self._session._should_freq_update(self._position)
         self._stats_only = (
-            not self._captured and bool(self._session._watched_layers)
+            not self._captured
+            and not self._freq_update
+            and bool(self._session._watched_layers)
         )
-        # Capture and stats-only use the same hook installation: full fx
-        # interpreter (or full per-module hooks + root pre-hook in
-        # hook-mode). That way any name in `layer_names` — inputs, fx
-        # intermediates, modules — can be watched. The only difference
-        # is whether we publish a snapshot and pause at __exit__.
-        if self._captured or self._stats_only:
+        # Capture, frequency-update, and stats-only batches use the same
+        # hook installation: full fx interpreter (or full per-module hooks +
+        # root pre-hook in hook-mode). That way any name in `layer_names` —
+        # inputs, fx intermediates, modules — can be watched. The only
+        # difference is what happens at __exit__ (publish / pause / stats).
+        if self._captured or self._freq_update or self._stats_only:
             self._session._install_hooks()
         return self
 
@@ -1408,14 +1642,22 @@ class _BatchContext:
     ) -> None:
         if self._position is None:
             return
-        if self._captured or self._stats_only:
+        if self._captured or self._freq_update or self._stats_only:
             if exc is None and self._session._watched_layers:
                 self._session._update_watch_stats(self._position)
             self._session._remove_hooks()
-            if self._captured and exc is None and not self._session.closed:
-                self._session._publish_snapshot(self._position)
-                self._session._maybe_run_probe_at_capture()
-                self._session._wait_for_proceed()
+            if exc is None and not self._session.closed:
+                if self._captured or self._freq_update:
+                    self._session._publish_snapshot(self._position)
+                    self._session._maybe_run_probe_at_capture()
+                    # Auto experiments re-run on every publish, so a pause
+                    # shows fresh results and a free-running frequency
+                    # update keeps open pages / recordings current.
+                    self._session._run_auto_experiments()
+                if self._freq_update:
+                    self._session._record_frames()
+                if self._captured:
+                    self._session._wait_for_proceed()
             self._session._activations.clear()
         # Every batch boundary — captured, stats-only, or plain (detach) —
         # consumes an armed time-travel jump. `_wait_for_proceed` above

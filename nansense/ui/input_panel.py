@@ -88,6 +88,7 @@ class InputPanel:
         self.sample_idx = 0
         self._color = "#000000"
         self._spinner_max: int | None = None
+        self._frozen = False
         self._build()
 
     def _build(self) -> None:
@@ -169,7 +170,7 @@ class InputPanel:
                 self._perturb_caption = ui.label("").classes(
                     "text-xs text-slate-500 font-mono"
                 )
-                ui.button(
+                self._clear_button = ui.button(
                     "Clear",
                     on_click=self._on_clear,
                     color="slate-500",
@@ -212,6 +213,30 @@ class InputPanel:
         if color:
             self._color = color
             self._color_button.style(self._swatch_style())
+
+    def set_frozen(self, frozen: bool) -> None:
+        """Disable every control while the main view is being recorded.
+
+        The recording renders with the live probe state (pinned batch,
+        perturbations, sample), so the panel must not change it. No-op when
+        the state didn't change, so the page can call this every tick.
+        """
+        if frozen == self._frozen:
+            return
+        self._frozen = frozen
+        controls = (
+            self._sample_input,
+            self._pin_switch,
+            self._mode_toggle,
+            self._perturb_switch,
+            self._color_button,
+            self._clear_button,
+        )
+        for control in controls:
+            if frozen:
+                control.disable()
+            else:
+                control.enable()
 
     def set_image(self, src: str) -> None:
         self._image.set_source(src)
@@ -314,7 +339,7 @@ class InputPanel:
             self._on_clear()
 
     def _on_image_click(self, e: object) -> None:
-        if not self._perturb_switch.value:
+        if self._frozen or not self._perturb_switch.value:
             return
         tensor = self._current_input()
         if tensor is None or tensor.ndim != 4:
