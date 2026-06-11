@@ -13,28 +13,29 @@ pip install nansense
 
 nansense deliberately does not depend on torch: install PyTorch separately
 (see [pytorch.org](https://pytorch.org/get-started/locally/)) so your
-hardware-specific build — CUDA, ROCm, or CPU — is preserved. The attribution
-experiments on the experiment page additionally need
-`pip install nansense[captum]`, and the Lightning integration
-`pip install nansense[lightning]`.
+hardware-specific build — CUDA, ROCm, or CPU — is preserved. The same goes
+for the optional integrations: with `pip install captum` the experiment page
+offers the Captum attribution methods (they are hidden otherwise), and with
+`pip install lightning` the `nansense.lightning` module becomes importable.
 
 ## Running the examples (this repository)
 
 ```bash
-uv sync --extra cpu    # CPU-only machines (smallest download)
-uv sync --extra cu130  # NVIDIA GPU with CUDA 13
+uv sync --group cpu    # CPU-only machines (smallest download)
+uv sync --group cu130  # NVIDIA GPU with CUDA 13
 
 uv run python -m examples.vision.main --nansense-port 8080
 ```
 
-PyTorch is installed through one of several mutually exclusive extras, so
-pick the one matching your hardware: `cpu` (works everywhere), `cu126` /
-`cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or `rocm7-2` (AMD ROCm,
-Linux).
+PyTorch is installed through one of several mutually exclusive dependency
+groups, so pick the one matching your hardware: `cpu` (works everywhere),
+`cu126` / `cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or `rocm7-2`
+(AMD ROCm, Linux). Groups are local to this repository and never published,
+which is what keeps the PyPI package torch-free.
 
-A plain `uv sync` (no extra) installs no torch via the extras and falls back
-to the default PyPI wheels through transitive dependencies — always pass an
-extra. All variants are pinned in the same `uv.lock`, so switching extras is
+Always pass a group — a plain `uv sync` installs torch only transitively
+(via captum/lightning in the dev group) from the default PyPI wheels. All
+variants are pinned in the same `uv.lock`, so switching groups is
 reproducible and doesn't re-lock.
 
 Open `http://localhost:8080`. Training pauses on the first batch; drive it
@@ -118,9 +119,9 @@ runs. The runnable version of this loop is `examples/vision/main.py`.
 
 ## PyTorch Lightning
 
-With the `lightning` package installed (`uv add lightning` or
-`pip install nansense[lightning]`), a stock `Trainer` gets the full
-experience through a callback — no changes to the training code:
+With the `lightning` package installed (`pip install lightning`), a stock
+`Trainer` gets the full experience through a callback — no changes to the
+training code:
 
 ```python
 import lightning as L

@@ -59,6 +59,7 @@ from nansense.experiments import (
     _DEFAULT_DREAM_BATCH,
     EXPERIMENT_KINDS,
     ExperimentResult,
+    available_experiment_kinds,
 )
 from nansense.probe import ProbeResult
 from nansense.restore import TimeTravelError
@@ -2609,7 +2610,7 @@ def _build_experiment_page(
                 # parameter form; only the form below is rebuilt when the
                 # kind changes.
                 ui.select(
-                    dict(EXPERIMENT_KINDS),
+                    available_experiment_kinds(),
                     label="Experiment",
                     value=kind_holder["kind"],
                     on_change=on_kind_change,

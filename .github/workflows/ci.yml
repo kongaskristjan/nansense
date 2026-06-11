@@ -14,8 +14,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync --extra cpu
-      - run: uv run --extra cpu ty check
+      - run: uv sync --group cpu
+      - run: uv run --group cpu ty check
 
   test:
     runs-on: ubuntu-latest
@@ -24,5 +24,5 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync --extra cpu
-      - run: uv run --extra cpu pytest
+      - run: uv sync --group cpu
+      - run: uv run --group cpu pytest
