@@ -10,7 +10,7 @@ dist/
 .claude/*
 !.claude/skills/
 .playwright-mcp/
-data/
+data
 *.pt
 *.pth
 nansense-*.png
