@@ -34,6 +34,7 @@ Deep dream works on *any* captured layer via the fx interpreter.
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -52,6 +53,19 @@ EXPERIMENT_KINDS: dict[str, str] = {
     "neuron_ig": "Neuron Integrated Gradients (Captum)",
     "occlusion": "Occlusion (Captum)",
 }
+
+_CAPTUM_KINDS = frozenset(EXPERIMENT_KINDS) - {"deep_dream"}
+
+
+def available_experiment_kinds() -> dict[str, str]:
+    """Experiment kinds the UI should offer.
+
+    captum is an optional dependency the user installs themselves; the
+    captum-based kinds are simply not offered when it is absent.
+    """
+    if importlib.util.find_spec("captum") is not None:
+        return dict(EXPERIMENT_KINDS)
+    return {k: v for k, v in EXPERIMENT_KINDS.items() if k not in _CAPTUM_KINDS}
 
 # How many intermediate publishes a deep-dream run spreads over its steps.
 _PUBLISH_COUNT: int = 20
@@ -412,7 +426,7 @@ def _run_captum(
     try:
         from captum import attr as captum_attr
     except ImportError:
-        yield _error(request, "captum is not installed (`pip install nansense[captum]`)")
+        yield _error(request, "captum is not installed (`pip install captum`)")
         return
 
     p = request.params

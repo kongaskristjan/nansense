@@ -460,6 +460,9 @@ displayable `[0, 1]` range mapped through the input mean/std.
 
 **Captum** (`_run_captum`) imports lazily and runs the *unpatched* model
 inside the isolation scope (experiments only execute between batches).
+captum is an optional dependency the user installs themselves:
+`available_experiment_kinds()` hides the Captum kinds from the UI when it
+is absent, and `_run_captum` degrades to an error result as a safety net.
 Layer-targeted methods require an `nn.Module`; fx intermediates are
 rejected with a pointer to the producing module. Output-targeted methods
 (Grad-CAM, Occlusion) resolve target class −1 to the model's argmax and

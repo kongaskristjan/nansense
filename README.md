@@ -13,10 +13,10 @@ pip install nansense
 
 nansense deliberately does not depend on torch: install PyTorch separately
 (see [pytorch.org](https://pytorch.org/get-started/locally/)) so your
-hardware-specific build — CUDA, ROCm, or CPU — is preserved. The attribution
-experiments on the experiment page additionally need
-`pip install nansense[captum]`, and the Lightning integration
-`pip install nansense[lightning]`.
+hardware-specific build — CUDA, ROCm, or CPU — is preserved. The same goes
+for the optional integrations: with `pip install captum` the experiment page
+offers the Captum attribution methods (they are hidden otherwise), and with
+`pip install lightning` the `nansense.lightning` module becomes importable.
 
 ## Running the examples (this repository)
 
@@ -119,9 +119,9 @@ runs. The runnable version of this loop is `examples/vision/main.py`.
 
 ## PyTorch Lightning
 
-With the `lightning` package installed (`uv add lightning` or
-`pip install nansense[lightning]`), a stock `Trainer` gets the full
-experience through a callback — no changes to the training code:
+With the `lightning` package installed (`pip install lightning`), a stock
+`Trainer` gets the full experience through a callback — no changes to the
+training code:
 
 ```python
 import lightning as L

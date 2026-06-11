@@ -30,14 +30,10 @@ dependencies = [
 Homepage = "https://github.com/kongaskristjan/nansense"
 Repository = "https://github.com/kongaskristjan/nansense"
 
-[project.optional-dependencies]
-captum = ["captum>=0.9.0"]
-lightning = [
-    "lightning>=2.4",
-]
-
 # The torch variants live in (unpublished) dependency groups rather than
 # extras, so the PyPI package never installs torch — not even optionally.
+# captum and lightning (which both pull in torch) are likewise left to the
+# user: the corresponding features are not offered when they are absent.
 [dependency-groups]
 cpu = ["torch>=2.12.0", "torchvision>=0.27.0"]
 cu126 = ["torch>=2.12.0", "torchvision>=0.27.0"]

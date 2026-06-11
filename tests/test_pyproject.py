@@ -38,16 +38,17 @@ def test_group_contains_torch_and_torchvision(group: str) -> None:
 
 
 def test_published_metadata_is_torch_free() -> None:
-    """`pip install nansense` (with or without extras) must never pull torch
-    or torchvision directly. captum and lightning depend on torch, so they
-    may only appear in opt-in extras and the dev group, never in the base
-    dependencies.
+    """`pip install nansense` (with or without extras) must never pull torch.
+
+    torch, torchvision, captum, and lightning (the latter two depend on
+    torch) are all delegated to the user: they may only appear in the
+    unpublished dependency groups, never in the published metadata.
     """
     data = _load_pyproject()
-    base = _requirement_names(data["project"]["dependencies"])
-    assert {"torch", "torchvision", "captum", "lightning"}.isdisjoint(base)
-    for extra, requirements in data["project"]["optional-dependencies"].items():
-        assert {"torch", "torchvision"}.isdisjoint(_requirement_names(requirements)), extra
+    forbidden = {"torch", "torchvision", "captum", "lightning"}
+    assert forbidden.isdisjoint(_requirement_names(data["project"]["dependencies"]))
+    for extra, requirements in data["project"].get("optional-dependencies", {}).items():
+        assert forbidden.isdisjoint(_requirement_names(requirements)), extra
 
 
 def test_dev_group_has_no_direct_torch() -> None:
