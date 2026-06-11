@@ -8,15 +8,79 @@ dependencies = [
     "nicegui>=3.12.1",
     "pillow>=12.2.0",
     "plotly>=6.7.0",
+]
+
+[project.optional-dependencies]
+cpu = ["torch>=2.12.0", "torchvision>=0.27.0"]
+cu126 = ["torch>=2.12.0", "torchvision>=0.27.0"]
+cu130 = ["torch>=2.12.0", "torchvision>=0.27.0"]
+cu132 = ["torch>=2.12.0", "torchvision>=0.27.0"]
+rocm7-2 = [
     "torch>=2.12.0",
+    "torchvision>=0.27.0",
+    "triton-rocm ; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
-    "torchvision>=0.27.0",
     "ty>=0.0.38",
 ]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu126" },
+        { extra = "cu130" },
+        { extra = "cu132" },
+        { extra = "rocm7-2" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu132", extra = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm7-2", extra = "rocm7-2", marker = "sys_platform == 'linux'" },
+]
+triton-rocm = [
+    { index = "pytorch-rocm7-2", extra = "rocm7-2", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu132", extra = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm7-2", extra = "rocm7-2", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm7-2"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

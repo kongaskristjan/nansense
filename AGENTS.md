@@ -4,7 +4,8 @@
 
 - Python 3.13
 - Package manager: `uv`
-- Dependencies: `uv sync`, `uv add <package>` etc.
+- Dependencies: `uv sync --extra cpu`, `uv add <package>` etc.
+  - PyTorch is installed via mutually exclusive extras (`cpu`, `cu126`, `cu130`, `cu132`, `rocm7-2`), each pinned to the matching PyTorch wheel index in `pyproject.toml`. Always sync with an extra; agents should use `--extra cpu`.
 - Directory structure:
   - 'nansense/' - Nansense visualization library (no training)
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)

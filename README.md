@@ -8,9 +8,23 @@ runs. See `INTERNALS.md` for how it works under the hood.
 ## Running
 
 ```bash
-uv sync
+uv sync --extra cpu
 uv run python -m examples.vision.main --nansense-port 8080
 ```
+
+PyTorch is installed through one of several mutually exclusive extras, so
+pick the one matching your hardware: `cpu` (smallest download, works
+everywhere), `cu126` / `cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or
+`rocm7-2` (AMD ROCm, Linux). For example, on a CUDA 13 machine:
+
+```bash
+uv sync --extra cu130
+```
+
+A plain `uv sync` (no extra) installs no torch via the extras and falls back
+to the default PyPI wheels through transitive dependencies — always pass an
+extra. All variants are pinned in the same `uv.lock`, so switching extras is
+reproducible and doesn't re-lock.
 
 Open `http://localhost:8080`. Training pauses on the first batch; drive it
 from the top bar (step batch / epoch / custom, detach, time travel).
