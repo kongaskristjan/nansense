@@ -562,9 +562,11 @@ def _build_page(
                     # never opened. See quasarframework/quasar#16167. Block-level
                     # children stack vertically anyway.
                     with ui.element("div").classes("min-w-64"):
-                        ui.menu_item(
-                            "Open watch view  →",
-                            on_click=lambda: ui.navigate.to("/watch", new_tab=True),
+                        # A real anchor (href) instead of a JS navigate: the
+                        # browser natively opens middle/ctrl clicks in a new
+                        # tab and plain clicks in the current one.
+                        ui.menu_item("Open watch view  →").props(
+                            'href="/watch"'
                         ).classes("font-medium")
                         ui.separator()
                         ui.menu_item(
@@ -3257,16 +3259,18 @@ class _LayerView:
                 # rendered DOM, so the attribute lives on these divs.
                 # The Weights button only appears for layers that actually own
                 # parameters; relu/add/input nodes have nothing to show.
+                # href (not on_click navigation) renders the buttons as real
+                # anchors, so the browser natively opens middle/ctrl clicks
+                # in a new tab and plain clicks in the current one.
                 if weights:
                     with ui.element("div").props("data-card-action"):
                         ui.button(
                             "Weights",
                             icon="grid_on",
-                            on_click=lambda: ui.navigate.to(
-                                f"/weights?layer={quote(name)}", new_tab=True
-                            ),
                             color="blue",
-                        ).props("dense no-caps").style(
+                        ).props(
+                            f'dense no-caps href="/weights?layer={quote(name)}"'
+                        ).style(
                             "min-height: 0; padding: 1px 6px; font-size: 11px"
                         ).tooltip(
                             f"Inspect this layer's weights ({len(weights)})"
@@ -3275,11 +3279,10 @@ class _LayerView:
                     ui.button(
                         "Experiment",
                         icon="science",
-                        on_click=lambda: ui.navigate.to(
-                            f"/experiment?layer={quote(name)}", new_tab=True
-                        ),
                         color="yellow-8",
-                    ).props("dense no-caps").style(
+                    ).props(
+                        f'dense no-caps href="/experiment?layer={quote(name)}"'
+                    ).style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip(
                         "Run deep dream / Captum experiments on this layer"
