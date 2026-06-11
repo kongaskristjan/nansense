@@ -721,12 +721,25 @@ class Session:
         `TimeTravelJump`. On a disabled session the restorer is inert: the
         loop runs exactly once and nothing touches the disk.
         """
+        restorer = TrainingRestorer(self, cache_dir=cache_dir)
+        self.attach_restorer(restorer)
+        return restorer
+
+    def attach_restorer(self, restorer: TrainingRestorer) -> None:
+        """Register an externally-created restorer with this session.
+
+        Binds the restorer to the session and enables time travel, exactly
+        like `training_restorer()` — but for restorer objects that must be
+        created before the session exists (e.g. the Lightning integration's
+        `LightningRestorer`, built by `fit_with_time_travel` and attached
+        once the first `trainer.fit` constructs the session). On a disabled
+        session the restorer is bound but stays inert.
+        """
         if self._restorer is not None:
             raise RuntimeError("this session already has a training restorer")
-        restorer = TrainingRestorer(self, cache_dir=cache_dir)
+        restorer._session = self
         if self._enabled:
             self._restorer = restorer
-        return restorer
 
     def request_time_travel(self, epoch: int) -> None:
         """Ask the training thread to restart at the start of `epoch`.

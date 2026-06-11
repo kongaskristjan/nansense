@@ -11,8 +11,14 @@ dependencies = [
     "torch>=2.12.0",
 ]
 
+[project.optional-dependencies]
+lightning = [
+    "lightning>=2.4",
+]
+
 [dependency-groups]
 dev = [
+    "lightning>=2.4",
     "pytest>=9.0.3",
     "torchvision>=0.27.0",
     "ty>=0.0.38",

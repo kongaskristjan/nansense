@@ -564,6 +564,55 @@ disabled with the reason as a tooltip on a wrapper div — Quasar suppresses
 pointer events on disabled buttons, so the tooltip can't live on the
 button itself.
 
+## PyTorch Lightning integration (`nansense.lightning`)
+
+`NansenseCallback` maps the batch context onto Lightning's hook pairs: the
+context returned by `session.batch(...)` is entered in
+`on_train_batch_start` / `on_validation_batch_start` and exited in the
+matching `*_batch_end` (where the capture, pause, and a possible
+`TimeTravelJump` happen — on the training thread, inside Lightning's
+hook). The gradient contract holds unchanged because Lightning's automatic
+optimization zero-grads before backward and `optimizer.step()` doesn't
+clear `.grad`. Sanity-check val batches are skipped
+(`trainer.sanity_checking`); `on_exception` closes an open context without
+publishing. The session is created once in `on_fit_start` (optimizers are
+configured by then; a time-travel re-fit reuses it) with a placeholder
+schedule; the real per-phase batch counts are re-declared at every
+`on_train_epoch_start` (and `on_validation_epoch_start`, for counts that
+were unknown at epoch start) via `set_schedule` — per-epoch re-declaration
+is also what models `check_val_every_n_epoch > 1` runs, where epochs
+without validation declare a train-only schedule. Mid-epoch validation and
+unsized dataloaders are rejected: the schedule must be known up-front.
+
+Time travel cannot live in the callback — it needs to own the retry loop —
+so `fit_with_time_travel` transplants the `while restorer.pending(): with
+restorer:` shape around `trainer.fit`. Its `LightningRestorer` (a
+`TrainingRestorer` subclass created before the session exists and bound
+via `Session.attach_restorer`) delegates all state restoration to
+Lightning: epoch boundaries are checkpointed with
+`trainer.save_checkpoint` into `epoch_<n>.ckpt`, and `_restore` just
+records the checkpoint path and rewinds nansense's schedule/watch
+bookkeeping — the next attempt's `trainer.fit(ckpt_path=...)` restores
+model, optimizers, schedulers, and loop counters itself. Each attempt
+needs a fresh trainer (hence the factory argument): Lightning trainers are
+single-use for `fit`, and the jump's teardown has already run. The
+session's first-batch `save_epoch_start` call is a no-op here; saves
+happen at Lightning's own boundaries, where resume semantics are exact.
+
+Lightning checkpoints don't include global RNG state, so the callback
+stashes torch/CUDA states in `on_save_checkpoint` and restores them in
+`on_load_checkpoint`. The anchor positions are deliberate: creating a
+dataloader iterator draws a seed from the global stream, and a resumed fit
+creates its first train iterator eagerly (before `on_train_start`) while a
+running fit creates each next epoch's lazily (after
+`on_train_epoch_start`). Anchoring both the epoch-0 save (`on_fit_start`)
+and the restore (`on_load_checkpoint`) *before any dataloader setup* — and
+the other epochs' saves at `on_train_epoch_end`, after which nothing draws
+until the next epoch's iterator — keeps the save→draw sequence identical
+between an epoch and its replay, which is what makes the replayed
+DataLoader shuffling exact. (Lightning's sanity check runs under
+`isolate_rng()`, so it never shifts the stream.)
+
 ## UI layer
 
 `nansense.ui` is a thin NiceGUI app that reads `Session.snapshot` and
