@@ -3656,7 +3656,7 @@ def _add_settings_button(
                         ui.button(
                             "End",
                             on_click=lambda s=status: end_view(s.view.key, s.view),
-                            color="slate-700",
+                            color="grey-8",
                         ).props("dense size=sm no-caps").tooltip(
                             "Finalize this view's MP4 file(s)"
                         )
@@ -3671,7 +3671,7 @@ def _add_settings_button(
                         )
                 with ui.row().classes("w-full gap-2"):
                     ui.button(
-                        "End all", on_click=end_all, color="slate-700"
+                        "End all", on_click=end_all, color="grey-8"
                     ).props("dense size=sm no-caps")
                     ui.button(
                         "Delete all", on_click=delete_all, color="red"
