@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
 
-from nansense.ui.input_panel import normalized_color
+from nansense.session import Session
+from nansense.ui.input_panel import InputPanel, normalized_color
 
 CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR_STD = (0.2470, 0.2435, 0.2616)
@@ -57,3 +61,22 @@ def test_normalized_color_rejects_bad_input(
     std: tuple[float, ...] | None,
 ) -> None:
     assert normalized_color(hex_color, channels, mean, std) is None
+
+
+@pytest.mark.parametrize(
+    "perturbations, expected",
+    [
+        ({}, False),
+        ({(0, 1, 2): (0.5, 0.5, 0.5)}, True),
+    ],
+)
+def test_compare_active_iff_perturbed(
+    perturbations: dict[tuple[int, int, int], tuple[float, ...]],
+    expected: bool,
+) -> None:
+    """`compare` is not a toggle: it derives from the perturbation map."""
+    panel = InputPanel.__new__(InputPanel)
+    panel._session = cast(
+        Session, SimpleNamespace(perturbations=perturbations)
+    )
+    assert panel.compare is expected

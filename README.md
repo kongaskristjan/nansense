@@ -188,9 +188,10 @@ performance warning), or clears every watch.
 The right "Input Selection" pane shows the input image and sample picker.
 "Pin batch" freezes the current batch as a probe input that is re-run on
 every pause, so activation changes are attributable to training rather than
-to the batch changing. "Click to perturb" paints pixels onto the input;
-"Compare with original" then shows per-layer activation diffs, tracing how
-far the edit propagates (the receptive field).
+to the batch changing. "Click to perturb" paints pixels onto the input; as
+soon as at least one pixel is perturbed, the layer strips switch to per-layer
+activation diffs against the original input (a note below the controls says
+so), tracing how far the edit propagates (the receptive field).
 
 ![Main view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-main.png)
 

@@ -3,10 +3,10 @@
 Hosts the per-sample spinner (moved out of the top bar), the batch-pinning
 and click-to-perturb controls for probe runs (see `nansense.probe`), and the
 input image. The panel owns the per-connection view state the page's tick
-loop reads (`sample_idx`, `compare`) and forwards pin / probe-mode /
-perturbation changes to the session; the session reacts asynchronously by
-publishing a new `ProbeResult`, which the tick loop picks up like a new
-snapshot.
+loop reads (`sample_idx`, plus the derived `compare`) and forwards pin /
+probe-mode / perturbation changes to the session; the session reacts
+asynchronously by publishing a new `ProbeResult`, which the tick loop picks
+up like a new snapshot.
 
 The input image is a `ui.interactive_image`, so clicks arrive with
 coordinates in the image's *native* pixel space regardless of the CSS
@@ -67,8 +67,8 @@ class InputPanel:
     """Builds the sidebar's controls inside the currently open container.
 
     `on_change` marks the page dirty so the next tick re-renders the strips
-    (sample flips, unpinning, and the compare toggle change what's displayed
-    without a new snapshot or probe result arriving).
+    (sample flips, unpinning, and clearing perturbations change what's
+    displayed without a new snapshot or probe result arriving).
     """
 
     def __init__(
@@ -86,7 +86,6 @@ class InputPanel:
         self._input_std = input_std
         self._on_change = on_change
         self.sample_idx = 0
-        self.compare = False
         self._color = "#000000"
         self._spinner_max: int | None = None
         self._build()
@@ -159,19 +158,9 @@ class InputPanel:
                     # Hex only: normalized_color expects #rrggbb, so don't let
                     # the picker emit rgba()/hsl() strings.
                     picker.q_color.props("format-model=hex")
-            self._compare_switch = ui.switch(
-                "Compare with original",
-                on_change=self._on_compare_change,
-            ).props("dense").classes("self-start").tooltip(
-                "Show each layer's activation diff (perturbed − original); "
-                "with nothing perturbed the diff is zero and renders white"
-            )
-            # Compare belongs to editing mode (it shows white with zero
-            # edits); the count/clear row only makes sense once a pixel has
-            # actually been perturbed (`refresh_status` keeps it in sync).
-            self._compare_switch.bind_visibility_from(
-                self._perturb_switch, "value"
-            )
+            # The count/clear row and the compare note only make sense once a
+            # pixel has actually been perturbed (`refresh_status` keeps both
+            # in sync).
             self._clear_row = ui.row().classes(
                 "w-full items-center justify-between no-wrap"
             )
@@ -187,6 +176,23 @@ class InputPanel:
                 ).props("dense size=sm no-caps").tooltip(
                     "Remove all perturbations"
                 )
+            self._compare_caption = ui.label(
+                "Comparing with original: layer strips show the "
+                "activation diff (perturbed − original)"
+            ).classes("text-xs text-slate-500 self-start")
+            self._compare_caption.set_visibility(
+                bool(self._session.perturbations)
+            )
+
+    @property
+    def compare(self) -> bool:
+        """Whether the tick loop should render the diff view.
+
+        Comparing is not a user toggle: it is active exactly while at least
+        one pixel is perturbed, so the diff is never the all-zero (white)
+        no-edit case.
+        """
+        return bool(self._session.perturbations)
 
     @staticmethod
     def _section_label(text: str) -> None:
@@ -239,6 +245,8 @@ class InputPanel:
         has_perturbations = n > 0
         if self._clear_row.visible != has_perturbations:
             self._clear_row.set_visibility(has_perturbations)
+        if self._compare_caption.visible != has_perturbations:
+            self._compare_caption.set_visibility(has_perturbations)
         self._error_label.text = self._session.probe_error or ""
 
     def _current_input(self) -> Tensor | None:
@@ -291,23 +299,19 @@ class InputPanel:
 
     def _on_clear(self) -> None:
         self._session.clear_perturbations()
-        self.refresh_status()  # hide compare/clear now, not on the next tick
+        self.refresh_status()  # hide the compare note/clear row now
+        self._on_change()  # drop the diff view now, not on the next probe
 
     def _on_perturb_change(self, e: object) -> None:
         if getattr(e, "value", False):
             self._image.classes(add="cursor-crosshair")
         else:
             # Leaving editing mode discards the edits and the diff view: the
-            # image and strips revert to the unperturbed input. Resetting the
-            # (now hidden) compare switch fires its own change handler, which
-            # clears `self.compare` and marks the page dirty.
+            # image and strips revert to the unperturbed input (clearing the
+            # perturbations also deactivates `compare`, which derives from
+            # them).
             self._image.classes(remove="cursor-crosshair")
-            self._compare_switch.set_value(False)
             self._on_clear()
-
-    def _on_compare_change(self, e: object) -> None:
-        self.compare = bool(getattr(e, "value", False))
-        self._on_change()
 
     def _on_image_click(self, e: object) -> None:
         if not self._perturb_switch.value:

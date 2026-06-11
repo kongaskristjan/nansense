@@ -394,8 +394,8 @@ clones the base input, writes the in-range entries (out-of-range or
 channel-mismatched ones are skipped — the base may have changed shape since
 the click), and the probe runs a *second* forward on the copy inside the
 same isolation scope. `ProbeResult` then carries `perturbed_input` /
-`perturbed_activations` next to the base pair, and the UI renders either
-the perturbed activations or the per-layer diff ("Compare with original").
+`perturbed_activations` next to the base pair, and the UI renders the
+per-layer diff against the original whenever any perturbation exists.
 Perturbations alone keep probing active without a pin — the base falls
 back to the snapshot's input (`_snapshot_input`), so edits track the
 current training batch.
@@ -741,21 +741,20 @@ It does not touch tensors directly until they need to be rendered.
   and a "Perturb" section: the "Click to perturb" switch with a compact
   color-swatch button beside it (the button's background *is* the current
   color; clicking opens a nested `ui.color_picker`, forced to
-  `format-model=hex` since `normalized_color` expects `#rrggbb`), the
-  "Compare with original" switch, and a perturbed-pixel count with a
-  "Clear" button on its right. Compare is visible whenever "Click to
-  perturb" is on (`bind_visibility_from` the perturb switch) — with
-  nothing perturbed its diff is identically zero and renders as white
-  strips, in both the probe and the plain-snapshot paths — while the
-  count/clear row shows only when perturbations exist (`refresh_status`
-  keeps it in sync). Switching "Click to perturb" off clears all
-  perturbations and resets compare — leaving editing mode discards the
-  edits and the diff view.
+  `format-model=hex` since `normalized_color` expects `#rrggbb`), and a
+  perturbed-pixel count with a "Clear" button on its right, followed by a
+  "Comparing with original" note. Comparing is not a user toggle:
+  `panel.compare` (threaded into `_compute_frame`) derives from the
+  session's perturbation map, so the diff view is active exactly while at
+  least one pixel is perturbed — the all-zero (white-strip) no-edit diff
+  is unreachable from the UI. The count/clear row and the compare note
+  show only when perturbations exist (`refresh_status` keeps them in
+  sync). Switching "Click to perturb" off clears all perturbations —
+  leaving editing mode discards the edits and, with them, the diff view.
   Pin / mode / perturbation changes call straight
   into the session; the session reacts by publishing a new `ProbeResult`,
-  which the tick loop picks up like a new snapshot. The compare switch is
-  pure view state (`panel.compare`, threaded into `_compute_frame`) — both
-  forwards are already in the result, so flipping it just re-renders. A
+  which the tick loop picks up like a new snapshot — both forwards are
+  already in the result, so adding or clearing edits just re-renders. A
   failed pin (no snapshot yet) reverts the switch with the usual
   one-tick-deferred value write.
 - The input image is a `ui.interactive_image` sized by CSS to
