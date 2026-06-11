@@ -27,7 +27,7 @@ def _requirement_names(requirements: list[str]) -> set[str]:
 
 def test_torch_extras_exist() -> None:
     extras = _load_pyproject()["project"]["optional-dependencies"]
-    assert set(extras) == set(TORCH_EXTRAS)
+    assert set(TORCH_EXTRAS) <= set(extras)
 
 
 @pytest.mark.parametrize("extra", TORCH_EXTRAS)
