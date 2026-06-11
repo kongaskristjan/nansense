@@ -8,18 +8,16 @@ runs. See `INTERNALS.md` for how it works under the hood.
 ## Running
 
 ```bash
-uv sync --extra cpu
+uv sync --extra cpu    # CPU-only machines (smallest download)
+uv sync --extra cu130  # NVIDIA GPU with CUDA 13
+
 uv run python -m examples.vision.main --nansense-port 8080
 ```
 
 PyTorch is installed through one of several mutually exclusive extras, so
-pick the one matching your hardware: `cpu` (smallest download, works
-everywhere), `cu126` / `cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or
-`rocm7-2` (AMD ROCm, Linux). For example, on a CUDA 13 machine:
-
-```bash
-uv sync --extra cu130
-```
+pick the one matching your hardware: `cpu` (works everywhere), `cu126` /
+`cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or `rocm7-2` (AMD ROCm,
+Linux).
 
 A plain `uv sync` (no extra) installs no torch via the extras and falls back
 to the default PyPI wheels through transitive dependencies — always pass an
