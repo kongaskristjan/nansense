@@ -41,7 +41,7 @@ import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -50,7 +50,7 @@ import uvicorn
 from fastapi import FastAPI
 from plotly.subplots import make_subplots
 from nicegui import ui
-from nicegui.events import GenericEventArguments
+from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 import torch
 from torch import Tensor
 
@@ -64,6 +64,7 @@ from nansense.probe import ProbeResult
 from nansense.restore import TimeTravelError
 from nansense.schedule import BatchPosition, Schedule
 from nansense.session import BatchSnapshot, Session
+from nansense.ui.bin_samples import sample_bin
 from nansense.ui.graph import build_mermaid, slug
 from nansense.ui.input_panel import InputPanel
 from nansense.ui.render import (
@@ -1222,8 +1223,12 @@ def _make_histogram_figure(
     *,
     log_x: bool = False,
     log_y: bool = False,
+    trace_names: list[str] | None = None,
 ) -> go.Figure:
     """Plotly bar chart of the signed-log histogram, one subplot row per phase.
+
+    `trace_names` overrides the default "phase (ep N)" trace/subplot names —
+    the per-channel view appends the channel there.
 
     `kind` selects which of the two histograms on each `LayerStatsSnapshot`
     to plot ("activation" or "gradient"). `per_phase` may be empty (initial
@@ -1263,7 +1268,7 @@ def _make_histogram_figure(
             "<br>count %{customdata[0]}<extra></extra>"
         )
     phases = _phases_with_data(per_phase, kind)
-    names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+    names = trace_names or [f"{p} (ep {per_phase[p].epoch})" for p in phases]
     fig = make_subplots(
         rows=max(1, len(phases)),
         cols=1,
@@ -1304,6 +1309,10 @@ def _make_histogram_figure(
         plot_bgcolor="#f8fafc",
         paper_bgcolor="white",
         showlegend=False,
+        # Hover by x-position instead of proximity: a short bar is hoverable
+        # from anywhere in its column, which the per-channel sample strip
+        # (and reading counts generally) depends on.
+        hovermode="x",
     )
     x_range, y_range = _axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
     if log_x:
@@ -1354,14 +1363,14 @@ def _build_watch_page(
     second dropdown picks which phase (train / val / …) the cards show —
     one phase at a time, in both views:
 
-    - MIN/MAX (the default) — the extreme-activation patch grids
+    - HISTOGRAM (the default) — one plotly figure per tensor kind for the
+      selected phase's latest epoch, with the "Log x" / "Log y" axis
+      checkboxes and a per-histogram "Per channel" switch.
+    - MIN/MAX — the extreme-activation patch grids
       (channels across, per-channel top samples down), one per patch
-      type, each toggleable by its own checkbox, plus a heatmap checkbox
+      type, each toggleable by its own checkbox (only "Max pixel" starts
+      checked), plus a heatmap checkbox
       that blends the stored activation maps over the patches.
-    - HISTOGRAM — one plotly figure per tensor kind (activations and
-      activation gradients) for the selected phase's latest epoch, plus
-      the "Log x" / "Log y" axis-scale checkboxes.
-
     Each checkbox group is only visible while its view is selected. A
     `ui.timer` polls `session.watch_snapshot()` and refreshes the visible
     view in place. Layers can also be unwatched directly from the card
@@ -1381,10 +1390,11 @@ def _build_watch_page(
     # `_use_density`); the header checkboxes flip them and re-render every
     # plot immediately.
     axis_log = {"x": False, "y": False}
-    # MIN/MAX view state (the default view): which of the four grids are
-    # shown and whether the activation heatmap is blended over the patches.
-    view_minmax = {"on": True}
-    grid_on: dict[PatchType, bool] = dict.fromkeys(PATCH_TYPES, True)
+    # MIN/MAX view state: which of the four grids are shown (only "Max
+    # pixel" starts checked) and whether the activation heatmap is blended
+    # over the patches. HISTOGRAM is the default view.
+    view_minmax = {"on": False}
+    grid_on: dict[PatchType, bool] = {t: t == "max_pixel" for t in PATCH_TYPES}
     heat_on = {"on": False}
     # Every card shows one phase at a time, picked by a header dropdown
     # shared by both views; defaults to the schedule's first phase.
@@ -1425,8 +1435,8 @@ def _build_watch_page(
                 "text-sm text-slate-500 ml-2"
             )
             ui.select(
-                [_VIEW_MINMAX, _VIEW_HISTOGRAM],
-                value=_VIEW_MINMAX,
+                [_VIEW_HISTOGRAM, _VIEW_MINMAX],
+                value=_VIEW_HISTOGRAM,
                 on_change=lambda e: set_mode(e.value),
             ).props("dense outlined options-dense").classes(
                 "ml-4 text-sm"
@@ -1477,7 +1487,7 @@ def _build_watch_page(
                     "patches (red positive, blue negative), with a scale "
                     "next to each grid"
                 )
-            hist_controls.set_visibility(False)
+            minmax_controls.set_visibility(False)
             ui.button(
                 icon="refresh",
                 on_click=lambda: refresh(),
@@ -1617,6 +1627,127 @@ def _figure_payload(fig: go.Figure) -> dict[str, object]:
     return {**fig.to_plotly_json(), "config": _PLOTLY_CONFIG}
 
 
+def _hover_attach_js(element_id: int) -> str:
+    """JS that wires the figure's `plotly_hover` to a NiceGUI event.
+
+    Plotly events fire on the graph div's own emitter, not as DOM events,
+    so NiceGUI's `.on()` can't subscribe to them — the handler is attached
+    with `gd.on` instead, with retries until Plotly has drawn the figure
+    (which is when `gd.on` exists). Idempotent via the `_nansenseHover`
+    flag, and throttled to one event per 200 ms so hovering across many
+    bars doesn't flood the websocket. Handlers attached to the div survive
+    `Plotly.react`/`update`, so one attach covers later figure rebuilds.
+    """
+    event = f"nansense_hist_hover_{element_id}"
+    return (
+        "(function attach(tries) {"
+        f"const gd = getHtmlElement({element_id});"
+        "if (!gd || !gd.on) {"
+        "  if (tries > 0) setTimeout(() => attach(tries - 1), 300);"
+        "  return;"
+        "}"
+        "if (gd._nansenseHover) return;"
+        "gd._nansenseHover = true;"
+        "gd.on('plotly_hover', (ev) => {"
+        "  const p = ev.points && ev.points[0];"
+        "  if (!p) return;"
+        "  const now = Date.now();"
+        "  if (gd._nansenseHoverAt && now - gd._nansenseHoverAt < 200) return;"
+        "  gd._nansenseHoverAt = now;"
+        f"  emitEvent('{event}', {{bin: p.pointNumber}});"
+        "});"
+        "})(20);"
+    )
+
+
+def _bin_samples_note(text: str) -> str:
+    return f'<div class="text-xs text-slate-400 italic py-1">{text}</div>'
+
+
+_HOVER_HINT_HTML: str = _bin_samples_note(
+    "hover a bar to see a few random input samples from that value range "
+    "(drawn from the last captured batch only)"
+)
+
+
+def _bin_samples_html(
+    snapshot: BatchSnapshot | None,
+    layer: str,
+    kind: str,
+    channel: int,
+    bin_idx: int,
+    input_name: str | None,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+    k: int = 4,
+) -> str:
+    """The hover strip for one (channel, bin) bar of a per-channel histogram.
+
+    The histogram aggregates whole epochs, but its source values are
+    discarded every batch — samples can only come from the last captured
+    batch (`session.snapshot`), and every caption names that batch so the
+    narrower population is explicit.
+    """
+    if snapshot is None:
+        return _bin_samples_note(
+            "no batch captured yet — sampling needs a captured batch"
+        )
+    pos = snapshot.position
+    source = (
+        "last captured batch only — "
+        f"{html.escape(pos.phase)} ep {pos.epoch}, batch {pos.batch_idx}"
+    )
+    tensors = (
+        snapshot.activations
+        if kind == "activation"
+        else snapshot.activation_gradients
+    )
+    tensor = tensors.get(layer)
+    if tensor is None:
+        return _bin_samples_note(
+            f"no captured {kind}s for this layer in the {source}"
+        )
+    input_tensor = snapshot.activations.get(input_name) if input_name else None
+    samples = sample_bin(
+        tensor, input_tensor, channel=channel, bin_idx=bin_idx, k=k
+    )
+    header = (
+        '<div class="text-xs text-slate-600">'
+        f'<span class="font-bold">ch {channel}</span>, '
+        f"value ≈ {_BIN_VALUE_LABELS[bin_idx]} — random samples, "
+        f'<span class="font-bold">{source}</span></div>'
+    )
+    if not samples:
+        return header + _bin_samples_note(
+            "no values in this bar in the last captured batch "
+            "(the bar may aggregate earlier batches)"
+        )
+    cells: list[str] = []
+    for sample in samples:
+        image = (
+            render_image(
+                sample.image.unsqueeze(0), 0, mean=mean, std=std
+            )
+            if sample.image is not None
+            else None
+        )
+        img_html = (
+            f'<img src="{_b64_img_src(image)}" '
+            'style="width:64px;image-rendering:pixelated;display:block;" />'
+            if image is not None
+            else '<div class="w-16 h-16 bg-slate-200 rounded"></div>'
+        )
+        cells.append(
+            '<div class="flex flex-col items-center gap-0.5">'
+            + img_html
+            + f'<div class="text-[10px] font-mono text-slate-600">'
+            f"{_format_stat(sample.value)}</div>"
+            f'<div class="text-[10px] text-slate-400">'
+            f"sample {sample.sample_idx}</div></div>"
+        )
+    return header + '<div class="flex gap-3 py-1">' + "".join(cells) + "</div>"
+
+
 class _HistPlot:
     """One Plotly histogram figure that refreshes its data in place.
 
@@ -1624,12 +1755,42 @@ class _HistPlot:
     when the set of phases or the axis scale
     changes. Routine per-tick updates go through `Plotly.update`, which
     leaves client-side state — zoom/pan — untouched.
+
+    A "Per channel" switch narrows the plot from the universal histogram to
+    a single channel's row of the per-channel histogram (dim 1 of the
+    tensor), stepped through with an index spinner. While per-channel,
+    hovering a bar fills the strip below the plot with a few random input
+    samples whose values landed in that bar — drawn from the *last captured
+    batch* only, since the running histogram's source values are discarded
+    every batch; the strip's caption spells that out.
     """
 
-    def __init__(self, kind: str, title: str, axis_log: dict[str, bool]) -> None:
+    def __init__(
+        self,
+        kind: str,
+        title: str,
+        axis_log: dict[str, bool],
+        *,
+        session: Session,
+        layer: str,
+        input_mean: tuple[float, ...] | None = None,
+        input_std: tuple[float, ...] | None = None,
+    ) -> None:
         self._kind = kind
         self._title = title
         self._axis_log = axis_log
+        self._session = session
+        self._layer = layer
+        self._input_mean = input_mean
+        self._input_std = input_std
+        self._per_channel = False
+        self._channel = 0
+        # Channel count of the latest data seen; `None` until per-channel
+        # rows exist (no data yet, 1D tensors, or collapsed buffers).
+        self._channel_count: int | None = None
+        # Last stats handed to `update`, so control changes re-render
+        # immediately instead of waiting for the next 2 s tick.
+        self._last_per_phase: dict[str, LayerStatsSnapshot] = {}
         # Signature of what's currently drawn, so `update` can tell a plain
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
@@ -1638,6 +1799,28 @@ class _HistPlot:
         # cap actually moved (a range write resets zoom on that axis).
         self._y_range: list[float] | None = None
         self._x_range: list[float] | None = None
+        with ui.row().classes("items-center gap-x-3 no-wrap"):
+            self._channel_switch = (
+                ui.switch("Per channel", value=False, on_change=self._set_mode)
+                .props("dense")
+                .classes("text-sm")
+            )
+            self._channel_switch.tooltip(
+                "Show one channel's histogram instead of all values pooled; "
+                "hover a bar to sample inputs from that value range"
+            )
+            self._channel_spinner = (
+                ui.number(
+                    value=0,
+                    min=0,
+                    step=1,
+                    format="%d",
+                    on_change=self._set_channel,
+                )
+                .props("dense outlined")
+                .classes("w-24")
+            )
+            self._channel_total = ui.label("").classes("text-xs text-slate-500")
         self.element = ui.plotly(
             _figure_payload(
                 _make_histogram_figure(
@@ -1645,11 +1828,119 @@ class _HistPlot:
                 )
             )
         ).classes("w-full")
+        self._samples = ui.html(_HOVER_HINT_HTML).classes("w-full")
+        self._sync_control_visibility()
+        ui.on(f"nansense_hist_hover_{self.element.id}", self._on_hover)
 
     def _current_axis(self) -> tuple[bool, bool]:
         return self._axis_log["x"], self._axis_log["y"]
 
+    def _set_mode(self, e: ValueChangeEventArguments) -> None:
+        self._per_channel = bool(e.value)
+        self._sync_control_visibility()
+        self.update(self._last_per_phase)
+
+    def _set_channel(self, e: ValueChangeEventArguments) -> None:
+        value = e.value if isinstance(e.value, (int, float)) else 0
+        self._channel = max(0, int(value))
+        self.update(self._last_per_phase)
+
+    def _sync_control_visibility(self) -> None:
+        self._channel_spinner.set_visibility(self._per_channel)
+        self._channel_total.set_visibility(self._per_channel)
+        self._samples.set_visibility(self._per_channel)
+        if self._per_channel:
+            self._samples.set_content(_HOVER_HINT_HTML)
+            # Attaching is idempotent client-side; (re-)sending it on every
+            # mode flip covers clients that connected after page build.
+            ui.run_javascript(_hover_attach_js(self.element.id))
+
+    def _channel_rows(
+        self, per_phase: dict[str, LayerStatsSnapshot]
+    ) -> tuple[tuple[int, ...], ...] | None:
+        """The drawn phase's per-channel rows, `None` when unavailable."""
+        for snap in per_phase.values():
+            rows = _kind_stats(snap, self._kind).channel_hists
+            if rows is not None:
+                return rows
+        return None
+
+    def _sync_channel_controls(
+        self, per_phase: dict[str, LayerStatsSnapshot]
+    ) -> None:
+        rows = self._channel_rows(per_phase)
+        self._channel_count = len(rows) if rows is not None else None
+        if self._channel_count is None:
+            self._channel_total.text = "(no per-channel data)"
+            return
+        self._channel = min(self._channel, self._channel_count - 1)
+        self._channel_total.text = f"of {self._channel_count} channels"
+        self._channel_spinner.max = self._channel_count - 1
+        if self._channel_spinner.value != self._channel:
+            # NiceGUI suppresses value writes from inside a value-change
+            # handler; defer one tick (same workaround as the weight panels).
+            ui.timer(
+                0.0,
+                lambda: self._channel_spinner.set_value(self._channel),
+                once=True,
+            )
+
+    def _view(
+        self, per_phase: dict[str, LayerStatsSnapshot]
+    ) -> dict[str, LayerStatsSnapshot]:
+        """`per_phase` with each phase's histogram narrowed to the channel.
+
+        Falls back to the universal histogram for phases without
+        per-channel rows (1D tensors, collapsed older epochs).
+        """
+        if not self._per_channel:
+            return per_phase
+        out: dict[str, LayerStatsSnapshot] = {}
+        for phase, snap in per_phase.items():
+            stats = _kind_stats(snap, self._kind)
+            if stats.channel_hists is None:
+                out[phase] = snap
+                continue
+            channel = min(self._channel, len(stats.channel_hists) - 1)
+            narrowed = replace(stats, hist=stats.channel_hists[channel])
+            field = "activations" if self._kind == "activation" else "gradients"
+            out[phase] = replace(snap, **{field: narrowed})
+        return out
+
+    def _trace_names(self, view: dict[str, LayerStatsSnapshot]) -> list[str]:
+        suffix = (
+            f" — ch {self._channel}"
+            if self._per_channel and self._channel_count is not None
+            else ""
+        )
+        phases = _phases_with_data(view, self._kind)
+        return [f"{p} (ep {view[p].epoch}){suffix}" for p in phases]
+
+    async def _on_hover(self, e: GenericEventArguments) -> None:
+        if not self._per_channel:
+            return
+        bin_idx = int(e.args.get("bin", -1))
+        if not 0 <= bin_idx < N_BINS:
+            return
+        snapshot = self._session.snapshot
+        input_names = self._session.input_names
+        content = await asyncio.to_thread(
+            _bin_samples_html,
+            snapshot,
+            self._layer,
+            self._kind,
+            self._channel,
+            bin_idx,
+            input_names[0] if input_names else None,
+            self._input_mean,
+            self._input_std,
+        )
+        self._samples.set_content(content)
+
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
+        self._last_per_phase = per_phase
+        self._sync_channel_controls(per_phase)
+        per_phase = self._view(per_phase)
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
         log_x = axis[0]
@@ -1665,6 +1956,7 @@ class _HistPlot:
                         self._title,
                         log_x=axis[0],
                         log_y=axis[1],
+                        trace_names=self._trace_names(per_phase),
                     )
                 )
             )
@@ -1675,9 +1967,10 @@ class _HistPlot:
             )
         elif phases:
             # Same rows and axes — only counts (and the epoch label) moved.
-            # Restyle in place so zoom/pan survives.
+            # Restyle in place so zoom/pan survives. A channel index change
+            # lands here too: same structure, new bar heights.
             hists = [_kind_stats(per_phase[p], self._kind).hist for p in phases]
-            names = [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+            names = self._trace_names(per_phase)
             update: dict[str, object] = {
                 "name": names,
                 "y": [_trace_heights(h, density) for h in hists],
@@ -1759,14 +2052,30 @@ class _WatchLayerPanel:
                 self._act_stats = ui.html(
                     _stats_table_html({}, "activation")
                 ).classes("font-mono text-sm")
-                self._act = _HistPlot("activation", "activations", axis_log)
+                self._act = _HistPlot(
+                    "activation",
+                    "activations",
+                    axis_log,
+                    session=session,
+                    layer=name,
+                    input_mean=input_mean,
+                    input_std=input_std,
+                )
                 ui.label("Gradients").classes(
                     "font-mono text-sm text-slate-600"
                 )
                 self._grad_stats = ui.html(
                     _stats_table_html({}, "gradient")
                 ).classes("font-mono text-sm")
-                self._grad = _HistPlot("gradient", "gradients", axis_log)
+                self._grad = _HistPlot(
+                    "gradient",
+                    "gradients",
+                    axis_log,
+                    session=session,
+                    layer=name,
+                    input_mean=input_mean,
+                    input_std=input_std,
+                )
             self._patch_section = ui.column().classes("w-full gap-2")
             with self._patch_section:
                 self._grids = ui.html(_NO_PATCHES_HTML).classes("w-full")
@@ -1932,8 +2241,8 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
     )
     return (
         '<div class="flex flex-col gap-0.5 w-full">'
-        '<div class="text-[10px] uppercase tracking-wide text-slate-500 '
-        f'font-mono">{label}</div>'
+        '<div class="text-base font-bold uppercase tracking-widest '
+        f'text-slate-800 font-mono">{label}</div>'
         '<div style="display:flex; align-items:flex-start;" class="w-full">'
         f"{legend}"
         '<div class="overflow-x-auto" style="flex:1; min-width:0;">'
