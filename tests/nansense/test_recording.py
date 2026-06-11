@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import imageio.v2 as imageio
@@ -11,6 +12,7 @@ import torch
 from torch import Tensor, nn
 
 import nansense
+import nansense.recording
 from nansense.recording import (
     RecordedView,
     RecordingManager,
@@ -253,6 +255,88 @@ def test_close_finalizes_recordings(tmp_path: Path) -> None:
     assert manager.count() == 0  # end_all ran
     (path,) = list((tmp_path / "rec").glob("*.mp4"))
     assert _frame_count(path) == 1
+
+
+def _block_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[threading.Event, threading.Event]:
+    """Stall `_render_view_frames` on an event, signalling when it started.
+
+    Returns `(rendering, release)`: the fake renderer sets `rendering`,
+    waits for `release`, then returns one tiny frame — letting a test hold
+    a capture mid-render without sleeping.
+    """
+    rendering = threading.Event()
+    release = threading.Event()
+
+    def slow_render(
+        view: RecordedView, session: Session
+    ) -> dict[str, np.ndarray | None]:
+        rendering.set()
+        assert release.wait(timeout=30.0)
+        return {"": np.zeros((4, 4, 3), dtype=np.uint8)}
+
+    monkeypatch.setattr(nansense.recording, "_render_view_frames", slow_render)
+    return rendering, release
+
+
+def test_manager_queries_do_not_block_during_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UI timers/handlers poll the manager on the asyncio event loop; they
+    must never wait behind a frame render (a blocked loop starves NiceGUI's
+    websocket keepalive and drops the connection)."""
+    session, _, manager = _make_session(tmp_path)
+    assert manager.start(_main_view())
+    rendering, release = _block_renderer(monkeypatch)
+    capture = threading.Thread(
+        target=manager.capture_frames, args=(session,), daemon=True
+    )
+    capture.start()
+    assert rendering.wait(timeout=30.0)
+
+    # Probe from a helper thread so a regression hangs the probe, not pytest.
+    probed: dict[str, object] = {}
+
+    def probe() -> None:
+        probed["count"] = manager.count()
+        probed["recording"] = manager.is_recording("main")
+        probed["statuses"] = len(manager.statuses())
+
+    prober = threading.Thread(target=probe, daemon=True)
+    prober.start()
+    prober.join(timeout=10.0)
+    assert not prober.is_alive(), "manager query blocked behind a frame render"
+    assert probed == {"count": 1, "recording": True, "statuses": 1}
+
+    release.set()
+    capture.join(timeout=30.0)
+    assert not capture.is_alive()
+    assert manager.statuses()[0].frames == 1
+
+
+def test_end_during_in_flight_render_drops_the_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, _, manager = _make_session(tmp_path)
+    assert manager.start(_main_view())
+    rendering, release = _block_renderer(monkeypatch)
+    capture = threading.Thread(
+        target=manager.capture_frames, args=(session,), daemon=True
+    )
+    capture.start()
+    assert rendering.wait(timeout=30.0)
+
+    # Ending mid-render must not wait for the render; the recorder had no
+    # frames yet, so there is nothing to finalize.
+    assert manager.end("main") == ()
+    assert manager.count() == 0
+
+    # The raced render completes but its frame is dropped: no file appears.
+    release.set()
+    capture.join(timeout=30.0)
+    assert not capture.is_alive()
+    assert not list((tmp_path / "rec").glob("*.mp4"))
 
 
 def test_renderer_error_is_stored_not_raised(tmp_path: Path) -> None:

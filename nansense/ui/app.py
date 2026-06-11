@@ -3597,8 +3597,12 @@ def _add_record_button(
         ui.notify(f"Recording into {session.recording.directory}/")
         rebuild()
 
-    def end_view(key: str, view: RecordedView) -> None:
-        paths = session.recording.end(key)
+    # End/delete run via `asyncio.to_thread`: finalizing the MP4 writers
+    # (ffmpeg) takes a moment and may briefly wait for an in-flight frame
+    # append — blocking the event loop here would starve the websocket
+    # keepalive and drop the connection.
+    async def end_view(key: str, view: RecordedView) -> None:
+        paths = await asyncio.to_thread(session.recording.end, key)
         unpin(view)
         if paths:
             ui.notify("Saved " + ", ".join(str(p) for p in paths))
@@ -3606,23 +3610,23 @@ def _add_record_button(
             ui.notify("Recording ended before any frame was captured")
         rebuild()
 
-    def delete_view(key: str, view: RecordedView) -> None:
-        session.recording.delete(key)
+    async def delete_view(key: str, view: RecordedView) -> None:
+        await asyncio.to_thread(session.recording.delete, key)
         unpin(view)
         rebuild()
 
-    def end_all() -> None:
+    async def end_all() -> None:
         for status in session.recording.statuses():
             unpin(status.view)
-        paths = session.recording.end_all()
+        paths = await asyncio.to_thread(session.recording.end_all)
         if paths:
             ui.notify("Saved " + ", ".join(str(p) for p in paths))
         rebuild()
 
-    def delete_all() -> None:
+    async def delete_all() -> None:
         for status in session.recording.statuses():
             unpin(status.view)
-        session.recording.delete_all()
+        await asyncio.to_thread(session.recording.delete_all)
         rebuild()
 
     def rebuild() -> None:

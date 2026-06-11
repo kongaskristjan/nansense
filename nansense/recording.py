@@ -175,6 +175,12 @@ class ViewRecorder:
     Most views write a single stream (empty suffix). The MIN/MAX view
     writes one stream per enabled cell-size group ("pixel" / "average"),
     since their frames have different dimensions.
+
+    Frame rendering runs outside every lock — it can take seconds for
+    large views. Only the short append/close/delete sections are
+    serialised by the recorder's own lock, so ending a recording never
+    waits behind a render; a frame whose render raced a `close` is simply
+    dropped (`_closed`).
     """
 
     def __init__(self, view: RecordedView, *, directory: Path, fps: int) -> None:
@@ -183,20 +189,25 @@ class ViewRecorder:
         self.error: str | None = None
         self._directory = directory
         self._fps = fps
+        self._lock = threading.Lock()
+        self._closed = False
         self._streams: dict[str, _VideoStream] = {}
 
     def capture(self, session: Session) -> None:
-        frames = _render_view_frames(self.view, session)
-        appended = False
-        for suffix, frame in frames.items():
-            if frame is None:
-                continue
-            self._stream(suffix).append(frame)
-            appended = True
-        if appended:
-            self.frames += 1
+        frames = _render_view_frames(self.view, session)  # unlocked: slow
+        with self._lock:
+            if self._closed:
+                return
+            appended = False
+            for suffix, frame in frames.items():
+                if frame is None:
+                    continue
+                self._stream_locked(suffix).append(frame)
+                appended = True
+            if appended:
+                self.frames += 1
 
-    def _stream(self, suffix: str) -> _VideoStream:
+    def _stream_locked(self, suffix: str) -> _VideoStream:
         stream = self._streams.get(suffix)
         if stream is None:
             name = _sanitize(self.view.key) + (f"_{suffix}" if suffix else "")
@@ -205,15 +216,20 @@ class ViewRecorder:
         return stream
 
     def paths(self) -> tuple[Path, ...]:
-        return tuple(s.path for s in self._streams.values())
+        with self._lock:
+            return tuple(s.path for s in self._streams.values())
 
     def close(self) -> None:
-        for stream in self._streams.values():
-            stream.close()
+        with self._lock:
+            self._closed = True
+            for stream in self._streams.values():
+                stream.close()
 
     def delete(self) -> None:
-        for stream in self._streams.values():
-            stream.delete()
+        with self._lock:
+            self._closed = True
+            for stream in self._streams.values():
+                stream.delete()
 
 
 def _sanitize(key: str) -> str:
@@ -224,11 +240,14 @@ class RecordingManager:
     """All active recordings of one session, shared across UI connections.
 
     Start/end/delete come from the UI thread; `capture_frames` runs on the
-    training thread at every frequency update. One lock serialises both —
-    frame rendering can take a moment, but dialog operations are rare
-    enough that briefly waiting on it is fine. A renderer failure is stored
-    on the recorder (and shown in the dialog) instead of propagating into
-    the training loop.
+    training thread at every frequency update. The manager's lock guards
+    only the recorder dict, so the queries UI timers and handlers make on
+    the asyncio event loop (`count`, `is_recording`, `statuses`) return
+    immediately even while a frame renders — a blocked event loop starves
+    NiceGUI's websocket keepalive (~6 s budget) and kills the connection.
+    Rendering and writer finalization run outside the manager lock (see
+    `ViewRecorder`). A renderer failure is stored on the recorder (and
+    shown in the dialog) instead of propagating into the training loop.
     """
 
     def __init__(self, *, directory: Path | None = None, fps: int = VIDEO_FPS) -> None:
@@ -261,52 +280,61 @@ class RecordingManager:
 
     def statuses(self) -> list[RecordingStatus]:
         with self._lock:
-            return [
-                RecordingStatus(
-                    view=r.view, frames=r.frames, error=r.error, paths=r.paths()
-                )
-                for r in self._recorders.values()
-            ]
+            recorders = list(self._recorders.values())
+        return [
+            RecordingStatus(
+                view=r.view, frames=r.frames, error=r.error, paths=r.paths()
+            )
+            for r in recorders
+        ]
 
     def end(self, key: str) -> tuple[Path, ...]:
         """Finalize `key`'s video file(s) and stop recording it."""
         with self._lock:
             recorder = self._recorders.pop(key, None)
-            if recorder is None:
-                return ()
-            recorder.close()
-            return recorder.paths()
+        if recorder is None:
+            return ()
+        recorder.close()
+        return recorder.paths()
 
     def delete(self, key: str) -> None:
         """Discard `key`'s recording, removing its file(s) from disk."""
         with self._lock:
             recorder = self._recorders.pop(key, None)
-            if recorder is not None:
-                recorder.delete()
+        if recorder is not None:
+            recorder.delete()
 
     def end_all(self) -> tuple[Path, ...]:
         with self._lock:
-            paths: list[Path] = []
-            for recorder in self._recorders.values():
-                recorder.close()
-                paths.extend(recorder.paths())
+            recorders = list(self._recorders.values())
             self._recorders.clear()
-            return tuple(paths)
+        paths: list[Path] = []
+        for recorder in recorders:
+            recorder.close()
+            paths.extend(recorder.paths())
+        return tuple(paths)
 
     def delete_all(self) -> None:
         with self._lock:
-            for recorder in self._recorders.values():
-                recorder.delete()
+            recorders = list(self._recorders.values())
             self._recorders.clear()
+        for recorder in recorders:
+            recorder.delete()
 
     def capture_frames(self, session: Session) -> None:
-        """Append one frame to every active recording (training thread)."""
+        """Append one frame to every active recording (training thread).
+
+        Renders outside the manager lock: a recorder that gets ended or
+        deleted mid-render finishes the render and drops the frame (see
+        `ViewRecorder.capture`).
+        """
         with self._lock:
-            for recorder in self._recorders.values():
-                try:
-                    recorder.capture(session)
-                except Exception as e:  # noqa: BLE001 — shown in the dialog
-                    recorder.error = f"{type(e).__name__}: {e}"
+            recorders = list(self._recorders.values())
+        for recorder in recorders:
+            try:
+                recorder.capture(session)
+            except Exception as e:  # noqa: BLE001 — shown in the dialog
+                recorder.error = f"{type(e).__name__}: {e}"
 
 
 # ---------------------------------------------------------------------------

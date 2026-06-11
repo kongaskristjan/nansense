@@ -566,6 +566,19 @@ renderer failure is stored on the recorder and shown in the dialog rather
 than propagating into the training loop, and `Session.close()` calls
 `end_all()` so files are playable when a run simply finishes.
 
+Locking is deliberately fine-grained: frame rendering (seconds for large
+views) runs outside every lock. The manager's lock guards only the
+recorder dict, so the `count` / `is_recording` / `statuses` queries that
+UI timers and click handlers make on the asyncio event loop return
+immediately even mid-render — NiceGUI's websocket keepalive budget is
+only ~6 s (ping interval 4 s + timeout 2 s at the default
+`reconnect_timeout`), so an event loop blocked behind a render drops the
+connection and loses the in-flight click. Each `ViewRecorder` serialises
+just its short stream append/close sections with its own lock; a
+recording ended or deleted mid-render finishes the render and drops that
+frame (`_closed`). The dialog's end/delete actions additionally run via
+`asyncio.to_thread`, since ffmpeg finalization can take a moment.
+
 ## Time travel (`nansense.restore`)
 
 Time travel jumps training back to the start of any epoch whose state was
