@@ -21,20 +21,21 @@ experiments on the experiment page additionally need
 ## Running the examples (this repository)
 
 ```bash
-uv sync --extra cpu    # CPU-only machines (smallest download)
-uv sync --extra cu130  # NVIDIA GPU with CUDA 13
+uv sync --group cpu    # CPU-only machines (smallest download)
+uv sync --group cu130  # NVIDIA GPU with CUDA 13
 
 uv run python -m examples.vision.main --nansense-port 8080
 ```
 
-PyTorch is installed through one of several mutually exclusive extras, so
-pick the one matching your hardware: `cpu` (works everywhere), `cu126` /
-`cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or `rocm7-2` (AMD ROCm,
-Linux).
+PyTorch is installed through one of several mutually exclusive dependency
+groups, so pick the one matching your hardware: `cpu` (works everywhere),
+`cu126` / `cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or `rocm7-2`
+(AMD ROCm, Linux). Groups are local to this repository and never published,
+which is what keeps the PyPI package torch-free.
 
-A plain `uv sync` (no extra) installs no torch via the extras and falls back
-to the default PyPI wheels through transitive dependencies — always pass an
-extra. All variants are pinned in the same `uv.lock`, so switching extras is
+Always pass a group — a plain `uv sync` installs torch only transitively
+(via captum/lightning in the dev group) from the default PyPI wheels. All
+variants are pinned in the same `uv.lock`, so switching groups is
 reproducible and doesn't re-lock.
 
 Open `http://localhost:8080`. Training pauses on the first batch; drive it
