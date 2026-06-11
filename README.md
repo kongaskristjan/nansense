@@ -5,7 +5,20 @@ your PyTorch training loop and inspect activations, gradients, weights, and
 more from a web UI — pausing, stepping, and time-traveling the loop as it
 runs. See `INTERNALS.md` for how it works under the hood.
 
-## Running
+## Installation
+
+```bash
+pip install nansense
+```
+
+nansense deliberately does not depend on torch: install PyTorch separately
+(see [pytorch.org](https://pytorch.org/get-started/locally/)) so your
+hardware-specific build — CUDA, ROCm, or CPU — is preserved. The attribution
+experiments on the experiment page additionally need
+`pip install nansense[captum]`, and the Lightning integration
+`pip install nansense[lightning]`.
+
+## Running the examples (this repository)
 
 ```bash
 uv sync --extra cpu    # CPU-only machines (smallest download)
@@ -179,7 +192,7 @@ to the batch changing. "Click to perturb" paints pixels onto the input;
 "Compare with original" then shows per-layer activation diffs, tracing how
 far the edit propagates (the receptive field).
 
-![Main view](assets/view-main.png)
+![Main view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-main.png)
 
 ### Watch
 
@@ -190,7 +203,7 @@ activations: per channel, the top input crops around the largest/smallest
 spatial activation and whole inputs ranked by spatial mean, with an optional
 activation-heatmap overlay.
 
-![Watch page, min/max view](assets/view-watch-minmax.png)
+![Watch page, min/max view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-minmax.png)
 
 The HISTOGRAM view shows activation and activation-gradient distributions
 over the most recent epoch as signed-log histograms with a stats table (`n`,
@@ -198,7 +211,7 @@ over the most recent epoch as signed-log histograms with a stats table (`n`,
 train/val, and Log x / Log y checkboxes handle distributions spanning many
 decades.
 
-![Watch page, histogram view](assets/view-watch-histogram.png)
+![Watch page, histogram view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
 
 ### Weights
 
@@ -211,7 +224,7 @@ Per-dimension selects remap which tensor axes become X, Y, and tiling (a 4D
 conv weight defaults to kernel tiles); a Refresh button re-reads weights on
 demand, even mid-training.
 
-![Weights page](assets/view-weights.png)
+![Weights page](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-weights.png)
 
 ### Experiment
 
@@ -225,7 +238,7 @@ Captum attribution methods — Grad-CAM, Neuron Gradient, Neuron Integrated
 Gradients, and Occlusion — render attributions next to the input sample
 they explain.
 
-![Experiment page](assets/view-experiment.png)
+![Experiment page](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-experiment.png)
 
 ## Tests
 

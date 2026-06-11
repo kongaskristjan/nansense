@@ -412,7 +412,7 @@ def _run_captum(
     try:
         from captum import attr as captum_attr
     except ImportError:
-        yield _error(request, "captum is not installed (`uv add captum`)")
+        yield _error(request, "captum is not installed (`pip install nansense[captum]`)")
         return
 
     p = request.params

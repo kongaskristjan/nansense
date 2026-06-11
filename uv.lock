@@ -1127,13 +1127,18 @@ name = "nansense"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "captum" },
+    { name = "fastapi" },
     { name = "nicegui" },
+    { name = "numpy" },
     { name = "pillow" },
     { name = "plotly" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
+captum = [
+    { name = "captum" },
+]
 cpu = [
     { name = "torch", version = "2.12.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-8-nansense-cpu') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-cu126') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-cu130') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-cu132') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-rocm7-2') or (extra == 'extra-8-nansense-cu126' and extra == 'extra-8-nansense-cu130') or (extra == 'extra-8-nansense-cu126' and extra == 'extra-8-nansense-cu132') or (extra == 'extra-8-nansense-cu126' and extra == 'extra-8-nansense-rocm7-2') or (extra == 'extra-8-nansense-cu130' and extra == 'extra-8-nansense-cu132') or (extra == 'extra-8-nansense-cu130' and extra == 'extra-8-nansense-rocm7-2') or (extra == 'extra-8-nansense-cu132' and extra == 'extra-8-nansense-rocm7-2')" },
     { name = "torch", version = "2.12.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-8-nansense-cpu') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-cu126') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-cu130') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-cu132') or (extra == 'extra-8-nansense-cpu' and extra == 'extra-8-nansense-rocm7-2') or (extra == 'extra-8-nansense-cu126' and extra == 'extra-8-nansense-cu130') or (extra == 'extra-8-nansense-cu126' and extra == 'extra-8-nansense-cu132') or (extra == 'extra-8-nansense-cu126' and extra == 'extra-8-nansense-rocm7-2') or (extra == 'extra-8-nansense-cu130' and extra == 'extra-8-nansense-cu132') or (extra == 'extra-8-nansense-cu130' and extra == 'extra-8-nansense-rocm7-2') or (extra == 'extra-8-nansense-cu132' and extra == 'extra-8-nansense-rocm7-2')" },
@@ -1171,6 +1176,7 @@ rocm7-2 = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "captum" },
     { name = "lightning" },
     { name = "pytest" },
     { name = "ty" },
@@ -1178,9 +1184,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "captum", specifier = ">=0.9.0" },
+    { name = "captum", marker = "extra == 'captum'", specifier = ">=0.9.0" },
+    { name = "fastapi", specifier = ">=0.110" },
     { name = "lightning", marker = "extra == 'lightning'", specifier = ">=2.4" },
     { name = "nicegui", specifier = ">=3.12.1" },
+    { name = "numpy", specifier = ">=2" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "plotly", specifier = ">=6.7.0" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cu126') or (sys_platform == 'win32' and extra == 'cu126')", specifier = ">=2.12.0", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "nansense", extra = "cu126" } },
@@ -1202,11 +1210,13 @@ requires-dist = [
     { name = "torchvision", marker = "sys_platform != 'linux' and extra == 'rocm7-2'", specifier = ">=0.27.0" },
     { name = "torchvision", marker = "extra == 'cpu'", specifier = ">=0.27.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "nansense", extra = "cpu" } },
     { name = "triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm7-2'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "nansense", extra = "rocm7-2" } },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
-provides-extras = ["cpu", "cu126", "cu130", "cu132", "rocm7-2", "lightning"]
+provides-extras = ["captum", "cpu", "cu126", "cu130", "cu132", "rocm7-2", "lightning"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "captum", specifier = ">=0.9.0" },
     { name = "lightning", specifier = ">=2.4" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "ty", specifier = ">=0.0.38" },

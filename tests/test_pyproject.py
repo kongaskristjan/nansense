@@ -43,6 +43,16 @@ def test_torch_not_in_base_dependencies() -> None:
     assert {"torch", "torchvision"}.isdisjoint(base | dev)
 
 
+def test_base_install_is_torch_free() -> None:
+    """`pip install nansense` must not pull torch, directly or transitively.
+
+    captum and lightning depend on torch, so they may only appear in extras
+    and the dev group, never in the base dependencies.
+    """
+    base = _requirement_names(_load_pyproject()["project"]["dependencies"])
+    assert {"torch", "torchvision", "captum", "lightning"}.isdisjoint(base)
+
+
 def test_extras_declared_mutually_exclusive() -> None:
     conflicts = _load_pyproject()["tool"]["uv"]["conflicts"]
     conflict_sets = [{entry["extra"] for entry in group} for group in conflicts]
