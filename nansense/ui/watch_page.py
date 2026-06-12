@@ -6,7 +6,7 @@ import asyncio
 import html
 import json
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 
 import plotly.graph_objects as go
 from nicegui import ui
@@ -47,6 +47,38 @@ from nansense.ui.top_bar import (
 from nansense.watch import N_BINS, LayerStatsSnapshot, WatchSnapshot
 
 
+@dataclass
+class _WatchPageState:
+    """Mutable page state shared by the sidebar controls and layer panels."""
+
+    # Whether the value (x) and probability (y) axes use a log-based scale.
+    # Both default off — linear axes showing probability density (see
+    # `use_density`); the sidebar checkboxes flip them and re-render every
+    # plot immediately.
+    axis_log_x: bool = False
+    axis_log_y: bool = False
+    # MIN/MAX view state: which of the four grids are shown (only "Max
+    # pixel" starts checked) and whether the activation heatmap is blended
+    # over the patches. HISTOGRAM is the default view.
+    view_minmax: bool = False
+    grid_on: dict[PatchType, bool] = field(
+        default_factory=lambda: {t: t == "max_pixel" for t in PATCH_TYPES}
+    )
+    heat_on: bool = False
+    # Every card shows one phase at a time, picked by a header dropdown
+    # shared by both views; defaults to the schedule's first phase.
+    selected_phase: str = ""
+    # Single-flight refresh flags (see `refresh` in `_build_watch_page`).
+    refresh_running: bool = False
+    refresh_dirty: bool = False
+    # Last frozen flags pushed to the client, so the per-tick sync only
+    # sends enable/disable when something actually changed.
+    frozen_hist: bool | None = None
+    frozen_minmax: bool | None = None
+    # The sidebar's watched-layer count label, assigned during page build.
+    count_label: ui.label = field(init=False)
+
+
 def _build_watch_page(
     session: Session,
     layer_names: list[str],
@@ -78,44 +110,36 @@ def _build_watch_page(
     _page_scaffold("Watching")
 
     layer_panels: dict[str, _WatchLayerPanel] = {}
-    count_label_holder: dict[str, ui.label] = {}
     body_container: ui.column
-    # Whether the value (x) and probability (y) axes use a log-based scale.
-    # Both default off — linear axes showing probability density (see
-    # `use_density`); the sidebar checkboxes flip them and re-render every
-    # plot immediately.
-    axis_log = {"x": False, "y": False}
-    # MIN/MAX view state: which of the four grids are shown (only "Max
-    # pixel" starts checked) and whether the activation heatmap is blended
-    # over the patches. HISTOGRAM is the default view.
-    view_minmax = {"on": False}
-    grid_on: dict[PatchType, bool] = {t: t == "max_pixel" for t in PATCH_TYPES}
-    heat_on = {"on": False}
-    # Every card shows one phase at a time, picked by a header dropdown
-    # shared by both views; defaults to the schedule's first phase.
     phase_names = list(session.schedule.phases)
-    selected_phase = {"name": phase_names[0] if phase_names else ""}
+    state = _WatchPageState(
+        selected_phase=phase_names[0] if phase_names else ""
+    )
 
-    async def set_axis_log(axis: str, value: bool) -> None:
-        axis_log[axis] = value
+    async def set_axis_log_x(value: bool) -> None:
+        state.axis_log_x = value
+        await refresh()
+
+    async def set_axis_log_y(value: bool) -> None:
+        state.axis_log_y = value
         await refresh()
 
     async def set_mode(value: object) -> None:
-        view_minmax["on"] = value == _VIEW_MINMAX
-        hist_controls.set_visibility(not view_minmax["on"])
-        minmax_controls.set_visibility(view_minmax["on"])
+        state.view_minmax = value == _VIEW_MINMAX
+        hist_controls.set_visibility(not state.view_minmax)
+        minmax_controls.set_visibility(state.view_minmax)
         await refresh()
 
     async def set_phase(value: object) -> None:
-        selected_phase["name"] = str(value)
+        state.selected_phase = str(value)
         await refresh()
 
     async def set_grid(ptype: PatchType, value: bool) -> None:
-        grid_on[ptype] = value
+        state.grid_on[ptype] = value
         await refresh()
 
     async def set_heat(value: bool) -> None:
-        heat_on["on"] = value
+        state.heat_on = value
         await refresh()
 
     step_until_custom = _build_step_until_custom_dialog(session)
@@ -124,9 +148,9 @@ def _build_watch_page(
         watched = [n for n in layer_names if n in session.watched_layers]
         if not watched:
             return None
-        phase = selected_phase["name"]
-        if view_minmax["on"]:
-            grids = tuple(t for t in PATCH_TYPES if grid_on[t])
+        phase = state.selected_phase
+        if state.view_minmax:
+            grids = tuple(t for t in PATCH_TYPES if state.grid_on[t])
             if not grids:
                 return None
             return RecordedView(
@@ -137,7 +161,7 @@ def _build_watch_page(
                     "layers": tuple(watched),
                     "phase": phase,
                     "grids": grids,
-                    "heatmap": heat_on["on"],
+                    "heatmap": state.heat_on,
                     "input_mean": input_mean,
                     "input_std": input_std,
                 },
@@ -149,8 +173,8 @@ def _build_watch_page(
             params={
                 "layers": tuple(watched),
                 "phase": phase,
-                "log_x": axis_log["x"],
-                "log_y": axis_log["y"],
+                "log_x": state.axis_log_x,
+                "log_y": state.axis_log_y,
             },
         )
 
@@ -172,7 +196,7 @@ def _build_watch_page(
             ):
                 with ui.row().classes("items-baseline gap-2 no-wrap"):
                     ui.label("Watching").classes("font-mono text-base font-bold")
-                    count_label_holder["count"] = ui.label("").classes(
+                    state.count_label = ui.label("").classes(
                         "text-sm text-slate-500"
                     )
                 ui.separator()
@@ -187,7 +211,7 @@ def _build_watch_page(
                 phase_select = ui.select(
                     phase_names,
                     label="Phase",
-                    value=selected_phase["name"],
+                    value=state.selected_phase,
                     on_change=lambda e: set_phase(e.value),
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
@@ -198,8 +222,8 @@ def _build_watch_page(
                     hist_boxes.append(
                         ui.checkbox(
                             "Log x",
-                            value=axis_log["x"],
-                            on_change=lambda e: set_axis_log("x", bool(e.value)),
+                            value=state.axis_log_x,
+                            on_change=lambda e: set_axis_log_x(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
                             "Log-based (signed-log) scale on the value axis"
                         )
@@ -207,8 +231,8 @@ def _build_watch_page(
                     hist_boxes.append(
                         ui.checkbox(
                             "Log y",
-                            value=axis_log["y"],
-                            on_change=lambda e: set_axis_log("y", bool(e.value)),
+                            value=state.axis_log_y,
+                            on_change=lambda e: set_axis_log_y(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
                             "Log scale on the probability axis"
                         )
@@ -218,7 +242,7 @@ def _build_watch_page(
                         minmax_boxes.append(
                             ui.checkbox(
                                 _PATCH_TYPE_LABELS[ptype],
-                                value=grid_on[ptype],
+                                value=state.grid_on[ptype],
                                 on_change=lambda e, p=ptype: set_grid(
                                     p, bool(e.value)
                                 ),
@@ -230,7 +254,7 @@ def _build_watch_page(
                     minmax_boxes.append(
                         ui.checkbox(
                             "Enable heatmap",
-                            value=heat_on["on"],
+                            value=state.heat_on,
                             on_change=lambda e: set_heat(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
                             "Blend each channel's activation strength over the "
@@ -265,11 +289,7 @@ def _build_watch_page(
                     name=name,
                     session=session,
                     on_unwatched=rebuild_cards,
-                    axis_log=axis_log,
-                    view_minmax=view_minmax,
-                    grid_on=grid_on,
-                    heat_on=heat_on,
-                    selected_phase=selected_phase,
+                    state=state,
                     input_mean=input_mean,
                     input_std=input_std,
                 )
@@ -280,25 +300,23 @@ def _build_watch_page(
     # lands while a pass is in flight just marks it dirty — rapid Heatmap
     # clicks coalesce into one follow-up pass instead of queueing a full
     # re-render per click.
-    refresh_state = {"running": False, "dirty": False}
-
     async def refresh() -> None:
-        if refresh_state["running"]:
-            refresh_state["dirty"] = True
+        if state.refresh_running:
+            state.refresh_dirty = True
             return
-        refresh_state["running"] = True
+        state.refresh_running = True
         try:
             while True:
-                refresh_state["dirty"] = False
+                state.refresh_dirty = False
                 watched = session.watched_layers
                 n = len(watched)
-                count_label_holder["count"].text = (
+                state.count_label.text = (
                     f"{n} layer{'' if n == 1 else 's'}"
                 )
                 if set(layer_panels) != set(watched):
                     rebuild_cards()
                 panels = dict(layer_panels)
-                minmax = view_minmax["on"]
+                minmax = state.view_minmax
 
                 def compute(
                     panels: dict[str, _WatchLayerPanel] = panels,
@@ -320,21 +338,17 @@ def _build_watch_page(
                 for name, panel in panels.items():
                     if layer_panels.get(name) is panel:  # not rebuilt meanwhile
                         panel.update(snap, grids.get(name))
-                if not refresh_state["dirty"]:
+                if not state.refresh_dirty:
                     return
         finally:
-            refresh_state["running"] = False
-
-    # Last frozen flags pushed to the client, so the per-tick sync only
-    # sends enable/disable when something actually changed.
-    frozen_state: dict[str, bool | None] = {"hist": None, "minmax": None}
+            state.refresh_running = False
 
     def sync_frozen() -> None:
         hist = session.recording.is_recording("watch_histogram")
         minmax = session.recording.is_recording("watch_minmax")
-        if hist != frozen_state["hist"] or minmax != frozen_state["minmax"]:
-            frozen_state["hist"] = hist
-            frozen_state["minmax"] = minmax
+        if hist != state.frozen_hist or minmax != state.frozen_minmax:
+            state.frozen_hist = hist
+            state.frozen_minmax = minmax
             # The phase applies to both views, so either recording locks it.
             _set_controls_enabled([phase_select], not (hist or minmax))
             _set_controls_enabled(hist_boxes, not hist)
@@ -531,7 +545,7 @@ class _HistPlot:
         self,
         kind: str,
         title: str,
-        axis_log: dict[str, bool],
+        state: _WatchPageState,
         *,
         session: Session,
         layer: str,
@@ -540,7 +554,7 @@ class _HistPlot:
     ) -> None:
         self._kind = kind
         self._title = title
-        self._axis_log = axis_log
+        self._state = state
         self._session = session
         self._layer = layer
         self._input_mean = input_mean
@@ -595,7 +609,7 @@ class _HistPlot:
         ui.on(f"nansense_hist_hover_{self.element.id}", self._on_hover)
 
     def _current_axis(self) -> tuple[bool, bool]:
-        return self._axis_log["x"], self._axis_log["y"]
+        return self._state.axis_log_x, self._state.axis_log_y
 
     def _set_mode(self, e: ValueChangeEventArguments) -> None:
         self._per_channel = bool(e.value)
@@ -777,20 +791,13 @@ class _WatchLayerPanel:
         name: str,
         session: Session,
         on_unwatched: Callable[[], None],
-        axis_log: dict[str, bool],
-        view_minmax: dict[str, bool],
-        grid_on: dict[PatchType, bool],
-        heat_on: dict[str, bool],
-        selected_phase: dict[str, str],
+        state: _WatchPageState,
         input_mean: tuple[float, ...] | None,
         input_std: tuple[float, ...] | None,
     ) -> None:
         self.name = name
         self._session = session
-        self._view_minmax = view_minmax
-        self._grid_on = grid_on
-        self._heat_on = heat_on
-        self._selected_phase = selected_phase
+        self._state = state
         self._input_mean = input_mean
         self._input_std = input_std
         self._grid_sig: tuple[object, ...] | None = None
@@ -820,7 +827,7 @@ class _WatchLayerPanel:
                 self._act = _HistPlot(
                     "activation",
                     "activations",
-                    axis_log,
+                    state,
                     session=session,
                     layer=name,
                     input_mean=input_mean,
@@ -835,7 +842,7 @@ class _WatchLayerPanel:
                 self._grad = _HistPlot(
                     "gradient",
                     "gradients",
-                    axis_log,
+                    state,
                     session=session,
                     layer=name,
                     input_mean=input_mean,
@@ -844,8 +851,8 @@ class _WatchLayerPanel:
             self._patch_section = ui.column().classes("w-full gap-2")
             with self._patch_section:
                 self._grids = ui.html(_NO_PATCHES_HTML).classes("w-full")
-            self._hist_section.set_visibility(not view_minmax["on"])
-            self._patch_section.set_visibility(view_minmax["on"])
+            self._hist_section.set_visibility(not state.view_minmax)
+            self._patch_section.set_visibility(state.view_minmax)
 
     def update(
         self,
@@ -858,7 +865,7 @@ class _WatchLayerPanel:
         loop by the page's refresh); `None` means the grids are unchanged.
         """
         per_phase = self._phase_view(snap)
-        minmax = self._view_minmax["on"]
+        minmax = self._state.view_minmax
         self._hist_section.set_visibility(not minmax)
         self._patch_section.set_visibility(minmax)
         if minmax:
@@ -874,7 +881,7 @@ class _WatchLayerPanel:
     def _phase_view(self, snap: WatchSnapshot) -> dict[str, LayerStatsSnapshot]:
         """The layer's latest-epoch stats, narrowed to the selected phase."""
         return _filter_phase(
-            snap.latest_per_phase(self.name), self._selected_phase["name"]
+            snap.latest_per_phase(self.name), self._state.selected_phase
         )
 
     def prepare_grids(
@@ -890,8 +897,8 @@ class _WatchLayerPanel:
         the current content is already up to date.
         """
         per_phase = self._phase_view(snap)
-        enabled = [t for t in PATCH_TYPES if self._grid_on[t]]
-        heatmap = self._heat_on["on"]
+        enabled = [t for t in PATCH_TYPES if self._state.grid_on[t]]
+        heatmap = self._state.heat_on
         sig = _patch_grids_signature(per_phase, enabled, heatmap)
         if sig == self._grid_sig:
             return None
