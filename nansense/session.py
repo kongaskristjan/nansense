@@ -141,6 +141,12 @@ class Session:
         self._mode: Mode = Mode.STEP
         self._target_position: tuple[str, int, int] | None = None
         self._restorer: TrainingRestorer | None = None
+        # Tracks which epoch's start checkpoint has already been written for
+        # the current attempt, so the pre-iter save (in `batches`) and the
+        # fallback save (in `_BatchContext.__enter__`) don't double-save — and
+        # so the post-iter `__enter__` save can't clobber the good pre-iter one
+        # with a now-stale RNG state. Reset on a time-travel rewind.
+        self._epoch_start_saved_for: int | None = None
         self._pending_jump: int | None = None
         self._cv = threading.Condition()
         self._resume_token = 0
@@ -331,6 +337,12 @@ class Session:
             for inputs, targets in session.batches(loader, phase="train", epoch=e):
                 ...  # forward / backward / step
         """
+        # Checkpoint the epoch-start state BEFORE `iter(loader)` draws the
+        # DataLoader's shuffle seed from the global RNG. The `__enter__` save
+        # (a fallback for users who drive `batch()` manually) would capture the
+        # RNG *after* the draw, so restoring it on replay produces a different
+        # shuffle order. Saving here, pre-iter, makes the replay deterministic.
+        self._maybe_save_epoch_start(phase, epoch)
         for item in loader:
             with self.batch(phase=phase, epoch=epoch):
                 yield item
@@ -892,8 +904,15 @@ class Session:
             manager.capture_frames(self)
 
     def _update_watch_stats(self, pos: BatchPosition) -> None:
+        # Iterate a snapshot of the watched set taken under the lock — the UI
+        # thread mutates `_watched_layers` via watch()/unwatch() (and the
+        # "Watch all" / "Clear all" loops), so iterating the live set here on
+        # the training thread would race into a "set changed size during
+        # iteration" RuntimeError. Mirrors `watched_layers` / `watch_snapshot`.
+        with self._cv:
+            watched = list(self._watched_layers)
         source = self._patch_source_input()
-        for name in self._watched_layers:
+        for name in watched:
             tensor = self._activations.get(name)
             if tensor is None:
                 continue
@@ -973,6 +992,24 @@ class Session:
             self._pending_jump = None
             return jump
 
+    def _maybe_save_epoch_start(self, phase: str, epoch: int) -> None:
+        """Checkpoint the epoch-start state, once per epoch attempt.
+
+        Called from `batches()` before `iter(loader)` draws the shuffle seed
+        (the deterministic-replay anchor) and, as a fallback, from
+        `_BatchContext.__enter__` for users who drive `batch()` manually. The
+        `_epoch_start_saved_for` guard makes whichever path runs first win, so
+        the fallback's post-iter save can't overwrite the good pre-iter RNG.
+        """
+        restorer = self._restorer
+        if (
+            restorer is not None
+            and phase == self._schedule.first_phase_name
+            and self._epoch_start_saved_for != epoch
+        ):
+            restorer.save_epoch_start(epoch)
+            self._epoch_start_saved_for = epoch
+
     def _rewind_to_epoch(self, epoch: int) -> None:
         """Reset per-epoch bookkeeping after a time-travel restore.
 
@@ -984,6 +1021,10 @@ class Session:
         with self._cv:
             self._schedule.rewind_to_epoch(epoch)
         self._watch_accumulator.forget_epochs_from(epoch)
+        # Re-running this (or any later) epoch must re-save fresh RNG, so clear
+        # the "already saved" marker — otherwise the re-run's pre-iter save in
+        # `batches()` would be skipped and the replay would reuse stale state.
+        self._epoch_start_saved_for = None
 
     def _wait_for_proceed(self) -> None:
         # A pending time-travel jump also ends the wait: its request already
@@ -1076,15 +1117,15 @@ class _BatchContext:
             raise TimeTravelJump(jump)
         # With a restorer attached, the first batch of each epoch checkpoints
         # the epoch-start state (model/optimizer/scheduler/RNG) to disk —
-        # before any forward pass, so a later jump back to this epoch
-        # restores exactly this moment.
-        restorer = self._session._restorer
-        if (
-            restorer is not None
-            and self._position.batch_idx == 0
-            and self._position.phase == self._session._schedule.first_phase_name
-        ):
-            restorer.save_epoch_start(self._epoch)
+        # before any forward pass, so a later jump back to this epoch restores
+        # exactly this moment. This is a fallback for users who drive `batch()`
+        # manually; the canonical `batches()` path saves *before* `iter(loader)`
+        # draws the shuffle seed, and the `_epoch_start_saved_for` guard inside
+        # `_maybe_save_epoch_start` keeps this post-draw save from clobbering it.
+        if self._position.batch_idx == 0:
+            self._session._maybe_save_epoch_start(
+                self._position.phase, self._epoch
+            )
         self._captured = self._session._should_capture(self._position)
         # A frequency update publishes like a capture but never pauses; it
         # is decided independently of the mode, so visualizations keep
@@ -1113,27 +1154,41 @@ class _BatchContext:
         if self._position is None:
             return
         if self._captured or self._freq_update or self._stats_only:
-            if exc is None and self._session._watched_layers:
-                self._session._update_watch_stats(self._position)
-            capture.remove_hooks(self._session)
-            if exc is None and not self._session.closed:
-                if self._captured or self._freq_update:
-                    self._session._publish_snapshot(self._position)
-                    # The snapshot holds CPU clones of everything; drop the
-                    # live GPU activations (and their retained grads) now so
-                    # the probe's forward below doesn't stack a second
-                    # batch's worth of memory on top of them.
-                    self._session._activations.clear()
-                    probe.maybe_run_probe_at_capture(self._session)
-                    # Auto experiments re-run on every publish, so a pause
-                    # shows fresh results and a free-running frequency
-                    # update keeps open pages / recordings current.
-                    experiments.run_auto_experiments(self._session)
-                if self._freq_update:
-                    self._session._record_frames()
-                if self._captured:
-                    self._session._wait_for_proceed()
-            self._session._activations.clear()
+            # Hook removal MUST run once hooks were installed, even if the
+            # watch-stats update raises — otherwise the fx-patched forward
+            # leaks past this batch and the next install captures it as the
+            # "original", permanently losing the real forward. So the whole
+            # block runs under try/finally with `remove_hooks` in the finally.
+            # In the normal flow we still remove hooks *before* publishing and
+            # probing: the snapshot reads the already-captured `_activations`,
+            # and the probe runs its own forward (in hook-fallback mode that
+            # would otherwise re-fire the live per-module hooks). The finally's
+            # `remove_hooks` is then a no-op (it is idempotent) — its job is to
+            # cover the path where `_update_watch_stats` raised before it ran.
+            try:
+                if exc is None and self._session._watched_layers:
+                    self._session._update_watch_stats(self._position)
+                capture.remove_hooks(self._session)
+                if exc is None and not self._session.closed:
+                    if self._captured or self._freq_update:
+                        self._session._publish_snapshot(self._position)
+                        # The snapshot holds CPU clones of everything; drop the
+                        # live GPU activations (and their retained grads) now so
+                        # the probe's forward below doesn't stack a second
+                        # batch's worth of memory on top of them.
+                        self._session._activations.clear()
+                        probe.maybe_run_probe_at_capture(self._session)
+                        # Auto experiments re-run on every publish, so a pause
+                        # shows fresh results and a free-running frequency
+                        # update keeps open pages / recordings current.
+                        experiments.run_auto_experiments(self._session)
+                    if self._freq_update:
+                        self._session._record_frames()
+                    if self._captured:
+                        self._session._wait_for_proceed()
+            finally:
+                capture.remove_hooks(self._session)
+                self._session._activations.clear()
         # Every batch boundary — captured, stats-only, or plain (detach) —
         # consumes an armed time-travel jump. `_wait_for_proceed` above
         # returns immediately when a jump is pending, so a paused batch

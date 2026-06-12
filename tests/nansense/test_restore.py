@@ -13,6 +13,7 @@ from nansense.restore import (
     EpochCache,
     TimeTravelError,
     TrainingRestorer,
+    restore_rng,
     validate_model_state,
 )
 from nansense.session import Session
@@ -267,3 +268,52 @@ def test_time_travel_jump_restores_and_replays_deterministically(
     # RNG stream, so its training steps reproduced the original weights.
     torch.testing.assert_close(replay_ep2[1], first_ep2[1])
     assert replay_ep2[2] == first_ep2[2]
+
+
+def _epoch_order(loader: torch.utils.data.DataLoader) -> list[int]:
+    """The sample indices a fresh iterator over `loader` yields, in order."""
+    return [int(i.item()) for (idx,) in loader for i in idx]
+
+
+def test_session_batches_saves_pre_iter_rng_for_deterministic_replay(
+    tmp_path: Path,
+) -> None:
+    """The epoch checkpoint must reproduce that epoch's shuffled data order.
+
+    `Session.batches` does `for item in loader`, and `iter(loader)` draws the
+    DataLoader's shuffle seed from the global RNG. The epoch-start checkpoint
+    must capture the RNG *before* that draw — otherwise restoring it and
+    building a fresh iterator yields a different order (the saved state was
+    post-draw). This test records each epoch's order while iterating through
+    `session.batches`, then replays each saved checkpoint's RNG and asserts the
+    fresh iterator reproduces that same epoch's order. Fails pre-fix because
+    epoch <n>'s checkpoint replays as epoch <n+1>'s order.
+    """
+    epochs = 3
+    dataset = torch.utils.data.TensorDataset(torch.arange(8))
+    model = TinyNet()
+    session = nansense.start(model, epochs=epochs, phases={"train": 2})
+    restorer = session.training_restorer(cache_dir=tmp_path / "cache")
+    session.detach()
+
+    torch.manual_seed(0)
+    recorded: list[list[int]] = []
+    for epoch in range(epochs):
+        loader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True)
+        order: list[int] = []
+        for (idx,) in session.batches(loader, phase="train", epoch=epoch):
+            order.extend(int(i.item()) for i in idx)
+        recorded.append(order)
+
+    assert restorer.cache.cached_epochs() == [0, 1, 2]
+    # The shuffle actually varies across epochs, so a wrong-epoch RNG would be
+    # caught (the bug surfaced as epoch-1's checkpoint replaying epoch-2 order).
+    assert recorded[0] != recorded[1]
+
+    for epoch in range(epochs):
+        payload = restorer.cache.load(epoch)
+        restore_rng(payload["rng"])
+        loader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=True)
+        assert _epoch_order(loader) == recorded[epoch], (
+            f"epoch {epoch} checkpoint did not reproduce its data order"
+        )

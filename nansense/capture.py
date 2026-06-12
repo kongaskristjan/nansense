@@ -171,6 +171,15 @@ def remove_hooks(session: Session) -> None:
 
 
 def _patch_forward(session: Session) -> None:
+    # Defense-in-depth: never overwrite an already-stashed original. If a
+    # previous batch leaked its patch (e.g. an exception skipped
+    # `remove_hooks`), `model.forward` is the stale fx_forward — capturing it
+    # as the new "original" would permanently lose the real forward. The
+    # normal install/remove cycle always clears `_original_forward` back to
+    # None in `_unpatch_forward`, so this guard never trips in healthy runs.
+    assert session._original_forward is None, (
+        "forward already patched — a previous batch's hook removal leaked"
+    )
     # Stash whatever .forward currently resolves to so we can put it back,
     # remembering whether it was an instance attribute or a class method.
     session._had_instance_forward = "forward" in session.model.__dict__

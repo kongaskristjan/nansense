@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+
+import pytest
 import torch
 from torch import Tensor, nn
 
@@ -167,3 +170,93 @@ def test_watch_input_x_accumulates_stats() -> None:
     assert ("x", "train", 0) in snap.stats
     x_stats = snap.stats[("x", "train", 0)].activations
     assert x_stats.n == 8  # batch 2 × 4 input features
+
+
+def test_watch_stats_failure_still_removes_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raise inside the watch-stats update must not leak the patched forward.
+
+    `_update_watch_stats` runs at `__exit__` before hook removal; if it raises
+    and removal is skipped, the next `install_hooks` would capture the leaked
+    fx_forward as the "original" and permanently lose the real forward. The
+    try/finally in `__exit__` keeps `remove_hooks` running regardless.
+    """
+    session, model = make_session(epochs=1, phases={"train": 2})
+    assert session.fx_traced  # the leak only corrupts the fx patch path
+    session.watch("fc1")
+    session.detach()
+    # The traced model patches its forward via an instance attribute; the real
+    # forward has no entry in the instance __dict__.
+    assert "forward" not in model.__dict__
+    baseline = model(torch.zeros(1, 4)).detach().clone()
+
+    # Make the accumulator's update raise on the first batch's stats pass.
+    def boom(**_kwargs: object) -> None:
+        raise RuntimeError("stats blew up")
+
+    monkeypatch.setattr(session._watch_accumulator, "update", boom)
+
+    with pytest.raises(RuntimeError, match="stats blew up"):
+        with session.batch(phase="train", epoch=0):
+            train_step(model)
+
+    # Hooks were torn down despite the raise: the fx patch is gone and forward
+    # resolves to the real one (no leaked patch left on the instance).
+    assert session._hook_handles == []  # type: ignore[reportPrivateUsage]
+    assert session._original_forward is None  # type: ignore[reportPrivateUsage]
+    assert "forward" not in model.__dict__
+    torch.testing.assert_close(model(torch.zeros(1, 4)), baseline)
+
+    # The next batch reinstalls cleanly — no stale patch became the "original".
+    monkeypatch.undo()
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+    assert session._hook_handles == []  # type: ignore[reportPrivateUsage]
+    assert session._original_forward is None  # type: ignore[reportPrivateUsage]
+    assert "forward" not in model.__dict__
+    torch.testing.assert_close(model(torch.zeros(1, 4)), baseline)
+    snap = session.watch_snapshot()
+    # Only the second batch's stats landed (the first raised before updating):
+    # one batch × 2 samples × 8 fc1 features.
+    assert snap.stats[("fc1", "train", 0)].activations.n == 16
+
+
+def test_concurrent_watch_unwatch_during_stats_does_not_crash() -> None:
+    """Iterating a snapshot of the watched set tolerates concurrent mutation.
+
+    The UI thread mutates `_watched_layers` via watch()/unwatch() while the
+    training thread runs `_update_watch_stats`. Iterating the live set there
+    would race into "set changed size during iteration"; the snapshot taken
+    under `_cv` makes the training thread immune.
+    """
+    session, model = make_session(epochs=1, phases={"train": 50})
+    watchable = ["fc1", "fc2", "relu", "x"]
+    for name in watchable:
+        session.watch(name)
+    session.detach()
+
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def churn() -> None:
+        try:
+            while not stop.is_set():
+                for name in watchable:
+                    session.unwatch(name)
+                    session.watch(name)
+        except BaseException as e:  # pragma: no cover - failure path
+            errors.append(e)
+
+    churner = threading.Thread(target=churn, daemon=True)
+    churner.start()
+    try:
+        for _ in range(50):
+            with session.batch(phase="train", epoch=0):
+                train_step(model)
+    finally:
+        stop.set()
+        churner.join(timeout=5.0)
+
+    assert not churner.is_alive()
+    assert errors == []
