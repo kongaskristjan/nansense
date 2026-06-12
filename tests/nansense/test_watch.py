@@ -267,6 +267,19 @@ def test_watch_accumulator_evicts_older_epoch_patch_buffers() -> None:
     assert snap.stats[("a", "val", 0)].patches is not None
 
 
+def test_watch_accumulator_evicts_patches_when_bucket_precreated() -> None:
+    """Histogram updates usually create the new epoch's bucket before any
+    patch update arrives — the patch eviction must still fire then."""
+    acc = WatchAccumulator()
+    act, x = _patch_batch()
+    acc.update_patches(layer="a", phase="train", epoch=0, act=act, x=x)
+    acc.update(layer="a", phase="train", epoch=1, kind="activation", x=x)
+    acc.update_patches(layer="a", phase="train", epoch=1, act=act, x=x)
+    snap = acc.snapshot()
+    assert snap.stats[("a", "train", 0)].patches is None
+    assert snap.stats[("a", "train", 1)].patches is not None
+
+
 @pytest.mark.parametrize(
     "shape",
     [(2, 3), (2, 3, 4), (2, 3, 2, 2)],

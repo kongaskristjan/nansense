@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import math
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -363,6 +363,18 @@ class _LayerStats:
     activations: TensorAccumulator = field(default_factory=TensorAccumulator)
     gradients: TensorAccumulator = field(default_factory=TensorAccumulator)
     patches: PatchAccumulator = field(default_factory=PatchAccumulator)
+    # Whether `update_patches` has touched this bucket yet — the trigger for
+    # releasing the same phase's older-epoch patch buffers exactly once.
+    patches_started: bool = False
+
+
+def _evict_channel_hists(stats: _LayerStats) -> None:
+    stats.activations.collapse_channels()
+    stats.gradients.collapse_channels()
+
+
+def _evict_patches(stats: _LayerStats) -> None:
+    stats.patches.clear()
 
 
 class WatchAccumulator:
@@ -389,18 +401,7 @@ class WatchAccumulator:
     ) -> None:
         key = (layer, phase, epoch)
         with self._lock:
-            stats = self._stats.get(key)
-            if stats is None:
-                stats = _LayerStats()
-                self._stats[key] = stats
-                # A new epoch of this phase begins: the *same* phase's older
-                # epochs release their per-channel histogram buffers (only
-                # the latest epoch per phase renders per-channel). Other
-                # phases keep theirs until their own next epoch starts.
-                for (l, ph, ep), other in self._stats.items():
-                    if l == layer and ph == phase and ep < epoch:
-                        other.activations.collapse_channels()
-                        other.gradients.collapse_channels()
+            stats = self._bucket_locked(key)
             acc = stats.activations if kind == "activation" else stats.gradients
         acc.update(x)
 
@@ -417,21 +418,46 @@ class WatchAccumulator:
 
         Histogram stats are small enough to keep for every epoch, but a
         patch bucket holds `4 × channels × N_PER_CHANNEL` image crops on
-        the GPU — so when a newer epoch starts for the same (layer, phase),
-        the older epochs' patch buffers are released. The UI only shows the
-        latest epoch per phase, so nothing visible is lost.
+        the GPU — so the first patch update of a newer (layer, phase)
+        epoch releases the older epochs' patch buffers. The UI only shows
+        the latest epoch per phase, so nothing visible is lost. (Keyed off
+        `patches_started` rather than bucket creation: `update` usually
+        creates the bucket first, which must not skip the patch eviction.)
         """
         key = (layer, phase, epoch)
         with self._lock:
-            stats = self._stats.get(key)
-            if stats is None:
-                stats = _LayerStats()
-                self._stats[key] = stats
+            stats = self._bucket_locked(key)
+            if not stats.patches_started:
+                stats.patches_started = True
+                self._evict_older_locked(key, _evict_patches)
             acc = stats.patches
-            for (l, ph, ep), other in self._stats.items():
-                if l == layer and ph == phase and ep < epoch:
-                    other.patches.clear()
         acc.update(act=act, x=x)
+
+    def _bucket_locked(self, key: tuple[str, str, int]) -> _LayerStats:
+        """Get-or-create the (layer, phase, epoch) bucket (lock held).
+
+        Creation means a new epoch of this phase begins: the *same* phase's
+        older epochs release their per-channel histogram buffers (only the
+        latest epoch per phase renders per-channel). Other phases keep
+        theirs until their own next epoch starts.
+        """
+        stats = self._stats.get(key)
+        if stats is None:
+            stats = _LayerStats()
+            self._stats[key] = stats
+            self._evict_older_locked(key, _evict_channel_hists)
+        return stats
+
+    def _evict_older_locked(
+        self,
+        key: tuple[str, str, int],
+        evict: Callable[[_LayerStats], None],
+    ) -> None:
+        """Run `evict` on the same (layer, phase)'s older-epoch buckets."""
+        layer, phase, epoch = key
+        for (l, ph, ep), other in self._stats.items():
+            if l == layer and ph == phase and ep < epoch:
+                evict(other)
 
     def forget_layer(self, layer: str) -> None:
         """Drop all stored stats for `layer` (e.g. on unwatch)."""
