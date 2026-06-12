@@ -61,7 +61,6 @@ def _resize_handle(key: str, side: Literal["left", "right"]) -> ui.element:
         ui.element("div")
         .classes("nansense-resize-handle")
         .props(f'data-resize-key="{key}" data-resize-side="{side}"')
-        .tooltip("Drag to resize — double-click to reset")
     )
 
 
