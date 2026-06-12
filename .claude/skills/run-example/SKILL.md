@@ -17,6 +17,9 @@ description: Launch a nansense example (web UI on --nansense-port) and verify it
    ```
 
    - `examples.mnist_linear.main` — minimal wiring, fastest startup.
+   - `examples.lightning_mnist.main` — the PyTorch Lightning wiring
+     (`NansenseCallback` + `fit_with_time_travel`); use when testing
+     `nansense/lightning.py` changes.
    - `examples.vision.main` — full wiring (scheduler, time travel):
      ResNet/ViT/LeNet on MNIST/CIFAR10/Imagenette
      (`--model resnet|resnet_deep|vit|lenet`,
