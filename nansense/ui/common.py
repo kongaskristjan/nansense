@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
@@ -21,6 +21,16 @@ def _set_controls_enabled(
             control.enable()
         else:
             control.disable()
+
+
+def _defer_value_write(write: Callable[[], object]) -> None:
+    """Apply a widget `.value` write on the next event-loop iteration.
+
+    NiceGUI suppresses value writes made from inside a value-change
+    handler; scheduling the write for the next loop tick makes it actually
+    reach the client.
+    """
+    ui.timer(0.0, write, once=True)
 
 
 def _weights_placeholder(message: str) -> None:

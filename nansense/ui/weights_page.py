@@ -9,6 +9,7 @@ from nansense.recording import RecordedView
 from nansense.schedule import format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
+    _defer_value_write,
     _set_controls_enabled,
     _strip_html,
     _strip_marker,
@@ -287,10 +288,8 @@ class _WeightPanel:
                 if other != dim and self._roles[other] == role:
                     self._roles[other] = "index"
         self._roles[dim] = role
-        # Writes to widget `.value` made from inside a value-change handler are
-        # suppressed by NiceGUI; defer the select/visibility sync one loop tick
-        # so demotions actually reach the client.
-        ui.timer(0.0, self._apply_control_state, once=True)
+        # Defer the select/visibility sync so demotions reach the client.
+        _defer_value_write(self._apply_control_state)
         self._render_current()
 
     def _on_index(self, dim: int, value: float | None) -> None:

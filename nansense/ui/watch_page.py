@@ -19,6 +19,7 @@ from nansense.session import BatchSnapshot, Session
 from nansense.ui.bin_samples import sample_bin
 from nansense.ui.common import (
     _b64_img_src,
+    _defer_value_write,
     _set_controls_enabled,
     _watch_views_recording,
 )
@@ -650,12 +651,8 @@ class _HistPlot:
         self._channel_total.text = f"of {self._channel_count} channels"
         self._channel_spinner.max = self._channel_count - 1
         if self._channel_spinner.value != self._channel:
-            # NiceGUI suppresses value writes from inside a value-change
-            # handler; defer one tick (same workaround as the weight panels).
-            ui.timer(
-                0.0,
-                lambda: self._channel_spinner.set_value(self._channel),
-                once=True,
+            _defer_value_write(
+                lambda: self._channel_spinner.set_value(self._channel)
             )
 
     def _view(

@@ -431,6 +431,12 @@ def test_patch_grid_denormalizes_with_mean_std() -> None:
     assert _rgb_at(_decode(grid.image), 0, 0) == (127, 127, 127)
 
 
+def test_patch_grid_returns_none_when_mean_std_size_mismatched() -> None:
+    """Same policy as `render_image`: hide rather than render wrongly scaled."""
+    tp = _type_patches(torch.zeros(1, 5), torch.zeros(1, 5, 3, 4, 4))
+    assert render_patch_grid(tp, mean=(0.5,), std=(0.5,)) is None
+
+
 def test_patch_grid_marks_unfilled_slots_gray() -> None:
     values = torch.full((1, 5), float("-inf"))
     values[0, 0] = 1.0

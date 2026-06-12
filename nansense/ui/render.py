@@ -369,14 +369,11 @@ def render_image(
     c, _, _ = sample.shape
     if c not in (1, 3):
         return None
-    arr = sample.detach().float().cpu().numpy()
-    if mean is not None and std is not None:
-        if len(mean) != c or len(std) != c:
-            return None
-        m = np.asarray(mean, dtype=np.float32).reshape(c, 1, 1)
-        s = np.asarray(std, dtype=np.float32).reshape(c, 1, 1)
-        arr = arr * s + m
-    arr = (arr.clip(0.0, 1.0) * 255).astype(np.uint8)
+    arr = _denormalize_uint8(
+        sample.detach().float().cpu().numpy(), mean, std, channel_axis=0
+    )
+    if arr is None:
+        return None
     hwc = np.transpose(arr, (1, 2, 0))
     if c == 1:
         pil = Image.fromarray(hwc[..., 0], mode="L")
@@ -432,6 +429,8 @@ def render_patch_grid(
     if not valid.any():
         return None
     cells = _denormalized_cells(tp, mean=mean, std=std)
+    if cells is None:
+        return None
     c, n, ph, pw, _ = cells.shape
     vmax = _heat_vmax(tp) if heatmap else 0.0
     if vmax > 0.0:
@@ -460,20 +459,41 @@ def render_patch_grid(
     )
 
 
+def _denormalize_uint8(
+    arr: np.ndarray,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+    *,
+    channel_axis: int,
+) -> np.ndarray | None:
+    """`x * std + mean` (when stats are given), clipped and scaled to uint8.
+
+    Returns None when provided stats don't match the channel count —
+    callers hide the render rather than show wrongly-scaled values.
+    """
+    if mean is not None and std is not None:
+        c = arr.shape[channel_axis]
+        if len(mean) != c or len(std) != c:
+            return None
+        shape = [1] * arr.ndim
+        shape[channel_axis] = c
+        m = np.asarray(mean, dtype=np.float32).reshape(shape)
+        s = np.asarray(std, dtype=np.float32).reshape(shape)
+        arr = arr * s + m
+    return (arr.clip(0.0, 1.0) * 255).astype(np.uint8)
+
+
 def _denormalized_cells(
     tp: TypePatches,
     *,
     mean: tuple[float, ...] | None,
     std: tuple[float, ...] | None,
-) -> np.ndarray:
+) -> np.ndarray | None:
     """Patches as `(C, N, ph, pw, 3)` uint8, denormalized like `render_image`."""
-    arr = tp.patches.numpy()  # (C, N, Cin, ph, pw)
-    cin = arr.shape[2]
-    if mean is not None and std is not None and len(mean) == cin == len(std):
-        m = np.asarray(mean, dtype=np.float32).reshape(1, 1, cin, 1, 1)
-        s = np.asarray(std, dtype=np.float32).reshape(1, 1, cin, 1, 1)
-        arr = arr * s + m
-    arr = (arr.clip(0.0, 1.0) * 255).astype(np.uint8)
+    arr = _denormalize_uint8(tp.patches.numpy(), mean, std, channel_axis=2)
+    if arr is None:
+        return None
+    cin = arr.shape[2]  # (C, N, Cin, ph, pw)
     rgb = np.moveaxis(arr, 2, -1)  # (C, N, ph, pw, Cin)
     if cin == 1:
         rgb = np.repeat(rgb, 3, axis=-1)
