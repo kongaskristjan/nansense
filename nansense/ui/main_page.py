@@ -21,8 +21,11 @@ from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _b64_img_src,
+    _install_panel_resize,
     _page_scaffold,
     _refuse_unwatch_while_recording,
+    _resizable_pane_props,
+    _resize_handle,
     _strip_html,
     _strip_marker,
 )
@@ -174,6 +177,7 @@ def _build_page(
         )
 
     _page_scaffold()
+    _install_panel_resize()
     ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
     ui.add_head_html(_STRIP_MARKER_CSS)
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
@@ -336,7 +340,8 @@ def _build_page(
             architecture_pane = ui.column().classes(
                 "w-1/4 shrink-0 h-full overflow-auto p-2 "
                 "border-r-2 border-slate-300 bg-slate-50"
-            )
+            ).props(_resizable_pane_props("main-architecture"))
+            architecture_handle = _resize_handle("main-architecture", "left")
             with architecture_pane:
                 ui.mermaid(mermaid_src).classes("w-full")
             layer_weights = session.layer_weights
@@ -360,10 +365,11 @@ def _build_page(
                         weights=layer_weights.get(name, []),
                         on_toggle_watch=toggle_layer,
                     )
+            input_handle = _resize_handle("main-input", "right")
             input_pane = ui.column().classes(
                 "w-72 shrink-0 h-full overflow-auto p-3 "
                 "border-l-2 border-slate-300 bg-slate-50 items-center"
-            )
+            ).props(_resizable_pane_props("main-input"))
             with input_pane:
 
                 def mark_dirty() -> None:
@@ -378,10 +384,14 @@ def _build_page(
                 )
 
         def toggle_architecture() -> None:
-            architecture_pane.set_visibility(not architecture_pane.visible)
+            visible = not architecture_pane.visible
+            architecture_pane.set_visibility(visible)
+            architecture_handle.set_visibility(visible)
 
         def toggle_input() -> None:
-            input_pane.set_visibility(not input_pane.visible)
+            visible = not input_pane.visible
+            input_pane.set_visibility(visible)
+            input_handle.set_visibility(visible)
 
         architecture_toggle.on_click(toggle_architecture)
         input_toggle.on_click(toggle_input)

@@ -204,6 +204,11 @@ soon as at least one pixel is perturbed, the layer strips switch to per-layer
 activation diffs against the original input (a note below the controls says
 so), tracing how far the edit propagates (the receptive field).
 
+The side panes — architecture and input here, the controls panes on the
+watch and experiment pages — are resizable: drag the thin handle between a
+pane and the center content, or double-click it to restore the default
+width. Pane sizes are remembered for the rest of the browser session.
+
 ![Main view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-main.png)
 
 ### Watch

@@ -19,7 +19,10 @@ from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _b64_img_src,
+    _install_panel_resize,
     _page_scaffold,
+    _resizable_pane_props,
+    _resize_handle,
     _set_controls_enabled,
     _strip_html,
     _weights_placeholder,
@@ -242,6 +245,7 @@ def _build_experiment_page(
     """
     title = f"Experiment · {layer}" if layer else "Experiment"
     _page_scaffold(title)
+    _install_panel_resize()
     ui.add_head_html(_STRIP_MARKER_CSS)
 
     step_until_custom = _build_step_until_custom_dialog(session)
@@ -320,7 +324,7 @@ def _build_experiment_page(
             with ui.column().classes(
                 "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
                 "border-r-2 border-slate-300 bg-slate-50"
-            ):
+            ).props(_resizable_pane_props("experiment-controls")):
                 with ui.row().classes("items-baseline gap-2 no-wrap"):
                     ui.label("Experiment").classes("font-mono text-base font-bold")
                     if layer:
@@ -351,6 +355,7 @@ def _build_experiment_page(
                     )
                 ui.separator()
                 params_pane = ui.column().classes("w-full gap-2 p-0")
+            _resize_handle("experiment-controls", "left")
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             ):

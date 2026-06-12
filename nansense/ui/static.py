@@ -286,6 +286,124 @@ _STRIP_CHECKERBOARD_STYLE: str = (
 )
 
 
+# Side panes are resizable by dragging the thin handle sitting between
+# the pane and the center content (`_resize_handle` in `common.py`). The
+# handle's resting color matches the center panes' `bg-slate-200` so it
+# reads as part of the center padding until hovered. `touch-action: none`
+# lets the pointer-capture drag work on touch screens too.
+_PANEL_RESIZE_CSS: str = """
+<style>
+  .nansense-resize-handle {
+    flex: 0 0 6px;
+    align-self: stretch;
+    cursor: col-resize;
+    background: rgb(226 232 240);
+    touch-action: none;
+  }
+  .nansense-resize-handle:hover,
+  .nansense-resize-handle.nansense-resizing {
+    background: rgb(96 165 250 / 0.7);
+  }
+</style>
+"""
+
+
+# Dragging a `.nansense-resize-handle` sets an inline `width` on the pane
+# carrying the matching `data-resize-pane` key (inline style beats the
+# pane's Tailwind width class, which thereby stays the default). The width
+# is saved to sessionStorage on release, so it survives navigation between
+# pages but lasts only for the browser session, and is re-applied on every
+# page load. Vue mounts the elements after this script runs, so restoring
+# happens via a MutationObserver as panes appear rather than once at load.
+_PANEL_RESIZE_JS: str = """
+<script>
+(function() {
+  const STORAGE_PREFIX = 'nansense-panel-width:';
+  const MIN_WIDTH = 150;
+
+  function clampWidth(px) {
+    const max = Math.max(MIN_WIDTH, window.innerWidth * 0.6);
+    return Math.min(Math.max(px, MIN_WIDTH), max);
+  }
+  function paneFor(handle) {
+    const key = handle.getAttribute('data-resize-key');
+    if (!key) return null;
+    return document.querySelector(
+      '[data-resize-pane="' + key.replace(/"/g, '') + '"]'
+    );
+  }
+
+  const restored = new WeakSet();
+  function restore() {
+    document.querySelectorAll('[data-resize-pane]').forEach(function(pane) {
+      if (restored.has(pane)) return;
+      restored.add(pane);
+      const key = pane.getAttribute('data-resize-pane');
+      const stored = parseFloat(sessionStorage.getItem(STORAGE_PREFIX + key));
+      if (isFinite(stored)) pane.style.width = clampWidth(stored) + 'px';
+    });
+  }
+  new MutationObserver(restore).observe(
+    document.documentElement, { childList: true, subtree: true }
+  );
+  restore();
+
+  document.addEventListener('pointerdown', function(e) {
+    if (!e.target.closest) return;
+    const handle = e.target.closest('.nansense-resize-handle');
+    if (!handle) return;
+    const pane = paneFor(handle);
+    if (!pane) return;
+    e.preventDefault();
+    // Capture keeps move/up events on the handle even when the pointer
+    // outruns the 6px strip; not supported for some synthetic pointers.
+    try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+    // 'right' marks a pane on the right edge of the view: its handle sits
+    // on the pane's left side, so dragging left grows the pane.
+    const grow = handle.getAttribute('data-resize-side') === 'right' ? -1 : 1;
+    const startX = e.clientX;
+    const startWidth = pane.getBoundingClientRect().width;
+    handle.classList.add('nansense-resizing');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    function onMove(ev) {
+      pane.style.width =
+        clampWidth(startWidth + grow * (ev.clientX - startX)) + 'px';
+    }
+    function onUp() {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      handle.classList.remove('nansense-resizing');
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      const key = pane.getAttribute('data-resize-pane');
+      sessionStorage.setItem(
+        STORAGE_PREFIX + key, String(pane.getBoundingClientRect().width)
+      );
+    }
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+
+  // Double-click restores the pane's default (class-derived) width.
+  document.addEventListener('dblclick', function(e) {
+    if (!e.target.closest) return;
+    const handle = e.target.closest('.nansense-resize-handle');
+    if (!handle) return;
+    const pane = paneFor(handle);
+    if (!pane) return;
+    pane.style.width = '';
+    sessionStorage.removeItem(
+      STORAGE_PREFIX + pane.getAttribute('data-resize-pane')
+    );
+  });
+})();
+</script>
+"""
+
+
 # The marker's vertical label is hidden on strips too short to fit it
 # (1D heatmap rows, the no-gradient placeholder); the tallest label is
 # ~75px, so anything under 88px can't show it cleanly. The 128px conv

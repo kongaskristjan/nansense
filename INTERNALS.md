@@ -766,6 +766,17 @@ cross-page helpers like `_strip_html` / `_strip_marker` /
 page modules import from `top_bar` / `common` / `histograms` / `static`;
 `app.py` imports the page modules — the graph is acyclic.
 
+Side panes (the main page's architecture/input panes, the watch and
+experiment control panes) are resizable: `_resize_handle` (`common.py`)
+places a 6 px drag strip between the pane and the center content, and the
+resize blob in `static.py` (`_PANEL_RESIZE_JS`) sets an inline width —
+clamped to [150 px, 60 vw] — on the pane marked with the matching
+`data-resize-pane` key, so the pane's Tailwind width class stays the
+default. Widths are saved to `sessionStorage` on release and re-applied on
+page load via a MutationObserver (Vue mounts the elements after the script
+runs): a size set on one page survives navigation but lasts only for the
+browser session. Double-clicking a handle restores the default width.
+
 Frame recording (`nansense.recording`) renders the same content the pages
 show, so the shared render model lives in the pure modules: the public
 names of `render.py` (`render_strip`, `probe_act_tensor`, `tensor_hw`,
