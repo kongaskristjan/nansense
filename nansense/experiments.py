@@ -52,6 +52,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from nansense.capture import _CaptureInterpreter
+from nansense.params import bool_param, float_param, float_tuple, int_param
 from nansense.probe import isolated_model
 
 if TYPE_CHECKING:
@@ -348,21 +349,6 @@ def _error(request: ExperimentRequest, message: str) -> ExperimentResult:
     )
 
 
-def _f(params: dict[str, object], key: str, default: float) -> float:
-    value = params.get(key, default)
-    return float(value) if isinstance(value, (int, float)) else default
-
-
-def _i(params: dict[str, object], key: str, default: int) -> int:
-    value = params.get(key, default)
-    return int(value) if isinstance(value, (int, float)) else default
-
-
-def _b(params: dict[str, object], key: str, default: bool) -> bool:
-    value = params.get(key, default)
-    return bool(value)
-
-
 def _sample_input(
     session: Session, request: ExperimentRequest
 ) -> Tensor | ExperimentResult:
@@ -374,7 +360,7 @@ def _sample_input(
         )
     if base.ndim != 4:
         return _error(request, "experiments need an image input [B, C, H, W]")
-    sample = min(max(0, _i(request.params, "sample", 0)), int(base.shape[0]) - 1)
+    sample = min(max(0, int_param(request.params, "sample", 0)), int(base.shape[0]) - 1)
     return base[sample : sample + 1].detach().clone().float()
 
 
@@ -400,22 +386,11 @@ def _dream_start(
         return _error(request, "deep dream needs a batched input [B, ...]")
     base = base.detach().float()
     default = min(_DEFAULT_DREAM_BATCH, int(base.shape[0]))
-    batch = max(1, _i(request.params, "batch", default))
+    batch = max(1, int_param(request.params, "batch", default))
     if str(request.params.get("start", "noise")) != "noise":
         return base[:batch].clone()
     noise = torch.randn((batch, *base.shape[1:]), generator=rng)
     return float(base.mean()) + float(base.std()) * noise
-
-
-def _float_tuple(value: object, length: int) -> tuple[float, ...] | None:
-    if not isinstance(value, (tuple, list)) or len(value) != length:
-        return None
-    result: list[float] = []
-    for v in value:
-        if not isinstance(v, (int, float)):
-            return None
-        result.append(float(v))
-    return tuple(result)
 
 
 def _value_bounds(
@@ -427,8 +402,8 @@ def _value_bounds(
     inverse image of that range is `[(0 - mean) / std, (1 - mean) / std]`.
     Without stats the input is assumed to already live in `[0, 1]`.
     """
-    means = _float_tuple(mean, channels)
-    stds = _float_tuple(std, channels)
+    means = float_tuple(mean, channels)
+    stds = float_tuple(std, channels)
     if means is not None and stds is not None:
         m = torch.tensor(means).view(1, channels, 1, 1)
         s = torch.tensor(stds).view(1, channels, 1, 1)
@@ -514,13 +489,13 @@ def _run_deep_dream(
     behaves comparably across layers and batch sizes.
     """
     p = request.params
-    steps = max(1, _i(p, "steps", 100))
-    lr = _f(p, "lr", 0.05)
-    diffusion = min(1.0, max(0.0, _f(p, "diffusion", 0.05)))
-    jitter = max(0, _i(p, "jitter", 2))
-    zoom = max(1.0, _f(p, "zoom", 1.0))
-    channel = _i(p, "channel", 0)
-    clamp = _b(p, "clamp", True)
+    steps = max(1, int_param(p, "steps", 100))
+    lr = float_param(p, "lr", 0.05)
+    diffusion = min(1.0, max(0.0, float_param(p, "diffusion", 0.05)))
+    jitter = max(0, int_param(p, "jitter", 2))
+    zoom = max(1.0, float_param(p, "zoom", 1.0))
+    channel = int_param(p, "channel", 0)
+    clamp = bool_param(p, "clamp", True)
 
     rng = torch.Generator().manual_seed(request.seq)
     x0 = _dream_start(session, request, rng)
@@ -588,7 +563,7 @@ def _run_deep_dream(
 
 def _resolve_target(model: nn.Module, x: Tensor, params: dict[str, object]) -> int:
     """The class index for output-targeted methods (-1 means the argmax)."""
-    target = _i(params, "target", -1)
+    target = int_param(params, "target", -1)
     if target >= 0:
         return target
     with torch.no_grad():
@@ -666,21 +641,21 @@ def _run_captum(
             assert module is not None  # checked above
             attribution = captum_attr.NeuronGradient(
                 session.model, module
-            ).attribute(x, neuron_selector=_neuron_selector(_i(p, "channel", 0)))
+            ).attribute(x, neuron_selector=_neuron_selector(int_param(p, "channel", 0)))
         elif request.kind == "neuron_ig":
             assert module is not None  # checked above
             attribution = captum_attr.NeuronIntegratedGradients(
                 session.model, module
             ).attribute(
                 x,
-                neuron_selector=_neuron_selector(_i(p, "channel", 0)),
-                n_steps=max(2, _i(p, "steps", 32)),
+                neuron_selector=_neuron_selector(int_param(p, "channel", 0)),
+                n_steps=max(2, int_param(p, "steps", 32)),
             )
         else:  # occlusion
             target = _resolve_target(session.model, x, p)
             channels = int(x.shape[1])
-            window = max(1, _i(p, "window", 4))
-            stride = max(1, _i(p, "stride", 2))
+            window = max(1, int_param(p, "window", 4))
+            stride = max(1, int_param(p, "stride", 2))
             attribution = captum_attr.Occlusion(session.model).attribute(
                 x,
                 target=target,
