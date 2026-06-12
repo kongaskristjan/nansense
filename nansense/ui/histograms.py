@@ -142,6 +142,32 @@ BIN_CENTERS: list[float] = [
 BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
+
+
+def _linear_bar_x(x_range: list[float] | None) -> list[float]:
+    """Bar x-positions for the linear value axis, off-view bins blanked.
+
+    All 211 bins keep their slot so a bar's index still equals its bin index
+    (the per-channel sample hover maps `pointNumber` straight to a bin), but
+    the centres of bins outside the visible `x_range` are set to NaN, which
+    drops them from both the drawing and Plotly's hit-testing.
+
+    Without this, the trace also carries the far-flung extreme-tail bins
+    (centres out to ±1e6, widths ~1e5) while the axis is zoomed to a tiny
+    window — e.g. an O(1e-3) gradient distribution. Plotly's bar
+    `hovermode="x"` closest-bar search then degenerates and locks onto one of
+    those off-screen bars, so the tooltip reports a fixed empty bin (count 0)
+    no matter where the cursor is. Blanking the off-view centres confines the
+    search to the bins actually on screen, so the hover tracks the cursor.
+    `x_range` is `None` (full-span autorange) only when there's no data, so
+    nothing is blanked there.
+    """
+    if x_range is None:
+        return list(BIN_CENTERS)
+    lo, hi = x_range
+    return [c if lo <= c <= hi else math.nan for c in BIN_CENTERS]
+
+
 # Hover labels for the signed-log view, where bars sit at plain bin indices:
 # each bin's representative value (its geometric midpoint, the same notion
 # the median stat uses) instead of the meaningless index.
@@ -504,7 +530,12 @@ def _make_histogram_figure(
     state like zoom survives; the figure is only rebuilt when the set of
     phases or the axis scale changes.
     """
-    x_values = list(range(N_BINS)) if log_x else BIN_CENTERS
+    phase_hists = _phase_hists(per_phase, kind)
+    x_range, y_range = _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
+    # Signed-log mode draws at uniform bin indices; the linear value axis
+    # draws at the bin centres but blanks the off-view tail bins so Plotly's
+    # `hovermode="x"` hit-test stays on the bins on screen (see `_linear_bar_x`).
+    x_values = list(range(N_BINS)) if log_x else _linear_bar_x(x_range)
     density = use_density(log_x)
     if density:
         hover = (
@@ -518,7 +549,6 @@ def _make_histogram_figure(
             "value ≈ %{customdata[1]}<br>probability %{y:.3g}"
             "<br>count %{customdata[0]}<extra></extra>"
         )
-    phase_hists = _phase_hists(per_phase, kind)
     names = trace_names or [
         f"{p} (ep {per_phase[p].epoch})" for p, _ in phase_hists
     ]
@@ -568,7 +598,6 @@ def _make_histogram_figure(
         # (and reading counts generally) depends on.
         hovermode="x",
     )
-    x_range, y_range = _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
     if log_x:
         tick_vals, tick_text = x_tick_layout()
         fig.update_xaxes(

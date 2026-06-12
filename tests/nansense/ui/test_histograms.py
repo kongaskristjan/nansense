@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from nansense.ui.histograms import (
+    BIN_CENTERS,
     BIN_WIDTHS,
     _HIST_EDGES,
     _PLOT_HEIGHT,
     axis_ranges,
     _fill_fraction,
+    _linear_bar_x,
     _linear_x_range,
     _linear_y_range,
     _log_x_range,
@@ -76,12 +80,15 @@ def test_histogram_log_x_uses_bin_indices() -> None:
 
 
 def test_histogram_linear_x_uses_value_positions_and_widths() -> None:
-    per_phase = {"train": _layer_snap("train")}
+    # A populated far-negative bin so its centre is genuinely negative and in
+    # view (the all-zero-band default would zoom to a tiny range around 0).
+    per_phase = {"train": _layer_snap("train", hist={ZERO_BIN - 40: 100})}
     fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False
     )
-    # Linear mode: bars positioned at true bin centres with per-bin widths.
-    assert fig.data[0].x[0] < 0  # first bin centre is far negative
+    # Linear mode: in-view bars sit at their true bin centres (not indices),
+    # with per-bin widths covering every bin slot.
+    assert fig.data[0].x[ZERO_BIN - 40] == BIN_CENTERS[ZERO_BIN - 40] < 0
     assert isinstance(fig.data[0].width, tuple)
     assert len(fig.data[0].width) == N_BINS
 
@@ -100,6 +107,61 @@ def test_linear_x_range_brackets_populated_bins() -> None:
     lo, hi = rng
     assert lo < 0 < hi
     assert hi - lo < 1.0  # zoomed in, not the full +/-1e6 span
+
+
+# --- Watching histogram: linear x-axis hover (off-view bins blanked) --------
+
+
+def test_linear_bar_x_keeps_all_slots_blanking_off_view_bins() -> None:
+    # A range covering only the central bins: bins on screen keep their true
+    # centre, every other slot is NaN — but the array is still 211 long so a
+    # bar's index still equals its bin index (the sample hover relies on that).
+    rng = _linear_x_range((ZERO_BIN - 2, ZERO_BIN + 2))
+    assert rng is not None
+    x = _linear_bar_x(rng)
+    assert len(x) == N_BINS
+    assert x[ZERO_BIN] == BIN_CENTERS[ZERO_BIN]
+    assert x[ZERO_BIN + 2] == BIN_CENTERS[ZERO_BIN + 2]
+    # The far extreme-tail bins (centres ~±1e6) are the ones whose presence
+    # breaks Plotly's zoomed-in `hovermode="x"` hit-test; they're blanked.
+    assert math.isnan(x[0])
+    assert math.isnan(x[N_BINS - 1])
+
+
+def test_linear_bar_x_blanks_nothing_without_a_range() -> None:
+    # No data → autorange (the full span), so every bin keeps its centre.
+    assert _linear_bar_x(None) == BIN_CENTERS
+
+
+def test_histogram_linear_blanks_far_tail_bins_for_hover() -> None:
+    # A tiny O(1e-3) gradient-like distribution: the visible range is a narrow
+    # window, so the far-flung extreme-tail bins must be blanked from the drawn
+    # x (else Plotly's bar hover locks onto an off-screen empty bar, count 0).
+    hist = {ZERO_BIN + 40: 100, ZERO_BIN - 40: 100}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    fig, (x_range, _) = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=False
+    )
+    x = fig.data[0].x
+    assert x_range is not None
+    # Populated, in-view bins keep their true centre; out-of-view bins (here
+    # the extreme tails) are NaN. Every kept centre lies within the range.
+    assert x[ZERO_BIN + 40] == BIN_CENTERS[ZERO_BIN + 40]
+    assert math.isnan(x[0]) and math.isnan(x[N_BINS - 1])
+    kept = [c for c in x if not math.isnan(c)]
+    assert kept  # something is still drawn
+    assert all(x_range[0] <= c <= x_range[1] for c in kept)
+
+
+def test_histogram_log_x_x_positions_are_plain_indices() -> None:
+    # The signed-log axis is unaffected by the blanking — bars stay at uniform
+    # bin indices (no NaN), since that mode never spans the huge value domain.
+    hist = {ZERO_BIN + 40: 100, ZERO_BIN - 40: 100}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    fig, _ = _make_histogram_figure(
+        per_phase, "activation", "activations", log_x=True
+    )
+    assert list(fig.data[0].x) == list(range(N_BINS))
 
 
 # --- Watching histogram: x-range tail trimming ------------------------------

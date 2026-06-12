@@ -29,6 +29,7 @@ from nansense.ui.histograms import (
     _format_stat,
     _hover_customdata,
     kind_stats,
+    _linear_bar_x,
     _make_histogram_figure,
     phase_color,
     _phases_with_data,
@@ -762,6 +763,12 @@ class _HistPlot:
                 # The rows' x-axes are matched, so one key updates every row.
                 self._x_range = x_range
                 layout["xaxis.range"] = x_range
+                # On the linear value axis the bars sit at bin centres with the
+                # off-view tail bins blanked (see `_linear_bar_x`); that blanking
+                # tracks the visible range, so a moved range re-blanks the bars.
+                if density:
+                    bar_x = _linear_bar_x(x_range)
+                    update["x"] = [bar_x for _ in phases]
             _plotly_restyle(
                 self.element, update, list(range(len(phases))), layout
             )
