@@ -16,10 +16,10 @@ from nansense.experiments import (
     available_experiment_kinds,
 )
 from nansense.recording import RecordedView
-from nansense.schedule import format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _b64_img_src,
+    _page_scaffold,
     _set_controls_enabled,
     _strip_html,
     _weights_placeholder,
@@ -29,6 +29,7 @@ from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_settings_button,
     _add_step_controls,
+    _back_button,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
@@ -227,10 +228,7 @@ def _build_experiment_page(
     explain.
     """
     title = f"Experiment · {layer}" if layer else "Experiment"
-    ui.page_title(f"Nansense — {title}")
-    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
-    ui.query("body").classes("overflow-hidden")
-    ui.query("html").classes("overflow-hidden")
+    _page_scaffold(title)
     ui.add_head_html(_STRIP_MARKER_CSS)
 
     step_until_custom = _build_step_until_custom_dialog(session)
@@ -304,12 +302,8 @@ def _build_experiment_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            ui.button(
-                icon="arrow_back",
-                on_click=lambda: ui.navigate.to("/"),
-                color="slate-500",
-            ).props("dense size=md").tooltip("Back to the main page")
-            position_label = _add_step_controls(session, step_until_custom)
+            _back_button()
+            _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
@@ -450,9 +444,6 @@ def _build_experiment_page(
                 render_batch_images("Input", result.reference)
 
     def tick() -> None:
-        live = session.live_position
-        if live is not None:
-            position_label.text = format_position(live)
         # Keep this page's auto experiment alive while the page is open.
         session.touch_auto_experiment(page_key)
         # While this experiment records, its request must stay as-is: Run

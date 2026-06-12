@@ -14,14 +14,14 @@ from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 
 from nansense.patches import PATCH_TYPES, PatchType
 from nansense.recording import RecordedView
-from nansense.schedule import format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.bin_samples import sample_bin
 from nansense.ui.common import (
     _b64_img_src,
     _defer_value_write,
+    _page_scaffold,
+    _refuse_unwatch_while_recording,
     _set_controls_enabled,
-    _watch_views_recording,
 )
 from nansense.ui.histograms import (
     _BIN_VALUE_LABELS,
@@ -40,6 +40,7 @@ from nansense.ui.render import PatchGridRender, render_image, render_patch_grid
 from nansense.ui.top_bar import (
     _add_settings_button,
     _add_step_controls,
+    _back_button,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
@@ -74,10 +75,7 @@ def _build_watch_page(
     header here, which drops the corresponding accumulator entry — the
     change is reflected on the main page on next navigation.
     """
-    ui.page_title("Nansense — Watching")
-    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
-    ui.query("body").classes("overflow-hidden")
-    ui.query("html").classes("overflow-hidden")
+    _page_scaffold("Watching")
 
     layer_panels: dict[str, _WatchLayerPanel] = {}
     count_label_holder: dict[str, ui.label] = {}
@@ -158,12 +156,8 @@ def _build_watch_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            ui.button(
-                icon="arrow_back",
-                on_click=lambda: ui.navigate.to("/"),
-                color="slate-500",
-            ).props("dense size=md").tooltip("Back to the main page")
-            position_label = _add_step_controls(session, step_until_custom)
+            _back_button()
+            _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
             ui.button(
                 icon="refresh",
@@ -346,13 +340,7 @@ def _build_watch_page(
             _set_controls_enabled(hist_boxes, not hist)
             _set_controls_enabled(minmax_boxes, not minmax)
 
-    def tick() -> None:
-        live = session.live_position
-        if live is not None:
-            position_label.text = format_position(live)
-        sync_frozen()
-
-    ui.timer(0.2, tick)
+    ui.timer(0.2, sync_frozen)
     ui.timer(0.0, refresh, once=True)
     ui.timer(2.0, refresh)
 
@@ -808,14 +796,7 @@ class _WatchLayerPanel:
         self._grid_sig: tuple[object, ...] | None = None
 
         def unwatch() -> None:
-            # The watch recordings render from this layer's accumulators,
-            # which unwatching drops — refuse while one is active.
-            if _watch_views_recording(session):
-                ui.notify(
-                    "Watched layers are frozen while a watch view is "
-                    "recording",
-                    type="warning",
-                )
+            if _refuse_unwatch_while_recording(session):
                 return
             session.unwatch(name)
             on_unwatched()

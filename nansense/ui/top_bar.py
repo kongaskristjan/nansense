@@ -9,7 +9,7 @@ from nicegui import ui
 
 from nansense.recording import RecordedView
 from nansense.restore import TimeTravelError
-from nansense.schedule import BatchPosition, Schedule
+from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.session import BatchSnapshot, Session
 
 
@@ -24,17 +24,29 @@ def _top_bar_row() -> ui.row:
     return ui.row().classes(_TOP_BAR_CLASSES)
 
 
+def _back_button() -> None:
+    """The arrow-back button to the main page (every subpage's top bar)."""
+    ui.button(
+        icon="arrow_back",
+        on_click=lambda: ui.navigate.to("/"),
+        color="slate-500",
+    ).props("dense size=md").tooltip("Back to the main page")
+
+
 def _add_step_controls(
     session: Session,
     step_until_custom: ui.dialog,
-) -> ui.label:
+) -> None:
     """Add the stepping buttons + a live-position label to the open row.
 
     Shared by every page's top bar so they all drive the session
     identically. The settings (gear) button lives in the top bar's
     right-side cluster instead — each page adds it via
-    `_add_settings_button`. The returned label is refreshed from
-    `session.live_position` by each page's timer (see `format_position`).
+    `_add_settings_button`. The label tracks the *live* training position
+    via a timer registered here (see `format_position`); the 0.2s period is
+    the throttle — rapid batches in step_epoch / step_run / detach coalesce
+    into at most ~5 cheap label updates per second, and NiceGUI skips the
+    write when the text is unchanged.
     """
     ui.button("Stop", on_click=session.stop, color="red").props(
         "dense size=md"
@@ -62,9 +74,16 @@ def _add_step_controls(
             step_until_custom.open,
         )
     _add_time_travel_button(session)
-    return ui.label("(waiting for first snapshot)").classes(
+    position_label = ui.label("(waiting for first snapshot)").classes(
         "ml-3 font-mono text-sm"
     )
+
+    def refresh_position() -> None:
+        live = session.live_position
+        if live is not None:
+            position_label.text = format_position(live)
+
+    ui.timer(0.2, refresh_position)
 
 
 def _step_menu_item(

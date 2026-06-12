@@ -12,6 +12,20 @@ from nansense.session import Session
 from nansense.ui.render import StripRender, image_mime
 
 
+def _page_scaffold(title: str = "") -> None:
+    """Per-page setup boilerplate: the tab title plus the no-scroll viewport.
+
+    `title` is the page-specific part of the tab title; the main page
+    passes nothing and is titled plain "Nansense". Every page fills the
+    viewport and scrolls inside its own panes, so page-level scrolling is
+    disabled at every level.
+    """
+    ui.page_title(f"Nansense — {title}" if title else "Nansense")
+    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
+    ui.query("body").classes("overflow-hidden")
+    ui.query("html").classes("overflow-hidden")
+
+
 def _set_controls_enabled(
     controls: Sequence[DisableableElement], enabled: bool
 ) -> None:
@@ -50,6 +64,23 @@ def _watch_views_recording(session: Session) -> bool:
     return recording.is_recording("watch_histogram") or recording.is_recording(
         "watch_minmax"
     )
+
+
+def _refuse_unwatch_while_recording(session: Session) -> bool:
+    """Notify and return True when unwatching must currently be refused.
+
+    The watch-page recordings render from the watch accumulators, and
+    unwatching a layer *drops* its accumulated stats (see
+    `_watch_views_recording`) — so while one records, every unwatch action
+    is refused with a warning toast instead.
+    """
+    if not _watch_views_recording(session):
+        return False
+    ui.notify(
+        "Watched layers are frozen while a watch view is recording",
+        type="warning",
+    )
+    return True
 
 
 def _strip_marker(color_class: str, label: str) -> None:

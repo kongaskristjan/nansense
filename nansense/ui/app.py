@@ -23,11 +23,12 @@ A `ui.timer` in each connection polls `session.snapshot` and
 `session.probe_result`; when a new one is published, the page re-renders
 the *watched* layers' strips against it (the probe — the pinned-batch view
 — wins when present). Unwatched layers are never rendered or shipped to
-the browser, which is what keeps large models responsive. The same timer
-also refreshes the top-bar position label from `session.live_position` on
-every tick, so the displayed epoch/batch keeps advancing during modes that
-don't publish a snapshot every batch (step-epoch, step-custom, run,
-detach) — a cheap label write, decoupled from the heavier strip rendering.
+the browser, which is what keeps large models responsive. A separate timer
+(owned by the shared step controls, see `nansense.ui.top_bar`) refreshes
+the top-bar position label from `session.live_position`, so the displayed
+epoch/batch keeps advancing during modes that don't publish a snapshot
+every batch (step-epoch, step-custom, run, detach) — a cheap label write,
+decoupled from the heavier strip rendering.
 """
 
 from __future__ import annotations
