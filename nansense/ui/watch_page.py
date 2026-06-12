@@ -24,16 +24,16 @@ from nansense.ui.common import (
 )
 from nansense.ui.histograms import (
     _BIN_VALUE_LABELS,
-    _axis_ranges,
+    axis_ranges,
     _format_stat,
     _hover_customdata,
-    _kind_stats,
+    kind_stats,
     _make_histogram_figure,
-    _phase_color,
+    phase_color,
     _phases_with_data,
     _stats_table_html,
-    _trace_heights,
-    _use_density,
+    trace_heights,
+    use_density,
 )
 from nansense.ui.render import PatchGridRender, render_image, render_patch_grid
 from nansense.ui.top_bar import (
@@ -83,7 +83,7 @@ def _build_watch_page(
     body_container: ui.column
     # Whether the value (x) and probability (y) axes use a log-based scale.
     # Both default off — linear axes showing probability density (see
-    # `_use_density`); the sidebar checkboxes flip them and re-render every
+    # `use_density`); the sidebar checkboxes flip them and re-render every
     # plot immediately.
     axis_log = {"x": False, "y": False}
     # MIN/MAX view state: which of the four grids are shown (only "Max
@@ -633,7 +633,7 @@ class _HistPlot:
     ) -> tuple[tuple[int, ...], ...] | None:
         """The drawn phase's per-channel rows, `None` when unavailable."""
         for snap in per_phase.values():
-            rows = _kind_stats(snap, self._kind).channel_hists
+            rows = kind_stats(snap, self._kind).channel_hists
             if rows is not None:
                 return rows
         return None
@@ -670,7 +670,7 @@ class _HistPlot:
             return per_phase
         out: dict[str, LayerStatsSnapshot] = {}
         for phase, snap in per_phase.items():
-            stats = _kind_stats(snap, self._kind)
+            stats = kind_stats(snap, self._kind)
             if stats.channel_hists is None:
                 out[phase] = snap
                 continue
@@ -717,7 +717,7 @@ class _HistPlot:
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
         log_x = axis[0]
-        density = _use_density(log_x)
+        density = use_density(log_x)
         if phases != self._phases or axis != self._axis:
             # A phase appeared/disappeared or an axis-scale checkbox
             # flipped — rebuild the whole figure.
@@ -735,18 +735,18 @@ class _HistPlot:
             )
             self._phases = phases
             self._axis = axis
-            self._x_range, self._y_range = _axis_ranges(
+            self._x_range, self._y_range = axis_ranges(
                 per_phase, self._kind, log_x=log_x, log_y=axis[1]
             )
         elif phases:
             # Same rows and axes — only counts (and the epoch label) moved.
             # Restyle in place so zoom/pan survives. A channel index change
             # lands here too: same structure, new bar heights.
-            hists = [_kind_stats(per_phase[p], self._kind).hist for p in phases]
+            hists = [kind_stats(per_phase[p], self._kind).hist for p in phases]
             names = self._trace_names(per_phase)
             update: dict[str, object] = {
                 "name": names,
-                "y": [_trace_heights(h, density) for h in hists],
+                "y": [trace_heights(h, density) for h in hists],
                 "customdata": [_hover_customdata(h, density) for h in hists],
             }
             # The subplot titles carry the epoch, so refresh them with the
@@ -756,7 +756,7 @@ class _HistPlot:
             }
             # The caps follow the data; re-apply them only when they moved so
             # an idle refresh doesn't keep snapping the user's zoom back.
-            x_range, y_range = _axis_ranges(
+            x_range, y_range = axis_ranges(
                 per_phase, self._kind, log_x=log_x, log_y=axis[1]
             )
             if y_range is not None and y_range != self._y_range:
@@ -1000,7 +1000,7 @@ def _patch_grids_html(
             rows.append(_patch_grid_row_html(_PATCH_TYPE_LABELS[ptype], grid))
         if not rows:
             continue
-        color = _phase_color(phase, i)
+        color = phase_color(phase, i)
         blocks.append(
             '<div class="flex flex-col gap-2 w-full">'
             f'<div class="font-mono text-xs font-bold" style="color:{color}">'

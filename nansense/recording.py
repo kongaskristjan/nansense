@@ -63,7 +63,6 @@ from nansense.schedule import BatchPosition, format_position
 from nansense.watch import N_BINS, LayerStatsSnapshot, TensorStatsSnapshot
 
 if TYPE_CHECKING:
-    from nansense.probe import ProbeResult
     from nansense.session import Session
 
 # Where recordings land: one timestamped subdirectory per manager (i.e. per
@@ -475,36 +474,14 @@ def _compose_sections(
     return np.asarray(canvas)
 
 
-def _main_act_tensor(
-    probe: ProbeResult, name: str, *, compare: bool
-) -> Tensor | None:
-    """The probe-sourced activation tensor for one layer (mirrors the page).
-
-    With `compare` the strip shows `perturbed − original` (zeros when no
-    perturbed forward ran); otherwise the perturbed activations win when
-    they exist.
-    """
-    import torch
-
-    base = probe.activations.get(name)
-    perturbed_acts = probe.perturbed_activations
-    if compare:
-        if base is None:
-            return None
-        if perturbed_acts is None:
-            return torch.zeros_like(base)
-        pert = perturbed_acts.get(name)
-        if pert is None or pert.shape != base.shape:
-            return None
-        return pert - base
-    if perturbed_acts is not None:
-        return perturbed_acts.get(name)
-    return base
-
-
 def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | None:
     """Input image plus per-layer activation/gradient strips, one frame."""
-    from nansense.ui.render import render_image, render_strip
+    from nansense.ui.render import (
+        probe_act_tensor,
+        render_image,
+        render_strip,
+        tensor_hw,
+    )
 
     snap = session.snapshot
     probe = session.probe_result
@@ -524,13 +501,13 @@ def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | Non
             if probe.perturbed_input is not None
             else probe.input
         )
-        input_hw = _tensor_hw(probe.input)
+        input_hw = tensor_hw(probe.input)
     else:
         assert snap is not None
         shown_input = (
             snap.activations.get(input_name) if input_name is not None else None
         )
-        input_hw = _tensor_hw(shown_input)
+        input_hw = tensor_hw(shown_input)
     input_img = render_image(shown_input, sample_idx, mean=mean, std=std)
     if input_img is not None:
         img = Image.open(io.BytesIO(input_img)).convert("RGB")
@@ -543,7 +520,7 @@ def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | Non
         sections.append(("input", img))
     for name in layers:
         if probe is not None:
-            act = _main_act_tensor(probe, name, compare=compare)
+            act = probe_act_tensor(probe, name, compare=compare)
             act_img = _strip_section(
                 render_strip(act, sample_idx, input_hw=input_hw)
             )
@@ -567,16 +544,9 @@ def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | Non
     return _compose_sections(sections)
 
 
-def _tensor_hw(tensor: Tensor | None) -> tuple[int, int] | None:
-    if tensor is None or tensor.ndim != 4:
-        return None
-    return int(tensor.shape[-2]), int(tensor.shape[-1])
-
-
 def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | None:
     """One layer's weight / gradient / optimizer strips under frozen axes."""
-    from nansense.ui.weights_page import _dims_from_roles
-    from nansense.ui.render import default_weight_dims, render_weight
+    from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
 
     snap = session.snapshot
     if snap is None:
@@ -603,7 +573,7 @@ def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | 
         if tensor is None:
             sections.append((f"{name} — no weights captured", None))
             continue
-        x_dim, y_dim, tile_dim = _dims_from_roles(roles)
+        x_dim, y_dim, tile_dim = dims_from_roles(roles)
         if x_dim is None:
             x_dim = tensor.ndim - 1
         tile = tile_dim if y_dim is not None else None
@@ -718,28 +688,28 @@ def _draw_histogram_axes(
 ) -> None:
     """One subplot: the same bars/ranges the watch page draws with Plotly."""
     from nansense.ui.histograms import (
-        _BIN_CENTERS,
-        _BIN_WIDTHS,
-        _axis_ranges,
-        _kind_stats,
-        _phase_color,
-        _trace_heights,
-        _use_density,
-        _x_tick_layout,
+        BIN_CENTERS,
+        BIN_WIDTHS,
+        axis_ranges,
+        kind_stats,
+        phase_color,
+        trace_heights,
+        use_density,
+        x_tick_layout,
     )
 
-    tensor_stats: TensorStatsSnapshot = _kind_stats(stats, kind)
-    density = _use_density(log_x)
-    heights = _trace_heights(tensor_stats.hist, density)
-    color = _phase_color(phase, 0)
+    tensor_stats: TensorStatsSnapshot = kind_stats(stats, kind)
+    density = use_density(log_x)
+    heights = trace_heights(tensor_stats.hist, density)
+    color = phase_color(phase, 0)
     if log_x:
         ax.bar(range(N_BINS), heights, width=1.0, color=color)
-        tick_vals, tick_text = _x_tick_layout()
+        tick_vals, tick_text = x_tick_layout()
         ax.set_xticks(tick_vals, tick_text, fontsize=6)
     else:
-        ax.bar(_BIN_CENTERS, heights, width=_BIN_WIDTHS, color=color)
+        ax.bar(BIN_CENTERS, heights, width=BIN_WIDTHS, color=color)
     per_phase = {phase: stats}
-    x_range, y_range = _axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
+    x_range, y_range = axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
     if x_range is not None:
         ax.set_xlim((x_range[0], x_range[1]))
     if log_y:
@@ -811,7 +781,7 @@ def _render_experiment_frame(
     view: RecordedView, session: Session
 ) -> np.ndarray | None:
     """The freshest result of the view's pinned auto experiment."""
-    from nansense.ui.render import render_strip
+    from nansense.ui.render import render_strip, tensor_hw
 
     seq = _int_param(view.params, "seq")
     mean = _stats_tuple(view.params.get("input_mean"))
@@ -836,7 +806,7 @@ def _render_experiment_frame(
                 "attribution",
                 _strip_section(
                     render_strip(
-                        result.attribution, 0, input_hw=_tensor_hw(result.reference)
+                        result.attribution, 0, input_hw=tensor_hw(result.reference)
                     )
                 ),
             )

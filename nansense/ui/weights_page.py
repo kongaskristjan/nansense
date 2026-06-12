@@ -15,7 +15,7 @@ from nansense.ui.common import (
     _weights_placeholder,
 )
 from nansense.ui.histograms import _format_stat
-from nansense.ui.render import default_weight_dims, render_weight
+from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_settings_button,
@@ -41,19 +41,6 @@ def _role_options(ndim: int) -> dict[str, str]:
         roles.append("tile")
     roles.append("index")
     return {r: _ROLE_LABELS[r] for r in roles}
-
-
-def _dims_from_roles(roles: list[str]) -> tuple[int | None, int | None, int | None]:
-    """Resolve a per-dimension role list to (x_dim, y_dim, tile_dim) axes."""
-    x = y = tile = None
-    for d, role in enumerate(roles):
-        if role == "x":
-            x = d
-        elif role == "y":
-            y = d
-        elif role == "tile":
-            tile = d
-    return x, y, tile
 
 
 def _default_roles(ndim: int) -> list[str]:
@@ -361,7 +348,7 @@ class _WeightPanel:
         if tensor is None:
             self._show_error("no weights captured yet")
             return
-        x_dim, y_dim, tile_dim = _dims_from_roles(self._roles)
+        x_dim, y_dim, tile_dim = dims_from_roles(self._roles)
         if x_dim is None:
             self._show_error("select an X dimension")
             return

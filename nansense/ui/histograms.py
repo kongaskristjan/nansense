@@ -1,6 +1,8 @@
 """Histogram math and Plotly figure construction for the watch views.
 
-Pure functions over plotly + snapshot types — no UI state.
+Pure functions over plotly + snapshot types — no UI state. The public
+(non-underscore) names are also the contract `nansense.recording` renders
+watch-view frames with, so recorded histograms match the page exactly.
 """
 
 from __future__ import annotations
@@ -33,11 +35,11 @@ _PHASE_COLORS: dict[str, str] = {
 _FALLBACK_COLORS: tuple[str, ...] = ("#a855f7", "#ef4444", "#14b8a6", "#6b7280")
 
 
-def _phase_color(phase: str, idx: int) -> str:
+def phase_color(phase: str, idx: int) -> str:
     return _PHASE_COLORS.get(phase, _FALLBACK_COLORS[idx % len(_FALLBACK_COLORS)])
 
 
-def _x_tick_layout() -> tuple[list[int], list[str]]:
+def x_tick_layout() -> tuple[list[int], list[str]]:
     """Tick positions (bin indices) and labels for the signed-log x-axis.
 
     Labels are drawn only at powers of 10 (every 7th edge); the
@@ -102,7 +104,7 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> st
     header = "".join(
         f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
         f"border-bottom:1px solid #e2e8f0;"
-        f'color:{_phase_color(p, i)}">'
+        f'color:{phase_color(p, i)}">'
         f"{html.escape(p)} ep {per_phase[p].epoch}</th>"
         for i, p in enumerate(phases)
     )
@@ -110,7 +112,7 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> st
         f'<tr><td style="{_STATS_CELL_STYLE};color:#64748b">{label}</td>'
         + "".join(
             f'<td style="{_STATS_CELL_STYLE};color:#1e293b">'
-            f"{fmt(_kind_stats(per_phase[p], kind))}</td>"
+            f"{fmt(kind_stats(per_phase[p], kind))}</td>"
             for p in phases
         )
         + "</tr>"
@@ -134,10 +136,10 @@ _PLOT_HEIGHT: int = 440
 # switched to a linear scale: each bar is drawn at the centre of its bin and
 # given the bin's true (linear) width so the bars tile the value axis.
 _HIST_EDGES: list[float] = histogram_edges()
-_BIN_CENTERS: list[float] = [
+BIN_CENTERS: list[float] = [
     (_HIST_EDGES[i] + _HIST_EDGES[i + 1]) / 2 for i in range(N_BINS)
 ]
-_BIN_WIDTHS: list[float] = [
+BIN_WIDTHS: list[float] = [
     _HIST_EDGES[i + 1] - _HIST_EDGES[i] for i in range(N_BINS)
 ]
 # Hover labels for the signed-log view, where bars sit at plain bin indices:
@@ -146,7 +148,7 @@ _BIN_WIDTHS: list[float] = [
 _BIN_VALUE_LABELS: list[str] = [f"{bin_midpoint(i):.3g}" for i in range(N_BINS)]
 
 # Axis trims may clip bins/bars holding up to this share of the data points
-# (see `_trimmed_bin_bounds` / `_linear_y_range`). `_axis_ranges` starts at
+# (see `_trimmed_bin_bounds` / `_linear_y_range`). `axis_ranges` starts at
 # the base share and raises it in steps up to the max while the bars would
 # fill less than `_MIN_FILL_FRACTION` of the plot area.
 _BASE_CLIP_SHARE: float = 0.005
@@ -162,7 +164,7 @@ _MIN_FILL_FRACTION: float = 0.05
 _DOMINANCE_RATIO: float = 5.0
 
 
-def _use_density(log_x: bool) -> bool:
+def use_density(log_x: bool) -> bool:
     """Whether bars show probability density instead of probabilities.
 
     On a linear value axis, per-bin probabilities are misleading: the
@@ -188,10 +190,10 @@ def _probability_densities(hist: tuple[int, ...]) -> list[float]:
     n = sum(hist)
     if n == 0:
         return [0.0] * len(hist)
-    return [c / (n * w) for c, w in zip(hist, _BIN_WIDTHS)]
+    return [c / (n * w) for c, w in zip(hist, BIN_WIDTHS)]
 
 
-def _trace_heights(hist: tuple[int, ...], density: bool) -> list[float]:
+def trace_heights(hist: tuple[int, ...], density: bool) -> list[float]:
     """Bar heights for one trace: probability densities or probabilities."""
     return _probability_densities(hist) if density else _probabilities(hist)
 
@@ -219,7 +221,7 @@ def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]
     into the 2e-9-wide zero band) produces a bar that would otherwise
     flatten the rest of the distribution.
     """
-    heights = _trace_heights(hist, density)
+    heights = trace_heights(hist, density)
     bars = sorted(((h, c) for h, c in zip(heights, hist) if c > 0), reverse=True)
     if len(bars) >= 2 and bars[0][0] > _DOMINANCE_RATIO * bars[1][0]:
         return bars[1:]
@@ -251,7 +253,7 @@ def _linear_y_range(
     bars: list[tuple[float, int]] = []
     total = 0
     for phase in _phases_with_data(per_phase, kind):
-        hist = _kind_stats(per_phase[phase], kind).hist
+        hist = kind_stats(per_phase[phase], kind).hist
         total += sum(hist)
         bars.extend(_scale_bars(hist, density))
     if not bars:
@@ -268,7 +270,7 @@ def _linear_y_range(
     return [0.0, cap * 1.05]
 
 
-def _kind_stats(layer_snap: LayerStatsSnapshot, kind: str) -> TensorStatsSnapshot:
+def kind_stats(layer_snap: LayerStatsSnapshot, kind: str) -> TensorStatsSnapshot:
     """The activation or gradient stats of a layer snapshot, by `kind`."""
     return layer_snap.activations if kind == "activation" else layer_snap.gradients
 
@@ -282,7 +284,7 @@ def _phases_with_data(
     draws, so it doubles as the signature the panel uses to decide whether a
     refresh can restyle in place or must rebuild the figure.
     """
-    return [p for p, snap in per_phase.items() if _kind_stats(snap, kind).n > 0]
+    return [p for p, snap in per_phase.items() if kind_stats(snap, kind).n > 0]
 
 
 def _trimmed_bin_bounds(
@@ -300,7 +302,7 @@ def _trimmed_bin_bounds(
     """
     counts = [0] * N_BINS
     for phase in _phases_with_data(per_phase, kind):
-        for i, count in enumerate(_kind_stats(per_phase[phase], kind).hist):
+        for i, count in enumerate(kind_stats(per_phase[phase], kind).hist):
             counts[i] += count
     total = sum(counts)
     if total == 0:
@@ -389,14 +391,14 @@ def _fill_fraction(
     phases = _phases_with_data(per_phase, kind)
     filled = 0.0
     for phase in phases:
-        heights = _trace_heights(_kind_stats(per_phase[phase], kind).hist, density)
+        heights = trace_heights(kind_stats(per_phase[phase], kind).hist, density)
         for i in range(lo, hi + 1):
-            width = _BIN_WIDTHS[i] if density else 1.0
+            width = BIN_WIDTHS[i] if density else 1.0
             filled += width * min(heights[i], y_top)
     return filled / (span * y_top * len(phases))
 
 
-def _axis_ranges(
+def axis_ranges(
     per_phase: dict[str, LayerStatsSnapshot],
     kind: str,
     *,
@@ -421,7 +423,7 @@ def _axis_ranges(
     to the base share — the log scale keeps the bars visible, so the fill
     heuristic doesn't apply. Both ranges are `None` when there's no data.
     """
-    density = _use_density(log_x)
+    density = use_density(log_x)
 
     def x_range_at(share: float) -> list[float] | None:
         return (
@@ -470,22 +472,22 @@ def _make_histogram_figure(
     and epoch, tinted with the trace color) rather than overlaying bars on
     shared axes, so one phase never obscures another. The rows share the
     x-axis and, on a linear y-axis, the same capped y-range
-    (see `_axis_ranges`), keeping the per-phase distributions directly
+    (see `axis_ranges`), keeping the per-phase distributions directly
     comparable.
 
     `log_x` / `log_y` toggle the value (x) and probability (y) axes between a
     log-based and a linear scale (the "Log x" / "Log y" checkboxes on the
     Watching page — the checkbox alone decides the x-mode). With `log_x`
     off, bars show probability density instead of probabilities (see
-    `_use_density`).
+    `use_density`).
 
     This builds the *whole* figure. Routine data refreshes don't call it —
     they restyle the existing figure in place (see `_HistPlot`) so client-side
     state like zoom survives; the figure is only rebuilt when the set of
     phases or the axis scale changes.
     """
-    x_values = list(range(N_BINS)) if log_x else _BIN_CENTERS
-    density = _use_density(log_x)
+    x_values = list(range(N_BINS)) if log_x else BIN_CENTERS
+    density = use_density(log_x)
     if density:
         hover = (
             "value %{x:.2e}<br>probability density %{y:.3g}"
@@ -508,15 +510,15 @@ def _make_histogram_figure(
         subplot_titles=names or None,
     )
     for i, phase in enumerate(phases):
-        stats = _kind_stats(per_phase[phase], kind)
+        stats = kind_stats(per_phase[phase], kind)
         fig.add_trace(
             go.Bar(
                 x=x_values,
-                y=_trace_heights(stats.hist, density),
+                y=trace_heights(stats.hist, density),
                 customdata=_hover_customdata(stats.hist, density),
-                width=None if log_x else _BIN_WIDTHS,
+                width=None if log_x else BIN_WIDTHS,
                 name=names[i],
-                marker_color=_phase_color(phase, i),
+                marker_color=phase_color(phase, i),
                 opacity=0.85,
                 hovertemplate=hover,
             ),
@@ -526,7 +528,7 @@ def _make_histogram_figure(
     # Subplot titles double as the legend: phase name + epoch in the trace
     # color, sitting right above the row they describe.
     for i, annotation in enumerate(fig.layout.annotations):
-        annotation.update(font=dict(size=11, color=_phase_color(phases[i], i)))
+        annotation.update(font=dict(size=11, color=phase_color(phases[i], i)))
     # `shared_xaxes` only hides the upper rows' tick labels; matching the
     # x-axes proper keeps every row in lock-step when zooming/panning and
     # lets a single `xaxis.range` relayout retarget all rows at once.
@@ -545,9 +547,9 @@ def _make_histogram_figure(
         # (and reading counts generally) depends on.
         hovermode="x",
     )
-    x_range, y_range = _axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
+    x_range, y_range = axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
     if log_x:
-        tick_vals, tick_text = _x_tick_layout()
+        tick_vals, tick_text = x_tick_layout()
         fig.update_xaxes(
             range=x_range,
             tickvals=tick_vals,
@@ -566,7 +568,7 @@ def _make_histogram_figure(
         )
     fig.update_yaxes(
         type="log" if log_y else "linear",
-        # The cap is a linear-space range; on a log y-axis `_axis_ranges`
+        # The cap is a linear-space range; on a log y-axis `axis_ranges`
         # returns `None` (Plotly autorange, which shows 100% of the data
         # anyway) since Plotly would misread the range as log10 units.
         range=y_range,

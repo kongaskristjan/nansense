@@ -22,10 +22,9 @@ from nansense.ui.common import (
     _b64_img_src,
     _set_controls_enabled,
     _strip_html,
-    _tensor_hw,
     _weights_placeholder,
 )
-from nansense.ui.render import INPUT_IMAGE_SIZE, render_image, render_strip
+from nansense.ui.render import INPUT_IMAGE_SIZE, render_image, render_strip, tensor_hw
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_settings_button,
@@ -443,7 +442,7 @@ def _build_experiment_page(
                                 render_strip(
                                     result.attribution,
                                     0,
-                                    input_hw=_tensor_hw(result.reference),
+                                    input_hw=tensor_hw(result.reference),
                                 )
                             )
                         )

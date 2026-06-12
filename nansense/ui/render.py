@@ -35,11 +35,13 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+import torch
 from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 from torch.nn import functional as F
 
 from nansense.patches import TypePatches
+from nansense.probe import ProbeResult
 
 TILE_SIZE: int = 128
 TILE_GAP_DIVISOR: int = 48
@@ -117,6 +119,41 @@ def render_strip(
     if sample.ndim == 1:
         return _render_1d(sample)
     return None
+
+
+def tensor_hw(tensor: Tensor | None) -> tuple[int, int] | None:
+    """Spatial size of a `[B, C, H, W]` input, or `None` when not image-like.
+
+    Threaded into `render_strip` as `input_hw` so 2D (token-shaped)
+    activations can be unflattened back onto the input's patch grid.
+    """
+    if tensor is None or tensor.ndim != 4:
+        return None
+    return int(tensor.shape[-2]), int(tensor.shape[-1])
+
+
+def probe_act_tensor(probe: ProbeResult, name: str, *, compare: bool) -> Tensor | None:
+    """The probe-sourced activation tensor one layer's strip shows.
+
+    With `compare` the strip shows `perturbed − original` (zeros when no
+    perturbed forward ran); otherwise the perturbed activations win when
+    they exist. Shared by the main page and frame recording, so both render
+    the same tensor for the same probe.
+    """
+    base = probe.activations.get(name)
+    perturbed_acts = probe.perturbed_activations
+    if compare:
+        if base is None:
+            return None
+        if perturbed_acts is None:
+            return torch.zeros_like(base)
+        pert = perturbed_acts.get(name)
+        if pert is None or pert.shape != base.shape:
+            return None
+        return pert - base
+    if perturbed_acts is not None:
+        return perturbed_acts.get(name)
+    return base
 
 
 # Leading non-spatial tokens a grid fit may skip: none, a class token, class
@@ -204,6 +241,19 @@ def default_weight_dims(ndim: int) -> WeightDims:
     tile_dim = ndim - 3 if ndim >= 3 else None
     fixed_dims = tuple(range(ndim - 3)) if ndim >= 4 else ()
     return WeightDims(x_dim=x_dim, y_dim=y_dim, tile_dim=tile_dim, fixed_dims=fixed_dims)
+
+
+def dims_from_roles(roles: list[str]) -> tuple[int | None, int | None, int | None]:
+    """Resolve a per-dimension role list to (x_dim, y_dim, tile_dim) axes."""
+    x = y = tile = None
+    for d, role in enumerate(roles):
+        if role == "x":
+            x = d
+        elif role == "y":
+            y = d
+        elif role == "tile":
+            tile = d
+    return x, y, tile
 
 
 def render_weight(

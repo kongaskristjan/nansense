@@ -740,6 +740,12 @@ cross-page helpers like `_strip_html` / `_strip_marker` /
 page modules import from `top_bar` / `common` / `histograms` / `static`;
 `app.py` imports the page modules — the graph is acyclic.
 
+Frame recording (`nansense.recording`) renders the same content the pages
+show, so the shared render model lives in the pure modules: the public
+names of `render.py` (`render_strip`, `probe_act_tensor`, `tensor_hw`,
+`dims_from_roles`, …) and `histograms.py` are that contract — recording
+imports only those, never page modules.
+
 - `nansense.ui.graph.build_mermaid(model)` produces the Mermaid TD source
   for the architecture view. It tries `torch.fx.symbolic_trace(model)`
   first, which yields a real data-flow graph — vertical chains, with

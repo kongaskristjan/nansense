@@ -24,12 +24,11 @@ from nansense.ui.common import (
     _b64_img_src,
     _strip_html,
     _strip_marker,
-    _tensor_hw,
     _watch_views_recording,
 )
 from nansense.ui.graph import slug
 from nansense.ui.input_panel import InputPanel
-from nansense.ui.render import render_image, render_strip
+from nansense.ui.render import probe_act_tensor, render_image, render_strip, tensor_hw
 from nansense.ui.static import (
     _ARCHITECTURE_CLICK_CSS,
     _ARCHITECTURE_CLICK_JS,
@@ -526,7 +525,7 @@ def _compute_frame(
             cache=cache,
         )
     assert snap is not None  # tick only renders when at least one source exists
-    input_hw = _tensor_hw(snap.activations.get(input_name) if input_name else None)
+    input_hw = tensor_hw(snap.activations.get(input_name) if input_name else None)
 
     def strips(name: str) -> tuple[str, str]:
         if compare:
@@ -607,33 +606,21 @@ def _compute_probe_frame(
     exists, so the edit is visible. Probe runs are forward-only, so every
     gradient strip shows a placeholder note instead of an image.
     """
-    perturbed_acts = probe.perturbed_activations
     kind = "probe-diff" if compare else (
-        "probe-perturbed" if perturbed_acts is not None else "probe-act"
+        "probe-perturbed" if probe.perturbed_activations is not None else "probe-act"
     )
-    input_hw = _tensor_hw(probe.input)
-
-    def act_tensor(name: str) -> Tensor | None:
-        base = probe.activations.get(name)
-        if compare:
-            if base is None:
-                return None
-            if perturbed_acts is None:
-                return torch.zeros_like(base)
-            pert = perturbed_acts.get(name)
-            if pert is None or pert.shape != base.shape:
-                return None
-            return pert - base
-        if perturbed_acts is not None:
-            return perturbed_acts.get(name)
-        return base
+    input_hw = tensor_hw(probe.input)
 
     def strips(name: str) -> tuple[str, str]:
         act = cache.get_or_render(
             probe,
             (name, kind, sample_idx),
             lambda: _strip_html(
-                render_strip(act_tensor(name), sample_idx, input_hw=input_hw)
+                render_strip(
+                    probe_act_tensor(probe, name, compare=compare),
+                    sample_idx,
+                    input_hw=input_hw,
+                )
             ),
         )
         return act, _PROBE_NO_GRADIENTS_HTML

@@ -7,7 +7,6 @@ from collections.abc import Sequence
 
 from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
-from torch import Tensor
 
 from nansense.session import Session
 from nansense.ui.render import StripRender, image_mime
@@ -41,17 +40,6 @@ def _watch_views_recording(session: Session) -> bool:
     return recording.is_recording("watch_histogram") or recording.is_recording(
         "watch_minmax"
     )
-
-
-def _tensor_hw(tensor: Tensor | None) -> tuple[int, int] | None:
-    """Spatial size of a `[B, C, H, W]` input, or `None` when not image-like.
-
-    Threaded into `render_strip` as `input_hw` so 2D (token-shaped)
-    activations can be unflattened back onto the input's patch grid.
-    """
-    if tensor is None or tensor.ndim != 4:
-        return None
-    return int(tensor.shape[-2]), int(tensor.shape[-1])
 
 
 def _strip_marker(color_class: str, label: str) -> None:
