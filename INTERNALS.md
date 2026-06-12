@@ -843,7 +843,7 @@ imports only those, never page modules.
     images.
 - `nansense.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
   renders the model input as a natural RGB or grayscale image at the
-  sample's native resolution; the UI scales it to `INPUT_IMAGE_SIZE` with
+  sample's native resolution; the UI scales it to its pane's width with
   CSS nearest-neighbour. Channels are assumed to lie
   in `[0, 1]` unless both `mean` and `std` are passed, in which case the
   sample is denormalized (`x * std + mean`) before being clamped and
@@ -927,9 +927,10 @@ imports only those, never page modules.
   already in the result, so adding or clearing edits just re-renders. A
   failed pin (no snapshot yet) reverts the switch with the usual
   one-tick-deferred value write.
-- The input image is a `ui.interactive_image` sized by CSS to
-  `INPUT_IMAGE_SIZE` with `image-rendering: pixelated` (the per-frame
-  payload is the native-resolution data URI from `_input_img_src`).
+- The input image is a `ui.interactive_image` sized by CSS to the input
+  pane's width with `image-rendering: pixelated` (the per-frame payload
+  is the native-resolution data URI from `_input_img_src`), so it scales
+  with the resizable pane.
   NiceGUI delivers click coordinates in the image's *native* pixel space,
   so the handler clamps `image_x`/`image_y` into the input's `H × W`,
   converts the picked color with `normalized_color` (grayscale inputs use

@@ -418,9 +418,10 @@ def render_image(
     to lie in `[0, 1]` unless both `mean` and `std` are provided, in which
     case the sample is denormalized as `x * std + mean` before being
     clamped and scaled to 8-bit. The image keeps the sample's native
-    `H × W`; the UI scales it to `INPUT_IMAGE_SIZE` with CSS
-    nearest-neighbour. Returns `None` for unsupported shapes, out-of-range
-    `sample_idx`, or a None tensor.
+    `H × W`; the UI scales it to the input pane's width with CSS
+    nearest-neighbour (recordings scale to `INPUT_IMAGE_SIZE`). Returns
+    `None` for unsupported shapes, out-of-range `sample_idx`, or a None
+    tensor.
     """
     if tensor is None or tensor.ndim != 4:
         return None

@@ -24,7 +24,6 @@ from torch import Tensor
 
 from nansense.session import Session
 from nansense.ui.common import _defer_value_write, _set_controls_enabled
-from nansense.ui.render import INPUT_IMAGE_SIZE
 
 _PROBE_MODE_OPTIONS: dict[str, str] = {
     "unchanged": "Unchanged",
@@ -98,9 +97,11 @@ class InputPanel:
         # control sections.
         with ui.column().classes("w-full items-center gap-2"):
             ui.label("Input Selection").classes("font-mono text-sm self-start")
+            # Full pane width, so the image scales with the (resizable)
+            # pane; clicks stay in native pixel space regardless of CSS size.
             self._image = ui.interactive_image(
                 on_mouse=self._on_image_click, events=["mousedown"]
-            ).style(f"width:{INPUT_IMAGE_SIZE}px; image-rendering:pixelated")
+            ).style("width:100%; image-rendering:pixelated")
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 ui.label("Viewing sample:").classes("text-sm")
                 self._sample_input = ui.number(
