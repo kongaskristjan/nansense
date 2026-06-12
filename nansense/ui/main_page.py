@@ -26,7 +26,7 @@ from nansense.ui.common import (
     _strip_html,
     _strip_marker,
 )
-from nansense.ui.graph import slug
+from nansense.ui.graph import slug_map
 from nansense.ui.input_panel import InputPanel
 from nansense.ui.render import probe_act_tensor, render_image, render_strip, tensor_hw
 from nansense.ui.static import (
@@ -123,6 +123,13 @@ def _build_page(
     state = _PageState()
     state.last_watched = session.watched_layers
     layer_views: dict[str, _LayerView] = {}
+    # One collision-free slug per layer, shared with the Mermaid diagram
+    # (`graph.build_mermaid` keys node ids by the same `slug_map`). Using it
+    # for the cards' `data-layer`, the click→toggle lookup, and the
+    # JS watch/scroll calls keeps the diagram and the cards in lockstep even
+    # when two distinct layer names would alias to the same bare slug
+    # (e.g. `fc.1` and `fc_1`).
+    slugs = slug_map(layer_names)
 
     def record_view() -> RecordedView | None:
         # `input_panel` is created further down; the dialog only calls this
@@ -257,7 +264,7 @@ def _build_page(
                     ui.menu_item(
                         layer,
                         on_click=lambda n=layer: ui.run_javascript(
-                            f"window.nansenseScrollToLayer({json.dumps(slug(n))})"
+                            f"window.nansenseScrollToLayer({json.dumps(slugs[n])})"
                         ),
                     ).classes("font-mono text-sm")
 
@@ -281,7 +288,7 @@ def _build_page(
                     view.set_visible(name in watched)
             if added or removed:
                 changes = "; ".join(
-                    f"window.nansenseSetWatched({json.dumps(slug(n))}, "
+                    f"window.nansenseSetWatched({json.dumps(slugs[n])}, "
                     f"{'true' if n in watched else 'false'})"
                     for n in added | removed
                 )
@@ -302,7 +309,7 @@ def _build_page(
             sync_watch_ui()
             if name in session.watched_layers:
                 ui.run_javascript(
-                    f"window.nansenseScrollToCard({json.dumps(slug(name))})"
+                    f"window.nansenseScrollToCard({json.dumps(slugs[name])})"
                 )
 
         with ui.row().classes("w-full no-wrap gap-0 grow min-h-0"):
@@ -328,6 +335,7 @@ def _build_page(
                 for name in layer_names:
                     layer_views[name] = _LayerView(
                         name,
+                        slug=slugs[name],
                         session=session,
                         weights=layer_weights.get(name, []),
                         on_toggle_watch=toggle_layer,
@@ -360,8 +368,10 @@ def _build_page(
 
     # Diagram clicks arrive as custom events carrying the node's slug; map
     # it back to the layer name and toggle. Unknown slugs (e.g. a node
-    # whose label isn't a captured layer) are ignored.
-    slug_to_name = {slug(n): n for n in layer_names}
+    # whose label isn't a captured layer) are ignored. Inverting `slugs`
+    # (rather than rebuilding via the bare `slug`) keeps this in step with
+    # the diagram's disambiguated node ids.
+    slug_to_name = {s: n for n, s in slugs.items()}
 
     def on_diagram_toggle(e: GenericEventArguments) -> None:
         name = slug_to_name.get(e.args)
@@ -376,7 +386,7 @@ def _build_page(
     refresh_chip()
     initial_watched = list(state.last_watched)
     if initial_watched:
-        slugs_js = json.dumps([slug(n) for n in initial_watched])
+        slugs_js = json.dumps([slugs[n] for n in initial_watched])
         ui.timer(
             0.0,
             lambda: ui.run_javascript(
@@ -411,6 +421,15 @@ def _build_page(
             or probe is not state.last_probe
             or state.dirty
         ):
+            # Mark this source/dirty as consumed up front so a clean render
+            # doesn't re-fire. Every layer's render is isolated
+            # (`_render_layers`), so a single bad layer can't reach here; this
+            # guard covers the residual whole-frame failure modes (e.g. the
+            # input image). On such a failure the frame is dropped but the
+            # loop is never wedged: `rendering` is reset in `finally`, the bad
+            # source stays marked as seen (so the timer doesn't busy-crash on
+            # it every 200 ms), and the next published snapshot/probe — a new
+            # object — renders cleanly, so the page recovers on its own.
             state.last_snapshot = snap
             state.last_probe = probe
             state.dirty = False
@@ -469,6 +488,32 @@ _PROBE_NO_GRADIENTS_HTML: str = (
     '<div class="text-xs text-slate-400 italic py-1">'
     "no gradients on probe runs</div>"
 )
+
+# Strip pair shown for a layer whose render fell over. `render_strip` already
+# returns `None` (hidden strip) for empty/unsupported tensors; this covers the
+# residual cases (a genuinely unexpected render bug) so one bad layer degrades
+# to a blank card instead of taking the whole frame down with it.
+_EMPTY_STRIPS: tuple[str, str] = ("", "")
+
+
+def _render_layers(
+    layer_names: list[str], strips: Callable[[str], tuple[str, str]]
+) -> dict[str, tuple[str, str]]:
+    """Render every layer's strip pair concurrently, isolating failures.
+
+    Layers fan out over `_RENDER_POOL`; a single layer that raises must not
+    abort its siblings or drop the frame, so each render is guarded and a
+    failed layer yields blank strips (`_EMPTY_STRIPS`) — the same empty
+    result a layer absent from the snapshot gets.
+    """
+
+    def guarded(name: str) -> tuple[str, str]:
+        try:
+            return strips(name)
+        except Exception:
+            return _EMPTY_STRIPS
+
+    return dict(zip(layer_names, _RENDER_POOL.map(guarded, layer_names), strict=True))
 
 
 def _compute_frame(
@@ -543,9 +588,7 @@ def _compute_frame(
         )
         return act, grad
 
-    rendered = dict(
-        zip(layer_names, _RENDER_POOL.map(strips, layer_names), strict=True)
-    )
+    rendered = _render_layers(layer_names, strips)
     input_src = cache.get_or_render(
         snap,
         (input_name or "", "input", sample_idx),
@@ -602,9 +645,7 @@ def _compute_probe_frame(
         )
         return act, _PROBE_NO_GRADIENTS_HTML
 
-    rendered = dict(
-        zip(layer_names, _RENDER_POOL.map(strips, layer_names), strict=True)
-    )
+    rendered = _render_layers(layer_names, strips)
     shown_input = (
         probe.perturbed_input if probe.perturbed_input is not None else probe.input
     )
@@ -652,6 +693,7 @@ class _LayerView:
         self,
         name: str,
         *,
+        slug: str,
         session: Session,
         weights: list[str],
         on_toggle_watch: Callable[[str], None],
@@ -661,7 +703,7 @@ class _LayerView:
             "w-full min-w-0 bg-white rounded border border-slate-300 shadow-sm "
             "hover:border-blue-400 transition-colors"
         )
-        card.props(f'data-layer="{slug(name)}"')
+        card.props(f'data-layer="{slug}"')
         with card:
             with ui.row().classes(
                 "items-center w-full no-wrap gap-2 pl-3 pr-1 py-1 bg-slate-100 "

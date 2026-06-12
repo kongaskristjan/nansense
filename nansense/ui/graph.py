@@ -10,7 +10,7 @@ the simpler parent->child module hierarchy.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 import torch
 from torch import fx, nn
@@ -49,19 +49,25 @@ def _build_from_fx(model: nn.Module, traced: fx.GraphModule) -> str:
     # matching layer card (`data-layer=slug(layer_name)`); scope-qualified
     # function names also give relus etc. a unique, locatable label.
     names = friendly_names(traced.graph)
+    slugs = slug_map(names.values())
     lines: list[str] = [CONFIG_HEADER, "flowchart TD"]
     for node in traced.graph.nodes:
-        lines.append(_node_def(node, model, names))
+        lines.append(_node_def(node, model, names, slugs))
     for node in traced.graph.nodes:
         for arg in _node_inputs(node):
-            lines.append(f"  {slug(names[arg])} --> {slug(names[node])}")
+            lines.append(f"  {slugs[names[arg]]} --> {slugs[names[node]]}")
     return "\n".join(lines)
 
 
-def _node_def(node: fx.Node, model: nn.Module, names: dict[fx.Node, str]) -> str:
+def _node_def(
+    node: fx.Node,
+    model: nn.Module,
+    names: dict[fx.Node, str],
+    slugs: dict[str, str],
+) -> str:
     # Shape encodes node kind: circles for graph in/out, ovals (stadiums) for
     # weightless function/method calls (relu, add, ...), rectangles for modules.
-    node_id = slug(names[node])
+    node_id = slugs[names[node]]
     if node.op == "placeholder":
         return f'  {node_id}(("in: {node.name}"))'
     if node.op == "output":
@@ -96,17 +102,19 @@ def _walk_fx_nodes(value: object) -> Iterator[fx.Node]:
 
 
 def _build_from_hierarchy(model: nn.Module, *, root_label: str) -> str:
+    full_names = [n for n, m in model.named_modules() if m is not model]
+    slugs = slug_map(full_names)
     lines: list[str] = [CONFIG_HEADER, "flowchart TD", f'  {ROOT_ID}["{root_label}"]']
     for full_name, module in model.named_modules():
         if module is model:
             continue
         label = f"{full_name}<br/>{type(module).__name__}"
-        lines.append(f'  {slug(full_name)}["{label}"]')
+        lines.append(f'  {slugs[full_name]}["{label}"]')
     for full_name, module in model.named_modules():
-        parent_id = ROOT_ID if module is model else slug(full_name)
+        parent_id = ROOT_ID if module is model else slugs[full_name]
         for child_name, _ in module.named_children():
             child_full = f"{full_name}.{child_name}" if full_name else child_name
-            lines.append(f"  {parent_id} --> {slug(child_full)}")
+            lines.append(f"  {parent_id} --> {slugs[child_full]}")
     return "\n".join(lines)
 
 
@@ -117,5 +125,35 @@ def slug(name: str) -> str:
     module paths (`stem.0`) become underscores (`stem_0`). The same slug
     is used on the per-layer card via `data-layer=...` so clicks on a
     Mermaid node can find their matching card.
+
+    This per-name mapping is *not* injective on its own (`fc.1` and `fc_1`
+    both produce `fc_1`); when a whole set of names must map to distinct ids
+    (every Mermaid build), use `slug_map`, which disambiguates collisions.
     """
     return re.sub(r"[^A-Za-z0-9]", "_", name) or ROOT_ID
+
+
+def slug_map(names: Iterable[str]) -> dict[str, str]:
+    """Collision-free `name -> slug` over a whole set of names.
+
+    `slug` alone can alias distinct names (`fc.1` and `fc_1` -> `fc_1`), which
+    would give two Mermaid nodes the same id and merge them in the diagram.
+    Here each name's base slug is taken in iteration order; the first claimant
+    keeps it and any later collider gets a stable `_N` suffix bumped until it
+    is free. Deterministic for a given (ordered) name set, and a no-op for the
+    common case where all base slugs are already distinct (ResNet etc.).
+    """
+    used: set[str] = set()
+    result: dict[str, str] = {}
+    for name in names:
+        if name in result:
+            continue  # repeated name (an fx value used by several nodes)
+        base = slug(name)
+        candidate = base
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        result[name] = candidate
+    return result

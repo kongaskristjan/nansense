@@ -25,6 +25,11 @@ deterministic):
   `add` stays `stage1.0.add`. Root-scope ops carry no prefix (`relu`,
   `flatten`).
 - anything else (`get_attr`)   -> the fx node name (already unique)
+
+A final pass forces the map to be *globally* unique: per-scope numbering only
+disambiguates scoped ops within a scope, so a `call_module` `relu` can still
+collide with a root-scope `torch.relu(...)` (both `relu`). The first node in
+graph order keeps the bare name; later colliders get a stable `_N` suffix.
 """
 
 from __future__ import annotations
@@ -91,4 +96,30 @@ def friendly_names(graph: fx.Graph) -> dict[fx.Node, str]:
                 names[node] = stem
         else:
             names[node] = node.name
-    return names
+    return _dedupe(names)
+
+
+def _dedupe(names: dict[fx.Node, str]) -> dict[fx.Node, str]:
+    """Force global uniqueness across the whole map, deterministically.
+
+    Per-scope numbering already disambiguates scoped ops *within* a scope, but
+    a name can still collide across kinds — a `self.relu = nn.ReLU()`
+    `call_module` named `relu` versus a root-scope `torch.relu(...)` named
+    `relu`, or `self.flatten` versus `x.flatten(1)`. Those collisions silently
+    merge layers (one snapshot/weight key clobbers the other), so we resolve
+    them here. The first node (in graph iteration order) to claim a name keeps
+    it unchanged; each later collider gets a stable `_N` suffix bumped until it
+    is free. Non-colliding names — the common case (ResNet etc.) — are
+    untouched, and the result is deterministic across runs.
+    """
+    used: set[str] = set()
+    result: dict[fx.Node, str] = {}
+    for node, name in names.items():
+        unique = name
+        suffix = 2
+        while unique in used:
+            unique = f"{name}_{suffix}"
+            suffix += 1
+        used.add(unique)
+        result[node] = unique
+    return result

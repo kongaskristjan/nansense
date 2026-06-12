@@ -14,7 +14,7 @@ from nansense.ui.main_page import (
     _display_batch_size,
     _input_img_src,
 )
-from nansense.ui.render import image_mime, render_image, render_strip
+from nansense.ui.render import StripRender, image_mime, render_image, render_strip
 from tests.nansense.helpers import _frame_snapshot, _make_snapshot
 
 
@@ -262,3 +262,80 @@ def test_compute_frame_renders_more_layers_than_pool_workers() -> None:
     )
     assert set(rendered) == set(names)
     assert all("<img" in rendered[name][0] for name in names)
+
+
+def test_compute_frame_empty_layer_does_not_drop_the_frame() -> None:
+    # A layer with an empty activation must not abort the others: the good
+    # layers still produce strips, the empty one renders as a hidden (blank)
+    # strip — one bad layer can't drop the whole frame for the snapshot.
+    snap = _make_snapshot(
+        "train",
+        0,
+        0,
+        activations={
+            "good": torch.rand(2, 2, 4, 4),
+            "empty": torch.zeros(2, 0, 4, 4),
+            "also_good": torch.rand(2, 3, 4, 4),
+        },
+    )
+    rendered, _ = _compute_frame(
+        ["good", "empty", "also_good"],
+        snap,
+        None,
+        0,
+        input_name=None,
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    assert "<img" in rendered["good"][0]
+    assert "<img" in rendered["also_good"][0]
+    assert rendered["empty"] == ("", "")
+
+
+def test_compute_frame_raising_layer_does_not_drop_the_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Defense in depth: even a layer whose render *raises* (a residual bug
+    # `render_strip`'s guards don't catch) must yield blank strips rather than
+    # abort the fan-out and drop every other layer's frame. The "bad" tensor
+    # is tagged by identity so only its render blows up.
+    import nansense.ui.main_page as main_page
+
+    bad = torch.rand(2, 7, 4, 4)
+    real_render_strip = main_page.render_strip
+
+    def flaky_render_strip(
+        tensor: torch.Tensor | None,
+        sample_idx: int,
+        *,
+        input_hw: tuple[int, int] | None = None,
+    ) -> StripRender | None:
+        if tensor is bad:
+            raise RuntimeError("boom")
+        return real_render_strip(tensor, sample_idx, input_hw=input_hw)
+
+    monkeypatch.setattr(main_page, "render_strip", flaky_render_strip)
+    snap = _make_snapshot(
+        "train",
+        0,
+        0,
+        activations={
+            "good": torch.rand(2, 2, 4, 4),
+            "bad": bad,
+            "also_good": torch.rand(2, 3, 4, 4),
+        },
+    )
+    rendered, _ = _compute_frame(
+        ["good", "bad", "also_good"],
+        snap,
+        None,
+        0,
+        input_name=None,
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    assert "<img" in rendered["good"][0]
+    assert "<img" in rendered["also_good"][0]
+    assert rendered["bad"] == ("", "")

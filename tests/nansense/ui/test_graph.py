@@ -6,7 +6,15 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from nansense.ui.graph import CONFIG_HEADER, ROOT_ID, build_mermaid, slug
+import re
+
+from nansense.ui.graph import (
+    CONFIG_HEADER,
+    ROOT_ID,
+    build_mermaid,
+    slug,
+    slug_map,
+)
 
 
 class TwoLayer(nn.Module):
@@ -123,6 +131,64 @@ def test_slug_replaces_non_alphanumeric_and_handles_empty() -> None:
     assert slug("stage1.0.conv1") == "stage1_0_conv1"
     assert slug("relu") == "relu"
     assert slug("") == ROOT_ID
+
+
+def test_slug_map_disambiguates_colliding_slugs() -> None:
+    # `fc.1` and `fc_1` both reduce to `fc_1` under the per-name `slug` rule,
+    # so a set-wide map must give them distinct ids (the first keeps the base,
+    # the later collider gets a stable numeric suffix).
+    assert slug("fc.1") == slug("fc_1") == "fc_1"
+    mapping = slug_map(["fc.1", "fc_1", "stem.0", "relu"])
+    assert mapping == {
+        "fc.1": "fc_1",
+        "fc_1": "fc_1_2",
+        "stem.0": "stem_0",
+        "relu": "relu",
+    }
+    assert len(set(mapping.values())) == len(mapping)
+
+
+def test_slug_map_is_a_noop_for_already_distinct_names() -> None:
+    # The common case (no collisions) maps each name to its plain slug.
+    mapping = slug_map(["stem.0", "stage1.0.conv1", "relu", "flatten"])
+    assert mapping == {
+        "stem.0": "stem_0",
+        "stage1.0.conv1": "stage1_0_conv1",
+        "relu": "relu",
+        "flatten": "flatten",
+    }
+
+
+class SlugCollision(nn.Module):
+    """A ModuleList `fc` (paths `fc.0`/`fc.1`) plus a sibling module `fc_1`.
+
+    `fc.1` and `fc_1` slug to the same `fc_1`, the collision class FIX C
+    guards against — without disambiguation the two would share a Mermaid
+    node id and merge in the diagram.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc = nn.ModuleList([nn.Linear(4, 4), nn.Linear(4, 4)])
+        self.fc_1 = nn.Linear(4, 4)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc[1](self.fc[0](x))
+        return self.fc_1(x)
+
+
+def _node_ids(src: str) -> list[str]:
+    """The leading Mermaid node id of each definition line."""
+    return re.findall(r"^  (\w+)[\[(\"]", src, re.MULTILINE)
+
+
+def test_build_mermaid_emits_distinct_node_ids_for_colliding_names() -> None:
+    src = build_mermaid(SlugCollision())
+    ids = _node_ids(src)
+    # No two node definitions share an id, despite `fc.1`/`fc_1` colliding.
+    assert len(ids) == len(set(ids))
+    assert "fc_1" in ids
+    assert "fc_1_2" in ids
 
 
 def test_handles_modules_with_tuple_args() -> None:

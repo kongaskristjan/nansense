@@ -122,7 +122,8 @@ def render_strip(
     `[tokens, dim]`) renders as channel tiles too when one axis matches a
     token grid of the `input_hw` image (see `_render_tokens_2d`), and as a
     single 2D heatmap tile otherwise. Returns `None` if the tensor is
-    `None`, `sample_idx` is out of range, or the per-sample shape is
+    `None`, `sample_idx` is out of range, the per-sample shape is empty (any
+    zero-length dim leaves no renderable tile), or the per-sample shape is
     unsupported (4D and beyond).
     """
     if tensor is None or tensor.ndim == 0:
@@ -130,6 +131,12 @@ def render_strip(
     if not 0 <= sample_idx < tensor.shape[0]:
         return None
     sample = tensor[sample_idx]
+    # A zero-length dim (empty activation: data-dependent selections, boolean
+    # masking traced through fx, last-batch edge cases) leaves no pixels to
+    # render; treat it like an unsupported shape so the UI hides the strip
+    # instead of crashing the frame on a reduction/interpolate/reshape.
+    if sample.numel() == 0:
+        return None
     if sample.ndim == 3:
         return _render_chw(sample)
     if sample.ndim == 2:
@@ -202,7 +209,9 @@ def _token_grid(n_tokens: int, input_hw: tuple[int, int]) -> tuple[int, int, int
     return None
 
 
-def _render_tokens_2d(sample: Tensor, input_hw: tuple[int, int] | None) -> StripRender:
+def _render_tokens_2d(
+    sample: Tensor, input_hw: tuple[int, int] | None
+) -> StripRender | None:
     """Render a 2D per-sample tensor, recovering a token grid when possible.
 
     When one axis matches a token grid of the input (`_token_grid`), the
@@ -287,10 +296,10 @@ def render_weight(
     `x_dim` / `y_dim` / `tile_dim` pick the axes shown within and across tiles
     (`y_dim`/`tile_dim` may be `None` for lower-rank views). Every other axis
     is reduced to a single slice via `fixed` (axis -> index, clamped into
-    range, defaulting to 0). Returns `None` for a `None`/scalar tensor or an
-    invalid axis selection (out-of-range or duplicated axes).
+    range, defaulting to 0). Returns `None` for a `None`/scalar/empty tensor
+    or an invalid axis selection (out-of-range or duplicated axes).
     """
-    if tensor is None or tensor.ndim == 0:
+    if tensor is None or tensor.ndim == 0 or tensor.numel() == 0:
         return None
     ndim = tensor.ndim
     kept = [d for d in (tile_dim, y_dim, x_dim) if d is not None]
@@ -327,8 +336,14 @@ def _tile_gap(tile_width: int) -> int:
     return max(1, tile_width // TILE_GAP_DIVISOR)
 
 
-def _render_chw(tensor: Tensor) -> StripRender:
+def _render_chw(tensor: Tensor) -> StripRender | None:
     data = tensor.detach().float()
+    # An empty tile (any zero-length dim) has no pixels to colormap, encode,
+    # or lay out — the reductions and PIL encode below would raise. The
+    # `render_strip` / `render_weight` callers hide a `None` strip, the same
+    # way they hide an unsupported shape.
+    if data.numel() == 0:
+        return None
     abs_max = _finite_abs_max(data)
     if max(data.shape[1], data.shape[2]) > TILE_SIZE:
         # Downsampling needs real averaging server-side; *up*scaling small
@@ -609,8 +624,10 @@ def _cell_heat(
     return heat[ys[:, None], xs[None, :]]
 
 
-def _render_1d(tensor: Tensor) -> StripRender:
+def _render_1d(tensor: Tensor) -> StripRender | None:
     values = tensor.detach().float()
+    if values.numel() == 0:
+        return None
     abs_max = _finite_abs_max(values)
     f = values.shape[0]
     if f > LINEAR_MAX_BINS:

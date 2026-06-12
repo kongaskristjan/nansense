@@ -108,6 +108,32 @@ def test_returns_none_for_unsupported_shape() -> None:
 
 
 @pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 0, 4, 4),  # 0 channels -> [0, 4, 4] tile
+        (2, 3, 0, 4),  # 0 height
+        (2, 3, 4, 0),  # 0 width
+        (2, 0, 4),  # 2D per-sample with a zero-length axis
+        (2, 0),  # 1D per-sample with no features
+        (0,),  # no samples at all
+    ],
+    ids=["no_channels", "no_height", "no_width", "2d_zero_axis", "1d_empty", "no_samples"],
+)
+def test_returns_none_for_empty_tensor(shape: tuple[int, ...]) -> None:
+    # An empty activation (any zero-length dim — data-dependent selections,
+    # boolean masking traced through fx, last-batch edge cases) must hide the
+    # strip like an unsupported shape, never raise (which would drop the whole
+    # frame for every layer of that snapshot).
+    assert render_strip(torch.zeros(shape), sample_idx=0) is None
+
+
+def test_normal_tensor_still_renders_after_empty_guard() -> None:
+    # The empty guard must not regress the normal non-empty path.
+    strip = render_strip(torch.randn(2, 3, 8, 8), sample_idx=0)
+    assert strip is not None
+
+
+@pytest.mark.parametrize(
     ("n_tokens", "input_hw", "expected"),
     [
         (64, (32, 32), (0, 8, 8)),  # plain 8x8 grid, stride 4
@@ -435,6 +461,27 @@ def test_render_weight_clamps_out_of_range_fixed_index() -> None:
 
 def test_render_weight_returns_none_for_none_tensor() -> None:
     assert render_weight(None, x_dim=0, y_dim=None, tile_dim=None, fixed={}) is None
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(0, 3, 3, 3), (8, 0, 3, 3), (8, 3, 0, 3), (8, 3, 3, 0), (0, 4), (4, 0), (0,)],
+)
+def test_render_weight_returns_none_for_empty_tensor(shape: tuple[int, ...]) -> None:
+    # An empty weight (any zero-length dim) shares the strip renderers, so it
+    # is hidden like an empty activation rather than crashing the renderer.
+    w = torch.zeros(shape)
+    d = default_weight_dims(w.ndim)
+    assert (
+        render_weight(
+            w,
+            x_dim=d.x_dim,
+            y_dim=d.y_dim,
+            tile_dim=d.tile_dim,
+            fixed={f: 0 for f in d.fixed_dims},
+        )
+        is None
+    )
 
 
 def test_render_weight_returns_none_for_duplicate_axes() -> None:
