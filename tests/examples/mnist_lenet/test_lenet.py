@@ -8,7 +8,7 @@ from torch import nn
 
 from examples.mnist_lenet.data import build_transforms
 from examples.mnist_lenet.lenet import LeNet
-from examples.mnist_lenet.train import evaluate, train_one_epoch
+from examples.common import evaluate, train_one_epoch
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])

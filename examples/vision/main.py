@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import io
-import sys
 import time
 from pathlib import Path
 
@@ -12,9 +10,9 @@ import torch
 from torch import nn
 
 import nansense
+from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
 from examples.vision.data import DATASETS, DatasetConfig, build_dataloaders
 from examples.vision.resnet import PreActResNet
-from examples.vision.train import evaluate, train_one_epoch
 from examples.vision.vit import SimpleViT
 
 
@@ -73,28 +71,6 @@ def parse_args() -> argparse.Namespace:
         help="Disable nansense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
-
-
-def enable_line_buffering() -> None:
-    """Flush stdout on every newline so progress prints appear immediately.
-
-    Python block-buffers stdout when it is not a TTY (e.g. redirected to a
-    file or pipe), which can hide progress output until the buffer fills or
-    the process exits. Reconfiguring to line buffering restores TTY-like
-    behaviour regardless of how the script is launched.
-    """
-    if isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout.reconfigure(line_buffering=True)
-
-
-def select_device(name: str | None) -> torch.device:
-    if name is not None:
-        return torch.device(name)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> nn.Module:
