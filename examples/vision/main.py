@@ -56,8 +56,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/latest"),
-        help="Directory for time-travel epoch checkpoints (default models/latest).",
+        default=Path("models/vision"),
+        help="Directory for time-travel epoch checkpoints (default models/vision).",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(

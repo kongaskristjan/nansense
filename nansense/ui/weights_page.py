@@ -71,10 +71,11 @@ def _build_weights_page(session: Session, layer: str) -> None:
     ui.add_head_html(_STRIP_MARKER_CSS)
 
     weight_names = session.layer_weights.get(layer, [])
+    wanted = set(weight_names)
     shapes = {
         name: tuple(p.shape)
         for name, p in session.model.named_parameters()
-        if name in set(weight_names)
+        if name in wanted
     }
     step_until_custom = _build_step_until_custom_dialog(session)
     panels: list[_WeightPanel] = []
@@ -406,7 +407,7 @@ class _WeightPanel:
                         x_dim=dims.x_dim,
                         y_dim=dims.y_dim,
                         tile_dim=dims.tile_dim,
-                        fixed={d: 0 for d in dims.fixed_dims},
+                        fixed={},
                     )
                 if strip is None:
                     continue

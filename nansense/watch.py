@@ -213,6 +213,34 @@ def bin_midpoint(idx: int) -> float:
     return sign * 10.0 ** ((lo + hi) / 2)
 
 
+@dataclass
+class _RunningStats:
+    """Device-resident running reductions, allocated together on first use.
+
+    Grouping them in one non-optional bundle means `TensorAccumulator`
+    carries a single `_RunningStats | None` instead of seven `Tensor |
+    None` fields that every method had to assert through.
+    """
+
+    n: Tensor
+    sum: Tensor
+    sum_sq: Tensor
+    min: Tensor
+    max: Tensor
+    hist: Tensor
+
+    @staticmethod
+    def zeros(device: torch.device) -> _RunningStats:
+        return _RunningStats(
+            n=torch.zeros((), dtype=torch.int64, device=device),
+            sum=torch.zeros((), dtype=torch.float32, device=device),
+            sum_sq=torch.zeros((), dtype=torch.float32, device=device),
+            min=torch.full((), float("inf"), dtype=torch.float32, device=device),
+            max=torch.full((), float("-inf"), dtype=torch.float32, device=device),
+            hist=torch.zeros(N_BINS, dtype=torch.int64, device=device),
+        )
+
+
 class TensorAccumulator:
     """Running stats for one tensor stream (activation OR gradient of a layer).
 
@@ -224,51 +252,29 @@ class TensorAccumulator:
     """
 
     def __init__(self) -> None:
-        self._device: torch.device | None = None
-        self._n: Tensor | None = None
-        self._sum: Tensor | None = None
-        self._sum_sq: Tensor | None = None
-        self._min: Tensor | None = None
-        self._max: Tensor | None = None
-        self._hist: Tensor | None = None
+        # Allocated by the first non-empty `update()`, on that tensor's device.
+        self._stats: _RunningStats | None = None
         # `(C, N_BINS)` per-channel counts; allocated on the first update
         # with a usable channel axis, dropped by `collapse_channels`.
         self._channel_hist: Tensor | None = None
         self._channels_off = False
 
-    def _lazy_init(self, device: torch.device) -> None:
-        if self._device is not None:
-            return
-        self._device = device
-        self._n = torch.zeros((), dtype=torch.int64, device=device)
-        self._sum = torch.zeros((), dtype=torch.float32, device=device)
-        self._sum_sq = torch.zeros((), dtype=torch.float32, device=device)
-        self._min = torch.full((), float("inf"), dtype=torch.float32, device=device)
-        self._max = torch.full(
-            (), float("-inf"), dtype=torch.float32, device=device
-        )
-        self._hist = torch.zeros(N_BINS, dtype=torch.int64, device=device)
-
     def update(self, x: Tensor) -> None:
         if x.numel() == 0:
             return
-        self._lazy_init(x.device)
-        assert self._sum is not None
-        assert self._sum_sq is not None
-        assert self._min is not None
-        assert self._max is not None
-        assert self._hist is not None
-        assert self._n is not None
+        if self._stats is None:
+            self._stats = _RunningStats.zeros(x.device)
+        stats = self._stats
         flat = x.detach().to(torch.float32).reshape(-1)
-        self._n += flat.numel()
-        self._sum += flat.sum()
-        self._sum_sq += flat.square().sum()
-        self._min = torch.minimum(self._min, flat.min())
-        self._max = torch.maximum(self._max, flat.max())
+        stats.n += flat.numel()
+        stats.sum += flat.sum()
+        stats.sum_sq += flat.square().sum()
+        stats.min = torch.minimum(stats.min, flat.min())
+        stats.max = torch.maximum(stats.max, flat.max())
         idx = _bin_indices(flat)
         channels = self._usable_channels(x)
         if channels is None:
-            self._hist += torch.bincount(idx, minlength=N_BINS)
+            stats.hist += torch.bincount(idx, minlength=N_BINS)
             return
         # One fused bincount over `channel * N_BINS + bin` gives the
         # per-channel counts; the universal histogram is their sum, so the
@@ -286,7 +292,7 @@ class TensorAccumulator:
         ).reshape(channels, N_BINS)
         assert self._channel_hist is not None
         self._channel_hist += counts
-        self._hist += counts.sum(dim=0)
+        stats.hist += counts.sum(dim=0)
 
     def _usable_channels(self, x: Tensor) -> int | None:
         """Channel count to bin `x` under, managing the per-channel buffer.
@@ -322,7 +328,8 @@ class TensorAccumulator:
         self._channels_off = True
 
     def snapshot(self) -> TensorStatsSnapshot:
-        if self._device is None:
+        stats = self._stats
+        if stats is None:
             return TensorStatsSnapshot(
                 n=0,
                 sum=0.0,
@@ -331,17 +338,11 @@ class TensorAccumulator:
                 max=float("-inf"),
                 hist=tuple([0] * N_BINS),
             )
-        assert self._n is not None
-        assert self._sum is not None
-        assert self._sum_sq is not None
-        assert self._min is not None
-        assert self._max is not None
-        assert self._hist is not None
         # One sync per scalar group; the histogram lands separately because
         # it's int64 and the scalars are float32.
-        scalars = torch.stack([self._sum, self._sum_sq, self._min, self._max]).cpu()
-        n = int(self._n.cpu().item())
-        hist_cpu = self._hist.cpu()
+        scalars = torch.stack([stats.sum, stats.sum_sq, stats.min, stats.max]).cpu()
+        n = int(stats.n.cpu().item())
+        hist_cpu = stats.hist.cpu()
         channel_hists: tuple[tuple[int, ...], ...] | None = None
         if self._channel_hist is not None:
             channel_hists = tuple(

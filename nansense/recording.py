@@ -599,7 +599,7 @@ def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | 
                     x_dim=dims.x_dim,
                     y_dim=dims.y_dim,
                     tile_dim=dims.tile_dim,
-                    fixed={d: 0 for d in dims.fixed_dims},
+                    fixed={},
                 )
             sections.append((f"{name} — {key}", _strip_section(strip)))
         scalar_parts += [
@@ -610,10 +610,7 @@ def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | 
         ]
         if scalar_parts:
             sections.append(("  ·  ".join(scalar_parts), None))
-    pos = snap.position
-    sections.insert(
-        0, (f"epoch {pos.epoch} | {pos.phase} batch {pos.batch_idx}", None)
-    )
+    sections.insert(0, (format_position(snap.position), None))
     return _compose_sections(sections)
 
 
