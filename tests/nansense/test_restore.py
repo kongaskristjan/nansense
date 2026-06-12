@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 import pytest
@@ -17,16 +16,7 @@ from nansense.restore import (
     validate_model_state,
 )
 from nansense.session import Session
-
-
-class TinyNet(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.fc1 = nn.Linear(4, 8)
-        self.fc2 = nn.Linear(8, 3)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.fc2(torch.relu(self.fc1(x)))
+from tests.nansense.helpers import TinyNet, optimizer_train_step, paused_worker
 
 
 class OtherNet(nn.Module):
@@ -36,15 +26,6 @@ class OtherNet(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.fc(x)
-
-
-def _train_step(model: nn.Module, optimizer: torch.optim.Optimizer) -> None:
-    x = torch.randn(2, 4)
-    y = torch.randint(0, 3, (2,))
-    optimizer.zero_grad(set_to_none=True)
-    loss = nn.functional.cross_entropy(model(x), y)
-    loss.backward()
-    optimizer.step()
 
 
 def _make_training(
@@ -136,7 +117,7 @@ def test_restorer_loop_runs_once_without_jumps(tmp_path: Path) -> None:
             for epoch in restorer.epochs():
                 for _ in range(2):
                     with session.batch(phase="train", epoch=epoch):
-                        _train_step(model, optimizer)
+                        optimizer_train_step(model, optimizer)
 
     assert attempts == [0]
     assert restorer.finished
@@ -162,7 +143,7 @@ def test_disabled_session_restorer_is_inert(tmp_path: Path) -> None:
             for epoch in restorer.epochs():
                 for _ in range(2):
                     with session.batch(phase="train", epoch=epoch):
-                        _train_step(model, optimizer)
+                        optimizer_train_step(model, optimizer)
 
     assert attempts == [0]
     assert restorer.cache.cached_epochs() == []  # nothing written to disk
@@ -250,35 +231,29 @@ def test_time_travel_jump_restores_and_replays_deterministically(
                     )
                     for _ in range(2):
                         with session.batch(phase="train", epoch=epoch):
-                            _train_step(model, optimizer)
+                            optimizer_train_step(model, optimizer)
                     scheduler.step()
-
-    thread = threading.Thread(target=loop, daemon=True)
-    thread.start()
 
     # First batch pauses (STEP mode); run forward to the pause at (2, 0) so
     # epochs 0, 1, and 2 all have checkpoints.
-    assert session.wait_until_paused(after_pauses=0, timeout=10.0)
-    session.step_until_position(phase="train", epoch=2, batch_idx=0)
-    assert session.wait_until_paused(after_pauses=1, timeout=10.0)
-    assert restorer.cache.cached_epochs() == [0, 1, 2]
+    with paused_worker(session, loop, timeout=10.0):
+        session.step_until_position(phase="train", epoch=2, batch_idx=0)
+        assert session.wait_until_paused(after_pauses=1, timeout=10.0)
+        assert restorer.cache.cached_epochs() == [0, 1, 2]
 
-    # Jump back to epoch 1; the session enters STEP mode, so the first batch
-    # of the replayed epoch pauses for inspection.
-    pauses = session.pause_count
-    session.request_time_travel(1)
-    assert session.wait_until_paused(after_pauses=pauses, timeout=10.0)
-    snap = session.snapshot
-    assert snap is not None
-    assert (snap.position.phase, snap.position.epoch, snap.position.batch_idx) == (
-        "train",
-        1,
-        0,
-    )
+        # Jump back to epoch 1; the session enters STEP mode, so the first
+        # batch of the replayed epoch pauses for inspection.
+        pauses = session.pause_count
+        session.request_time_travel(1)
+        assert session.wait_until_paused(after_pauses=pauses, timeout=10.0)
+        snap = session.snapshot
+        assert snap is not None
+        assert (snap.position.phase, snap.position.epoch, snap.position.batch_idx) == (
+            "train",
+            1,
+            0,
+        )
 
-    session.detach()
-    thread.join(timeout=10.0)
-    assert not thread.is_alive()
     assert restorer.finished
 
     assert attempts == [0, 1]

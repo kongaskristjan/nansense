@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pytest
 import torch
@@ -16,6 +17,7 @@ from nansense.experiments import (
     available_experiment_kinds,
 )
 from nansense.session import Session
+from tests.nansense.helpers import paused_session, train_step
 
 CIFARISH_MEAN = (0.5, 0.4, 0.3)
 CIFARISH_STD = (0.25, 0.2, 0.3)
@@ -35,35 +37,18 @@ class TinyClassifier(nn.Module):
         return self.fc(h.flatten(1))
 
 
-def _train_step(model: TinyClassifier, batch_size: int) -> None:
-    x = torch.randn(batch_size, 3, 4, 4)
-    y = torch.randint(0, 3, (batch_size,))
-    model.zero_grad(set_to_none=True)
-    loss = nn.functional.cross_entropy(model(x), y)
-    loss.backward()
-
-
+@contextmanager
 def _paused_session(
     batch_size: int = 2,
-) -> tuple[Session, TinyClassifier, threading.Thread]:
+) -> Iterator[tuple[Session, TinyClassifier]]:
+    """A paused TinyClassifier session fed `batch_size`-sample image batches."""
     model = TinyClassifier()
-    session = nansense.start(model, epochs=1, phases={"train": 2})
 
-    def loop() -> None:
-        for _ in range(2):
-            with session.batch(phase="train", epoch=0):
-                _train_step(model, batch_size)
+    def step(m: TinyClassifier) -> None:
+        train_step(m, input_shape=(3, 4, 4), batch_size=batch_size)
 
-    thread = threading.Thread(target=loop, daemon=True)
-    thread.start()
-    assert session.wait_until_paused(timeout=5)
-    return session, model, thread
-
-
-def _finish(session: Session, thread: threading.Thread) -> None:
-    session.detach()
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+    with paused_session(model, step) as session:
+        yield session, model
 
 
 def _dream_params(**overrides: object) -> dict[str, object]:
@@ -84,37 +69,35 @@ def _dream_params(**overrides: object) -> dict[str, object]:
 
 
 def test_deep_dream_publishes_done_result_with_image() -> None:
-    session, _, thread = _paused_session()
-    assert session.input_batch_size == 2
-    session.request_experiment(
-        kind="deep_dream", layer="conv", params=_dream_params()
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None
-    assert result.error is None
-    assert result.done and result.step == result.total_steps == 5
-    assert result.kind == "deep_dream" and result.layer == "conv"
-    # Without a "batch" param the dream covers the whole current batch.
-    assert result.image is not None and result.image.shape == (2, 3, 4, 4)
-    assert result.image.device.type == "cpu"
-    assert result.reference is not None and result.reference.shape == (2, 3, 4, 4)
-    assert isinstance(result.objective, float)
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        assert session.input_batch_size == 2
+        session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params()
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None
+        assert result.error is None
+        assert result.done and result.step == result.total_steps == 5
+        assert result.kind == "deep_dream" and result.layer == "conv"
+        # Without a "batch" param the dream covers the whole current batch.
+        assert result.image is not None and result.image.shape == (2, 3, 4, 4)
+        assert result.image.device.type == "cpu"
+        assert result.reference is not None and result.reference.shape == (2, 3, 4, 4)
+        assert isinstance(result.objective, float)
 
 
 def test_deep_dream_default_batch_caps_at_eight() -> None:
-    session, _, thread = _paused_session(batch_size=10)
-    session.request_experiment(
-        kind="deep_dream",
-        layer="conv",
-        params=_dream_params(start="noise", steps=1),  # no "batch" param
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None and result.error is None
-    assert result.image is not None and result.image.shape == (8, 3, 4, 4)
-    _finish(session, thread)
+    with _paused_session(batch_size=10) as (session, _):
+        session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params=_dream_params(start="noise", steps=1),  # no "batch" param
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        assert result.image is not None and result.image.shape == (8, 3, 4, 4)
 
 
 @pytest.mark.parametrize(
@@ -126,107 +109,101 @@ def test_deep_dream_default_batch_caps_at_eight() -> None:
     ],
 )
 def test_deep_dream_batch_param(start: str, batch: int, expected: int) -> None:
-    session, _, thread = _paused_session()
-    session.request_experiment(
-        kind="deep_dream",
-        layer="conv",
-        params=_dream_params(start=start, batch=batch, steps=2),
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None and result.error is None
-    assert result.image is not None and result.image.shape == (expected, 3, 4, 4)
-    assert result.reference is not None
-    assert result.reference.shape == (expected, 3, 4, 4)
-    _finish(session, thread)
-
-
-def test_deep_dream_noise_differs_across_runs() -> None:
-    session, _, thread = _paused_session()
-    references: list[Tensor] = []
-    for _ in range(2):
+    with _paused_session() as (session, _):
         session.request_experiment(
             kind="deep_dream",
             layer="conv",
-            params=_dream_params(start="noise", batch=2, steps=1),
+            params=_dream_params(start=start, batch=batch, steps=2),
         )
         assert session.wait_for_experiment(timeout=10)
         result = session.experiment_result
         assert result is not None and result.error is None
+        assert result.image is not None and result.image.shape == (expected, 3, 4, 4)
         assert result.reference is not None
-        references.append(result.reference)
-    assert not torch.equal(references[0], references[1])
-    _finish(session, thread)
+        assert result.reference.shape == (expected, 3, 4, 4)
+
+
+def test_deep_dream_noise_differs_across_runs() -> None:
+    with _paused_session() as (session, _):
+        references: list[Tensor] = []
+        for _ in range(2):
+            session.request_experiment(
+                kind="deep_dream",
+                layer="conv",
+                params=_dream_params(start="noise", batch=2, steps=1),
+            )
+            assert session.wait_for_experiment(timeout=10)
+            result = session.experiment_result
+            assert result is not None and result.error is None
+            assert result.reference is not None
+            references.append(result.reference)
+        assert not torch.equal(references[0], references[1])
 
 
 def test_deep_dream_clamps_to_displayable_range() -> None:
-    session, _, thread = _paused_session()
-    session.request_experiment(
-        kind="deep_dream",
-        layer="conv",
-        params=_dream_params(steps=8, lr=10.0),  # huge lr would escape bounds
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None and result.error is None and result.image is not None
-    lo, hi = _value_bounds(3, CIFARISH_MEAN, CIFARISH_STD)
-    assert bool((result.image >= lo - 1e-5).all())
-    assert bool((result.image <= hi + 1e-5).all())
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params=_dream_params(steps=8, lr=10.0),  # huge lr would escape bounds
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.error is None and result.image is not None
+        lo, hi = _value_bounds(3, CIFARISH_MEAN, CIFARISH_STD)
+        assert bool((result.image >= lo - 1e-5).all())
+        assert bool((result.image <= hi + 1e-5).all())
 
 
 def test_deep_dream_leaves_training_state_untouched() -> None:
-    session, model, thread = _paused_session()
-    running_mean = model.bn.running_mean
-    assert running_mean is not None
-    mean_before = running_mean.clone()
-    grads_before = {
-        n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None
-    }
-    assert grads_before  # the training step populated them
-    rng_before = torch.get_rng_state()
-    flags_before = [m.training for m in model.modules()]
+    with _paused_session() as (session, model):
+        running_mean = model.bn.running_mean
+        assert running_mean is not None
+        mean_before = running_mean.clone()
+        grads_before = {
+            n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None
+        }
+        assert grads_before  # the training step populated them
+        rng_before = torch.get_rng_state()
+        flags_before = [m.training for m in model.modules()]
 
-    session.request_experiment(
-        kind="deep_dream", layer="conv", params=_dream_params()
-    )
-    assert session.wait_for_experiment(timeout=10)
-    assert session.experiment_result is not None
-    assert session.experiment_result.error is None
+        session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params()
+        )
+        assert session.wait_for_experiment(timeout=10)
+        assert session.experiment_result is not None
+        assert session.experiment_result.error is None
 
-    torch.testing.assert_close(running_mean, mean_before)
-    for name, param in model.named_parameters():
-        assert param.grad is not None
-        torch.testing.assert_close(param.grad, grads_before[name])
-    assert torch.equal(torch.get_rng_state(), rng_before)
-    assert [m.training for m in model.modules()] == flags_before
-    _finish(session, thread)
+        torch.testing.assert_close(running_mean, mean_before)
+        for name, param in model.named_parameters():
+            assert param.grad is not None
+            torch.testing.assert_close(param.grad, grads_before[name])
+        assert torch.equal(torch.get_rng_state(), rng_before)
+        assert [m.training for m in model.modules()] == flags_before
 
 
 def test_deep_dream_bad_channel_publishes_error() -> None:
-    session, _, thread = _paused_session()
-    session.request_experiment(
-        kind="deep_dream", layer="conv", params=_dream_params(channel=99)
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None and result.done
-    assert result.error is not None and "channel" in result.error
-    # The worker survived and is still paused/responsive.
-    assert session.pause_count == 1
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params(channel=99)
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.done
+        assert result.error is not None and "channel" in result.error
+        # The worker survived and is still paused/responsive.
+        assert session.pause_count == 1
 
 
 def test_deep_dream_works_on_fx_intermediate_layer() -> None:
-    session, _, thread = _paused_session()
-    assert "relu" in session.layer_names
-    session.request_experiment(
-        kind="deep_dream", layer="relu", params=_dream_params(steps=3)
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None and result.error is None and result.image is not None
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        assert "relu" in session.layer_names
+        session.request_experiment(
+            kind="deep_dream", layer="relu", params=_dream_params(steps=3)
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.error is None and result.image is not None
 
 
 class VectorNet(nn.Module):
@@ -243,29 +220,16 @@ class VectorNet(nn.Module):
 
 def test_deep_dream_works_on_vector_input() -> None:
     model = VectorNet()
-    session = nansense.start(model, epochs=1, phases={"train": 2})
-
-    def loop() -> None:
-        for _ in range(2):
-            with session.batch(phase="train", epoch=0):
-                x = torch.randn(2, 8)
-                y = torch.randint(0, 3, (2,))
-                model.zero_grad(set_to_none=True)
-                nn.functional.cross_entropy(model(x), y).backward()
-
-    thread = threading.Thread(target=loop, daemon=True)
-    thread.start()
-    assert session.wait_until_paused(timeout=5)
-    session.request_experiment(
-        kind="deep_dream",
-        layer="fc1",
-        params={"channel": 0, "steps": 3, "lr": 0.1, "start": "noise", "batch": 3},
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None and result.error is None
-    assert result.image is not None and result.image.shape == (3, 8)
-    _finish(session, thread)
+    with paused_session(model, lambda m: train_step(m, input_shape=(8,))) as session:
+        session.request_experiment(
+            kind="deep_dream",
+            layer="fc1",
+            params={"channel": 0, "steps": 3, "lr": 0.1, "start": "noise", "batch": 3},
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        assert result.image is not None and result.image.shape == (3, 8)
 
 
 @pytest.mark.parametrize(
@@ -284,53 +248,50 @@ def test_deep_dream_works_on_vector_input() -> None:
 def test_captum_methods_publish_attributions(
     kind: str, params: dict[str, object], expected_shape: tuple[int, ...]
 ) -> None:
-    session, _, thread = _paused_session()
-    session.request_experiment(kind=kind, layer="conv", params=params)
-    assert session.wait_for_experiment(timeout=15)
-    result = session.experiment_result
-    assert result is not None
-    assert result.error is None
-    assert result.done
-    assert result.attribution is not None
-    assert tuple(result.attribution.shape) == expected_shape
-    assert result.attribution.device.type == "cpu"
-    assert result.reference is not None
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        session.request_experiment(kind=kind, layer="conv", params=params)
+        assert session.wait_for_experiment(timeout=15)
+        result = session.experiment_result
+        assert result is not None
+        assert result.error is None
+        assert result.done
+        assert result.attribution is not None
+        assert tuple(result.attribution.shape) == expected_shape
+        assert result.attribution.device.type == "cpu"
+        assert result.reference is not None
 
 
 def test_captum_on_fx_intermediate_publishes_module_hint() -> None:
-    session, _, thread = _paused_session()
-    session.request_experiment(
-        kind="gradcam", layer="relu", params={"target": -1, "sample": 0}
-    )
-    assert session.wait_for_experiment(timeout=10)
-    result = session.experiment_result
-    assert result is not None and result.error is not None
-    assert "nn.Module" in result.error
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        session.request_experiment(
+            kind="gradcam", layer="relu", params={"target": -1, "sample": 0}
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.error is not None
+        assert "nn.Module" in result.error
 
 
 def test_queued_experiments_publish_per_seq_results() -> None:
     # Two clients (browser tabs) request back to back: both run to
     # completion in order, and each result stays retrievable by its seq.
-    session, _, thread = _paused_session()
-    seq_a = session.request_experiment(
-        kind="deep_dream", layer="conv", params=_dream_params(steps=2)
-    )
-    seq_b = session.request_experiment(
-        kind="neuron_gradient", layer="conv", params={"channel": 0, "sample": 0}
-    )
-    assert session.wait_for_experiment(timeout=10)
-    first = session.experiment_result_for(seq_a)
-    assert first is not None and first.done and first.error is None
-    assert first.kind == "deep_dream" and first.seq == seq_a
-    assert first.image is not None
-    second = session.experiment_result_for(seq_b)
-    assert second is not None and second.done and second.error is None
-    assert second.kind == "neuron_gradient" and second.seq == seq_b
-    latest = session.experiment_result
-    assert latest is not None and latest.seq == seq_b
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        seq_a = session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params(steps=2)
+        )
+        seq_b = session.request_experiment(
+            kind="neuron_gradient", layer="conv", params={"channel": 0, "sample": 0}
+        )
+        assert session.wait_for_experiment(timeout=10)
+        first = session.experiment_result_for(seq_a)
+        assert first is not None and first.done and first.error is None
+        assert first.kind == "deep_dream" and first.seq == seq_a
+        assert first.image is not None
+        second = session.experiment_result_for(seq_b)
+        assert second is not None and second.done and second.error is None
+        assert second.kind == "neuron_gradient" and second.seq == seq_b
+        latest = session.experiment_result
+        assert latest is not None and latest.seq == seq_b
 
 
 def test_cancel_experiment_drops_one_seq_or_all() -> None:
@@ -348,19 +309,18 @@ def test_cancel_experiment_drops_one_seq_or_all() -> None:
 
 
 def test_experiment_results_evict_oldest_seq() -> None:
-    session, _, thread = _paused_session()
-    seqs = [
-        session.request_experiment(
-            kind="deep_dream", layer="conv", params=_dream_params(steps=1)
-        )
-        for _ in range(9)  # one more than _EXPERIMENT_RESULTS_KEPT
-    ]
-    assert session.wait_for_experiment(timeout=30)
-    assert session.experiment_result_for(seqs[0]) is None  # evicted
-    for seq in seqs[1:]:
-        result = session.experiment_result_for(seq)
-        assert result is not None and result.seq == seq
-    _finish(session, thread)
+    with _paused_session() as (session, _):
+        seqs = [
+            session.request_experiment(
+                kind="deep_dream", layer="conv", params=_dream_params(steps=1)
+            )
+            for _ in range(9)  # one more than _EXPERIMENT_RESULTS_KEPT
+        ]
+        assert session.wait_for_experiment(timeout=30)
+        assert session.experiment_result_for(seqs[0]) is None  # evicted
+        for seq in seqs[1:]:
+            result = session.experiment_result_for(seq)
+            assert result is not None and result.seq == seq
 
 
 def test_request_experiment_rejects_unknown_kind() -> None:
