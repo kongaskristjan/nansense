@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 import torch
@@ -11,7 +12,7 @@ from torch import Tensor, nn
 
 import nansense
 from nansense.probe import apply_perturbations
-from nansense.session import Session
+from nansense.session import Session, _CaptureInterpreter
 
 
 class BnDropNet(nn.Module):
@@ -225,6 +226,60 @@ def test_probe_works_in_hook_fallback_mode() -> None:
     assert len(model._forward_pre_hooks) == 0
 
     _finish(session, thread)
+
+
+@pytest.mark.parametrize(
+    "make_model, step",
+    [(BnDropNet, _bn_drop_step), (DynamicNet, _dynamic_step)],
+)
+def test_probe_runs_after_batch_activations_are_freed(
+    make_model: Callable[[], nn.Module],
+    step: Callable[[Any], None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The training batch's live activations are dropped before any probe
+    forward — a pinned probe must not stack a second batch's worth of
+    (GPU) memory on top of the captured step's own."""
+    model = make_model()
+    session, thread = _paused_session(model, step)
+    seen: list[int] = []
+    original = session._capture_forward  # type: ignore[reportPrivateUsage]
+
+    def spy(inp: Tensor) -> dict[str, Tensor]:
+        seen.append(len(session._activations))  # type: ignore[reportPrivateUsage]
+        return original(inp)
+
+    monkeypatch.setattr(session, "_capture_forward", spy)
+
+    assert session.pin_current_batch() is True  # probe inside the pause loop
+    assert session.wait_for_probe(timeout=5)
+    session.step_batch()  # probe right after the next capture
+    assert session.wait_until_paused(after_pauses=1, timeout=5)
+
+    assert len(seen) == 2
+    assert seen == [0, 0]
+
+    _finish(session, thread)
+
+
+def test_capture_interpreter_to_cpu_stores_detached_clones() -> None:
+    """`to_cpu=True` (the probe path) clones each output to CPU as it is
+    produced — nothing captured stays grad-connected to the live forward."""
+    gm = torch.fx.symbolic_trace(BnDropNet())
+    x = torch.randn(2, 3, 4, 4, requires_grad=True)
+
+    eager: dict[str, Tensor] = {}
+    _CaptureInterpreter(gm, eager, to_cpu=True).run(x)
+    assert eager
+    for name, tensor in eager.items():
+        assert tensor.device.type == "cpu", name
+        assert not tensor.requires_grad, name
+
+    # The default keeps live tensors so the batch path's backward can
+    # populate `.grad` on them.
+    live: dict[str, Tensor] = {}
+    _CaptureInterpreter(gm, live).run(x)
+    assert any(tensor.requires_grad for tensor in live.values())
 
 
 def test_unpin_clears_probe_result() -> None:
