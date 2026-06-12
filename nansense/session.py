@@ -60,6 +60,8 @@ from nansense.restore import (
     TimeTravelStatus,
     TrainingRestorer,
     validate_model_state,
+    validate_optimizer_state,
+    validate_scheduler_state,
 )
 from nansense.schedule import BatchPosition, Schedule
 from nansense.watch import WatchAccumulator, WatchSnapshot
@@ -765,13 +767,15 @@ class Session:
 
         Validates the request up-front on the calling (UI) thread — the
         checkpoint must exist, load, and match the live model's parameter
-        shapes — and raises `TimeTravelError` with a displayable message
-        otherwise, so an incompatible cache (e.g. written by a previous run
-        with a different model) is rejected before anything unwinds. On
-        success the jump is armed: the training thread raises
-        `TimeTravelJump` at its next batch boundary (immediately, when
-        paused), the restorer rolls the state back, and the session enters
-        `STEP` mode so the first batch of `epoch` pauses for inspection.
+        shapes *and* the live optimizer's / scheduler's state layout — and
+        raises `TimeTravelError` with a displayable message otherwise, so an
+        incompatible cache (e.g. written by a previous run with a different
+        model, or a different optimizer config) is rejected before anything
+        unwinds or any state is mutated. On success the jump is armed: the
+        training thread raises `TimeTravelJump` at its next batch boundary
+        (immediately, when paused), the restorer rolls the state back, and the
+        session enters `STEP` mode so the first batch of `epoch` pauses for
+        inspection.
         """
         restorer = self._restorer
         if restorer is None:
@@ -786,9 +790,19 @@ class Session:
                 f"epoch {epoch} out of range [0, {self._schedule.epochs})"
             )
         payload = restorer.cache.load(epoch)
-        error = validate_model_state(payload, self.model)
-        if error is not None:
-            raise TimeTravelError(error)
+        # Validate every piece of the checkpoint the training thread will load
+        # back into live state — model, optimizer, scheduler — here on the UI
+        # thread, before the jump is armed. The training thread's `_restore`
+        # mutates the model first, so an unvalidated optimizer/scheduler
+        # mismatch would otherwise crash mid-restore, after the model was
+        # already overwritten and after this method already reported success.
+        for error in (
+            validate_model_state(payload, self.model),
+            validate_optimizer_state(payload, self._optimizer),
+            validate_scheduler_state(payload, self._scheduler),
+        ):
+            if error is not None:
+                raise TimeTravelError(error)
         with self._cv:
             self._pending_jump = epoch
             self._mode = Mode.STEP

@@ -188,6 +188,15 @@ def _state_dict(payload: dict[str, Any], key: str) -> dict[str, Any] | None:
     return cast("dict[str, Any]", value) if isinstance(value, dict) else None
 
 
+def _group_params(group: Any) -> list[Any]:
+    """The `params` entry of an optimizer param group, or `[]` when malformed."""
+    if isinstance(group, dict):
+        params = group.get("params")
+        if isinstance(params, list):
+            return params
+    return []
+
+
 def validate_model_state(
     payload: dict[str, Any], model: torch.nn.Module
 ) -> str | None:
@@ -224,6 +233,107 @@ def validate_model_state(
     if problems:
         return (
             "cached model does not match the current model — " + "; ".join(problems)
+        )
+    return None
+
+
+def validate_optimizer_state(
+    payload: dict[str, Any], optimizer: torch.optim.Optimizer | None
+) -> str | None:
+    """Check a cached optimizer state dict against the live optimizer.
+
+    Returns a human-readable mismatch description, or `None` when the cached
+    state can be loaded safely. Like `validate_model_state`, this runs at
+    request time (UI thread) so an incompatible cache — written by a previous
+    run whose optimizer had a different param-group layout, or a different
+    optimizer class entirely — is rejected before any state is mutated,
+    rather than detonating inside `optimizer.load_state_dict` (param-group
+    count/size mismatch) or later at `optimizer.step()` (a class whose
+    per-parameter state keys differ).
+
+    Skipped (returns `None`) when the session has no optimizer or the
+    checkpoint carries no optimizer state — preserving the no-optimizer flow.
+    """
+    if optimizer is None:
+        return None
+    cached = _state_dict(payload, "optimizer")
+    if cached is None:
+        return None
+    cached_groups = cached.get("param_groups")
+    current_groups = optimizer.state_dict().get("param_groups")
+    if not isinstance(cached_groups, list) or not isinstance(current_groups, list):
+        return "cached optimizer state is missing its param groups"
+    if len(cached_groups) != len(current_groups):
+        return (
+            "cached optimizer does not match the current optimizer — "
+            f"param group count differs (cached {len(cached_groups)} vs "
+            f"optimizer {len(current_groups)})"
+        )
+    for i, (cached_group, current_group) in enumerate(
+        zip(cached_groups, current_groups)
+    ):
+        cached_params = _group_params(cached_group)
+        current_params = _group_params(current_group)
+        if len(cached_params) != len(current_params):
+            return (
+                "cached optimizer does not match the current optimizer — "
+                f"param group {i} has {len(cached_params)} params "
+                f"(optimizer expects {len(current_params)})"
+            )
+    # A different optimizer class often keeps the same param-group layout but
+    # writes different per-parameter state keys (SGD's `momentum_buffer` vs
+    # Adam's `exp_avg`/`exp_avg_sq`), which only fails later at `step()`.
+    # Catch it up-front by comparing the state keys the live optimizer already
+    # populated against the cached ones for the same parameters.
+    cached_state = cached.get("state")
+    current_state = optimizer.state_dict().get("state")
+    if isinstance(cached_state, dict) and isinstance(current_state, dict):
+        for param_id, current_entry in current_state.items():
+            cached_entry = cached_state.get(param_id)
+            if not isinstance(current_entry, dict) or not isinstance(
+                cached_entry, dict
+            ):
+                continue
+            if set(current_entry) != set(cached_entry):
+                return (
+                    "cached optimizer does not match the current optimizer — "
+                    "per-parameter state keys differ (likely a different "
+                    "optimizer class)"
+                )
+    return None
+
+
+def validate_scheduler_state(
+    payload: dict[str, Any],
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
+) -> str | None:
+    """Check a cached scheduler state dict against the live scheduler.
+
+    Returns a human-readable mismatch description, or `None` when the cached
+    state can be loaded. Like the optimizer check, this runs at request time
+    so a scheduler whose stored keys no longer match the live one is rejected
+    before `scheduler.load_state_dict` runs on the training thread.
+
+    Skipped (returns `None`) when the session has no scheduler or the
+    checkpoint carries no scheduler state.
+    """
+    if scheduler is None:
+        return None
+    cached = _state_dict(payload, "scheduler")
+    if cached is None:
+        return None
+    current = scheduler.state_dict()
+    missing = sorted(set(current) - set(cached))
+    unexpected = sorted(set(cached) - set(current))
+    problems: list[str] = []
+    if missing:
+        problems.append(f"missing keys: {', '.join(missing[:5])}")
+    if unexpected:
+        problems.append(f"unexpected keys: {', '.join(unexpected[:5])}")
+    if problems:
+        return (
+            "cached scheduler does not match the current scheduler — "
+            + "; ".join(problems)
         )
     return None
 
@@ -334,9 +444,10 @@ class TrainingRestorer:
         """Load epoch `epoch`'s checkpoint back into the live training state.
 
         Runs on the training thread between attempts, so nothing races with
-        a forward pass. The payload was already validated against the model
-        at request time (`Session.request_time_travel`), making a failing
-        `load_state_dict` here practically impossible.
+        a forward pass. The payload was already validated against the model,
+        optimizer, and scheduler at request time
+        (`Session.request_time_travel`), making a failing `load_state_dict`
+        here practically impossible.
         """
         session = self._require_session()
         payload = self.cache.load(epoch)

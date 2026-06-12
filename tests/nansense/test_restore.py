@@ -15,8 +15,10 @@ from nansense.restore import (
     TrainingRestorer,
     restore_rng,
     validate_model_state,
+    validate_optimizer_state,
+    validate_scheduler_state,
 )
-from nansense.session import Session
+from nansense.session import Mode, Session
 from tests.nansense.helpers import TinyNet, optimizer_train_step, paused_worker
 
 
@@ -105,6 +107,110 @@ def test_validate_model_state(
         assert error is None
     else:
         assert error is not None and expected in error
+
+
+def test_validate_optimizer_state_accepts_matching(tmp_path: Path) -> None:
+    cache = EpochCache(tmp_path / "cache")
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    cache.save(0, model=model, optimizer=optimizer, scheduler=None)
+    assert validate_optimizer_state(cache.load(0), optimizer) is None
+
+
+def test_validate_optimizer_state_skips_when_absent(tmp_path: Path) -> None:
+    cache = EpochCache(tmp_path / "cache")
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    # No optimizer in the session: nothing to validate against.
+    cache.save(0, model=model, optimizer=optimizer, scheduler=None)
+    assert validate_optimizer_state(cache.load(0), None) is None
+    # No optimizer in the checkpoint: nothing to load, so nothing to reject.
+    cache.save(1, model=model, optimizer=None, scheduler=None)
+    assert validate_optimizer_state(cache.load(1), optimizer) is None
+
+
+def test_validate_optimizer_state_rejects_param_group_count(tmp_path: Path) -> None:
+    cache = EpochCache(tmp_path / "cache")
+    model = TinyNet()
+    one_group = torch.optim.SGD(model.parameters(), lr=0.1)
+    cache.save(0, model=model, optimizer=one_group, scheduler=None)
+    # A live optimizer with two param groups can't load a one-group cache.
+    two_groups = torch.optim.SGD(
+        [
+            {"params": model.fc1.parameters(), "lr": 0.1},
+            {"params": model.fc2.parameters(), "lr": 0.2},
+        ]
+    )
+    error = validate_optimizer_state(cache.load(0), two_groups)
+    assert error is not None and "param group count" in error
+
+
+def test_validate_optimizer_state_rejects_changed_class(tmp_path: Path) -> None:
+    cache = EpochCache(tmp_path / "cache")
+    model = TinyNet()
+    sgd = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    optimizer_train_step(model, sgd)  # populate SGD's momentum_buffer state
+    cache.save(0, model=model, optimizer=sgd, scheduler=None)
+    # Same param-group layout, but Adam writes exp_avg/exp_avg_sq instead of
+    # momentum_buffer — load_state_dict's count check passes, step() detonates.
+    adam = torch.optim.Adam(model.parameters(), lr=0.1)
+    optimizer_train_step(model, adam)
+    error = validate_optimizer_state(cache.load(0), adam)
+    assert error is not None and "state keys differ" in error
+
+
+def test_validate_scheduler_state_accepts_matching(tmp_path: Path) -> None:
+    cache = EpochCache(tmp_path / "cache")
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+    cache.save(0, model=model, optimizer=optimizer, scheduler=scheduler)
+    assert validate_scheduler_state(cache.load(0), scheduler) is None
+    # No scheduler on either side is skipped.
+    assert validate_scheduler_state(cache.load(0), None) is None
+    cache.save(1, model=model, optimizer=optimizer, scheduler=None)
+    assert validate_scheduler_state(cache.load(1), scheduler) is None
+
+
+def test_request_time_travel_rejects_mismatched_optimizer(tmp_path: Path) -> None:
+    """A cache whose optimizer layout differs is rejected up-front, intact.
+
+    Mirrors the mismatched-model case but swaps the live optimizer for one
+    with a different param-group structure after the checkpoint was written —
+    `request_time_travel` must raise `TimeTravelError` on the UI thread
+    (not a raw `ValueError` later on the training thread) and leave the live
+    model and optimizer untouched (no partial mutation mid-restore).
+    """
+    session, restorer, model, _, _ = _make_training(tmp_path)
+    # Epoch 0's checkpoint holds the single-group SGD layout.
+    assert restorer.cache.cached_epochs() == []
+    restorer.save_epoch_start(0)
+
+    # Swap the live optimizer for a two-group one, incompatible with the cache.
+    two_groups = torch.optim.SGD(
+        [
+            {"params": model.fc1.parameters(), "lr": 0.1},
+            {"params": model.fc2.parameters(), "lr": 0.2},
+        ]
+    )
+    session._optimizer = two_groups
+    weight_before = model.fc1.weight.detach().clone()
+    groups_before = len(two_groups.param_groups)
+
+    with pytest.raises(TimeTravelError, match="param group count"):
+        session.request_time_travel(0)
+
+    # Nothing unwound: the model and optimizer are exactly as before.
+    torch.testing.assert_close(model.fc1.weight, weight_before)
+    assert len(two_groups.param_groups) == groups_before
+
+
+def test_request_time_travel_allows_matching_optimizer(tmp_path: Path) -> None:
+    """The matching-optimizer happy path still arms the jump (no over-reject)."""
+    session, restorer, _, _, _ = _make_training(tmp_path)
+    restorer.save_epoch_start(0)
+    session.request_time_travel(0)  # must not raise
+    assert session.mode is Mode.STEP
 
 
 def test_restorer_loop_runs_once_without_jumps(tmp_path: Path) -> None:
