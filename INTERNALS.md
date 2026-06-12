@@ -417,6 +417,15 @@ local dict and are removed in a `finally`. Neither path touches
 `_activations` or `_hook_handles`; both are safe because probes only run
 between batches, when the batch path's hooks are uninstalled.
 
+**GPU memory.** Probe captures clone every layer output to CPU *as it is
+produced* (`to_cpu=True` in both capture paths) rather than holding live
+tensors until the forward ends — otherwise a probe would keep a full
+training-forward's worth of activations resident at once. For the same
+reason `_BatchContext.__exit__` clears `_activations` (the training batch's
+live GPU activations and retained grads) right after `_publish_snapshot`
+CPU-clones them, before any probe runs — so a pinned probe never stacks a
+second batch's activations on top of the training step's own.
+
 **Perturbations.** `Session.add_perturbation(sample=, y=, x=, values=)`
 records per-pixel edits (`(sample, y, x) -> per-channel values` in
 model-input space; the UI back-transforms the picked display color via

@@ -1174,10 +1174,15 @@ class Session:
         self._had_instance_forward = False
 
     def _make_hook(
-        self, name: str, capture: dict[str, Tensor]
+        self, name: str, capture: dict[str, Tensor], *, to_cpu: bool = False
     ) -> Callable[[nn.Module, object, object], None]:
+        # `to_cpu` mirrors `_CaptureInterpreter`: probe forwards clone each
+        # output to CPU as it is produced instead of retaining live tensors.
         def hook(_module: nn.Module, _inputs: object, output: object) -> None:
             if not isinstance(output, Tensor):
+                return
+            if to_cpu:
+                capture[name] = self._cpu_clone(output)
                 return
             if output.requires_grad:
                 output.retain_grad()
@@ -1186,7 +1191,7 @@ class Session:
         return hook
 
     def _make_pre_hook(
-        self, capture: dict[str, Tensor]
+        self, capture: dict[str, Tensor], *, to_cpu: bool = False
     ) -> Callable[[nn.Module, tuple[object, ...]], None]:
         def hook(_module: nn.Module, inputs: tuple[object, ...]) -> None:
             for i, inp in enumerate(inputs):
@@ -1197,6 +1202,9 @@ class Session:
                     if i < len(self._input_names)
                     else f"arg_{i}"
                 )
+                if to_cpu:
+                    capture[name] = self._cpu_clone(inp)
+                    continue
                 if inp.requires_grad:
                     inp.retain_grad()
                 capture[name] = inp
@@ -1532,7 +1540,7 @@ class Session:
             self._cv.notify_all()
 
     def _capture_forward(self, inp: Tensor) -> dict[str, Tensor]:
-        """One forward pass capturing every layer output into a fresh dict.
+        """One forward pass capturing every layer output as a fresh CPU clone.
 
         Never touches the batch path's state (`_activations`,
         `_hook_handles`, the patched forward): in fx mode the interpreter
@@ -1540,16 +1548,25 @@ class Session:
         hooks are registered and removed around the call. Safe because probes
         only run between batches, when the batch path's hooks are
         uninstalled.
+
+        Captures clone to CPU eagerly (`to_cpu=True`): holding live outputs
+        until the end of the forward would keep every layer's activation
+        resident on the GPU at once — roughly a training forward's worth of
+        memory on top of the training step's own.
         """
         capture: dict[str, Tensor] = {}
         if self._fx_graph is not None:
-            _CaptureInterpreter(self._fx_graph, capture).run(inp)
+            _CaptureInterpreter(self._fx_graph, capture, to_cpu=True).run(inp)
         else:
             handles = [
-                self.model.register_forward_pre_hook(self._make_pre_hook(capture))
+                self.model.register_forward_pre_hook(
+                    self._make_pre_hook(capture, to_cpu=True)
+                )
             ]
             handles += [
-                module.register_forward_hook(self._make_hook(name, capture))
+                module.register_forward_hook(
+                    self._make_hook(name, capture, to_cpu=True)
+                )
                 for name, module in self.model.named_modules()
                 if module is not self.model
             ]
@@ -1558,7 +1575,7 @@ class Session:
             finally:
                 for handle in handles:
                     handle.remove()
-        return {name: self._cpu_clone(tensor) for name, tensor in capture.items()}
+        return capture
 
     def _model_device(self) -> torch.device:
         param = next(self.model.parameters(), None)
@@ -1649,6 +1666,11 @@ class _BatchContext:
             if exc is None and not self._session.closed:
                 if self._captured or self._freq_update:
                     self._session._publish_snapshot(self._position)
+                    # The snapshot holds CPU clones of everything; drop the
+                    # live GPU activations (and their retained grads) now so
+                    # the probe's forward below doesn't stack a second
+                    # batch's worth of memory on top of them.
+                    self._session._activations.clear()
                     self._session._maybe_run_probe_at_capture()
                     # Auto experiments re-run on every publish, so a pause
                     # shows fresh results and a free-running frequency
@@ -1754,21 +1776,31 @@ class _CaptureInterpreter(fx.Interpreter):
     intercept after each run. We retain_grad on every non-leaf tensor so
     the user's subsequent loss.backward() populates `.grad`, and store the
     live tensor under its friendly name in `capture`.
+
+    With `to_cpu=True` (probe forwards, which never backward), each output
+    is cloned to CPU as it is produced instead — so a whole model's worth
+    of layer outputs never accumulates on the GPU during the run.
     """
 
-    def __init__(self, gm: fx.GraphModule, capture: dict[str, Tensor]) -> None:
+    def __init__(
+        self, gm: fx.GraphModule, capture: dict[str, Tensor], *, to_cpu: bool = False
+    ) -> None:
         super().__init__(gm)
         self._capture = capture
         self._names = friendly_names(gm.graph)
+        self._to_cpu = to_cpu
 
     def run_node(self, n: fx.Node) -> object:
         result = super().run_node(n)
         if n.op == "output":
             return result
         if isinstance(result, Tensor):
-            if result.requires_grad:
-                result.retain_grad()
-            self._capture[self._names[n]] = result
+            if self._to_cpu:
+                self._capture[self._names[n]] = Session._cpu_clone(result)
+            else:
+                if result.requires_grad:
+                    result.retain_grad()
+                self._capture[self._names[n]] = result
         return result
 
 
