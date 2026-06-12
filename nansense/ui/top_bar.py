@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_right
 from collections.abc import Callable
 
 from nicegui import ui
@@ -158,18 +159,22 @@ def _add_time_travel_button(session: Session) -> None:
             # cached set has gaps; the label shows the mapped epoch number.
             epoch_slider: ui.slider | None = None
             if cached:
+                position = _current_position(session.live_position, session.snapshot)
+                initial = _time_travel_default_index(
+                    cached, position.epoch if position is not None else None
+                )
                 ui.label("Jump back to the start of a cached epoch:").classes(
                     "text-sm"
                 )
                 with ui.row().classes("w-full items-center gap-4 no-wrap"):
-                    epoch_label = ui.label(f"epoch {cached[-1]}").classes(
+                    epoch_label = ui.label(f"epoch {cached[initial]}").classes(
                         "font-mono text-sm w-20 shrink-0"
                     )
                     epoch_slider = ui.slider(
                         min=0,
                         max=len(cached) - 1,
                         step=1,
-                        value=len(cached) - 1,
+                        value=initial,
                         on_change=lambda e: epoch_label.set_text(
                             f"epoch {cached[int(e.value)]}"
                         ),
@@ -517,6 +522,20 @@ def _summarize_epoch_ranges(epochs: list[int]) -> str:
     return ", ".join(parts)
 
 
+def _time_travel_default_index(cached: list[int], current_epoch: int | None) -> int:
+    """Slider index (into the sorted `cached` list) to preselect on dialog open.
+
+    The preselected epoch is where training currently is — the closest
+    cached epoch at or before `current_epoch` — not simply the last cached
+    one: after a backwards jump the checkpoints of later, abandoned epochs
+    stay on disk, so the last cached epoch can lie in the future. Falls back
+    to the last cached epoch before the first batch publishes a position.
+    """
+    if current_epoch is None:
+        return len(cached) - 1
+    return max(0, bisect_right(cached, current_epoch) - 1)
+
+
 def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
     schedule = session.schedule
     phase_names = list(schedule.phases)
@@ -563,9 +582,7 @@ def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
             ui.button("Step", on_click=submit)
 
         def apply_current_position() -> None:
-            position = _step_until_default_position(
-                session.live_position, session.snapshot
-            )
+            position = _current_position(session.live_position, session.snapshot)
             if position is None:
                 return
             epoch_input.value = position.epoch
@@ -578,15 +595,14 @@ def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
     return dialog
 
 
-def _step_until_default_position(
+def _current_position(
     live_position: BatchPosition | None, snapshot: BatchSnapshot | None
 ) -> BatchPosition | None:
-    """Position to prefill the step-until dialog with on open.
+    """Where training currently is, for dialogs that prefill from it.
 
-    Prefilling with where training currently is means the user only tweaks
-    the field they care about. `live_position` tracks every batch even in
-    modes where `snapshot.position` is frozen between boundaries, so it wins;
-    the snapshot covers the brief window before the first batch publishes a
+    `live_position` tracks every batch even in modes where
+    `snapshot.position` is frozen between boundaries, so it wins; the
+    snapshot covers the brief window before the first batch publishes a
     live position.
     """
     if live_position is not None:
@@ -613,7 +629,7 @@ def _validate_step_until_target(
         return f"Batch must be in [0, {declared - 1}] for phase {phase!r}"
     # `step_until_position` captures on an *exact* (phase, epoch, batch_idx)
     # match against the live training position, so validate against that same
-    # source the dialog prefills from (see `_step_until_default_position`).
+    # source the dialog prefills from (see `_current_position`).
     # `snapshot.position` is stale mid-step_epoch/step_run/detach — a target
     # between it and the live position would pass here yet never be hit.
     current = live_position if live_position is not None else (

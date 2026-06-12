@@ -8,8 +8,9 @@ import torch
 from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
-    _step_until_default_position,
+    _current_position,
     _summarize_epoch_ranges,
+    _time_travel_default_index,
     _validate_step_until_target,
 )
 from tests.nansense.helpers import _make_snapshot, make_position
@@ -152,12 +153,12 @@ def test_validate_step_until_rejects_invalid_targets(
         (None, None, None),
     ],
 )
-def test_step_until_default_position(
+def test_current_position(
     live: tuple[str, int, int] | None,
     snapshot: tuple[str, int, int] | None,
     expected: tuple[str, int, int] | None,
 ) -> None:
-    result = _step_until_default_position(
+    result = _current_position(
         make_position(*live) if live is not None else None,
         _snapshot_at(*snapshot) if snapshot is not None else None,
     )
@@ -179,3 +180,24 @@ def test_step_until_default_position(
 )
 def test_summarize_epoch_ranges(epochs: list[int], expected: str) -> None:
     assert _summarize_epoch_ranges(epochs) == expected
+
+
+@pytest.mark.parametrize(
+    ("cached", "current_epoch", "expected"),
+    [
+        # Current epoch is cached: preselect it, not the last cached epoch
+        # (epochs past a backwards jump keep their checkpoints on disk).
+        pytest.param([0, 1, 2, 3, 4], 2, 2, id="current-cached"),
+        pytest.param([0, 1, 2], 2, 2, id="current-is-last"),
+        # Current epoch missing from a gappy cache: closest one before it.
+        pytest.param([0, 1, 5, 6], 3, 1, id="gap-rounds-down"),
+        # Everything cached is in the future: clamp to the earliest.
+        pytest.param([4, 5], 2, 0, id="all-cached-ahead"),
+        # No position published yet: fall back to the last cached epoch.
+        pytest.param([0, 1, 2], None, 2, id="no-position-yet"),
+    ],
+)
+def test_time_travel_default_index(
+    cached: list[int], current_epoch: int | None, expected: int
+) -> None:
+    assert _time_travel_default_index(cached, current_epoch) == expected
