@@ -26,7 +26,6 @@ reimplemented.
 from __future__ import annotations
 
 import inspect
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -54,10 +53,11 @@ from nansense.restore import (
     EpochCache,
     TimeTravelError,
     TrainingRestorer,
+    capture_rng,
+    restore_rng,
 )
 from nansense.session import Session, _BatchContext
 
-_CKPT_FILE_RE = re.compile(r"^epoch_(\d+)\.ckpt$")
 _RNG_CHECKPOINT_KEY = "nansense_rng"
 
 # Lightning's TRAIN_DATALOADERS / EVAL_DATALOADERS unions are wide and
@@ -358,12 +358,7 @@ class NansenseCallback(Callback):
     ) -> None:
         # Lightning checkpoints do not include global RNG state; stash it so
         # a time-travel replay reproduces DataLoader shuffling and dropout.
-        checkpoint[_RNG_CHECKPOINT_KEY] = {
-            "torch": torch.get_rng_state(),
-            "cuda": (
-                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
-            ),
-        }
+        checkpoint[_RNG_CHECKPOINT_KEY] = capture_rng()
 
     def on_load_checkpoint(
         self,
@@ -376,7 +371,7 @@ class NansenseCallback(Callback):
         # position relative to iterator creation matters).
         rng = checkpoint.get(_RNG_CHECKPOINT_KEY)
         if isinstance(rng, dict):
-            TrainingRestorer._restore_rng(rng)
+            restore_rng(rng)
 
 
 class _LightningCkptCache(EpochCache):
@@ -388,22 +383,11 @@ class _LightningCkptCache(EpochCache):
     — restoring is delegated to `trainer.fit(ckpt_path=...)`.
     """
 
+    FILE_SUFFIX = ".ckpt"
+
     def __init__(self, directory: Path, *, state_prefix: str = "") -> None:
         super().__init__(directory)
         self._state_prefix = state_prefix
-
-    def path_for(self, epoch: int) -> Path:
-        return self.directory / f"epoch_{epoch}.ckpt"
-
-    def cached_epochs(self) -> list[int]:
-        if not self.directory.is_dir():
-            return []
-        epochs: list[int] = []
-        for entry in self.directory.iterdir():
-            m = _CKPT_FILE_RE.match(entry.name)
-            if m is not None:
-                epochs.append(int(m.group(1)))
-        return sorted(epochs)
 
     def save(
         self,

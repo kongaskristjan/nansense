@@ -38,9 +38,45 @@ import torch
 if TYPE_CHECKING:
     from nansense.session import Session
 
-_EPOCH_FILE_RE = re.compile(r"^epoch_(\d+)\.pt$")
-
 DEFAULT_CACHE_DIR = Path("models/latest")
+
+
+def capture_rng() -> dict[str, Any]:
+    """Snapshot the global torch (and per-device CUDA) RNG states.
+
+    The counterpart of `restore_rng`; stashed alongside checkpoints so a
+    time-travel replay reproduces DataLoader shuffling and dropout.
+    """
+    return {
+        "torch": torch.get_rng_state(),
+        "cuda": (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
+        ),
+    }
+
+
+def restore_rng(rng: dict[str, Any] | None) -> None:
+    """Best-effort RNG restore so the replayed epochs are deterministic.
+
+    Restoring the global torch RNG also reproduces DataLoader shuffling:
+    the loader draws its base seed from the global generator when its
+    iterator is created. CUDA states are restored only when the device
+    count still matches what was saved.
+    """
+    if rng is None:
+        return
+    torch_state = rng.get("torch")
+    if isinstance(torch_state, torch.Tensor):
+        torch.set_rng_state(torch_state.cpu().to(torch.uint8))
+    cuda_states = rng.get("cuda")
+    if (
+        isinstance(cuda_states, list)
+        and torch.cuda.is_available()
+        and len(cuda_states) == torch.cuda.device_count()
+    ):
+        torch.cuda.set_rng_state_all(
+            [s.cpu().to(torch.uint8) for s in cuda_states]
+        )
 
 
 class TimeTravelJump(BaseException):
@@ -88,20 +124,25 @@ class EpochCache:
     entry.
     """
 
+    # Checkpoint file extension; subclasses with a different on-disk format
+    # (e.g. the Lightning cache's `.ckpt`) override just this.
+    FILE_SUFFIX: str = ".pt"
+
     def __init__(self, directory: Path) -> None:
         # The directory is created lazily on first save, so merely creating
         # a restorer (e.g. on a disabled session) leaves the disk untouched.
         self.directory = directory
 
     def path_for(self, epoch: int) -> Path:
-        return self.directory / f"epoch_{epoch}.pt"
+        return self.directory / f"epoch_{epoch}{self.FILE_SUFFIX}"
 
     def cached_epochs(self) -> list[int]:
         if not self.directory.is_dir():
             return []
+        file_re = re.compile(rf"^epoch_(\d+){re.escape(self.FILE_SUFFIX)}$")
         epochs: list[int] = []
         for entry in self.directory.iterdir():
-            m = _EPOCH_FILE_RE.match(entry.name)
+            m = file_re.match(entry.name)
             if m is not None:
                 epochs.append(int(m.group(1)))
         return sorted(epochs)
@@ -119,19 +160,13 @@ class EpochCache:
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict() if optimizer is not None else None,
             "scheduler": scheduler.state_dict() if scheduler is not None else None,
-            "rng": {
-                "torch": torch.get_rng_state(),
-                "cuda": (
-                    torch.cuda.get_rng_state_all()
-                    if torch.cuda.is_available()
-                    else []
-                ),
-            },
+            "rng": capture_rng(),
         }
         self.directory.mkdir(parents=True, exist_ok=True)
-        tmp = self.path_for(epoch).with_suffix(".pt.tmp")
+        path = self.path_for(epoch)
+        tmp = path.with_name(path.name + ".tmp")
         torch.save(payload, tmp)
-        tmp.replace(self.path_for(epoch))
+        tmp.replace(path)
 
     def load(self, epoch: int) -> dict[str, Any]:
         """Load epoch `epoch`'s checkpoint; raises `TimeTravelError` if absent."""
@@ -314,29 +349,5 @@ class TrainingRestorer:
         scheduler_state = _state_dict(payload, "scheduler")
         if session.scheduler is not None and scheduler_state is not None:
             session.scheduler.load_state_dict(scheduler_state)
-        self._restore_rng(_state_dict(payload, "rng"))
+        restore_rng(_state_dict(payload, "rng"))
         session._rewind_to_epoch(epoch)
-
-    @staticmethod
-    def _restore_rng(rng: dict[str, Any] | None) -> None:
-        """Best-effort RNG restore so the replayed epochs are deterministic.
-
-        Restoring the global torch RNG also reproduces DataLoader shuffling:
-        the loader draws its base seed from the global generator when its
-        iterator is created. CUDA states are restored only when the device
-        count still matches what was saved.
-        """
-        if rng is None:
-            return
-        torch_state = rng.get("torch")
-        if isinstance(torch_state, torch.Tensor):
-            torch.set_rng_state(torch_state.cpu().to(torch.uint8))
-        cuda_states = rng.get("cuda")
-        if (
-            isinstance(cuda_states, list)
-            and torch.cuda.is_available()
-            and len(cuda_states) == torch.cuda.device_count()
-        ):
-            torch.cuda.set_rng_state_all(
-                [s.cpu().to(torch.uint8) for s in cuda_states]
-            )
