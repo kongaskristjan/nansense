@@ -33,6 +33,7 @@ decoupled from the heavier strip rendering.
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -46,6 +47,19 @@ from nansense.ui.graph import build_mermaid
 from nansense.ui.main_page import _RenderCache, _build_page
 from nansense.ui.watch_page import _build_watch_page
 from nansense.ui.weights_page import _build_weights_page
+
+
+class _DropListenerRerenderWarning(logging.Filter):
+    """Drop NiceGUI's browser-relayed "Event listeners changed after initial
+    definition" warning — adding listeners to live elements is routine here
+    (e.g. cards rebuilt against a new snapshot), and the warning would repeat
+    on every such update."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "Event listeners changed after initial definition" not in record.getMessage()
+
+
+logging.getLogger("nicegui").addFilter(_DropListenerRerenderWarning())
 
 
 def serve(
