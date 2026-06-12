@@ -148,7 +148,7 @@ BIN_WIDTHS: list[float] = [
 _BIN_VALUE_LABELS: list[str] = [f"{bin_midpoint(i):.3g}" for i in range(N_BINS)]
 
 # Axis trims may clip bins/bars holding up to this share of the data points
-# (see `_trimmed_bin_bounds` / `_linear_y_range`). `axis_ranges` starts at
+# (see `_trimmed_bin_bounds` / `_linear_y_range`). `_axis_ranges` starts at
 # the base share and raises it in steps up to the max while the bars would
 # fill less than `_MIN_FILL_FRACTION` of the plot area.
 _BASE_CLIP_SHARE: float = 0.005
@@ -229,8 +229,7 @@ def _scale_bars(hist: tuple[int, ...], density: bool) -> list[tuple[float, int]]
 
 
 def _linear_y_range(
-    per_phase: dict[str, LayerStatsSnapshot],
-    kind: str,
+    phase_hists: _PhaseHists,
     density: bool,
     clip_share: float = _BASE_CLIP_SHARE,
 ) -> list[float] | None:
@@ -252,8 +251,7 @@ def _linear_y_range(
     """
     bars: list[tuple[float, int]] = []
     total = 0
-    for phase in _phases_with_data(per_phase, kind):
-        hist = kind_stats(per_phase[phase], kind).hist
+    for _, hist in phase_hists:
         total += sum(hist)
         bars.extend(_scale_bars(hist, density))
     if not bars:
@@ -287,9 +285,25 @@ def _phases_with_data(
     return [p for p, snap in per_phase.items() if kind_stats(snap, kind).n > 0]
 
 
+# The figure's drawn traces for one `kind`: a `(phase, histogram)` pair per
+# phase with data, in render order. The entry points (`_make_histogram_figure`,
+# `axis_ranges`) extract this once via `_phase_hists` and the range helpers
+# below all work over it instead of re-deriving it from the snapshots.
+type _PhaseHists = list[tuple[str, tuple[int, ...]]]
+
+
+def _phase_hists(
+    per_phase: dict[str, LayerStatsSnapshot], kind: str
+) -> _PhaseHists:
+    """The drawn traces' `(phase, histogram)` pairs (see `_PhaseHists`)."""
+    return [
+        (p, kind_stats(per_phase[p], kind).hist)
+        for p in _phases_with_data(per_phase, kind)
+    ]
+
+
 def _trimmed_bin_bounds(
-    per_phase: dict[str, LayerStatsSnapshot],
-    kind: str,
+    phase_hists: _PhaseHists,
     clip_share: float = _BASE_CLIP_SHARE,
 ) -> tuple[int, int] | None:
     """Smallest/largest bin indices after trimming the extreme-tail bins.
@@ -301,8 +315,8 @@ def _trimmed_bin_bounds(
     stretches the whole value axis. Returns `None` when there's no data.
     """
     counts = [0] * N_BINS
-    for phase in _phases_with_data(per_phase, kind):
-        for i, count in enumerate(kind_stats(per_phase[phase], kind).hist):
+    for _, hist in phase_hists:
+        for i, count in enumerate(hist):
             counts[i] += count
     total = sum(counts)
     if total == 0:
@@ -327,20 +341,15 @@ def _trimmed_bin_bounds(
     return lo, hi
 
 
-def _linear_x_range(
-    per_phase: dict[str, LayerStatsSnapshot],
-    kind: str,
-    clip_share: float = _BASE_CLIP_SHARE,
-) -> list[float] | None:
+def _linear_x_range(bounds: tuple[int, int] | None) -> list[float] | None:
     """X-axis range (linear value space) covering the trimmed bins.
 
     On a linear axis the bars span the full `[-1e6, 1e6]` edge range, almost
-    all of it empty. We zoom to the edges of the trimmed bin span
-    (`_trimmed_bin_bounds`, plus a little padding) so the bulk of the
-    distribution stays legible. Returns `None` (Plotly autorange) when
-    there's no data.
+    all of it empty. We zoom to the edges of the trimmed bin span (`bounds`,
+    as computed by `_trimmed_bin_bounds`, plus a little padding) so the bulk
+    of the distribution stays legible. Returns `None` (Plotly autorange)
+    when there's no data (`bounds` is `None`).
     """
-    bounds = _trimmed_bin_bounds(per_phase, kind, clip_share)
     if bounds is None:
         return None
     lo = _HIST_EDGES[bounds[0]]
@@ -349,19 +358,15 @@ def _linear_x_range(
     return [lo - pad, hi + pad]
 
 
-def _log_x_range(
-    per_phase: dict[str, LayerStatsSnapshot],
-    kind: str,
-    clip_share: float = _BASE_CLIP_SHARE,
-) -> list[float] | None:
+def _log_x_range(bounds: tuple[int, int] | None) -> list[float] | None:
     """X-axis range (bin-index space) covering the trimmed bins.
 
     The signed-log view draws bars at integer bin indices, so the range
-    brackets the trimmed span (`_trimmed_bin_bounds`) with half-bar margins
-    plus a little padding. Returns `None` (Plotly autorange — the full
-    211-bin span) when there's no data.
+    brackets the trimmed span (`bounds`, as computed by
+    `_trimmed_bin_bounds`) with half-bar margins plus a little padding.
+    Returns `None` (Plotly autorange — the full 211-bin span) when there's
+    no data (`bounds` is `None`).
     """
-    bounds = _trimmed_bin_bounds(per_phase, kind, clip_share)
     if bounds is None:
         return None
     lo, hi = bounds
@@ -370,8 +375,7 @@ def _log_x_range(
 
 
 def _fill_fraction(
-    per_phase: dict[str, LayerStatsSnapshot],
-    kind: str,
+    phase_hists: _PhaseHists,
     density: bool,
     bounds: tuple[int, int],
     y_top: float,
@@ -388,14 +392,13 @@ def _fill_fraction(
         return 1.0
     lo, hi = bounds
     span = (_HIST_EDGES[hi + 1] - _HIST_EDGES[lo]) if density else (hi - lo + 1)
-    phases = _phases_with_data(per_phase, kind)
     filled = 0.0
-    for phase in phases:
-        heights = trace_heights(kind_stats(per_phase[phase], kind).hist, density)
+    for _, hist in phase_hists:
+        heights = trace_heights(hist, density)
         for i in range(lo, hi + 1):
             width = BIN_WIDTHS[i] if density else 1.0
             filled += width * min(heights[i], y_top)
-    return filled / (span * y_top * len(phases))
+    return filled / (span * y_top * len(phase_hists))
 
 
 def axis_ranges(
@@ -406,6 +409,21 @@ def axis_ranges(
     log_y: bool,
 ) -> tuple[list[float] | None, list[float] | None]:
     """The histogram figure's `(x, y)` axis ranges.
+
+    Extracts the drawn traces once (`_phase_hists`) and delegates to
+    `_axis_ranges`. `_make_histogram_figure` calls `_axis_ranges` directly
+    with the traces it already extracted.
+    """
+    return _axis_ranges(_phase_hists(per_phase, kind), log_x=log_x, log_y=log_y)
+
+
+def _axis_ranges(
+    phase_hists: _PhaseHists,
+    *,
+    log_x: bool,
+    log_y: bool,
+) -> tuple[list[float] | None, list[float] | None]:
+    """`axis_ranges` over already-extracted `(phase, histogram)` traces.
 
     Both ranges come from the same clip budget: bins/bars holding up to a
     share of the data points may be cut off (x: outermost tail bins,
@@ -425,27 +443,23 @@ def axis_ranges(
     """
     density = use_density(log_x)
 
-    def x_range_at(share: float) -> list[float] | None:
-        return (
-            _log_x_range(per_phase, kind, share)
-            if log_x
-            else _linear_x_range(per_phase, kind, share)
-        )
+    def x_range_at(bounds: tuple[int, int] | None) -> list[float] | None:
+        return _log_x_range(bounds) if log_x else _linear_x_range(bounds)
 
     if log_y:
-        return x_range_at(_BASE_CLIP_SHARE), None
+        return x_range_at(_trimmed_bin_bounds(phase_hists)), None
     share = _BASE_CLIP_SHARE
     while True:
-        bounds = _trimmed_bin_bounds(per_phase, kind, share)
-        y_range = _linear_y_range(per_phase, kind, density, share)
+        bounds = _trimmed_bin_bounds(phase_hists, share)
+        y_range = _linear_y_range(phase_hists, density, share)
         if bounds is None or y_range is None:
             return None, None
         if (
             share >= _MAX_CLIP_SHARE
-            or _fill_fraction(per_phase, kind, density, bounds, y_range[1])
+            or _fill_fraction(phase_hists, density, bounds, y_range[1])
             >= _MIN_FILL_FRACTION
         ):
-            return x_range_at(share), y_range
+            return x_range_at(bounds), y_range
         share = min(share + _CLIP_SHARE_STEP, _MAX_CLIP_SHARE)
 
 
@@ -457,8 +471,12 @@ def _make_histogram_figure(
     log_x: bool = False,
     log_y: bool = False,
     trace_names: list[str] | None = None,
-) -> go.Figure:
+) -> tuple[go.Figure, tuple[list[float] | None, list[float] | None]]:
     """Plotly bar chart of the signed-log histogram, one subplot row per phase.
+
+    Returns the figure together with the `(x_range, y_range)` pair applied
+    to it (the most expensive part of the build, see `_axis_ranges`), so a
+    caller that caches the ranges (`_HistPlot`) doesn't recompute them.
 
     `trace_names` overrides the default "phase (ep N)" trace/subplot names —
     the per-channel view appends the channel there.
@@ -500,22 +518,23 @@ def _make_histogram_figure(
             "value ≈ %{customdata[1]}<br>probability %{y:.3g}"
             "<br>count %{customdata[0]}<extra></extra>"
         )
-    phases = _phases_with_data(per_phase, kind)
-    names = trace_names or [f"{p} (ep {per_phase[p].epoch})" for p in phases]
+    phase_hists = _phase_hists(per_phase, kind)
+    names = trace_names or [
+        f"{p} (ep {per_phase[p].epoch})" for p, _ in phase_hists
+    ]
     fig = make_subplots(
-        rows=max(1, len(phases)),
+        rows=max(1, len(phase_hists)),
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.06,
         subplot_titles=names or None,
     )
-    for i, phase in enumerate(phases):
-        stats = kind_stats(per_phase[phase], kind)
+    for i, (phase, hist) in enumerate(phase_hists):
         fig.add_trace(
             go.Bar(
                 x=x_values,
-                y=trace_heights(stats.hist, density),
-                customdata=_hover_customdata(stats.hist, density),
+                y=trace_heights(hist, density),
+                customdata=_hover_customdata(hist, density),
                 width=None if log_x else BIN_WIDTHS,
                 name=names[i],
                 marker_color=phase_color(phase, i),
@@ -528,17 +547,19 @@ def _make_histogram_figure(
     # Subplot titles double as the legend: phase name + epoch in the trace
     # color, sitting right above the row they describe.
     for i, annotation in enumerate(fig.layout.annotations):
-        annotation.update(font=dict(size=11, color=phase_color(phases[i], i)))
+        annotation.update(
+            font=dict(size=11, color=phase_color(phase_hists[i][0], i))
+        )
     # `shared_xaxes` only hides the upper rows' tick labels; matching the
     # x-axes proper keeps every row in lock-step when zooming/panning and
     # lets a single `xaxis.range` relayout retarget all rows at once.
-    for row in range(2, len(phases) + 1):
+    for row in range(2, len(phase_hists) + 1):
         fig.update_xaxes(matches="x", row=row, col=1)
     fig.update_layout(
         title=dict(text=title, x=0.0, font=dict(size=12)),
         bargap=0,
         margin=dict(l=50, r=20, t=40, b=40),
-        height=_PLOT_HEIGHT * max(1, len(phases)),
+        height=_PLOT_HEIGHT * max(1, len(phase_hists)),
         plot_bgcolor="#f8fafc",
         paper_bgcolor="white",
         showlegend=False,
@@ -547,7 +568,7 @@ def _make_histogram_figure(
         # (and reading counts generally) depends on.
         hovermode="x",
     )
-    x_range, y_range = axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
+    x_range, y_range = _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
     if log_x:
         tick_vals, tick_text = x_tick_layout()
         fig.update_xaxes(
@@ -568,7 +589,7 @@ def _make_histogram_figure(
         )
     fig.update_yaxes(
         type="log" if log_y else "linear",
-        # The cap is a linear-space range; on a log y-axis `axis_ranges`
+        # The cap is a linear-space range; on a log y-axis `_axis_ranges`
         # returns `None` (Plotly autorange, which shows 100% of the data
         # anyway) since Plotly would misread the range as log10 units.
         range=y_range,
@@ -580,4 +601,4 @@ def _make_histogram_figure(
             font=dict(size=10),
         ),
     )
-    return fig
+    return fig, (x_range, y_range)

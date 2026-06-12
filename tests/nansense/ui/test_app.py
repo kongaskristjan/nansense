@@ -22,6 +22,7 @@ from nansense.ui.histograms import (
     _linear_y_range,
     _log_x_range,
     _make_histogram_figure,
+    _phase_hists,
     _phases_with_data,
     _probabilities,
     _probability_densities,
@@ -278,7 +279,7 @@ def test_phases_with_data_skips_empty_phases() -> None:
 
 def test_histogram_traces_match_phases_with_data() -> None:
     per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val", n=0)}
-    fig = _make_histogram_figure(per_phase, "activation", "activations")
+    fig, _ = _make_histogram_figure(per_phase, "activation", "activations")
     # Only phases with data get a trace, in order; all visible by default so a
     # rebuild never silently hides a series.
     assert [t.name for t in fig.data] == ["train (ep 0)"]
@@ -291,7 +292,7 @@ def test_histogram_traces_match_phases_with_data() -> None:
 @pytest.mark.parametrize("log_y", [True, False])
 def test_histogram_log_y_toggles_y_axis_scale(log_y: bool) -> None:
     per_phase = {"train": _layer_snap("train")}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_y=log_y
     )
     assert fig.layout.yaxis.type == ("log" if log_y else "linear")
@@ -299,7 +300,7 @@ def test_histogram_log_y_toggles_y_axis_scale(log_y: bool) -> None:
 
 def test_histogram_log_x_uses_bin_indices() -> None:
     per_phase = {"train": _layer_snap("train")}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=True
     )
     # Log mode: evenly spaced bin indices, default (uniform) bar width.
@@ -309,7 +310,7 @@ def test_histogram_log_x_uses_bin_indices() -> None:
 
 def test_histogram_linear_x_uses_value_positions_and_widths() -> None:
     per_phase = {"train": _layer_snap("train")}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False
     )
     # Linear mode: bars positioned at true bin centres with per-bin widths.
@@ -319,13 +320,15 @@ def test_histogram_linear_x_uses_value_positions_and_widths() -> None:
 
 
 def test_linear_x_range_none_when_empty() -> None:
-    assert _linear_x_range({}, "activation") is None
+    assert _linear_x_range(_trimmed_bin_bounds([])) is None
 
 
 def test_linear_x_range_brackets_populated_bins() -> None:
     # Counts only in the zero band → a tight range straddling zero.
     per_phase = {"train": _layer_snap("train", n=7)}
-    rng = _linear_x_range(per_phase, "activation")
+    rng = _linear_x_range(
+        _trimmed_bin_bounds(_phase_hists(per_phase, "activation"))
+    )
     assert rng is not None
     lo, hi = rng
     assert lo < 0 < hi
@@ -340,7 +343,7 @@ def test_trimmed_bin_bounds_drops_sparse_outlier_tail() -> None:
     # shrink to the bulk bin.
     hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    assert _trimmed_bin_bounds(per_phase, "activation") == (
+    assert _trimmed_bin_bounds(_phase_hists(per_phase, "activation")) == (
         ZERO_BIN + 10,
         ZERO_BIN + 10,
     )
@@ -351,7 +354,7 @@ def test_trimmed_bin_bounds_keeps_heavy_tails() -> None:
     # than the 0.5% budget, so the bounds cover them both.
     hist = {ZERO_BIN + 10: 500, ZERO_BIN + 80: 500}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    assert _trimmed_bin_bounds(per_phase, "activation") == (
+    assert _trimmed_bin_bounds(_phase_hists(per_phase, "activation")) == (
         ZERO_BIN + 10,
         ZERO_BIN + 80,
     )
@@ -361,7 +364,7 @@ def test_trimmed_bin_bounds_budget_spans_both_tails() -> None:
     # 3 + 4 outlier points (0.07% combined) trim away on both sides.
     hist = {ZERO_BIN - 40: 3, ZERO_BIN + 10: 10_000, ZERO_BIN + 40: 4}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    assert _trimmed_bin_bounds(per_phase, "activation") == (
+    assert _trimmed_bin_bounds(_phase_hists(per_phase, "activation")) == (
         ZERO_BIN + 10,
         ZERO_BIN + 10,
     )
@@ -372,7 +375,7 @@ def test_trimmed_bin_bounds_stops_when_budget_runs_out() -> None:
     # budget (~50 points), so only the lighter tail is dropped.
     hist = {ZERO_BIN - 40: 40, ZERO_BIN + 10: 10_000, ZERO_BIN + 40: 30}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    assert _trimmed_bin_bounds(per_phase, "activation") == (
+    assert _trimmed_bin_bounds(_phase_hists(per_phase, "activation")) == (
         ZERO_BIN - 40,
         ZERO_BIN + 10,
     )
@@ -385,20 +388,22 @@ def test_trimmed_bin_bounds_pools_phases() -> None:
         "train": _layer_snap("train", hist={ZERO_BIN + 10: 10_000}),
         "val": _layer_snap("val", hist={ZERO_BIN + 80: 5}),
     }
-    assert _trimmed_bin_bounds(per_phase, "activation") == (
+    assert _trimmed_bin_bounds(_phase_hists(per_phase, "activation")) == (
         ZERO_BIN + 10,
         ZERO_BIN + 10,
     )
 
 
 def test_trimmed_bin_bounds_none_when_empty() -> None:
-    assert _trimmed_bin_bounds({}, "activation") is None
+    assert _trimmed_bin_bounds([]) is None
 
 
 def test_linear_x_range_excludes_sparse_outlier_tail() -> None:
     hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    rng = _linear_x_range(per_phase, "activation")
+    rng = _linear_x_range(
+        _trimmed_bin_bounds(_phase_hists(per_phase, "activation"))
+    )
     assert rng is not None
     assert rng[1] < _HIST_EDGES[ZERO_BIN + 80]  # the outlier bin is outside
 
@@ -406,20 +411,24 @@ def test_linear_x_range_excludes_sparse_outlier_tail() -> None:
 def test_log_x_range_brackets_trimmed_bins() -> None:
     hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    rng = _log_x_range(per_phase, "activation")
+    rng = _log_x_range(
+        _trimmed_bin_bounds(_phase_hists(per_phase, "activation"))
+    )
     assert rng is not None
     assert rng[0] < ZERO_BIN + 10 < rng[1]
     assert rng[1] < ZERO_BIN + 80  # the outlier bin is outside
-    assert _log_x_range({}, "activation") is None
+    assert _log_x_range(_trimmed_bin_bounds([])) is None
 
 
 def test_histogram_log_x_zooms_to_trimmed_bins() -> None:
     hist = {ZERO_BIN + 10: 10_000, ZERO_BIN + 80: 5}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=True
     )
-    expected = _log_x_range(per_phase, "activation")
+    expected = _log_x_range(
+        _trimmed_bin_bounds(_phase_hists(per_phase, "activation"))
+    )
     assert expected is not None
     assert tuple(fig.layout.xaxis.range) == tuple(expected)
 
@@ -434,7 +443,10 @@ def test_fill_fraction_full_for_single_bar() -> None:
     heights = _probability_densities(per_phase["train"].activations.hist)
     bounds = (ZERO_BIN + 60, ZERO_BIN + 60)
     frac = _fill_fraction(
-        per_phase, "activation", True, bounds, heights[ZERO_BIN + 60]
+        _phase_hists(per_phase, "activation"),
+        True,
+        bounds,
+        heights[ZERO_BIN + 60],
     )
     assert frac == pytest.approx(1.0)
 
@@ -444,11 +456,12 @@ def test_axis_ranges_keep_base_share_when_plot_is_full() -> None:
     # adaptive loop leaves the base ranges untouched.
     hist = {ZERO_BIN + 60 + i: 100 for i in range(5)}
     per_phase = {"train": _layer_snap("train", hist=hist)}
+    hists = _phase_hists(per_phase, "activation")
     x_range, y_range = axis_ranges(
         per_phase, "activation", log_x=False, log_y=False
     )
-    assert x_range == _linear_x_range(per_phase, "activation")
-    assert y_range == _linear_y_range(per_phase, "activation", density=True)
+    assert x_range == _linear_x_range(_trimmed_bin_bounds(hists))
+    assert y_range == _linear_y_range(hists, density=True)
 
 
 def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
@@ -460,8 +473,9 @@ def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
     hist = {ZERO_BIN: 50_000, ZERO_BIN + 1: 600, ZERO_BIN + 2: 500}
     hist.update({ZERO_BIN + 60 + i: 250 for i in range(40)})
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    base_x = _linear_x_range(per_phase, "activation")
-    base_y = _linear_y_range(per_phase, "activation", density=True)
+    hists = _phase_hists(per_phase, "activation")
+    base_x = _linear_x_range(_trimmed_bin_bounds(hists))
+    base_y = _linear_y_range(hists, density=True)
     x_range, y_range = axis_ranges(
         per_phase, "activation", log_x=False, log_y=False
     )
@@ -480,7 +494,9 @@ def test_axis_ranges_log_y_keeps_base_trim_and_autorange() -> None:
         per_phase, "activation", log_x=False, log_y=True
     )
     assert y_range is None
-    assert x_range == _linear_x_range(per_phase, "activation")
+    assert x_range == _linear_x_range(
+        _trimmed_bin_bounds(_phase_hists(per_phase, "activation"))
+    )
 
 
 def test_axis_ranges_none_when_empty() -> None:
@@ -505,7 +521,7 @@ def test_histogram_stays_linear_even_for_multi_decade_distribution() -> None:
     # The Log x checkbox is authoritative: with it off, even a gradient-like
     # multi-decade distribution renders on the linear value axis (no silent
     # signed-log fallback).
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         _multi_decade_snap(), "activation", "activations", log_x=False
     )
     assert fig.data[0].width is not None  # linear per-bin widths
@@ -519,7 +535,7 @@ def test_histogram_compact_distribution_stays_linear() -> None:
             "train", hist={ZERO_BIN + 60 + i: 100 for i in range(5)}
         )
     }
-    fig = _make_histogram_figure(per_phase, "activation", "activations")
+    fig, _ = _make_histogram_figure(per_phase, "activation", "activations")
     assert fig.layout.yaxis.title.text == "probability density"
     assert fig.layout.xaxis.title.text is None
 
@@ -530,7 +546,7 @@ def test_histogram_compact_distribution_stays_linear() -> None:
 def test_histogram_defaults_to_linear_density_mode() -> None:
     # Log x / Log y start unchecked, so the no-args figure is the density view.
     per_phase = {"train": _layer_snap("train")}
-    fig = _make_histogram_figure(per_phase, "activation", "activations")
+    fig, _ = _make_histogram_figure(per_phase, "activation", "activations")
     assert fig.layout.yaxis.type == "linear"
     assert fig.layout.yaxis.title.text == "probability density"
 
@@ -574,7 +590,7 @@ def test_linear_y_range_clips_bars_holding_under_coverage() -> None:
     hist = {ZERO_BIN: 5, ZERO_BIN + 50: 10_000}
     per_phase = {"train": _layer_snap("train", hist=hist)}
     heights = _probability_densities(per_phase["train"].activations.hist)
-    rng = _linear_y_range(per_phase, "activation", density=True)
+    rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     assert rng[0] == 0.0
     assert rng[1] == pytest.approx(heights[ZERO_BIN + 50] * 1.05)
@@ -588,7 +604,7 @@ def test_linear_y_range_keeps_tall_bars_that_do_not_dominate() -> None:
     hist = {ZERO_BIN + 1: 5_000, ZERO_BIN + 2: 5_000, ZERO_BIN + 50: 100}
     per_phase = {"train": _layer_snap("train", hist=hist)}
     heights = _probability_densities(per_phase["train"].activations.hist)
-    rng = _linear_y_range(per_phase, "activation", density=True)
+    rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     assert rng[1] == pytest.approx(max(heights) * 1.05)
 
@@ -599,7 +615,7 @@ def test_linear_y_range_excludes_dominant_spike_despite_count() -> None:
     hist = {ZERO_BIN: 10_000, ZERO_BIN + 50: 9_000, ZERO_BIN + 51: 1_000}
     per_phase = {"train": _layer_snap("train", hist=hist)}
     heights = _probability_densities(per_phase["train"].activations.hist)
-    rng = _linear_y_range(per_phase, "activation", density=True)
+    rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     assert rng[1] == pytest.approx(heights[ZERO_BIN + 50] * 1.05)
     assert rng[1] < heights[ZERO_BIN]  # the dominant spike clips
@@ -614,7 +630,7 @@ def test_linear_y_range_dominance_is_per_phase() -> None:
     }
     train_heights = _probability_densities(per_phase["train"].activations.hist)
     val_heights = _probability_densities(per_phase["val"].activations.hist)
-    rng = _linear_y_range(per_phase, "activation", density=True)
+    rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     expected_cap = max(train_heights[ZERO_BIN + 30], val_heights[ZERO_BIN + 40])
     assert rng[1] == pytest.approx(expected_cap * 1.05)
@@ -631,7 +647,7 @@ def test_linear_y_range_pools_phases_weighted_by_count() -> None:
     }
     train_heights = _probability_densities(per_phase["train"].activations.hist)
     val_heights = _probability_densities(per_phase["val"].activations.hist)
-    rng = _linear_y_range(per_phase, "activation", density=True)
+    rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     expected_cap = max(train_heights[ZERO_BIN + 30], val_heights[ZERO_BIN + 40])
     assert rng[1] == pytest.approx(expected_cap * 1.05)
@@ -639,13 +655,13 @@ def test_linear_y_range_pools_phases_weighted_by_count() -> None:
 
 
 def test_linear_y_range_none_when_empty() -> None:
-    assert _linear_y_range({}, "activation", density=True) is None
+    assert _linear_y_range([], density=True) is None
 
 
 def test_histogram_density_mode_plots_probability_density_with_capped_axis() -> None:
     hist = {ZERO_BIN: 50, ZERO_BIN + 10: 7}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False, log_y=False
     )
     trace = fig.data[0]
@@ -654,7 +670,9 @@ def test_histogram_density_mode_plots_probability_density_with_capped_axis() -> 
     # Raw counts ride along for the hover text.
     assert trace.customdata[ZERO_BIN] == 50
     assert fig.layout.yaxis.title.text == "probability density"
-    expected_range = _linear_y_range(per_phase, "activation", density=True)
+    expected_range = _linear_y_range(
+        _phase_hists(per_phase, "activation"), density=True
+    )
     assert expected_range is not None
     assert tuple(fig.layout.yaxis.range) == tuple(expected_range)
 
@@ -664,7 +682,7 @@ def test_histogram_log_y_keeps_density_but_drops_range_cap() -> None:
     # densities, but the cap (a linear-space range) gives way to autorange
     # so all of the data is visible on the log scale.
     per_phase = {"train": _layer_snap("train", n=9)}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False, log_y=True
     )
     expected = _probability_densities(per_phase["train"].activations.hist)
@@ -676,7 +694,7 @@ def test_histogram_log_y_keeps_density_but_drops_range_cap() -> None:
 @pytest.mark.parametrize("log_y", [True, False])
 def test_histogram_log_x_plots_probabilities(log_y: bool) -> None:
     per_phase = {"train": _layer_snap("train", n=9)}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=True, log_y=log_y
     )
     assert fig.data[0].y[ZERO_BIN] == pytest.approx(1.0)
@@ -695,7 +713,7 @@ def test_histogram_log_x_linear_y_excludes_dominant_probability_spike() -> None:
     # like in density mode: the cap lands on the tallest non-dominant bar.
     hist = {ZERO_BIN: 5_000, ZERO_BIN + 50: 600, ZERO_BIN + 51: 500}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=True, log_y=False
     )
     probs = _probabilities(per_phase["train"].activations.hist)
@@ -710,7 +728,7 @@ def test_histogram_log_x_linear_y_excludes_dominant_probability_spike() -> None:
 
 def test_histogram_one_subplot_row_per_phase() -> None:
     per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val", epoch=1)}
-    fig = _make_histogram_figure(per_phase, "activation", "activations")
+    fig, _ = _make_histogram_figure(per_phase, "activation", "activations")
     assert [t.name for t in fig.data] == ["train (ep 0)", "val (ep 1)"]
     # Each phase draws alone in its own stacked row: full opacity, no
     # overlay, separate y-axes.
@@ -726,8 +744,10 @@ def test_histogram_one_subplot_row_per_phase() -> None:
 
 def test_histogram_rows_share_the_capped_y_range() -> None:
     per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val")}
-    fig = _make_histogram_figure(per_phase, "activation", "activations")
-    expected = _linear_y_range(per_phase, "activation", density=True)
+    fig, _ = _make_histogram_figure(per_phase, "activation", "activations")
+    expected = _linear_y_range(
+        _phase_hists(per_phase, "activation"), density=True
+    )
     assert expected is not None
     assert tuple(fig.layout.yaxis.range) == tuple(expected)
     assert tuple(fig.layout.yaxis2.range) == tuple(expected)
@@ -736,7 +756,8 @@ def test_histogram_rows_share_the_capped_y_range() -> None:
 def test_figure_payload_carries_plotly_config() -> None:
     # Autoscale would land on a different scale than the capped initial
     # render, so it's removed; double-click resets to the built ranges.
-    payload = _figure_payload(_make_histogram_figure({}, "activation", "a"))
+    fig, _ = _make_histogram_figure({}, "activation", "a")
+    payload = _figure_payload(fig)
     assert set(payload) >= {"data", "layout", "config"}
     assert payload["config"] is _PLOTLY_CONFIG
     assert _PLOTLY_CONFIG["modeBarButtonsToRemove"] == ["autoScale2d"]
@@ -781,10 +802,10 @@ def test_stats_table_escapes_phase_names() -> None:
 
 def test_histogram_height_scales_with_phase_rows() -> None:
     assert _PLOT_HEIGHT == 440  # 2x the original 220, now per phase row
-    fig = _make_histogram_figure({}, "activation", "activations")
+    fig, _ = _make_histogram_figure({}, "activation", "activations")
     assert fig.layout.height == _PLOT_HEIGHT
     two = {"train": _layer_snap("train"), "val": _layer_snap("val")}
-    fig = _make_histogram_figure(two, "activation", "activations")
+    fig, _ = _make_histogram_figure(two, "activation", "activations")
     assert fig.layout.height == 2 * _PLOT_HEIGHT
 
 
@@ -1222,7 +1243,7 @@ def test_patch_grids_html_adds_heat_legend_when_enabled() -> None:
 def test_log_x_hover_shows_bin_value_not_index() -> None:
     hist = {ZERO_BIN: 5, ZERO_BIN + 1 + 9 * 7: 4}  # zero band + the 1.0 decade
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=True
     )
     hover = fig.data[0].hovertemplate
@@ -1238,7 +1259,7 @@ def test_log_x_hover_shows_bin_value_not_index() -> None:
 
 def test_linear_hover_keeps_value_from_bar_position() -> None:
     per_phase = {"train": _layer_snap("train", n=9)}
-    fig = _make_histogram_figure(
+    fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False
     )
     assert "value %{x:.2e}" in fig.data[0].hovertemplate
