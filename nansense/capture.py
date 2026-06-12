@@ -183,17 +183,62 @@ def _patch_forward(session: Session) -> None:
     # Stash whatever .forward currently resolves to so we can put it back,
     # remembering whether it was an instance attribute or a class method.
     session._had_instance_forward = "forward" in session.model.__dict__
-    session._original_forward = session.model.forward
+    original_forward = session.model.forward
+    session._original_forward = original_forward
     graph = session._fx_graph
     capture = session._activations
     assert graph is not None
 
-    def fx_forward(*args: Tensor) -> object:
-        # fx.Interpreter.run takes positional args matched to placeholder
-        # order; kwargs aren't passed through.
-        return _CaptureInterpreter(graph, capture).run(*args)
+    # fx.Interpreter.run takes positional args matched to placeholder order;
+    # it doesn't accept keyword arguments. A model called with kwargs (e.g.
+    # `model(x=batch)`, common for NLP-shaped forwards) would otherwise raise
+    # on the first captured batch. We introspect the real forward signature so
+    # we can normalize any args/kwargs back to positional placeholder order.
+    sig = _forward_signature(original_forward)
+
+    def fx_forward(*args: Tensor, **kwargs: object) -> object:
+        positional = _ordered_positional(sig, args, kwargs)
+        return _CaptureInterpreter(graph, capture).run(*positional)
 
     object.__setattr__(session.model, "forward", fx_forward)
+
+
+def _forward_signature(forward: Callable[..., object]) -> inspect.Signature | None:
+    """Signature of the model's bound forward, or None if uninspectable.
+
+    Returning None falls back to the legacy positional-only path (a C-level
+    or otherwise un-introspectable callable), matching prior behavior.
+    """
+    try:
+        return inspect.signature(forward)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ordered_positional(
+    sig: inspect.Signature | None,
+    args: tuple[Tensor, ...],
+    kwargs: dict[str, object],
+) -> tuple[object, ...]:
+    """Normalize a call's args/kwargs to fx placeholder (positional) order.
+
+    fx GraphModule placeholders correspond to the forward parameters in
+    declaration order, so binding the call against the real forward signature
+    and reading the bound arguments back out in order reconstructs exactly the
+    positional sequence the interpreter expects. The common positional-only
+    call path stays identical: with no kwargs (and no signature) we pass the
+    args straight through.
+    """
+    if not kwargs:
+        return args
+    if sig is None:
+        # Un-introspectable forward called with kwargs: best effort is the
+        # legacy positional behavior (the interpreter will raise a clear error
+        # if the placeholders don't line up).
+        return args
+    bound = sig.bind(*args, **kwargs)
+    bound.apply_defaults()
+    return tuple(bound.arguments.values())
 
 
 def _unpatch_forward(session: Session) -> None:

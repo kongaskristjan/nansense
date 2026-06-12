@@ -126,6 +126,82 @@ def test_fx_mode_restores_original_forward_after_batch() -> None:
     assert "forward" not in model.__dict__
 
 
+def test_fx_mode_captures_keyword_argument_call() -> None:
+    """A model called with a keyword arg (`model(x=batch)`) still captures.
+
+    The fx interpreter takes positional args matched to placeholder order, so
+    the patched forward must normalize kwargs back to that order rather than
+    raising `TypeError: fx_forward() got an unexpected keyword argument`.
+    """
+
+    class Tiny(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fc = nn.Linear(4, 2)
+
+        def forward(self, x: Tensor) -> Tensor:
+            return torch.relu(self.fc(x))
+
+    model = Tiny()
+    session = nansense.start(model, epochs=1, phases={"train": 1})
+    assert session.fx_traced
+
+    x = torch.randn(2, 4)
+    captured: dict[str, Tensor] = {}
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            model.zero_grad(set_to_none=True)
+            out = model(x=x)  # keyword call: the bug crashed here on batch 0
+            captured["out"] = out
+            out.sum().backward()
+
+    with paused_worker(session, loop):
+        snap = session.snapshot
+        assert snap is not None
+        assert "relu" in snap.activations
+        assert "fc" in snap.activations
+        # The captured output matches the model's true (unpatched) forward.
+        with torch.no_grad():
+            expected = torch.relu(model.fc(x))
+        assert torch.allclose(captured["out"], expected)
+
+
+def test_fx_mode_positional_call_still_captures() -> None:
+    """Regression: the common positional call path is unchanged by the
+    kwargs-normalization fix (output and activations both populate)."""
+
+    class Tiny(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fc = nn.Linear(4, 2)
+
+        def forward(self, x: Tensor) -> Tensor:
+            return torch.relu(self.fc(x))
+
+    model = Tiny()
+    session = nansense.start(model, epochs=1, phases={"train": 1})
+    assert session.fx_traced
+
+    x = torch.randn(2, 4)
+    captured: dict[str, Tensor] = {}
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            model.zero_grad(set_to_none=True)
+            out = model(x)  # plain positional call
+            captured["out"] = out
+            out.sum().backward()
+
+    with paused_worker(session, loop):
+        snap = session.snapshot
+        assert snap is not None
+        assert "relu" in snap.activations
+        with torch.no_grad():
+            expected = torch.relu(model.fc(x))
+        assert torch.allclose(captured["out"], expected)
+
+
 def test_fx_failure_falls_back_to_hooks() -> None:
     session = nansense.start(DynamicNet(), epochs=1, phases={"train": 1})
     assert not session.fx_traced
