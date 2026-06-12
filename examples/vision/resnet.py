@@ -124,13 +124,3 @@ class PreActResNet(nn.Module):
         x = self.pool(x).flatten(1)
         return self.fc(x)
 
-
-def resnet20(num_classes: int = 10) -> PreActResNet:
-    return PreActResNet(num_classes=num_classes, blocks_per_stage=3)
-
-
-def resnet_deep(num_classes: int = 10, blocks_per_stage: int = 3) -> PreActResNet:
-    """Five-stage variant: two more downsampling stages, up to 256 channels."""
-    return PreActResNet(
-        num_classes=num_classes, blocks_per_stage=blocks_per_stage, num_stages=5
-    )

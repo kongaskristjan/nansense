@@ -40,25 +40,6 @@ def _autocast(device: torch.device, amp_dtype: torch.dtype | None) -> Iterator[N
         yield
 
 
-def _batches(
-    session: Session | None,
-    loader: DataLoader,
-    *,
-    phase: str,
-    epoch: int,
-) -> Iterator[tuple[Tensor, Tensor]]:
-    """Iterate `loader`, wrapped in `session.batches` when a session is given.
-
-    The loop body runs inside the session's batch context (the generator is
-    suspended there), so hooks are installed before the forward pass and a
-    time-travel jump surfaces from the `for` statement, not mid-body.
-    """
-    if session is None:
-        yield from loader
-        return
-    yield from session.batches(loader, phase=phase, epoch=epoch)
-
-
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -67,14 +48,18 @@ def train_one_epoch(
     device: torch.device,
     amp_dtype: torch.dtype | None = None,
     *,
-    session: Session | None = None,
+    session: Session,
     epoch: int = 0,
 ) -> EpochStats:
+    """One training epoch under `session.batches` (a disabled session is the
+    no-branching off switch — the loop body runs inside the batch context
+    either way, so hooks install before the forward pass and a time-travel
+    jump surfaces from the `for` statement, not mid-body)."""
     model.train()
     total_loss = 0.0
     total_acc = 0.0
     n_batches = 0
-    for inputs, targets in _batches(session, loader, phase="train", epoch=epoch):
+    for inputs, targets in session.batches(loader, phase="train", epoch=epoch):
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
@@ -100,14 +85,14 @@ def evaluate(
     device: torch.device,
     amp_dtype: torch.dtype | None = None,
     *,
-    session: Session | None = None,
+    session: Session,
     epoch: int = 0,
 ) -> EpochStats:
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
-    for inputs, targets in _batches(session, loader, phase="val", epoch=epoch):
+    for inputs, targets in session.batches(loader, phase="val", epoch=epoch):
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 

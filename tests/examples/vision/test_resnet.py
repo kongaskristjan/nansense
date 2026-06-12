@@ -6,7 +6,8 @@ import pytest
 import torch
 from torch import nn
 
-from examples.vision.resnet import PreActBlock, PreActResNet, resnet20, resnet_deep
+import nansense
+from examples.vision.resnet import PreActBlock, PreActResNet
 from examples.common import evaluate, train_one_epoch
 
 
@@ -51,7 +52,7 @@ def test_resnet_forward_shape(blocks_per_stage: int) -> None:
 
 
 def test_resnet20_param_count() -> None:
-    model = resnet20()
+    model = PreActResNet()  # the defaults are exactly ResNet-20
     n_params = sum(p.numel() for p in model.parameters())
     assert 250_000 < n_params < 300_000
 
@@ -76,7 +77,7 @@ def test_resnet_stage_layout(
 
 @pytest.mark.parametrize("image_size", [32, 128])
 def test_resnet_deep_forward_shape(image_size: int) -> None:
-    model = resnet_deep(num_classes=10, blocks_per_stage=1)
+    model = PreActResNet(num_classes=10, blocks_per_stage=1, num_stages=5)
     x = torch.randn(2, 3, image_size, image_size)
     assert model(x).shape == (2, 10)
 
@@ -126,9 +127,18 @@ def test_train_and_eval_loops_run(amp_dtype: torch.dtype | None) -> None:
     targets = torch.randint(0, 10, (16,))
     dataset = torch.utils.data.TensorDataset(inputs, targets)
     loader = torch.utils.data.DataLoader(dataset, batch_size=4)
+    # A disabled session is the loops' no-op off switch, exactly as in main().
+    session = nansense.start(
+        model, epochs=1, phases={"train": 4, "val": 4}, enabled=False
+    )
 
-    train_stats = train_one_epoch(model, loader, optimizer, criterion, device, amp_dtype=amp_dtype)
-    eval_stats = evaluate(model, loader, criterion, device, amp_dtype=amp_dtype)
+    train_stats = train_one_epoch(
+        model, loader, optimizer, criterion, device, amp_dtype=amp_dtype, session=session
+    )
+    eval_stats = evaluate(
+        model, loader, criterion, device, amp_dtype=amp_dtype, session=session
+    )
+    session.close()
 
     assert 0.0 <= train_stats.accuracy <= 1.0
     assert 0.0 <= eval_stats.accuracy <= 1.0

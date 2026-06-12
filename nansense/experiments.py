@@ -316,18 +316,7 @@ def run_experiment_guarded(session: Session, request: ExperimentRequest) -> None
         for partial in run(session, request, should_abort):
             _publish_experiment(session, partial)
     except Exception as e:  # noqa: BLE001 — surfaced via the result
-        _publish_experiment(
-            session,
-            ExperimentResult(
-                seq=request.seq,
-                kind=request.kind,
-                layer=request.layer,
-                step=0,
-                total_steps=0,
-                done=True,
-                error=f"{type(e).__name__}: {e}",
-            ),
-        )
+        _publish_experiment(session, _error(request, f"{type(e).__name__}: {e}"))
     finally:
         with session._cv:
             session._experiment_running = None

@@ -106,6 +106,3 @@ class SimpleViT(nn.Module):
         x = x.mean(dim=1)  # global average pool over tokens
         return self.head(x)
 
-
-def vit_tiny(image_size: int, patch_size: int, num_classes: int = 10) -> SimpleViT:
-    return SimpleViT(image_size=image_size, patch_size=patch_size, num_classes=num_classes)
