@@ -16,6 +16,7 @@ from nansense.watch import (
     ZERO_BIN,
     TensorAccumulator,
     WatchAccumulator,
+    _bin_indices,
     bin_index,
     bin_midpoint,
     histogram_edges,
@@ -69,6 +70,44 @@ def test_powers_of_ten_are_bin_edges() -> None:
 )
 def test_bin_index(value: float, expected_bin: int) -> None:
     assert bin_index(value) == expected_bin
+
+
+_BIN_INDEX_VALUES: list[float] = [
+    0.0,
+    1e-15,
+    -1e-15,
+    1e-9,
+    -1e-9,
+    1.0,
+    -1.0,
+    1e6,
+    -1e6,
+    1e10,
+    -1e10,
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+]
+
+
+@pytest.mark.parametrize("value", _BIN_INDEX_VALUES)
+def test_bin_indices_matches_scalar_bin_index(value: float) -> None:
+    """The vectorised binning agrees with the scalar reference everywhere,
+    including the non-finite cases (nan → zero bin, ±inf → overflow ends)."""
+    idx = _bin_indices(torch.tensor([value], dtype=torch.float32))
+    assert int(idx[0]) == bin_index(value)
+
+
+def test_bin_indices_mixed_tensor_matches_scalar() -> None:
+    """A tensor mixing finite and non-finite values bins element-wise like
+    the scalar reference — in particular nan/+inf/-inf are not misbinned into
+    the near-zero bins."""
+    values = _BIN_INDEX_VALUES
+    idx = _bin_indices(torch.tensor(values, dtype=torch.float32)).tolist()
+    assert idx == [bin_index(v) for v in values]
+    # The specific regression: nan and ±inf must land in 105/210/0, not the
+    # 104/106 bins flanking zero.
+    assert idx[-3:] == [ZERO_BIN, N_BINS - 1, 0]
 
 
 def test_bin_midpoint_zero_and_overflow() -> None:
@@ -147,6 +186,38 @@ def test_overflow_values_land_in_extreme_bins() -> None:
     snap = acc.snapshot()
     assert snap.hist[N_BINS - 1] == 1  # extreme positive
     assert snap.hist[0] == 1  # extreme negative
+
+
+def test_diverged_activation_lands_in_overflow_and_zero_bins() -> None:
+    """A diverged activation (inf and nan) must spike the overflow/zero bins,
+    not the near-zero bins — the whole point of a tool named 'nansense'."""
+    acc = TensorAccumulator()
+    acc.update(torch.tensor([float("inf"), float("-inf"), float("nan")]))
+    snap = acc.snapshot()
+    assert snap.hist[N_BINS - 1] == 1  # +inf → top overflow
+    assert snap.hist[0] == 1  # -inf → bottom overflow
+    assert snap.hist[ZERO_BIN] == 1  # nan → zero band
+    # Nothing leaked into the bins flanking zero (the pre-fix misbinning).
+    assert snap.hist[ZERO_BIN - 1] == 0
+    assert snap.hist[ZERO_BIN + 1] == 0
+
+
+def test_watch_accumulator_diverged_activation_lands_in_overflow_bins() -> None:
+    """The same divergence routed through WatchAccumulator's per-channel path
+    bins each non-finite element into the overflow/zero bins."""
+    acc = WatchAccumulator()
+    # (B=2, C=1, H=2, W=1): inf, -inf, nan, and a finite value.
+    x = torch.tensor([float("inf"), float("-inf"), float("nan"), 1.0]).reshape(2, 1, 2, 1)
+    acc.update(layer="a", phase="train", epoch=0, kind="activation", x=x)
+    act = acc.snapshot().stats[("a", "train", 0)].activations
+    assert act.hist[N_BINS - 1] == 1
+    assert act.hist[0] == 1
+    assert act.hist[ZERO_BIN] == 1
+    assert act.hist[ZERO_BIN - 1] == 0
+    assert act.hist[ZERO_BIN + 1] == 0
+    # The per-channel row mirrors the universal histogram for the lone channel.
+    assert act.channel_hists is not None
+    assert tuple(act.channel_hists[0]) == act.hist
 
 
 def test_watch_accumulator_separates_layers_and_phases_and_epochs() -> None:

@@ -91,7 +91,14 @@ def bin_index(value: float) -> int:
 
 
 def _bin_indices(x: Tensor) -> Tensor:
-    """Vectorised version of `bin_index` for a flat fp32 tensor."""
+    """Vectorised version of `bin_index` for a flat fp32 tensor.
+
+    Non-finite inputs are mapped exactly as `bin_index` does: `nan` to the
+    zero bin, `+inf` to the top overflow bin, `-inf` to the bottom one. The
+    finite path is computed unconditionally (`log10` of inf/nan underflows
+    on `.long()`, but those lanes are overwritten below), so finite values
+    are unaffected.
+    """
     abs_x = x.abs()
     in_zero = abs_x < _SMALLEST_POSITIVE
     # `clamp_min` keeps log10 finite for zero/subnormal inputs; those are
@@ -102,7 +109,11 @@ def _bin_indices(x: Tensor) -> Tensor:
     neg_idx = ZERO_BIN - 1 - pos
     idx = torch.where(x >= 0, pos_idx, neg_idx)
     zero = torch.full_like(idx, ZERO_BIN)
-    return torch.where(in_zero, zero, idx)
+    idx = torch.where(in_zero, zero, idx)
+    # Overwrite non-finite lanes, whose finite-path indices are garbage.
+    idx = torch.where(torch.isnan(x), zero, idx)
+    idx = torch.where(torch.isposinf(x), torch.full_like(idx, N_BINS - 1), idx)
+    return torch.where(torch.isneginf(x), torch.zeros_like(idx), idx)
 
 
 @dataclass(frozen=True)
