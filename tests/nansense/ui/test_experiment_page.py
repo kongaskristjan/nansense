@@ -1,0 +1,33 @@
+"""Tests for experiment parameter specs and layer-channel helpers in nansense.ui.experiment_page."""
+
+from __future__ import annotations
+
+import torch
+
+from tests.nansense.helpers import _frame_snapshot
+
+
+def test_experiment_params_cover_every_kind() -> None:
+    from nansense.experiments import EXPERIMENT_KINDS
+    from nansense.ui.experiment_page import _EXPERIMENT_PARAMS
+
+    assert set(_EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
+    for kind, specs in _EXPERIMENT_PARAMS.items():
+        assert specs, kind  # every experiment exposes at least one knob
+        for spec in specs:
+            assert spec.kind in ("int", "float", "bool", "select"), spec.key
+            if spec.kind == "select":
+                assert spec.options and spec.default in spec.options, spec.key
+            if spec.kind in ("int", "float"):
+                assert isinstance(spec.default, (int, float)), spec.key
+
+
+def test_layer_channel_count_reads_snapshot_activation() -> None:
+    from nansense.ui.experiment_page import _layer_channel_count
+
+    snap = _frame_snapshot()
+    snap.activations["vec"] = torch.rand(5)  # channel-less activation
+    assert _layer_channel_count(snap, "conv") == 2
+    assert _layer_channel_count(snap, "vec") is None
+    assert _layer_channel_count(snap, "missing") is None
+    assert _layer_channel_count(None, "conv") is None
