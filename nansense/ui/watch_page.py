@@ -1014,7 +1014,7 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) ->
         if grid.heat_legend is not None
         else "<div></div>"
     )
-    axis_cls = "text-[10px] font-mono text-slate-400"
+    axis_cls = "text-[15px] font-mono text-slate-600"
     return (
         '<div class="flex flex-col gap-0.5 w-full">'
         '<div class="text-base font-bold uppercase tracking-widest '
