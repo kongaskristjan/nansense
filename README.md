@@ -188,9 +188,13 @@ clicking a node toggles that layer's card in the center pane — visible is
 synonymous with watched, so each shown card carries activation and gradient
 strips for the selected sample plus an "Unwatch" button that hides it
 again. The center pane starts empty and only visible layers are rendered
-and sent to the browser, which keeps large models responsive. The top-bar
-eye menu jumps to watched layers, watches all layers at once (behind a
-performance warning), or clears every watch.
+and sent to the browser, which keeps large models responsive. Hovering a
+diagram node or a card header shows the layer's hyperparameters in a
+tooltip — `Conv2d(3, 64, kernel_size=(3, 3), stride=(2, 2), ...)` — built
+from each module's `extra_repr()` (custom modules can override it to
+surface their own knobs) or, for functional ops, the call's literal
+arguments. The top-bar eye menu jumps to watched layers, watches all
+layers at once (behind a performance warning), or clears every watch.
 
 The right "Input Selection" pane shows the input image and sample picker.
 "Pin batch" freezes the current batch as a probe input that is re-run on

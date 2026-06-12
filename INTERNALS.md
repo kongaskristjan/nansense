@@ -145,6 +145,18 @@ it. In the hook fallback a module maps to every parameter in its subtree
 the output the forward hook captured. For ResNet-20 every one of the 61
 parameters is covered by a `call_module` node.
 
+`Session.layer_info` is the third construction-time map — `layer name ->
+hyperparameter string`, keyed identically. Module layers carry their
+`print(model)`-style signature built from `extra_repr()` (PyTorch's
+universal hyperparameter surface — `Conv2d(3, 64, kernel_size=(3, 3),
+...)`; custom modules override `extra_repr` to join in), fx
+function/method ops carry their literal non-tensor call arguments
+(`max_pool2d(2, stride=None, ...)`), and layers with nothing to report
+(graph inputs, `relu`, `add`, …) map to `""`. The main page publishes the
+non-empty entries to the browser as a slug-keyed JS map
+(`_layer_info_script`) and a cursor-following tooltip div in the shared
+static JS shows them while hovering a diagram node or a card header.
+
 At `__exit__`:
 
 1. `capture.remove_hooks()` removes every registered hook.
@@ -768,7 +780,10 @@ imports only those, never page modules.
   static module-hierarchy tree rooted at a synthetic `root` node. Nodes
   use different Mermaid shapes per fx op (rectangles for `call_module`,
   ovals/stadiums for `call_function` / `call_method`, circles for
-  `placeholder` / `output`).
+  `placeholder` / `output`). Hovering a node (or a layer card's header)
+  shows the layer's `Session.layer_info` hyperparameter string in a
+  cursor-following tooltip (the layer-info block in `static.py`, fed by
+  the slug-keyed map `_layer_info_script` publishes).
 - `nansense.ui.render.render_strip(tensor, sample_idx)` turns per-layer
   CPU tensors into a `StripRender`: one data image at the tensor's
   *native* resolution plus a legend image at display resolution.

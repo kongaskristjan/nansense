@@ -5,9 +5,10 @@ user's model, in three groups:
 
 - **Construction-time discovery.** `try_trace` attempts the up-front
   `fx.symbolic_trace`; `compute_input_names` / `compute_layer_names` /
-  `compute_layer_weights` derive the stable name universe the UI indexes
-  into (graph inputs, module outputs, fx intermediates, and the
-  layer -> parameter-names map).
+  `compute_layer_weights` / `compute_layer_info` derive the stable name
+  universe the UI indexes into (graph inputs, module outputs, fx
+  intermediates, the layer -> parameter-names map, and the per-layer
+  hyperparameter strings).
 
 - **Per-batch capture.** `install_hooks` / `remove_hooks` arm one batch's
   capture into `session._activations`: in fx mode by monkey-patching
@@ -38,7 +39,7 @@ import torch
 from torch import Tensor, fx, nn
 from torch.optim import Optimizer
 
-from nansense.fx_names import friendly_names
+from nansense.fx_names import _op_base, friendly_names
 
 if TYPE_CHECKING:
     from nansense.session import Session
@@ -102,6 +103,81 @@ def _fx_layer_weights(
                 used.add(str(inp.target))
         result[names[node]] = sorted(used)
     return result
+
+
+def compute_layer_info(
+    fx_graph: fx.GraphModule | None, model: nn.Module, input_names: list[str]
+) -> dict[str, str]:
+    """Human-readable hyperparameter string per layer name ("" when none).
+
+    Module layers report their `print(model)`-style signature —
+    `ClassName(extra_repr())`, e.g. `Conv2d(3, 64, kernel_size=(3, 3), ...)`.
+    `extra_repr` is PyTorch's universal hyperparameter surface: every
+    built-in layer implements it and custom modules override it to join in.
+    fx function/method ops report their literal (non-tensor) call arguments
+    instead — `max_pool2d(2, stride=None, ...)`; ops whose inputs are all
+    tensors (`relu`, `add`) and graph inputs have nothing to show and map
+    to "". Keys match `compute_layer_names`.
+    """
+    if fx_graph is not None:
+        return _fx_layer_info(fx_graph, model)
+    result = {name: "" for name in input_names}
+    for name, module in model.named_modules():
+        if module is not model:
+            result[name] = _module_info(module)
+    return result
+
+
+def _module_info(module: nn.Module) -> str:
+    # Containers and custom modules may produce multi-line extra_reprs;
+    # collapse the whitespace so the info string stays a single line.
+    extra = " ".join(module.extra_repr().split())
+    return f"{type(module).__name__}({extra})"
+
+
+def _fx_layer_info(fx_graph: fx.GraphModule, model: nn.Module) -> dict[str, str]:
+    names = friendly_names(fx_graph.graph)
+    result: dict[str, str] = {}
+    for node in fx_graph.graph.nodes:
+        if node.op == "output":
+            continue
+        if node.op == "call_module":
+            result[names[node]] = _module_info(
+                model.get_submodule(str(node.target))
+            )
+        elif node.op in ("call_function", "call_method"):
+            result[names[node]] = _fx_call_info(node)
+        else:
+            result[names[node]] = ""
+    return result
+
+
+def _fx_call_info(node: fx.Node) -> str:
+    """Literal-argument signature of a function/method node ("" when none).
+
+    Tensor inputs are data flow, not hyperparameters, so any argument that
+    contains an `fx.Node` is dropped; what remains are the call's literal
+    knobs (`kernel_size`, `stride`, a flatten dim, ...).
+    """
+    parts = [repr(a) for a in node.args if not _contains_fx_node(a)]
+    parts += [
+        f"{key}={value!r}"
+        for key, value in node.kwargs.items()
+        if not _contains_fx_node(value)
+    ]
+    if not parts:
+        return ""
+    return f"{_op_base(node)}({', '.join(parts)})"
+
+
+def _contains_fx_node(value: object) -> bool:
+    if isinstance(value, fx.Node):
+        return True
+    if isinstance(value, (list, tuple)):
+        return any(_contains_fx_node(v) for v in value)
+    if isinstance(value, dict):
+        return any(_contains_fx_node(v) for v in value.values())
+    return False
 
 
 def _hook_layer_weights(
