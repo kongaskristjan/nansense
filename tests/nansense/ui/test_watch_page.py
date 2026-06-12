@@ -90,6 +90,17 @@ def test_patch_grids_html_placeholder_without_patches() -> None:
     )
 
 
+def test_patch_grids_html_labels_axes() -> None:
+    # The fixture activations have 2 channels; the caption shows the count.
+    per_phase = {"train": _layer_snap_with_patches("train")}
+    html = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
+    )
+    assert "2 channels &rarr;" in html
+    assert "top samples (best first) &rarr;" in html
+    assert "writing-mode:vertical-rl" in html
+
+
 def test_patch_grids_signature_tracks_toggles_and_values() -> None:
     per_phase = {"train": _layer_snap_with_patches("train")}
     base = _patch_grids_signature(per_phase, list(PATCH_TYPES), False)

@@ -982,7 +982,13 @@ def _patch_grids_html(
             grid = render_patch_grid(tp, mean=mean, std=std, heatmap=heatmap)
             if grid is None:
                 continue
-            rows.append(_patch_grid_row_html(_PATCH_TYPE_LABELS[ptype], grid))
+            rows.append(
+                _patch_grid_row_html(
+                    _PATCH_TYPE_LABELS[ptype],
+                    grid,
+                    channels=tp.values.shape[0],
+                )
+            )
         if not rows:
             continue
         color = phase_color(phase, i)
@@ -996,28 +1002,40 @@ def _patch_grids_html(
     return '<div class="flex flex-col gap-4 w-full">' + "".join(blocks) + "</div>"
 
 
-def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
+def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) -> str:
     """One labeled grid: channels as columns, top samples as rows.
 
-    With the heatmap enabled the grid is flanked by its crisp
-    display-resolution colorbar (the overlay's `±vmax` scale), which sits
-    outside the scroll container so it stays visible on wide grids.
+    The axes are labeled explicitly: a "N channels" caption runs along
+    the grid's top edge and a rotated "top samples (best first)" caption
+    down its left edge, aligned by a CSS grid whose first row holds only
+    the caption. With the heatmap enabled the second row also starts with
+    the crisp display-resolution colorbar (the overlay's `±vmax` scale),
+    which sits outside the scroll container so it stays visible on wide
+    grids; without it that auto column collapses to zero width.
     `max-width:none` opts the images out of the preflight `max-width:100%`
     so wide grids scroll horizontally instead of being squashed.
     """
     legend = (
         f'<img src="{_b64_img_src(grid.heat_legend)}" '
-        'style="display:block; flex:none; max-width:none;" />'
+        'style="display:block; max-width:none;" />'
         if grid.heat_legend is not None
-        else ""
+        else "<div></div>"
     )
+    axis_cls = "text-[10px] font-mono text-slate-400"
     return (
         '<div class="flex flex-col gap-0.5 w-full">'
         '<div class="text-base font-bold uppercase tracking-widest '
         f'text-slate-800 font-mono">{label}</div>'
-        '<div style="display:flex; align-items:flex-start;" class="w-full">'
+        '<div class="w-full" style="display:grid; '
+        'grid-template-columns:auto auto minmax(0,1fr); '
+        'align-items:start;">'
+        "<div></div><div></div>"
+        f'<div class="{axis_cls}">{channels} channels &rarr;</div>'
         f"{legend}"
-        '<div class="overflow-x-auto" style="flex:1; min-width:0;">'
+        f'<div class="{axis_cls}" '
+        'style="writing-mode:vertical-rl; padding-right:3px;">'
+        "top samples (best first) &rarr;</div>"
+        '<div class="overflow-x-auto">'
         f'<img src="{_b64_img_src(grid.image, mime=grid.mime)}" '
         f'style="width:{grid.width}px; height:{grid.height}px; '
         'image-rendering:pixelated; display:block; max-width:none;" '
