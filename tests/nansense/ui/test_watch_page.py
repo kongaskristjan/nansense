@@ -99,6 +99,7 @@ def test_patch_grids_html_labels_axes() -> None:
     assert "2 channels &rarr;" in html
     assert "top samples (best first) &rarr;" in html
     assert "writing-mode:vertical-rl" in html
+    assert "text-[15px] font-mono text-slate-600" in html
 
 
 def test_patch_grids_signature_tracks_toggles_and_values() -> None:

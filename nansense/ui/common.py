@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable, Sequence
+from typing import Literal
 
 from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
 
 from nansense.session import Session
 from nansense.ui.render import StripRender, image_mime
-from nansense.ui.static import _STRIP_CHECKERBOARD_STYLE
+from nansense.ui.static import (
+    _PANEL_RESIZE_CSS,
+    _PANEL_RESIZE_JS,
+    _STRIP_CHECKERBOARD_STYLE,
+)
 
 
 def _page_scaffold(title: str = "") -> None:
@@ -25,6 +30,39 @@ def _page_scaffold(title: str = "") -> None:
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-hidden")
+
+
+def _install_panel_resize() -> None:
+    """Ship the pane-resize CSS/JS; call once per page that uses handles."""
+    ui.add_head_html(_PANEL_RESIZE_CSS)
+    ui.add_body_html(_PANEL_RESIZE_JS)
+
+
+def _resizable_pane_props(key: str) -> str:
+    """Props marking a side pane as the resize target for `key`.
+
+    The matching `_resize_handle(key, ...)` drags this pane's width; the
+    pane keeps its Tailwind width class as the default size.
+    """
+    return f'data-resize-pane="{key}"'
+
+
+def _resize_handle(key: str, side: Literal["left", "right"]) -> ui.element:
+    """Drag handle resizing the side pane marked with `_resizable_pane_props`.
+
+    Created between the pane and the center content, in DOM order (after a
+    left pane, before a right pane). `side` is the edge of the view the
+    pane sits on — it decides which drag direction grows the pane. Widths
+    persist in sessionStorage for the rest of the browser session; a
+    double-click resets to the default width. Requires
+    `_install_panel_resize()` on the page.
+    """
+    return (
+        ui.element("div")
+        .classes("nansense-resize-handle")
+        .props(f'data-resize-key="{key}" data-resize-side="{side}"')
+        .tooltip("Drag to resize — double-click to reset")
+    )
 
 
 def _set_controls_enabled(

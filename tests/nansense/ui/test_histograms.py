@@ -12,6 +12,7 @@ from nansense.ui.histograms import (
     _HIST_EDGES,
     _PLOT_HEIGHT,
     axis_ranges,
+    dead_channels,
     _fill_fraction,
     _linear_bar_x,
     _linear_x_range,
@@ -30,6 +31,7 @@ from nansense.watch import (
     N_BINS,
     ZERO_BIN,
     LayerStatsSnapshot,
+    TensorStatsSnapshot,
     bin_midpoint,
 )
 from tests.nansense.helpers import _layer_snap
@@ -613,6 +615,67 @@ def test_stats_table_skips_phase_without_data() -> None:
 def test_stats_table_escapes_phase_names() -> None:
     per_phase = {"<b>": _layer_snap("<b>")}
     assert "<b>" not in _stats_table_html(per_phase, "activation")
+
+
+def _snap_with_channel_hists(
+    rows: list[dict[int, int]], phase: str = "train"
+) -> LayerStatsSnapshot:
+    """A layer snapshot whose activations carry per-channel `bin -> count` rows."""
+    channel_hists = tuple(
+        tuple(row.get(b, 0) for b in range(N_BINS)) for row in rows
+    )
+    hist = tuple(sum(col) for col in zip(*channel_hists))
+    stats = TensorStatsSnapshot(
+        n=sum(hist), sum=0.0, sum_sq=0.0, min=0.0, max=0.0,
+        hist=hist, channel_hists=channel_hists,
+    )
+    return LayerStatsSnapshot(
+        layer="L", phase=phase, epoch=0, activations=stats, gradients=stats
+    )
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        # All mass in the zero bin = dead; any other bin keeps it alive.
+        ([{ZERO_BIN: 4}, {ZERO_BIN: 3, ZERO_BIN + 9: 1}, {ZERO_BIN: 5}], [0, 2]),
+        # A channel that never saw a value is not reported as dead.
+        ([{}, {ZERO_BIN: 2}], [1]),
+        ([{ZERO_BIN + 1: 7}], []),
+    ],
+)
+def test_dead_channels_from_channel_hists(
+    rows: list[dict[int, int]], expected: list[int]
+) -> None:
+    snap = _snap_with_channel_hists(rows)
+    assert dead_channels(snap.activations) == expected
+
+
+def test_dead_channels_none_without_channel_hists() -> None:
+    assert dead_channels(_layer_snap("train").activations) is None
+
+
+def test_stats_table_dead_channels_row_only_for_activations() -> None:
+    per_phase = {"train": _snap_with_channel_hists([{ZERO_BIN: 2}, {3: 1}])}
+    act = _stats_table_html(per_phase, "activation")
+    assert ">dead channels</td>" in act
+    assert 'title="channels: 0"' in act  # hover lists the dead indices
+    assert "dead channels" not in _stats_table_html(per_phase, "gradient")
+
+
+def test_stats_table_dead_channels_placeholder_without_channel_hists() -> None:
+    table = _stats_table_html({"train": _layer_snap("train")}, "activation")
+    assert ">dead channels</td>" in table
+    assert ">—</td>" in table
+    assert "title=" not in table
+
+
+def test_stats_table_dead_channels_hover_truncates_to_ten() -> None:
+    per_phase = {"train": _snap_with_channel_hists([{ZERO_BIN: 1}] * 12)}
+    table = _stats_table_html(per_phase, "activation")
+    assert ">12</td>" in table
+    listed = ", ".join(str(c) for c in range(10))
+    assert f'title="channels: {listed}, ..."' in table
 
 
 # --- Watching histogram: plot height (task 3) ------------------------------

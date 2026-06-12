@@ -19,8 +19,11 @@ from nansense.ui.bin_samples import sample_bin
 from nansense.ui.common import (
     _b64_img_src,
     _defer_value_write,
+    _install_panel_resize,
     _page_scaffold,
     _refuse_unwatch_while_recording,
+    _resizable_pane_props,
+    _resize_handle,
     _set_controls_enabled,
 )
 from nansense.ui.histograms import (
@@ -109,6 +112,7 @@ def _build_watch_page(
     change is reflected on the main page on next navigation.
     """
     _page_scaffold("Watching")
+    _install_panel_resize()
 
     layer_panels: dict[str, _WatchLayerPanel] = {}
     body_container: ui.column
@@ -194,7 +198,7 @@ def _build_watch_page(
             with ui.column().classes(
                 "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
                 "border-r-2 border-slate-300 bg-slate-50"
-            ):
+            ).props(_resizable_pane_props("watch-controls")):
                 with ui.row().classes("items-baseline gap-2 no-wrap"):
                     ui.label("Watching").classes("font-mono text-base font-bold")
                     state.count_label = ui.label("").classes(
@@ -265,6 +269,7 @@ def _build_watch_page(
                     )
                 minmax_controls.set_visibility(False)
 
+            _resize_handle("watch-controls", "left")
             body_container = ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             )
@@ -1021,7 +1026,7 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) ->
         if grid.heat_legend is not None
         else "<div></div>"
     )
-    axis_cls = "text-[10px] font-mono text-slate-400"
+    axis_cls = "text-[15px] font-mono text-slate-600"
     return (
         '<div class="flex flex-col gap-0.5 w-full">'
         '<div class="text-base font-bold uppercase tracking-widest '
