@@ -1,4 +1,4 @@
-"""Train a small ResNet or Vision Transformer on CIFAR10 or Imagenette."""
+"""Train a small ResNet, Vision Transformer, or LeNet on MNIST, CIFAR10, or Imagenette."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from torch import nn
 import nansense
 from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
 from examples.vision.data import DATASETS, DatasetConfig, build_dataloaders
+from examples.vision.lenet import LeNet
 from examples.vision.resnet import PreActResNet
 from examples.vision.vit import SimpleViT
 
@@ -26,11 +27,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=["resnet", "resnet_deep", "vit"],
+        choices=["resnet", "resnet_deep", "vit", "lenet"],
         default="resnet",
         help=(
             "Architecture: the small pre-activation ResNet, its five-stage "
-            "variant, or the simple ViT (default resnet)."
+            "variant, the simple ViT, or LeNet-5 (default resnet)."
         ),
     )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
@@ -80,12 +81,20 @@ def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> 
             num_classes=config.num_classes,
             blocks_per_stage=blocks_per_stage,
             num_stages=5 if name == "resnet_deep" else 3,
+            in_channels=config.in_channels,
+        )
+    if name == "lenet":
+        return LeNet(
+            num_classes=config.num_classes,
+            in_channels=config.in_channels,
+            image_size=config.image_size,
         )
     # An 8x8 patch grid at either image size (32 -> patch 4, 128 -> patch 16).
     return SimpleViT(
         image_size=config.image_size,
         patch_size=config.image_size // 8,
         num_classes=config.num_classes,
+        in_channels=config.in_channels,
     )
 
 

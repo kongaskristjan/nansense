@@ -17,10 +17,15 @@ description: Launch a nansense example (web UI on --nansense-port) and verify it
    ```
 
    - `examples.mnist_linear.main` — minimal wiring, fastest startup.
-   - `examples.mnist_lenet.main` — full wiring (scheduler, time travel).
-   - `examples.vision.main` — ResNet/ViT on CIFAR10/Imagenette
-     (`--model resnet|resnet_deep|vit`, `--dataset cifar10|imagenette`);
-     `--blocks-per-stage 1` makes the ResNet small and fast.
+   - `examples.lightning_mnist.main` — the PyTorch Lightning wiring
+     (`NansenseCallback` + `fit_with_time_travel`); use when testing
+     `nansense/lightning.py` changes.
+   - `examples.vision.main` — full wiring (scheduler, time travel):
+     ResNet/ViT/LeNet on MNIST/CIFAR10/Imagenette
+     (`--model resnet|resnet_deep|vit|lenet`,
+     `--dataset mnist|cifar10|imagenette`); `--blocks-per-stage 1` makes
+     the ResNet small and fast, `--dataset mnist --model lenet` is the
+     lightest full-wiring combination.
 3. If running in a worktree, `data/` is gitignored — symlink it from the main
    tree first to skip the dataset download.
 4. Poll until the UI is up — training pauses on the first batch, so the page

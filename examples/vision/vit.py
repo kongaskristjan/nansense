@@ -73,12 +73,13 @@ class SimpleViT(nn.Module):
         dim: int = 192,
         depth: int = 6,
         num_heads: int = 3,
+        in_channels: int = 3,
     ) -> None:
         super().__init__()
         if image_size % patch_size != 0:
             raise ValueError(f"image_size={image_size} not divisible by patch_size={patch_size}")
         num_patches = (image_size // patch_size) ** 2
-        self.patch_embed = nn.Conv2d(3, dim, kernel_size=patch_size, stride=patch_size)
+        self.patch_embed = nn.Conv2d(in_channels, dim, kernel_size=patch_size, stride=patch_size)
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, dim))
         self.blocks = nn.Sequential(
             *[TransformerBlock(dim, num_heads) for _ in range(depth)]

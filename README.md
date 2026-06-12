@@ -45,12 +45,14 @@ Available examples:
 
 - `examples.mnist_linear.main` — a single linear layer on MNIST with the
   minimal nansense wiring (no scheduler, no time travel).
-- `examples.mnist_lenet.main` — LeNet-5 on MNIST: SGD + momentum, basic
-  augmentation, and the full wiring (scheduler, time travel, checkpoints).
+- `examples.lightning_mnist.main` — a tiny convnet on MNIST trained with
+  PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
 - `examples.vision.main` — a small pre-activation ResNet (default), a
-  deeper five-stage variant (`--model resnet_deep`), or a simple ViT
-  (`--model vit`) on CIFAR10 (default) or Imagenette
-  (`--dataset imagenette`), trained with AdamW + a cosine schedule.
+  deeper five-stage variant (`--model resnet_deep`), a simple ViT
+  (`--model vit`), or LeNet-5 (`--model lenet`) on CIFAR10 (default),
+  MNIST (`--dataset mnist`, scaled to 32x32), or Imagenette
+  (`--dataset imagenette`), trained with AdamW + a cosine schedule and
+  the full wiring (scheduler, time travel, checkpoints).
 
 ## Minimal example
 
@@ -164,7 +166,8 @@ fit_with_time_travel(
 Epoch boundaries are checkpointed via `trainer.save_checkpoint` (with RNG
 states stashed alongside), and a jump re-invokes
 `trainer.fit(ckpt_path=...)`, so the replay is exactly as deterministic as
-the hand-written loop's. Supported: automatic optimization and
+the hand-written loop's. The runnable version of this wiring is
+`examples/lightning_mnist/main.py`. Supported: automatic optimization and
 epoch-boundary validation, including `check_val_every_n_epoch > 1`.
 Rejected with a clear error: mid-epoch validation
 (`val_check_interval < 1.0` or step-driven) and unsized dataloaders — the
