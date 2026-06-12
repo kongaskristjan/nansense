@@ -19,6 +19,7 @@ from nansense.ui.render import (
     PATCH_CELL_SIZE,
     TILE_SIZE,
     default_weight_dims,
+    dims_from_roles,
     image_mime,
     render_image,
     render_patch_grid,
@@ -514,3 +515,9 @@ def test_patch_grid_heat_legend_only_when_heatmap_enabled() -> None:
     flat = _type_patches(values, torch.ones(1, 5, 3, 4, 4))
     rendered = render_patch_grid(flat, heatmap=True)
     assert rendered is not None and rendered.heat_legend is None
+
+
+def test_dims_from_roles_resolves_axes() -> None:
+    assert dims_from_roles(["index", "tile", "y", "x"]) == (3, 2, 1)
+    assert dims_from_roles(["x"]) == (0, None, None)
+    assert dims_from_roles(["index", "index"]) == (None, None, None)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 import torch
 from torch import nn
@@ -126,7 +125,7 @@ def test_slug_replaces_non_alphanumeric_and_handles_empty() -> None:
     assert slug("") == ROOT_ID
 
 
-def test_handles_modules_with_tuple_args(monkeypatch: Any) -> None:
+def test_handles_modules_with_tuple_args() -> None:
     # Walk recurses into tuples/lists, so calls like torch.cat([a, b], dim=1)
     # still produce edges from both inputs.
     class CatModel(nn.Module):

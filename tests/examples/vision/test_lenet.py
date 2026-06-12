@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 import torch
-from torch import nn
 
 from examples.vision.lenet import LeNet
+from tests.examples.helpers import assert_training_reduces_loss
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])
@@ -35,16 +35,5 @@ def test_training_step_reduces_loss() -> None:
     model = LeNet(num_classes=10)
     x = torch.randn(8, 1, 32, 32)
     y = torch.randint(0, 10, (8,))
-    criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.05, momentum=0.9)
-
-    model.train()
-    initial = criterion(model(x), y).item()
-    for _ in range(5):
-        optimizer.zero_grad(set_to_none=True)
-        loss = criterion(model(x), y)
-        loss.backward()
-        optimizer.step()
-    final = criterion(model(x), y).item()
-
-    assert final < initial
+    assert_training_reduces_loss(model, x, y, optimizer=optimizer)

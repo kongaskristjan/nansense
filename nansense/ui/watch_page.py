@@ -571,8 +571,9 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
-        # Last axis ranges applied, so refreshes only push a relayout when a
-        # cap actually moved (a range write resets zoom on that axis).
+        # Last axis ranges applied (set by every figure build, including the
+        # empty one below), so refreshes only push a relayout when a cap
+        # actually moved (a range write resets zoom on that axis).
         self._y_range: list[float] | None = None
         self._x_range: list[float] | None = None
         with ui.row().classes("items-center gap-x-3 no-wrap"):
@@ -597,13 +598,10 @@ class _HistPlot:
                 .classes("w-24")
             )
             self._channel_total = ui.label("").classes("text-xs text-slate-500")
-        self.element = ui.plotly(
-            _figure_payload(
-                _make_histogram_figure(
-                    {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
-                )
-            )
-        ).classes("w-full")
+        fig, (self._x_range, self._y_range) = _make_histogram_figure(
+            {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
+        )
+        self.element = ui.plotly(_figure_payload(fig)).classes("w-full")
         self._samples = ui.html(_HOVER_HINT_HTML).classes("w-full")
         self._sync_control_visibility()
         ui.on(f"nansense_hist_hover_{self.element.id}", self._on_hover)
@@ -719,24 +717,19 @@ class _HistPlot:
         density = use_density(log_x)
         if phases != self._phases or axis != self._axis:
             # A phase appeared/disappeared or an axis-scale checkbox
-            # flipped — rebuild the whole figure.
-            self.element.update_figure(
-                _figure_payload(
-                    _make_histogram_figure(
-                        per_phase,
-                        self._kind,
-                        self._title,
-                        log_x=axis[0],
-                        log_y=axis[1],
-                        trace_names=self._trace_names(per_phase),
-                    )
-                )
+            # flipped — rebuild the whole figure. The build hands back the
+            # ranges it applied, so caching them costs no recompute.
+            fig, (self._x_range, self._y_range) = _make_histogram_figure(
+                per_phase,
+                self._kind,
+                self._title,
+                log_x=axis[0],
+                log_y=axis[1],
+                trace_names=self._trace_names(per_phase),
             )
+            self.element.update_figure(_figure_payload(fig))
             self._phases = phases
             self._axis = axis
-            self._x_range, self._y_range = axis_ranges(
-                per_phase, self._kind, log_x=log_x, log_y=axis[1]
-            )
         elif phases:
             # Same rows and axes — only counts (and the epoch label) moved.
             # Restyle in place so zoom/pan survives. A channel index change

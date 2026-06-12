@@ -25,12 +25,16 @@ def _top_bar_row() -> ui.row:
 
 
 def _back_button() -> None:
-    """The arrow-back button to the main page (every subpage's top bar)."""
+    """The arrow-back button to the main page (every subpage's top bar).
+
+    Rendered as a native link (`href` prop) rather than an `on_click`
+    navigation so middle/ctrl-click opens the main page in a new tab —
+    same pattern as the layer cards' Weights/Experiment buttons.
+    """
     ui.button(
         icon="arrow_back",
-        on_click=lambda: ui.navigate.to("/"),
         color="slate-500",
-    ).props("dense size=md").tooltip("Back to the main page")
+    ).props('dense size=md href="/"').tooltip("Back to the main page")
 
 
 def _add_step_controls(

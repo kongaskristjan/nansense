@@ -70,9 +70,7 @@ def _node_def(node: fx.Node, model: nn.Module, names: dict[fx.Node, str]) -> str
         sub = model.get_submodule(str(node.target))
         label = f"{node.target}<br/>{type(sub).__name__}"
         return f'  {node_id}["{label}"]'
-    if node.op == "call_function":
-        return f'  {node_id}(["{names[node]}"])'
-    if node.op == "call_method":
+    if node.op in ("call_function", "call_method"):
         return f'  {node_id}(["{names[node]}"])'
     return f'  {node_id}["{names[node]}"]'
 

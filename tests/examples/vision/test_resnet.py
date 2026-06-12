@@ -9,6 +9,7 @@ from torch import nn
 import nansense
 from examples.vision.resnet import PreActBlock, PreActResNet
 from examples.common import evaluate, train_one_epoch
+from tests.examples.helpers import assert_training_reduces_loss
 
 
 @pytest.mark.parametrize(
@@ -100,19 +101,8 @@ def test_training_step_reduces_loss() -> None:
     model = PreActResNet(num_classes=10, blocks_per_stage=1)
     x = torch.randn(8, 3, 32, 32)
     y = torch.randint(0, 10, (8,))
-    criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-
-    model.train()
-    initial = criterion(model(x), y).item()
-    for _ in range(5):
-        optimizer.zero_grad(set_to_none=True)
-        loss = criterion(model(x), y)
-        loss.backward()
-        optimizer.step()
-    final = criterion(model(x), y).item()
-
-    assert final < initial
+    assert_training_reduces_loss(model, x, y, optimizer=optimizer)
 
 
 @pytest.mark.parametrize("amp_dtype", [None, torch.bfloat16])

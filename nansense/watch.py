@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import math
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -213,6 +213,34 @@ def bin_midpoint(idx: int) -> float:
     return sign * 10.0 ** ((lo + hi) / 2)
 
 
+@dataclass
+class _RunningStats:
+    """Device-resident running reductions, allocated together on first use.
+
+    Grouping them in one non-optional bundle means `TensorAccumulator`
+    carries a single `_RunningStats | None` instead of seven `Tensor |
+    None` fields that every method had to assert through.
+    """
+
+    n: Tensor
+    sum: Tensor
+    sum_sq: Tensor
+    min: Tensor
+    max: Tensor
+    hist: Tensor
+
+    @staticmethod
+    def zeros(device: torch.device) -> _RunningStats:
+        return _RunningStats(
+            n=torch.zeros((), dtype=torch.int64, device=device),
+            sum=torch.zeros((), dtype=torch.float32, device=device),
+            sum_sq=torch.zeros((), dtype=torch.float32, device=device),
+            min=torch.full((), float("inf"), dtype=torch.float32, device=device),
+            max=torch.full((), float("-inf"), dtype=torch.float32, device=device),
+            hist=torch.zeros(N_BINS, dtype=torch.int64, device=device),
+        )
+
+
 class TensorAccumulator:
     """Running stats for one tensor stream (activation OR gradient of a layer).
 
@@ -224,51 +252,29 @@ class TensorAccumulator:
     """
 
     def __init__(self) -> None:
-        self._device: torch.device | None = None
-        self._n: Tensor | None = None
-        self._sum: Tensor | None = None
-        self._sum_sq: Tensor | None = None
-        self._min: Tensor | None = None
-        self._max: Tensor | None = None
-        self._hist: Tensor | None = None
+        # Allocated by the first non-empty `update()`, on that tensor's device.
+        self._stats: _RunningStats | None = None
         # `(C, N_BINS)` per-channel counts; allocated on the first update
         # with a usable channel axis, dropped by `collapse_channels`.
         self._channel_hist: Tensor | None = None
         self._channels_off = False
 
-    def _lazy_init(self, device: torch.device) -> None:
-        if self._device is not None:
-            return
-        self._device = device
-        self._n = torch.zeros((), dtype=torch.int64, device=device)
-        self._sum = torch.zeros((), dtype=torch.float32, device=device)
-        self._sum_sq = torch.zeros((), dtype=torch.float32, device=device)
-        self._min = torch.full((), float("inf"), dtype=torch.float32, device=device)
-        self._max = torch.full(
-            (), float("-inf"), dtype=torch.float32, device=device
-        )
-        self._hist = torch.zeros(N_BINS, dtype=torch.int64, device=device)
-
     def update(self, x: Tensor) -> None:
         if x.numel() == 0:
             return
-        self._lazy_init(x.device)
-        assert self._sum is not None
-        assert self._sum_sq is not None
-        assert self._min is not None
-        assert self._max is not None
-        assert self._hist is not None
-        assert self._n is not None
+        if self._stats is None:
+            self._stats = _RunningStats.zeros(x.device)
+        stats = self._stats
         flat = x.detach().to(torch.float32).reshape(-1)
-        self._n += flat.numel()
-        self._sum += flat.sum()
-        self._sum_sq += flat.square().sum()
-        self._min = torch.minimum(self._min, flat.min())
-        self._max = torch.maximum(self._max, flat.max())
+        stats.n += flat.numel()
+        stats.sum += flat.sum()
+        stats.sum_sq += flat.square().sum()
+        stats.min = torch.minimum(stats.min, flat.min())
+        stats.max = torch.maximum(stats.max, flat.max())
         idx = _bin_indices(flat)
         channels = self._usable_channels(x)
         if channels is None:
-            self._hist += torch.bincount(idx, minlength=N_BINS)
+            stats.hist += torch.bincount(idx, minlength=N_BINS)
             return
         # One fused bincount over `channel * N_BINS + bin` gives the
         # per-channel counts; the universal histogram is their sum, so the
@@ -286,7 +292,7 @@ class TensorAccumulator:
         ).reshape(channels, N_BINS)
         assert self._channel_hist is not None
         self._channel_hist += counts
-        self._hist += counts.sum(dim=0)
+        stats.hist += counts.sum(dim=0)
 
     def _usable_channels(self, x: Tensor) -> int | None:
         """Channel count to bin `x` under, managing the per-channel buffer.
@@ -322,7 +328,8 @@ class TensorAccumulator:
         self._channels_off = True
 
     def snapshot(self) -> TensorStatsSnapshot:
-        if self._device is None:
+        stats = self._stats
+        if stats is None:
             return TensorStatsSnapshot(
                 n=0,
                 sum=0.0,
@@ -331,17 +338,11 @@ class TensorAccumulator:
                 max=float("-inf"),
                 hist=tuple([0] * N_BINS),
             )
-        assert self._n is not None
-        assert self._sum is not None
-        assert self._sum_sq is not None
-        assert self._min is not None
-        assert self._max is not None
-        assert self._hist is not None
         # One sync per scalar group; the histogram lands separately because
         # it's int64 and the scalars are float32.
-        scalars = torch.stack([self._sum, self._sum_sq, self._min, self._max]).cpu()
-        n = int(self._n.cpu().item())
-        hist_cpu = self._hist.cpu()
+        scalars = torch.stack([stats.sum, stats.sum_sq, stats.min, stats.max]).cpu()
+        n = int(stats.n.cpu().item())
+        hist_cpu = stats.hist.cpu()
         channel_hists: tuple[tuple[int, ...], ...] | None = None
         if self._channel_hist is not None:
             channel_hists = tuple(
@@ -363,6 +364,18 @@ class _LayerStats:
     activations: TensorAccumulator = field(default_factory=TensorAccumulator)
     gradients: TensorAccumulator = field(default_factory=TensorAccumulator)
     patches: PatchAccumulator = field(default_factory=PatchAccumulator)
+    # Whether `update_patches` has touched this bucket yet — the trigger for
+    # releasing the same phase's older-epoch patch buffers exactly once.
+    patches_started: bool = False
+
+
+def _evict_channel_hists(stats: _LayerStats) -> None:
+    stats.activations.collapse_channels()
+    stats.gradients.collapse_channels()
+
+
+def _evict_patches(stats: _LayerStats) -> None:
+    stats.patches.clear()
 
 
 class WatchAccumulator:
@@ -389,18 +402,7 @@ class WatchAccumulator:
     ) -> None:
         key = (layer, phase, epoch)
         with self._lock:
-            stats = self._stats.get(key)
-            if stats is None:
-                stats = _LayerStats()
-                self._stats[key] = stats
-                # A new epoch of this phase begins: the *same* phase's older
-                # epochs release their per-channel histogram buffers (only
-                # the latest epoch per phase renders per-channel). Other
-                # phases keep theirs until their own next epoch starts.
-                for (l, ph, ep), other in self._stats.items():
-                    if l == layer and ph == phase and ep < epoch:
-                        other.activations.collapse_channels()
-                        other.gradients.collapse_channels()
+            stats = self._bucket_locked(key)
             acc = stats.activations if kind == "activation" else stats.gradients
         acc.update(x)
 
@@ -417,21 +419,46 @@ class WatchAccumulator:
 
         Histogram stats are small enough to keep for every epoch, but a
         patch bucket holds `4 × channels × N_PER_CHANNEL` image crops on
-        the GPU — so when a newer epoch starts for the same (layer, phase),
-        the older epochs' patch buffers are released. The UI only shows the
-        latest epoch per phase, so nothing visible is lost.
+        the GPU — so the first patch update of a newer (layer, phase)
+        epoch releases the older epochs' patch buffers. The UI only shows
+        the latest epoch per phase, so nothing visible is lost. (Keyed off
+        `patches_started` rather than bucket creation: `update` usually
+        creates the bucket first, which must not skip the patch eviction.)
         """
         key = (layer, phase, epoch)
         with self._lock:
-            stats = self._stats.get(key)
-            if stats is None:
-                stats = _LayerStats()
-                self._stats[key] = stats
+            stats = self._bucket_locked(key)
+            if not stats.patches_started:
+                stats.patches_started = True
+                self._evict_older_locked(key, _evict_patches)
             acc = stats.patches
-            for (l, ph, ep), other in self._stats.items():
-                if l == layer and ph == phase and ep < epoch:
-                    other.patches.clear()
         acc.update(act=act, x=x)
+
+    def _bucket_locked(self, key: tuple[str, str, int]) -> _LayerStats:
+        """Get-or-create the (layer, phase, epoch) bucket (lock held).
+
+        Creation means a new epoch of this phase begins: the *same* phase's
+        older epochs release their per-channel histogram buffers (only the
+        latest epoch per phase renders per-channel). Other phases keep
+        theirs until their own next epoch starts.
+        """
+        stats = self._stats.get(key)
+        if stats is None:
+            stats = _LayerStats()
+            self._stats[key] = stats
+            self._evict_older_locked(key, _evict_channel_hists)
+        return stats
+
+    def _evict_older_locked(
+        self,
+        key: tuple[str, str, int],
+        evict: Callable[[_LayerStats], None],
+    ) -> None:
+        """Run `evict` on the same (layer, phase)'s older-epoch buckets."""
+        layer, phase, epoch = key
+        for (l, ph, ep), other in self._stats.items():
+            if l == layer and ph == phase and ep < epoch:
+                evict(other)
 
     def forget_layer(self, layer: str) -> None:
         """Drop all stored stats for `layer` (e.g. on unwatch)."""

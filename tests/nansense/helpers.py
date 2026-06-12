@@ -1,7 +1,8 @@
 """Shared harness helpers for the nansense test suite.
 
 Stub models, train-step functions, and the start-thread -> wait-until-paused
--> detach -> join lifecycle that the session-level tests share.
+-> detach -> join lifecycle that the session-level tests share, plus the
+snapshot and watch-stats builders shared by the UI page tests.
 """
 
 from __future__ import annotations
@@ -14,7 +15,34 @@ import torch
 from torch import Tensor, nn
 
 import nansense
-from nansense.session import Session
+from nansense.schedule import BatchPosition
+from nansense.session import BatchSnapshot, Session
+from nansense.watch import (
+    N_BINS,
+    ZERO_BIN,
+    LayerStatsSnapshot,
+    TensorStatsSnapshot,
+)
+
+
+def make_position(
+    phase: str,
+    epoch: int,
+    batch_idx: int,
+    *,
+    is_last_in_phase: bool = False,
+    is_last_in_epoch: bool = False,
+    is_last_overall: bool = False,
+) -> BatchPosition:
+    """A `BatchPosition` literal whose `is_last_*` flags default to False."""
+    return BatchPosition(
+        phase=phase,
+        epoch=epoch,
+        batch_idx=batch_idx,
+        is_last_in_phase=is_last_in_phase,
+        is_last_in_epoch=is_last_in_epoch,
+        is_last_overall=is_last_overall,
+    )
 
 
 class TinyNet(nn.Module):
@@ -128,3 +156,63 @@ def paused_session[M: nn.Module](
 
     with paused_worker(session, loop, timeout=timeout):
         yield session
+
+
+def _tensor_stats(n: int, hist: dict[int, int] | None = None) -> TensorStatsSnapshot:
+    """Stats with `n` values in the zero band, or an explicit `bin -> count` map."""
+    counts = [0] * N_BINS
+    if hist is None:
+        counts[ZERO_BIN] = n
+    else:
+        for idx, count in hist.items():
+            counts[idx] = count
+        n = sum(hist.values())
+    return TensorStatsSnapshot(
+        n=n, sum=0.0, sum_sq=0.0, min=0.0, max=0.0, hist=tuple(counts)
+    )
+
+
+def _layer_snap(
+    phase: str,
+    epoch: int = 0,
+    n: int = 10,
+    hist: dict[int, int] | None = None,
+) -> LayerStatsSnapshot:
+    stats = _tensor_stats(n, hist)
+    return LayerStatsSnapshot(
+        layer="L",
+        phase=phase,
+        epoch=epoch,
+        activations=stats,
+        gradients=stats,
+    )
+
+
+def _make_snapshot(
+    phase: str,
+    epoch: int,
+    batch_idx: int,
+    *,
+    activations: dict[str, Tensor] | None = None,
+    activation_gradients: dict[str, Tensor] | None = None,
+) -> BatchSnapshot:
+    """A snapshot at the given position; tensor categories default to empty."""
+    return BatchSnapshot(
+        position=make_position(phase, epoch, batch_idx),
+        activations=activations if activations is not None else {},
+        activation_gradients=(
+            activation_gradients if activation_gradients is not None else {}
+        ),
+        weights={},
+        weight_gradients={},
+    )
+
+
+def _frame_snapshot() -> BatchSnapshot:
+    return _make_snapshot(
+        "train",
+        0,
+        0,
+        activations={"x": torch.rand(2, 3, 4, 4), "conv": torch.rand(2, 2, 4, 4)},
+        activation_gradients={"conv": torch.rand(2, 2, 4, 4)},
+    )
