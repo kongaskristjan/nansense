@@ -205,6 +205,24 @@ _ARCHITECTURE_CLICK_JS: str = """
 """
 
 
+# GIMP-style transparency backdrop for strip data images: a 4px-box gray
+# checkerboard, fixed at *display* resolution (independent of the CSS
+# `image-rendering: pixelated` upscale of the data image in front of it).
+# Every strip data img carries this background; opaque (all-finite) strips
+# fully cover it, and only the transparent NaN/±Inf cells of a divergent
+# strip reveal it — reading as "no value here" rather than a misleading
+# color or white. The two slate grays match `recording.CHECKER_*` so live
+# UI and recorded MP4 frames look identical.
+_STRIP_CHECKERBOARD_STYLE: str = (
+    "background-color:#f9fafb;"
+    "background-image:"
+    "linear-gradient(45deg,#e5e7eb 25%,transparent 25%,transparent 75%,#e5e7eb 75%),"
+    "linear-gradient(45deg,#e5e7eb 25%,transparent 25%,transparent 75%,#e5e7eb 75%);"
+    "background-size:8px 8px;"
+    "background-position:0 0,4px 4px;"
+)
+
+
 # The marker's vertical label is hidden on strips too short to fit it
 # (1D heatmap rows, the no-gradient placeholder); the tallest label is
 # ~75px, so anything under 88px can't show it cleanly. The 128px conv

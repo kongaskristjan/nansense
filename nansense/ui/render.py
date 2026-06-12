@@ -26,6 +26,16 @@ to encode than PNG — at ~2× the payload, the right trade for a localhost
 WebSocket. Flip to `"PNG"` (compressed at `PNG_COMPRESS_LEVEL`) when bytes
 matter more than encode time, e.g. viewing the UI through an SSH port
 forward.
+
+NaN / ±Inf cells are the one exception to the fast RGB path. A single
+non-finite value used to NaN/Inf the colormap scale and whitewash the whole
+strip (indistinguishable from all-zero — the very divergence the tool exists
+to surface). Now the symmetric scale is computed over finite values only,
+and a strip that actually contains NaN/±Inf is encoded as RGBA PNG with
+those cells fully transparent (alpha 0); the UI and recordings paint a fixed
+display-resolution gray checkerboard behind the data image so the bad cells
+read as "no value here", not a misleading color. All-finite strips keep the
+byte-for-byte RGB `STRIP_FORMAT` path (`StripRender.data_mime` says which).
 """
 
 from __future__ import annotations
@@ -77,18 +87,26 @@ def image_mime() -> str:
 class StripRender:
     """One rendered strip: a native-resolution data image plus a crisp legend.
 
-    `data_image` holds every tile in a single image (encoded per
-    `STRIP_FORMAT`) at native (or server-downsampled) resolution, with white
-    separators `_tile_gap(w)` native pixels wide between tiles; the UI
-    displays it at `width × height` CSS pixels with `image-rendering:
-    pixelated`, so the separators scale together with the tiles.
-    `legend_image` is already at display resolution and is shown 1:1.
+    `data_image` holds every tile in a single image at native (or
+    server-downsampled) resolution, with white separators `_tile_gap(w)`
+    native pixels wide between tiles; the UI displays it at `width × height`
+    CSS pixels with `image-rendering: pixelated`, so the separators scale
+    together with the tiles. `legend_image` is already at display resolution
+    and is shown 1:1.
+
+    `data_mime` is the data image's MIME type: the common all-finite strip
+    is RGB encoded per `STRIP_FORMAT` (the fast `image_mime()` path), but a
+    strip containing NaN/±Inf cells is RGBA PNG instead — those cells are
+    fully transparent so the UI / recording can show a checkerboard behind
+    them. Consumers must use `data_mime` (not the global `image_mime()`) for
+    the data image's data-URI; the `legend_image` is always `STRIP_FORMAT`.
     """
 
     legend_image: bytes
     data_image: bytes
     width: int
     height: int
+    data_mime: str = _MIME_TYPES[STRIP_FORMAT]
 
 
 def render_strip(
@@ -310,32 +328,60 @@ def _tile_gap(tile_width: int) -> int:
 
 
 def _render_chw(tensor: Tensor) -> StripRender:
-    abs_max = float(tensor.detach().abs().max())
     data = tensor.detach().float()
+    abs_max = _finite_abs_max(data)
     if max(data.shape[1], data.shape[2]) > TILE_SIZE:
         # Downsampling needs real averaging server-side; *up*scaling small
         # maps is left to the browser's nearest-neighbour (CSS `pixelated`).
-        data = F.interpolate(
-            data.unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="area"
-        )[0]
+        # `area` would spread a NaN/Inf cell across its neighbours; keep the
+        # non-finite mask sharp by interpolating finite values and the mask
+        # separately (the colormap re-derives the mask after downsampling).
+        data = _interpolate_preserving_nonfinite(data)
     _, h, w = data.shape
-    rgb = _apply_colormap(data.numpy(), abs_max=abs_max)
+    rgb, mime = _apply_colormap(data.numpy(), abs_max=abs_max)
     strip = _concat_tiles_with_gaps(list(rgb), _tile_gap(w))
     # Each tile spans TILE_SIZE × TILE_SIZE CSS px, so the whole strip scales
     # by TILE_SIZE/w horizontally and TILE_SIZE/h vertically.
     return StripRender(
         legend_image=_encode_image(_render_legend(TILE_SIZE, abs_max=abs_max)),
-        data_image=_encode_image(strip),
+        data_image=_encode_strip_data(strip, mime),
         width=round(strip.shape[1] * TILE_SIZE / w),
         height=TILE_SIZE,
+        data_mime=mime,
     )
+
+
+def _interpolate_preserving_nonfinite(data: Tensor) -> Tensor:
+    """Area-downsample to `TILE_SIZE²`, keeping NaN/±Inf cells non-finite.
+
+    `F.interpolate(mode="area")` smears a single non-finite value across a
+    whole tile. To keep the bad cells localized, finite values are averaged
+    with their sentinel zeroed out, while a separate nearest-neighbour pass
+    on the non-finite mask decides which output cells stay non-finite (they
+    are then stamped back as NaN so the colormap renders them transparent).
+    """
+    finite = torch.isfinite(data)
+    if finite.all():
+        return F.interpolate(
+            data.unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="area"
+        )[0]
+    cleaned = torch.where(finite, data, torch.zeros_like(data))
+    down = F.interpolate(
+        cleaned.unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="area"
+    )[0]
+    mask = F.interpolate(
+        (~finite).float().unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="nearest"
+    )[0]
+    return torch.where(mask > 0, torch.full_like(down, float("nan")), down)
 
 
 def _concat_tiles_with_gaps(tiles: list[np.ndarray], gap: int) -> np.ndarray:
     if len(tiles) <= 1:
         return tiles[0]
-    h = tiles[0].shape[0]
-    spacer = np.full((h, gap, 3), 255, dtype=np.uint8)
+    h, channels = tiles[0].shape[0], tiles[0].shape[2]
+    # Separators are opaque white in RGB strips and opaque-white in RGBA
+    # ones too (alpha 255) — only the data's non-finite cells go transparent.
+    spacer = np.full((h, gap, channels), 255, dtype=np.uint8)
     pieces: list[np.ndarray] = []
     for i, tile in enumerate(tiles):
         if i > 0:
@@ -565,29 +611,72 @@ def _cell_heat(
 
 def _render_1d(tensor: Tensor) -> StripRender:
     values = tensor.detach().float()
-    abs_max = float(values.abs().max())
+    abs_max = _finite_abs_max(values)
     f = values.shape[0]
     if f > LINEAR_MAX_BINS:
-        values = F.adaptive_avg_pool1d(
-            values.reshape(1, 1, f), LINEAR_MAX_BINS
+        # `nan_to_num` first so a single NaN can't poison a whole pooled bin;
+        # the bin's non-finite cells are re-detected by the colormap below.
+        finite = torch.isfinite(values)
+        pooled = F.adaptive_avg_pool1d(
+            torch.where(finite, values, torch.zeros_like(values)).reshape(1, 1, f),
+            LINEAR_MAX_BINS,
         ).reshape(-1)
+        if not finite.all():
+            bad = F.adaptive_max_pool1d(
+                (~finite).float().reshape(1, 1, f), LINEAR_MAX_BINS
+            ).reshape(-1)
+            pooled = torch.where(bad > 0, torch.full_like(pooled, float("nan")), pooled)
+        values = pooled
         f = LINEAR_MAX_BINS
-    rgb_row = _apply_colormap(values.numpy(), abs_max=abs_max)
+    rgb_row, mime = _apply_colormap(values.numpy(), abs_max=abs_max)
     # A 1-px-tall row; the browser stretches it to the display height.
     return StripRender(
         legend_image=_encode_image(
             _render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)
         ),
-        data_image=_encode_image(rgb_row[None, :, :]),
+        data_image=_encode_strip_data(rgb_row[None, :, :], mime),
         width=f * LINEAR_BIN_WIDTH,
         height=LINEAR_TILE_HEIGHT,
+        data_mime=mime,
     )
 
 
-def _apply_colormap(values: np.ndarray, *, abs_max: float) -> np.ndarray:
+def _finite_abs_max(values: Tensor) -> float:
+    """Largest `|x|` over finite entries; a tiny epsilon when none are finite.
+
+    Computing the symmetric colormap scale over finite values only is what
+    keeps one NaN/±Inf from turning the whole strip's scale into NaN/Inf
+    (which left every cell white — indistinguishable from all-zero). The
+    epsilon fallback keeps an all-non-finite (or finite-but-all-zero) strip
+    rendering without a divide-by-zero.
+    """
+    finite = values[torch.isfinite(values)]
+    if finite.numel() == 0:
+        return 1e-12
+    return float(finite.abs().max())
+
+
+def _apply_colormap(values: np.ndarray, *, abs_max: float) -> tuple[np.ndarray, str]:
+    """Diverging colormap plus the MIME the data image must use.
+
+    The all-finite common case returns an RGB array and the `STRIP_FORMAT`
+    mime — byte-for-byte the previous fast path. When any value is NaN/±Inf
+    the result is an RGBA array (PNG mime): finite cells keep the opaque
+    blue-white-red color and the non-finite cells get alpha 0, so the UI /
+    recording reveal a checkerboard behind them instead of a misleading
+    color or white.
+    """
+    finite = np.isfinite(values)
     scale = max(abs_max, 1e-12)
-    norm = (values / scale).clip(-1.0, 1.0)
-    return _diverging_colormap(norm)
+    norm = np.where(finite, values, 0.0) / scale
+    rgb = _diverging_colormap(np.clip(norm, -1.0, 1.0))
+    if finite.all():
+        return rgb, image_mime()
+    rgba = np.concatenate(
+        [rgb, np.full(rgb.shape[:-1] + (1,), 255, dtype=np.uint8)], axis=-1
+    )
+    rgba[~finite, 3] = 0
+    return rgba, _MIME_TYPES["PNG"]
 
 
 def _diverging_colormap(norm: np.ndarray) -> np.ndarray:
@@ -611,7 +700,7 @@ def _render_legend(height: int, *, abs_max: float) -> np.ndarray:
     top/bottom labels.
     """
     values = np.linspace(abs_max, -abs_max, height, dtype=np.float32)
-    bar_col = _apply_colormap(values, abs_max=abs_max)
+    bar_col, _ = _apply_colormap(values, abs_max=abs_max)  # finite: always RGB
     bar = np.broadcast_to(bar_col[:, None, :], (height, LEGEND_BAR_WIDTH, 3)).copy()
 
     labels_img = Image.new("RGB", (LEGEND_LABEL_WIDTH, height), (255, 255, 255))
@@ -633,6 +722,20 @@ def _encode_image(rgb: np.ndarray, *, fmt: str | None = None) -> bytes:
     return _pil_to_bytes(
         Image.fromarray(np.ascontiguousarray(rgb), mode="RGB"), fmt=fmt
     )
+
+
+def _encode_strip_data(pixels: np.ndarray, mime: str) -> bytes:
+    """Encode a strip's data image, picking the format from its `mime`.
+
+    RGB strips keep the `STRIP_FORMAT` fast path (BMP by default); the RGBA
+    strips that carry transparent NaN/±Inf cells must be PNG, the only
+    `_MIME_TYPES` format with an alpha channel.
+    """
+    if pixels.shape[-1] == 4:
+        return _pil_to_bytes(
+            Image.fromarray(np.ascontiguousarray(pixels), mode="RGBA"), fmt="PNG"
+        )
+    return _encode_image(pixels)
 
 
 def _pil_to_bytes(pil: Image.Image, *, fmt: str | None = None) -> bytes:

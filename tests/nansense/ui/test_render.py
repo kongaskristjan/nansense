@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 
+import numpy as np
 import pytest
 import torch
 from PIL import Image
@@ -178,6 +179,77 @@ def test_zero_variance_tensor_renders() -> None:
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
     assert _decode(strip.data_image).size == (4 * 8 + 3 * 1, 8)
+
+
+def _decode_rgba(image: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(image)).convert("RGBA")
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 3, 8, 8), (1, 12)],  # [C,H,W] and [F]
+    ids=["chw", "linear"],
+)
+def test_nonfinite_strip_is_transparent_rgba_not_whitewashed(
+    shape: tuple[int, ...],
+) -> None:
+    # Regression for the HIGH bug: a single NaN/±Inf used to NaN the colormap
+    # scale and leave every cell white. The finite cells must still map to
+    # multiple distinct colors, and the non-finite cells must be transparent.
+    tensor = torch.linspace(-1.0, 1.0, int(torch.tensor(shape[1:]).prod())).reshape(
+        shape
+    )
+    tensor.view(-1)[0] = float("nan")
+    tensor.view(-1)[1] = float("inf")
+    tensor.view(-1)[2] = float("-inf")
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    # A strip with non-finite cells switches to RGBA PNG.
+    assert strip.data_mime == "image/png"
+    assert strip.data_image.startswith(b"\x89PNG")
+    img = _decode_rgba(strip.data_image)
+    assert img.mode == "RGBA"
+    arr = np.asarray(img)
+    alpha = arr[..., 3]
+    # The bad cells are fully transparent; some cells remain opaque.
+    assert (alpha == 0).any()
+    assert (alpha == 255).any()
+    # Finite (opaque) cells still span more than one color — not whitewashed.
+    opaque_rgb = arr[..., :3][alpha == 255]
+    assert len({tuple(c) for c in opaque_rgb}) > 1
+
+
+def test_nonfinite_legend_label_uses_finite_max() -> None:
+    # The legend's "+x" label must use the finite abs-max, never "+nan/+inf".
+    tensor = torch.tensor([[float("nan"), float("inf"), 0.5, -0.25]])
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    # Legend stays the display-resolution RGB image (always STRIP_FORMAT).
+    assert _decode(strip.legend_image).size == (LEGEND_WIDTH, LINEAR_TILE_HEIGHT)
+
+
+def test_finite_strip_keeps_fast_rgb_path() -> None:
+    # No non-finite values: the data image stays the default RGB/BMP fast
+    # path (mime + mode unchanged), so the 30-60x BMP encode is preserved.
+    tensor = torch.randn(1, 3, 8, 8)
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    assert strip.data_mime == image_mime() == "image/bmp"
+    assert strip.data_image.startswith(b"BM")
+    assert _decode(strip.data_image).mode == "RGB"
+
+
+def test_nonfinite_does_not_smear_across_downsampled_tile() -> None:
+    # A large map with one NaN downsamples; the bad cell stays a localized
+    # transparent region rather than wiping out the whole tile.
+    tensor = torch.randn(1, 1, 300, 300)
+    tensor[0, 0, 0, 0] = float("nan")
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip is not None
+    arr = np.asarray(_decode_rgba(strip.data_image))
+    transparent = (arr[..., 3] == 0).sum()
+    # Only a small corner region goes transparent, not the whole 128x128 tile.
+    assert 0 < transparent < arr.shape[0] * arr.shape[1] // 4
 
 
 def test_strip_uses_diverging_colormap_with_white_separator() -> None:

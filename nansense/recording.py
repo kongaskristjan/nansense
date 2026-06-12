@@ -81,6 +81,14 @@ _SECTION_GAP: int = 10
 _FRAME_PAD: int = 10
 _LABEL_COLOR: tuple[int, int, int] = (30, 41, 59)  # slate-800
 
+# GIMP-style transparency backdrop baked behind a strip's transparent
+# NaN/±Inf cells, matching the live UI's CSS checkerboard
+# (`static._STRIP_CHECKERBOARD_STYLE`): two slate grays in 4px boxes at
+# display resolution. All-finite (opaque RGB) strips never see it.
+_CHECKER_BOX: int = 4
+_CHECKER_LIGHT: tuple[int, int, int] = (249, 250, 251)  # slate-50  (#f9fafb)
+_CHECKER_DARK: tuple[int, int, int] = (229, 231, 235)  # slate-200 (#e5e7eb)
+
 
 @dataclass(frozen=True)
 class RecordedView:
@@ -400,15 +408,27 @@ def _strip_section(strip: object) -> Image.Image | None:
     The data image is nearest-upscaled to its CSS display size (matching
     the browser's `image-rendering: pixelated`) and pasted next to the
     crisp legend, reproducing what the page shows.
+
+    An RGBA data image carries transparent NaN/±Inf cells: it is composited
+    over a baked gray checkerboard the same size as the upscaled strip
+    (`_checkerboard`), so recorded frames show the same GIMP-style backdrop
+    the live UI paints with CSS. Opaque RGB strips keep the plain path.
     """
     from nansense.ui.render import StripRender
 
     if not isinstance(strip, StripRender):
         return None
     legend = Image.open(io.BytesIO(strip.legend_image)).convert("RGB")
-    data = Image.open(io.BytesIO(strip.data_image)).convert("RGB")
+    decoded = Image.open(io.BytesIO(strip.data_image))
     width = min(strip.width, MAX_FRAME_SIZE)
-    data = data.resize((strip.width, strip.height), Image.Resampling.NEAREST)
+    if decoded.mode == "RGBA":
+        data = decoded.resize((strip.width, strip.height), Image.Resampling.NEAREST)
+        backdrop = _checkerboard(strip.width, strip.height)
+        data = Image.alpha_composite(backdrop, data).convert("RGB")
+    else:
+        data = decoded.convert("RGB").resize(
+            (strip.width, strip.height), Image.Resampling.NEAREST
+        )
     canvas = Image.new(
         "RGB",
         (legend.width + width, max(legend.height, strip.height)),
@@ -417,6 +437,25 @@ def _strip_section(strip: object) -> Image.Image | None:
     canvas.paste(legend, (0, 0))
     canvas.paste(data.crop((0, 0, width, strip.height)), (legend.width, 0))
     return canvas
+
+
+def _checkerboard(width: int, height: int) -> Image.Image:
+    """An opaque `_CHECKER_BOX`-square gray checkerboard, `width × height` RGBA.
+
+    Mirrors the live UI's CSS backdrop so a recorded NaN/±Inf cell shows the
+    same two slate grays. Built vectorised: the box-parity of each pixel's
+    `(row, col)` picks the light/dark color.
+    """
+    ys = (np.arange(height) // _CHECKER_BOX)[:, None]
+    xs = (np.arange(width) // _CHECKER_BOX)[None, :]
+    dark = (ys + xs) % 2 == 1
+    rgb = np.empty((height, width, 3), dtype=np.uint8)
+    rgb[...] = _CHECKER_LIGHT
+    rgb[dark] = _CHECKER_DARK
+    rgba = np.concatenate(
+        [rgb, np.full((height, width, 1), 255, dtype=np.uint8)], axis=-1
+    )
+    return Image.fromarray(rgba, mode="RGBA")
 
 
 def _compose_sections(

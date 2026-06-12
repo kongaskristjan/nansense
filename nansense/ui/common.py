@@ -10,6 +10,7 @@ from nicegui.elements.mixins.disableable_element import DisableableElement
 
 from nansense.session import Session
 from nansense.ui.render import StripRender, image_mime
+from nansense.ui.static import _STRIP_CHECKERBOARD_STYLE
 
 
 def _page_scaffold(title: str = "") -> None:
@@ -128,6 +129,14 @@ def _strip_html(strip: StripRender | None) -> str:
     upscale the renderer used to do server-side. The legend image is already
     at display resolution and renders 1:1, so its labels stay sharp.
     `flex:none` keeps the scroll container from squishing the images.
+
+    The data img sits over a fixed display-resolution gray checkerboard
+    (`_STRIP_CHECKERBOARD_STYLE`): an all-finite strip is fully opaque and
+    hides it, while a strip carrying transparent NaN/±Inf cells (RGBA PNG,
+    `strip.data_mime`) reveals the checkerboard through them — so the bad
+    cells read as "no value here" instead of a misleading color or white.
+    The data image uses `strip.data_mime` (RGB `STRIP_FORMAT` or RGBA PNG),
+    not the global `image_mime()` the legend keeps.
     """
     if strip is None:
         return ""
@@ -135,8 +144,9 @@ def _strip_html(strip: StripRender | None) -> str:
         '<div style="display:flex; align-items:flex-start;">'
         f'<img src="{_b64_img_src(strip.legend_image)}" '
         'style="display:block; flex:none; max-width:none;" />'
-        f'<img src="{_b64_img_src(strip.data_image)}" '
+        f'<img src="{_b64_img_src(strip.data_image, mime=strip.data_mime)}" '
         f'style="width:{strip.width}px; height:{strip.height}px; '
-        'image-rendering:pixelated; display:block; flex:none; max-width:none;" />'
+        f"image-rendering:pixelated; display:block; flex:none; max-width:none; "
+        f'{_STRIP_CHECKERBOARD_STYLE}" />'
         "</div>"
     )
