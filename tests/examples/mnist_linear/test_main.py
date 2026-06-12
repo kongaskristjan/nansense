@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import torch
-from torch import nn
 
 from examples.mnist_linear.main import build_model
+from tests.examples.helpers import assert_training_reduces_loss
 
 
 def test_model_forward_shape() -> None:
@@ -24,15 +24,5 @@ def test_training_step_reduces_loss() -> None:
     model = build_model()
     x = torch.randn(16, 1, 28, 28)
     y = torch.randint(0, 10, (16,))
-    criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-
-    initial = criterion(model(x), y).item()
-    for _ in range(5):
-        optimizer.zero_grad(set_to_none=True)
-        loss = criterion(model(x), y)
-        loss.backward()
-        optimizer.step()
-    final = criterion(model(x), y).item()
-
-    assert final < initial
+    assert_training_reduces_loss(model, x, y, optimizer=optimizer)

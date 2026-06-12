@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from nansense.schedule import BatchPosition, Schedule, format_position
+from nansense.schedule import Schedule, format_position
+from tests.nansense.helpers import make_position
 
 
 @pytest.mark.parametrize(
@@ -17,15 +18,7 @@ from nansense.schedule import BatchPosition, Schedule, format_position
 def test_format_position(
     phase: str, epoch: int, batch_idx: int, expected: str
 ) -> None:
-    position = BatchPosition(
-        phase=phase,
-        epoch=epoch,
-        batch_idx=batch_idx,
-        is_last_in_phase=False,
-        is_last_in_epoch=False,
-        is_last_overall=False,
-    )
-    assert format_position(position) == expected
+    assert format_position(make_position(phase, epoch, batch_idx)) == expected
 
 
 def test_advance_through_full_run() -> None:

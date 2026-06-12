@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import pytest
 import torch
+from torch import Tensor
 
 import nansense
 from nansense.patches import PATCH_TYPES, PatchAccumulator
 from nansense.probe import ProbeResult
-from nansense.schedule import BatchPosition, Schedule
+from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
+from tests.nansense.helpers import make_position
 from nansense.ui.app import serve
 from nansense.ui.common import _strip_html
 from nansense.ui.histograms import (
@@ -101,21 +103,28 @@ def _layer_snap(
     )
 
 
-def _snapshot_at(phase: str, epoch: int, batch_idx: int) -> BatchSnapshot:
+def _make_snapshot(
+    phase: str,
+    epoch: int,
+    batch_idx: int,
+    *,
+    activations: dict[str, Tensor] | None = None,
+    activation_gradients: dict[str, Tensor] | None = None,
+) -> BatchSnapshot:
+    """A snapshot at the given position; tensor categories default to empty."""
     return BatchSnapshot(
-        position=BatchPosition(
-            phase=phase,
-            epoch=epoch,
-            batch_idx=batch_idx,
-            is_last_in_phase=False,
-            is_last_in_epoch=False,
-            is_last_overall=False,
+        position=make_position(phase, epoch, batch_idx),
+        activations=activations if activations is not None else {},
+        activation_gradients=(
+            activation_gradients if activation_gradients is not None else {}
         ),
-        activations={"x": torch.zeros(1)},
-        activation_gradients={},
         weights={},
         weight_gradients={},
     )
+
+
+def _snapshot_at(phase: str, epoch: int, batch_idx: int) -> BatchSnapshot:
+    return _make_snapshot(phase, epoch, batch_idx, activations={"x": torch.zeros(1)})
 
 
 @pytest.fixture
@@ -143,66 +152,50 @@ def test_validate_passes_when_no_snapshot_yet(schedule: Schedule) -> None:
 
 
 @pytest.mark.parametrize(
-    "phase, epoch, batch_idx",
+    ("current", "phase", "epoch", "batch_idx", "expected"),
     [
-        ("train", 0, 0),
-        ("train", 0, 1),
-        ("train", 0, 2),
+        pytest.param(
+            ("train", 0, 2), "train", 0, 0, "after the current", id="before-current"
+        ),
+        pytest.param(
+            ("train", 0, 2),
+            "train",
+            0,
+            1,
+            "after the current",
+            id="just-before-current",
+        ),
+        pytest.param(
+            ("train", 0, 2), "train", 0, 2, "after the current", id="at-current"
+        ),
+        pytest.param(
+            ("val", 0, 0),
+            "train",
+            0,
+            4,
+            "after the current",
+            id="earlier-phase-same-epoch",
+        ),
+        pytest.param(None, "bogus", 0, 0, "Unknown phase", id="unknown-phase"),
+        pytest.param(None, "train", 3, 0, "Epoch", id="epoch-out-of-range"),
+        pytest.param(None, "train", 0, 5, "Batch", id="batch-out-of-range"),
     ],
 )
-def test_validate_rejects_position_at_or_before_current(
-    schedule: Schedule, phase: str, epoch: int, batch_idx: int
+def test_validate_step_until_rejects_invalid_targets(
+    schedule: Schedule,
+    current: tuple[str, int, int] | None,
+    phase: str,
+    epoch: int,
+    batch_idx: int,
+    expected: str,
 ) -> None:
-    snap = _snapshot_at("train", 0, 2)
+    """`current` is the last-captured position (None: nothing captured yet)."""
+    snap = _snapshot_at(*current) if current is not None else None
     msg = _validate_step_until_target(
         schedule=schedule, snapshot=snap, phase=phase, epoch=epoch, batch_idx=batch_idx
     )
     assert msg is not None
-    assert "after the current" in msg
-
-
-def test_validate_rejects_earlier_phase_in_same_epoch(schedule: Schedule) -> None:
-    snap = _snapshot_at("val", 0, 0)
-    msg = _validate_step_until_target(
-        schedule=schedule, snapshot=snap, phase="train", epoch=0, batch_idx=4
-    )
-    assert msg is not None
-    assert "after the current" in msg
-
-
-def test_validate_rejects_unknown_phase(schedule: Schedule) -> None:
-    msg = _validate_step_until_target(
-        schedule=schedule, snapshot=None, phase="bogus", epoch=0, batch_idx=0
-    )
-    assert msg is not None
-    assert "Unknown phase" in msg
-
-
-def test_validate_rejects_epoch_out_of_range(schedule: Schedule) -> None:
-    msg = _validate_step_until_target(
-        schedule=schedule, snapshot=None, phase="train", epoch=3, batch_idx=0
-    )
-    assert msg is not None
-    assert "Epoch" in msg
-
-
-def test_validate_rejects_batch_out_of_range(schedule: Schedule) -> None:
-    msg = _validate_step_until_target(
-        schedule=schedule, snapshot=None, phase="train", epoch=0, batch_idx=5
-    )
-    assert msg is not None
-    assert "Batch" in msg
-
-
-def _position_at(phase: str, epoch: int, batch_idx: int) -> BatchPosition:
-    return BatchPosition(
-        phase=phase,
-        epoch=epoch,
-        batch_idx=batch_idx,
-        is_last_in_phase=False,
-        is_last_in_epoch=False,
-        is_last_overall=False,
-    )
+    assert expected in msg
 
 
 @pytest.mark.parametrize(
@@ -222,7 +215,7 @@ def test_step_until_default_position(
     expected: tuple[str, int, int] | None,
 ) -> None:
     result = _step_until_default_position(
-        _position_at(*live) if live is not None else None,
+        make_position(*live) if live is not None else None,
         _snapshot_at(*snapshot) if snapshot is not None else None,
     )
     if expected is None:
@@ -860,19 +853,12 @@ def test_input_img_src_is_a_data_uri() -> None:
 
 
 def _frame_snapshot() -> BatchSnapshot:
-    return BatchSnapshot(
-        position=BatchPosition(
-            phase="train",
-            epoch=0,
-            batch_idx=0,
-            is_last_in_phase=False,
-            is_last_in_epoch=False,
-            is_last_overall=False,
-        ),
+    return _make_snapshot(
+        "train",
+        0,
+        0,
         activations={"x": torch.rand(2, 3, 4, 4), "conv": torch.rand(2, 2, 4, 4)},
         activation_gradients={"conv": torch.rand(2, 2, 4, 4)},
-        weights={},
-        weight_gradients={},
     )
 
 
@@ -1123,19 +1109,8 @@ def test_display_batch_size_prefers_probe() -> None:
 def test_compute_frame_renders_more_layers_than_pool_workers() -> None:
     # Exercise the render pool's queueing: more layers than max_workers.
     names = [f"l{i}" for i in range(20)]
-    snap = BatchSnapshot(
-        position=BatchPosition(
-            phase="train",
-            epoch=0,
-            batch_idx=0,
-            is_last_in_phase=False,
-            is_last_in_epoch=False,
-            is_last_overall=False,
-        ),
-        activations={name: torch.rand(1, 2, 4, 4) for name in names},
-        activation_gradients={},
-        weights={},
-        weight_gradients={},
+    snap = _make_snapshot(
+        "train", 0, 0, activations={name: torch.rand(1, 2, 4, 4) for name in names}
     )
     rendered, _ = _compute_frame(
         names,
@@ -1269,19 +1244,8 @@ def test_linear_hover_keeps_value_from_bar_position() -> None:
 def _hover_snapshot() -> BatchSnapshot:
     act = torch.zeros(2, 2, 4, 4)
     act[0, 1, 2, 3] = 5.0
-    return BatchSnapshot(
-        position=BatchPosition(
-            phase="train",
-            epoch=3,
-            batch_idx=7,
-            is_last_in_phase=False,
-            is_last_in_epoch=False,
-            is_last_overall=False,
-        ),
-        activations={"x": torch.rand(2, 3, 16, 16), "conv": act},
-        activation_gradients={},
-        weights={},
-        weight_gradients={},
+    return _make_snapshot(
+        "train", 3, 7, activations={"x": torch.rand(2, 3, 16, 16), "conv": act}
     )
 
 

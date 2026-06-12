@@ -67,21 +67,69 @@ def test_detach_skips_capture_for_every_batch() -> None:
     assert snap.position.epoch == 1
 
 
-def test_step_run_pauses_only_at_last_overall() -> None:
-    phases = {"train": 2, "val": 2}
-    session, model = make_session(epochs=2, phases=phases)
+@pytest.mark.parametrize(
+    ("step", "epochs", "phases", "expected", "expect_last_overall"),
+    [
+        pytest.param(
+            lambda s: s.step_run(),
+            2,
+            {"train": 2, "val": 2},
+            [("val", 1, 1)],
+            True,
+            id="run",
+        ),
+        pytest.param(
+            lambda s: s.step_phase(),
+            1,
+            {"train": 3, "val": 2},
+            [("train", 0, 2)],
+            False,
+            id="until_phase_change",
+        ),
+        pytest.param(
+            lambda s: s.step_until_position(phase="val", epoch=0, batch_idx=1),
+            2,
+            {"train": 2, "val": 2},
+            [("val", 0, 1)],
+            False,
+            id="until_position",
+        ),
+        pytest.param(
+            lambda s: s.step_epoch(),
+            2,
+            {"train": 2, "val": 2},
+            [("val", 0, 1)],
+            False,
+            id="until_epoch_change",
+        ),
+    ],
+)
+def test_step_modes_capture_only_at_target(
+    step: Callable[[Session], None],
+    epochs: int,
+    phases: dict[str, int],
+    expected: list[tuple[str, int, int]],
+    expect_last_overall: bool,
+) -> None:
+    """Each step mode (RUN / PHASE / UNTIL POSITION / EPOCH) captures exactly
+    the batch it targets and nothing else."""
+    session, model = make_session(epochs=epochs, phases=phases)
 
     captured_positions: list[tuple[str, int, int]] = []
     loop = _capture_positions_loop(
-        session, model, captured_positions, epochs=2, phases=phases
+        session, model, captured_positions, epochs=epochs, phases=phases
     )
 
-    session.step_run()
+    step(session)
     with paused_worker(session, loop):
-        session.close()
-    assert captured_positions == [("val", 1, 1)]
-    assert session.snapshot is not None
-    assert session.snapshot.position.is_last_overall
+        # RUN pauses at the final batch: close() releases the worker there.
+        # The other modes pause at a boundary; exit releases them via detach.
+        if expect_last_overall:
+            session.close()
+    assert captured_positions == expected
+    if expect_last_overall:
+        assert session.snapshot is not None
+        assert session.snapshot.position.is_last_overall
 
 
 def test_step_mode_pauses_on_every_batch() -> None:
@@ -95,51 +143,6 @@ def test_step_mode_pauses_on_every_batch() -> None:
         assert session.snapshot is not None
         assert session.snapshot.position.batch_idx == 1
     assert session.pause_count == 2
-
-
-def test_until_phase_change_captures_only_phase_end() -> None:
-    phases = {"train": 3, "val": 2}
-    session, model = make_session(epochs=1, phases=phases)
-
-    captured_positions: list[tuple[str, int, int]] = []
-    loop = _capture_positions_loop(
-        session, model, captured_positions, epochs=1, phases=phases
-    )
-
-    session.step_phase()
-    with paused_worker(session, loop):
-        pass  # exit releases the worker paused at the phase boundary
-    assert captured_positions == [("train", 0, 2)]
-
-
-def test_step_until_position_captures_only_at_target() -> None:
-    phases = {"train": 2, "val": 2}
-    session, model = make_session(epochs=2, phases=phases)
-
-    captured_positions: list[tuple[str, int, int]] = []
-    loop = _capture_positions_loop(
-        session, model, captured_positions, epochs=2, phases=phases
-    )
-
-    session.step_until_position(phase="val", epoch=0, batch_idx=1)
-    with paused_worker(session, loop):
-        pass  # exit releases the worker paused at the target position
-    assert captured_positions == [("val", 0, 1)]
-
-
-def test_until_epoch_change_captures_only_epoch_end() -> None:
-    phases = {"train": 2, "val": 2}
-    session, model = make_session(epochs=2, phases=phases)
-
-    captured_positions: list[tuple[str, int, int]] = []
-    loop = _capture_positions_loop(
-        session, model, captured_positions, epochs=2, phases=phases
-    )
-
-    session.step_epoch()
-    with paused_worker(session, loop):
-        pass  # exit releases the worker paused at the epoch boundary
-    assert captured_positions == [("val", 0, 1)]
 
 
 def test_live_position_starts_none_and_tracks_every_batch_under_detach() -> None:

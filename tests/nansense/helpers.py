@@ -14,7 +14,28 @@ import torch
 from torch import Tensor, nn
 
 import nansense
+from nansense.schedule import BatchPosition
 from nansense.session import Session
+
+
+def make_position(
+    phase: str,
+    epoch: int,
+    batch_idx: int,
+    *,
+    is_last_in_phase: bool = False,
+    is_last_in_epoch: bool = False,
+    is_last_overall: bool = False,
+) -> BatchPosition:
+    """A `BatchPosition` literal whose `is_last_*` flags default to False."""
+    return BatchPosition(
+        phase=phase,
+        epoch=epoch,
+        batch_idx=batch_idx,
+        is_last_in_phase=is_last_in_phase,
+        is_last_in_epoch=is_last_in_epoch,
+        is_last_overall=is_last_overall,
+    )
 
 
 class TinyNet(nn.Module):
