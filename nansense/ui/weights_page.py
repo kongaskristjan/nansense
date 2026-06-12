@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass, field
+
 from nicegui import ui
 from torch import Tensor
 
@@ -131,33 +134,73 @@ def _build_weights_page(session: Session, layer: str) -> None:
                         _WeightPanel(name=name, shape=shapes[name], session=session)
                     )
 
-    def do_refresh() -> None:
+    async def do_refresh() -> None:
         # Read the model's live parameters instead of the last snapshot, so the
         # weights update even mid-training (detach / run modes never publish a
         # snapshot). The live view then persists until the next captured batch.
-        weights = session.current_weights()
-        gradients = session.current_weight_gradients()
-        optimizer_state = session.current_optimizer_state()
-        optimizer_hyperparams = session.current_optimizer_hyperparams()
-        for panel in panels:
-            panel.show_weights(
-                weights,
-                gradients,
-                optimizer_state=optimizer_state,
-                optimizer_hyperparams=optimizer_hyperparams,
-            )
+        #
+        # The `current_*` reads are GPU→CPU clones of every parameter and the
+        # strip rendering is CPU-heavy, so both run in a worker thread —
+        # blocking the event loop here would starve NiceGUI's websocket
+        # keepalive (~6s budget) and drop connected tabs (same reason
+        # main_page's tick offloads `_compute_frame`). UI mutations
+        # (`set_content`, …) happen back on the loop once the thread returns.
+        renders = await asyncio.to_thread(_compute_live_renders, session, panels)
+        for panel, render in zip(panels, renders, strict=True):
+            panel.apply_render(render)
 
-    def tick() -> None:
+    async def tick() -> None:
         frozen = session.recording.is_recording(record_key)
         for panel in panels:
             panel.set_frozen(frozen)
         snap = session.snapshot
         if snap is None:
             return
-        for panel in panels:
-            panel.maybe_render(snap)
+        # Only the panels with a genuinely new snapshot need rendering; that
+        # decision is cheap, but the rendering it gates is not, so it runs off
+        # the loop just like `do_refresh`.
+        pending = [panel for panel in panels if panel.needs_render(snap)]
+        if not pending:
+            return
+        renders = await asyncio.to_thread(_compute_snapshot_renders, pending, snap)
+        for panel, render in zip(pending, renders, strict=True):
+            panel.apply_render(render)
 
     ui.timer(0.2, tick)
+
+
+def _compute_live_renders(
+    session: Session, panels: list[_WeightPanel]
+) -> list[_PanelRender]:
+    """GPU→CPU clone the live weights once, then render every panel (worker)."""
+    weights = session.current_weights()
+    gradients = session.current_weight_gradients()
+    optimizer_state = session.current_optimizer_state()
+    optimizer_hyperparams = session.current_optimizer_hyperparams()
+    return [
+        panel.compute_render(
+            weights,
+            gradients,
+            optimizer_state=optimizer_state,
+            optimizer_hyperparams=optimizer_hyperparams,
+        )
+        for panel in panels
+    ]
+
+
+def _compute_snapshot_renders(
+    panels: list[_WeightPanel], snap: BatchSnapshot
+) -> list[_PanelRender]:
+    """Render every pending panel against the new snapshot (worker)."""
+    return [
+        panel.compute_render(
+            snap.weights,
+            snap.weight_gradients,
+            optimizer_state=snap.optimizer_state,
+            optimizer_hyperparams=snap.optimizer_hyperparams,
+        )
+        for panel in panels
+    ]
 
 
 # Shown next to the GRADIENT marker before any backward pass has populated
@@ -167,13 +210,33 @@ _NO_GRADIENT_HTML: str = (
 )
 
 
+@dataclass
+class _PanelRender:
+    """The result of rendering one panel, computed off the event loop.
+
+    Holds only plain strings/markup — the heavy `render_weight` calls and
+    `_strip_html` encoding already happened in the worker thread, so
+    `_WeightPanel.apply_render` just writes these onto the UI elements back on
+    the loop. `error` (when set) short-circuits to the error display; otherwise
+    `weight_html` / `grad_html` / the optimizer fields drive the strips.
+    """
+
+    error: str | None = None
+    weight_html: str = ""
+    grad_html: str = ""
+    # One (marker label, strip HTML) pair per tensor-valued optimizer entry.
+    opt_strips: list[tuple[str, str]] = field(default_factory=list)
+    opt_scalar_text: str = ""
+
+
 class _WeightPanel:
     """One card per parameter — an axis-remappable kernel/image strip.
 
     The weight's rank is fixed, so the per-dimension role selects and index
     spinners are built once. Changing a role auto-demotes whichever other axis
     held that role (roles X/Y/Tile stay unique), then re-renders against the
-    last snapshot; new snapshots re-render via `maybe_render`.
+    last weights; new snapshots re-render via the page's `tick`, which only
+    touches panels whose `needs_render` reports a fresh snapshot.
     """
 
     def __init__(self, *, name: str, shape: tuple[int, ...], session: Session) -> None:
@@ -298,22 +361,18 @@ class _WeightPanel:
         for d, number in self._index_numbers.items():
             number.set_visibility(self._roles[d] == "index")
 
-    def maybe_render(self, snap: BatchSnapshot) -> None:
-        """Render snapshot weights, but only when the snapshot is new.
+    def needs_render(self, snap: BatchSnapshot) -> bool:
+        """Whether `snap` is a genuinely new snapshot worth rendering.
 
-        A manual refresh (`show_weights` with live weights) leaves
-        `_last_snapshot` untouched, so the live view persists until the next
-        captured batch publishes a genuinely fresh snapshot.
+        Marks it consumed so the next tick skips it. A manual refresh
+        (`compute_render` with live weights) leaves `_last_snapshot` untouched,
+        so the live view persists until the next captured batch publishes a
+        genuinely fresh snapshot.
         """
         if snap is self._last_snapshot:
-            return
+            return False
         self._last_snapshot = snap
-        self.show_weights(
-            snap.weights,
-            snap.weight_gradients,
-            optimizer_state=snap.optimizer_state,
-            optimizer_hyperparams=snap.optimizer_hyperparams,
-        )
+        return True
 
     def show_weights(
         self,
@@ -323,26 +382,49 @@ class _WeightPanel:
         optimizer_state: dict[str, dict[str, Tensor]],
         optimizer_hyperparams: dict[str, dict[str, float]],
     ) -> None:
-        """Display weight, gradient, and optimizer values (snapshot or live)."""
+        """Display weight, gradient, and optimizer values (snapshot or live).
+
+        Synchronous compute-and-apply, for the light paths (page build, tests).
+        The 0.2s tick and the Refresh handler instead split `compute_render`
+        (off the event loop) from `apply_render` (back on it).
+        """
+        self.apply_render(
+            self.compute_render(
+                weights,
+                gradients,
+                optimizer_state=optimizer_state,
+                optimizer_hyperparams=optimizer_hyperparams,
+            )
+        )
+
+    def compute_render(
+        self,
+        weights: dict[str, Tensor],
+        gradients: dict[str, Tensor],
+        *,
+        optimizer_state: dict[str, dict[str, Tensor]],
+        optimizer_hyperparams: dict[str, dict[str, float]],
+    ) -> _PanelRender:
+        """Render the panel's strips to HTML — pure, safe to run in a thread.
+
+        Stashes the source dicts so `_on_role` / `_on_index` can re-render the
+        same weights synchronously when the user remaps an axis, then returns a
+        `_PanelRender` the loop applies via `apply_render`. Touches no NiceGUI
+        element, so it runs off the event loop (`asyncio.to_thread`).
+        """
         self._weights = weights
         self._gradients = gradients
         self._opt_state = optimizer_state
         self._opt_hparams = optimizer_hyperparams
-        self._render()
+        return self._compute_render()
 
-    def _render_current(self) -> None:
-        if self._weights is not None:
-            self._render()
-
-    def _render(self) -> None:
+    def _compute_render(self) -> _PanelRender:
         tensor = self._weights.get(self.name) if self._weights is not None else None
         if tensor is None:
-            self._show_error("no weights captured yet")
-            return
+            return _PanelRender(error="no weights captured yet")
         x_dim, y_dim, tile_dim = dims_from_roles(self._roles)
         if x_dim is None:
-            self._show_error("select an X dimension")
-            return
+            return _PanelRender(error="select an X dimension")
         # A tiling axis only makes sense once a Y axis exists.
         tile = tile_dim if y_dim is not None else None
         fixed = {
@@ -354,10 +436,7 @@ class _WeightPanel:
             tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
         )
         if strip is None:
-            self._show_error("invalid axis selection")
-            return
-        self._error.text = ""
-        self._img.set_content(_strip_html(strip))
+            return _PanelRender(error="invalid axis selection")
         # The gradient shares the weight's shape, so the same axis layout
         # applies; it's simply absent before the first backward pass.
         grad = self._gradients.get(self.name) if self._gradients is not None else None
@@ -366,61 +445,89 @@ class _WeightPanel:
             if grad is not None
             else None
         )
-        self._grad_img.set_content(
-            _strip_html(grad_strip) if grad_strip is not None else _NO_GRADIENT_HTML
+        opt_strips, opt_scalar_text = self._compute_optimizer_values(
+            x_dim=x_dim, y_dim=y_dim, tile=tile, fixed=fixed
         )
-        self._render_optimizer_values(x_dim=x_dim, y_dim=y_dim, tile=tile, fixed=fixed)
+        return _PanelRender(
+            weight_html=_strip_html(strip),
+            grad_html=(
+                _strip_html(grad_strip)
+                if grad_strip is not None
+                else _NO_GRADIENT_HTML
+            ),
+            opt_strips=opt_strips,
+            opt_scalar_text=opt_scalar_text,
+        )
 
-    def _render_optimizer_values(
+    def _compute_optimizer_values(
         self,
         *,
         x_dim: int,
         y_dim: int | None,
         tile: int | None,
         fixed: dict[int, int],
-    ) -> None:
-        """Rebuild the optimizer strips + scalar line below the gradient.
+    ) -> tuple[list[tuple[str, str]], str]:
+        """Render the optimizer strips + scalar line below the gradient (pure).
 
         Tensor state entries matching the weight's shape (momentum buffers,
         Adam moments) reuse the panel's axis layout; differently-shaped ones
         (e.g. factored second moments) fall back to their own rank's default
         axes. 0-dim entries (Adam's `step`) join the group hyperparameters
         (`lr`, …) on a single scalar line. With no optimizer attached both
-        stay empty, leaving the panel exactly as before.
+        stay empty, leaving the panel exactly as before. Returns the
+        `(marker label, strip HTML)` pairs and the scalar-line text; building
+        the elements is `apply_render`'s job, back on the event loop.
         """
         entries = dict(sorted(self._opt_state.get(self.name, {}).items()))
-        self._opt_container.clear()
+        opt_strips: list[tuple[str, str]] = []
         scalar_parts: list[str] = []
-        with self._opt_container:
-            for key, tensor in entries.items():
-                if tensor.ndim == 0:
-                    scalar_parts.append(f"{key} = {_format_stat(float(tensor))}")
-                    continue
-                if tuple(tensor.shape) == self._shape:
-                    strip = render_weight(
-                        tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
-                    )
-                else:
-                    dims = default_weight_dims(tensor.ndim)
-                    strip = render_weight(
-                        tensor,
-                        x_dim=dims.x_dim,
-                        y_dim=dims.y_dim,
-                        tile_dim=dims.tile_dim,
-                        fixed={},
-                    )
-                if strip is None:
-                    continue
-                ui.element("div").classes("h-1")
-                with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-amber-600", key.upper())
-                    ui.html(_strip_html(strip))
+        for key, tensor in entries.items():
+            if tensor.ndim == 0:
+                scalar_parts.append(f"{key} = {_format_stat(float(tensor))}")
+                continue
+            if tuple(tensor.shape) == self._shape:
+                strip = render_weight(
+                    tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
+                )
+            else:
+                dims = default_weight_dims(tensor.ndim)
+                strip = render_weight(
+                    tensor,
+                    x_dim=dims.x_dim,
+                    y_dim=dims.y_dim,
+                    tile_dim=dims.tile_dim,
+                    fixed={},
+                )
+            if strip is None:
+                continue
+            opt_strips.append((key.upper(), _strip_html(strip)))
         scalar_parts += [
             f"{key} = {_format_stat(value)}"
             for key, value in sorted(self._opt_hparams.get(self.name, {}).items())
         ]
-        self._opt_scalars.text = "  ·  ".join(scalar_parts)
-        self._opt_scalars.set_visibility(bool(scalar_parts))
+        return opt_strips, "  ·  ".join(scalar_parts)
+
+    def apply_render(self, render: _PanelRender) -> None:
+        """Push a computed `_PanelRender` onto the UI elements (event loop)."""
+        if render.error is not None:
+            self._show_error(render.error)
+            return
+        self._error.text = ""
+        self._img.set_content(render.weight_html)
+        self._grad_img.set_content(render.grad_html)
+        self._opt_container.clear()
+        with self._opt_container:
+            for label, strip_html in render.opt_strips:
+                ui.element("div").classes("h-1")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-amber-600", label)
+                    ui.html(strip_html)
+        self._opt_scalars.text = render.opt_scalar_text
+        self._opt_scalars.set_visibility(bool(render.opt_scalar_text))
+
+    def _render_current(self) -> None:
+        if self._weights is not None:
+            self.apply_render(self._compute_render())
 
     def _show_error(self, message: str) -> None:
         self._error.text = message

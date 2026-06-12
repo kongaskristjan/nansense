@@ -545,6 +545,7 @@ def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
             phase = str(phase_select.value)
             error = _validate_step_until_target(
                 schedule=schedule,
+                live_position=session.live_position,
                 snapshot=session.snapshot,
                 phase=phase,
                 epoch=epoch,
@@ -596,6 +597,7 @@ def _step_until_default_position(
 def _validate_step_until_target(
     *,
     schedule: Schedule,
+    live_position: BatchPosition | None,
     snapshot: BatchSnapshot | None,
     phase: str,
     epoch: int,
@@ -609,10 +611,19 @@ def _validate_step_until_target(
     declared = phases[phase]
     if not 0 <= batch_idx < declared:
         return f"Batch must be in [0, {declared - 1}] for phase {phase!r}"
-    if snapshot is not None:
-        cur = snapshot.position
+    # `step_until_position` captures on an *exact* (phase, epoch, batch_idx)
+    # match against the live training position, so validate against that same
+    # source the dialog prefills from (see `_step_until_default_position`).
+    # `snapshot.position` is stale mid-step_epoch/step_run/detach — a target
+    # between it and the live position would pass here yet never be hit.
+    current = live_position if live_position is not None else (
+        snapshot.position if snapshot is not None else None
+    )
+    if current is not None:
         target_rank = _position_rank(phases, phase, epoch, batch_idx)
-        current_rank = _position_rank(phases, cur.phase, cur.epoch, cur.batch_idx)
+        current_rank = _position_rank(
+            phases, current.phase, current.epoch, current.batch_idx
+        )
         if target_rank <= current_rank:
             return "Target must be after the current position"
     return None

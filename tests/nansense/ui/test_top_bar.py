@@ -28,7 +28,12 @@ def test_validate_passes_for_future_position(schedule: Schedule) -> None:
     snap = _snapshot_at("train", 0, 1)
     assert (
         _validate_step_until_target(
-            schedule=schedule, snapshot=snap, phase="val", epoch=0, batch_idx=0
+            schedule=schedule,
+            live_position=None,
+            snapshot=snap,
+            phase="val",
+            epoch=0,
+            batch_idx=0,
         )
         is None
     )
@@ -37,7 +42,48 @@ def test_validate_passes_for_future_position(schedule: Schedule) -> None:
 def test_validate_passes_when_no_snapshot_yet(schedule: Schedule) -> None:
     assert (
         _validate_step_until_target(
-            schedule=schedule, snapshot=None, phase="train", epoch=0, batch_idx=0
+            schedule=schedule,
+            live_position=None,
+            snapshot=None,
+            phase="train",
+            epoch=0,
+            batch_idx=0,
+        )
+        is None
+    )
+
+
+def test_validate_uses_live_position_over_stale_snapshot(schedule: Schedule) -> None:
+    """The live position runs ahead of the snapshot during step_epoch/run/detach.
+
+    `step_until_position` only captures on an *exact* (phase, epoch, batch_idx)
+    match against the live position, so a target between the stale snapshot and
+    the live position can never be hit — it must be rejected, not silently let
+    training run to the end.
+    """
+    snap = _snapshot_at("train", 0, 0)
+    live = make_position("train", 1, 3)
+    # Between snapshot (train,0,0) and live (train,1,3): already passed.
+    assert (
+        _validate_step_until_target(
+            schedule=schedule,
+            live_position=live,
+            snapshot=snap,
+            phase="train",
+            epoch=0,
+            batch_idx=4,
+        )
+        == "Target must be after the current position"
+    )
+    # Strictly ahead of the live position: accepted.
+    assert (
+        _validate_step_until_target(
+            schedule=schedule,
+            live_position=live,
+            snapshot=snap,
+            phase="train",
+            epoch=2,
+            batch_idx=0,
         )
         is None
     )
@@ -84,7 +130,12 @@ def test_validate_step_until_rejects_invalid_targets(
     """`current` is the last-captured position (None: nothing captured yet)."""
     snap = _snapshot_at(*current) if current is not None else None
     msg = _validate_step_until_target(
-        schedule=schedule, snapshot=snap, phase=phase, epoch=epoch, batch_idx=batch_idx
+        schedule=schedule,
+        live_position=None,
+        snapshot=snap,
+        phase=phase,
+        epoch=epoch,
+        batch_idx=batch_idx,
     )
     assert msg is not None
     assert expected in msg

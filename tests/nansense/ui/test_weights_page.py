@@ -1,10 +1,23 @@
-"""Tests for axis-role options and defaults in nansense.ui.weights_page."""
+"""Tests for axis-role options/defaults and the off-loop render path in
+nansense.ui.weights_page."""
 
 from __future__ import annotations
 
-import pytest
+import asyncio
 
-from nansense.ui.weights_page import _default_roles, _role_options
+import pytest
+import torch
+
+from nansense.session import Session
+from nansense.ui.weights_page import (
+    _NO_GRADIENT_HTML,
+    _compute_live_renders,
+    _default_roles,
+    _PanelRender,
+    _role_options,
+    _WeightPanel,
+)
+from tests.nansense.helpers import make_session
 
 
 @pytest.mark.parametrize(
@@ -31,3 +44,72 @@ def test_role_options_scale_with_rank(ndim: int, expected: list[str]) -> None:
 )
 def test_default_roles_match_default_dims(ndim: int, roles: list[str]) -> None:
     assert _default_roles(ndim) == roles
+
+
+def _first_weight_panel(session: Session) -> _WeightPanel:
+    """A panel for the first parameter the session's layers own."""
+    layer = next(layer for layer, names in session.layer_weights.items() if names)
+    name = session.layer_weights[layer][0]
+    shape = tuple(dict(session.model.named_parameters())[name].shape)
+    return _WeightPanel(name=name, shape=shape, session=session)
+
+
+def test_compute_render_produces_strip_html() -> None:
+    """The pure render step emits weight + gradient strip markup off the loop."""
+    session, _ = make_session()
+    panel = _first_weight_panel(session)
+    tensor = torch.randn(*panel._shape)
+    render = panel.compute_render(
+        {panel.name: tensor},
+        {panel.name: torch.randn(*panel._shape)},
+        optimizer_state={},
+        optimizer_hyperparams={},
+    )
+    assert render.error is None
+    assert render.weight_html
+    assert render.grad_html != _NO_GRADIENT_HTML
+
+
+def test_compute_render_no_gradient_placeholder() -> None:
+    """A weight with no captured gradient renders the placeholder note."""
+    session, _ = make_session()
+    panel = _first_weight_panel(session)
+    render = panel.compute_render(
+        {panel.name: torch.randn(*panel._shape)},
+        {},
+        optimizer_state={},
+        optimizer_hyperparams={},
+    )
+    assert render.error is None
+    assert render.grad_html == _NO_GRADIENT_HTML
+
+
+def test_compute_render_missing_weight_is_error() -> None:
+    session, _ = make_session()
+    panel = _first_weight_panel(session)
+    render = panel.compute_render(
+        {}, {}, optimizer_state={}, optimizer_hyperparams={}
+    )
+    assert render.error == "no weights captured yet"
+    assert not render.weight_html
+
+
+def test_compute_live_renders_runs_off_the_event_loop() -> None:
+    """The Refresh payload (live `current_*` clones + strip render) is the unit
+    `do_refresh` hands to `asyncio.to_thread`; running it through a thread must
+    produce the same rendered content the loop would.
+
+    This mirrors main_page's `tick`, which offloads `_compute_frame` so the
+    GPU→CPU clones and CPU-heavy rendering never block NiceGUI's websocket
+    keepalive.
+    """
+    session, _ = make_session()
+    panel = _first_weight_panel(session)
+
+    async def run() -> list[_PanelRender]:
+        return await asyncio.to_thread(_compute_live_renders, session, [panel])
+
+    renders = asyncio.run(run())
+    assert len(renders) == 1
+    assert renders[0].error is None
+    assert renders[0].weight_html
