@@ -80,6 +80,55 @@ _STAT_ROWS: tuple[tuple[str, Callable[[TensorStatsSnapshot], str]], ...] = (
     ("max", lambda s: _format_stat(s.max)),
 )
 
+# Cap on channel indices listed in the dead-channels hover tooltip.
+_DEAD_CHANNELS_LISTED: int = 10
+
+
+def dead_channels(stats: TensorStatsSnapshot) -> list[int] | None:
+    """Indices of channels whose every observed value landed in the zero bin.
+
+    The zero bin holds exact zeros and sub-`1e-9` magnitudes (NaNs also land
+    there), so this flags channels that never produced a meaningful
+    activation — e.g. dead ReLUs. Returns `None` when per-channel histograms
+    aren't tracked for this stream.
+    """
+    if stats.channel_hists is None:
+        return None
+    return [
+        c
+        for c, row in enumerate(stats.channel_hists)
+        if sum(row) > 0 and row[ZERO_BIN] == sum(row)
+    ]
+
+
+def _dead_channels_cells(
+    per_phase: dict[str, LayerStatsSnapshot], phases: list[str]
+) -> str:
+    """One table cell per phase: the dead-channel count, hover for indices.
+
+    Shows "—" when per-channel histograms aren't available for the phase;
+    a non-zero count gets a dotted underline plus a `title` tooltip listing
+    the first `_DEAD_CHANNELS_LISTED` indices ("..." marks truncation).
+    """
+    cells: list[str] = []
+    for p in phases:
+        dead = dead_channels(per_phase[p].activations)
+        if dead is None:
+            cells.append(f'<td style="{_STATS_CELL_STYLE};color:#1e293b">—</td>')
+            continue
+        listed = ", ".join(str(c) for c in dead[:_DEAD_CHANNELS_LISTED])
+        if len(dead) > _DEAD_CHANNELS_LISTED:
+            listed += ", ..."
+        hover = (
+            f' title="channels: {listed}"'
+            f' style="{_STATS_CELL_STYLE};color:#1e293b;'
+            'text-decoration:underline dotted;cursor:help"'
+            if dead
+            else f' style="{_STATS_CELL_STYLE};color:#1e293b"'
+        )
+        cells.append(f"<td{hover}>{len(dead)}</td>")
+    return "".join(cells)
+
 _STATS_CELL_STYLE: str = "padding:2px 26px 2px 0;text-align:left"
 
 # Light framed card around each stats table so it stands out from the page
@@ -95,8 +144,10 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> st
 
     The header of each phase column ("train ep 0") is tinted with the phase's
     trace color so it reads against the matching bars in the histogram below,
-    and the whole table sits in a light framed box for visibility. Returns a
-    plain "no data yet" note while the phase has no samples.
+    and the whole table sits in a light framed box for visibility. The
+    activation table gets an extra "dead channels" row (count per phase,
+    indices on hover). Returns a plain "no data yet" note while the phase has
+    no samples.
     """
     phases = _phases_with_data(per_phase, kind)
     if not phases:
@@ -118,6 +169,11 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> st
         + "</tr>"
         for label, fmt in _STAT_ROWS
     )
+    if kind == "activation":
+        rows += (
+            f'<tr><td style="{_STATS_CELL_STYLE};color:#64748b">dead channels'
+            f"</td>{_dead_channels_cells(per_phase, phases)}</tr>"
+        )
     return (
         f'<div style="{_STATS_BOX_STYLE}">'
         '<table style="border-collapse:collapse">'
