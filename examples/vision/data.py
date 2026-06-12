@@ -1,4 +1,4 @@
-"""CIFAR10 / Imagenette data loading with standard augmentations."""
+"""MNIST / CIFAR10 / Imagenette data loading with standard augmentations."""
 
 from __future__ import annotations
 
@@ -16,15 +16,26 @@ class DatasetConfig:
     name: str
     image_size: int
     num_classes: int
-    mean: tuple[float, float, float]
-    std: tuple[float, float, float]
+    in_channels: int
+    mean: tuple[float, ...]
+    std: tuple[float, ...]
 
 
 DATASETS: dict[str, DatasetConfig] = {
+    # 28x28 grayscale digits, scaled up to the 32x32 the models train at.
+    "mnist": DatasetConfig(
+        name="mnist",
+        image_size=32,
+        num_classes=10,
+        in_channels=1,
+        mean=(0.1307,),
+        std=(0.3081,),
+    ),
     "cifar10": DatasetConfig(
         name="cifar10",
         image_size=32,
         num_classes=10,
+        in_channels=3,
         mean=(0.4914, 0.4822, 0.4465),
         std=(0.2470, 0.2435, 0.2616),
     ),
@@ -33,6 +44,7 @@ DATASETS: dict[str, DatasetConfig] = {
         name="imagenette",
         image_size=128,
         num_classes=10,
+        in_channels=3,
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225),
     ),
@@ -42,6 +54,18 @@ DATASETS: dict[str, DatasetConfig] = {
 def build_transforms(config: DatasetConfig, train: bool) -> transforms.Compose:
     normalize = [transforms.ToTensor(), transforms.Normalize(config.mean, config.std)]
     size = config.image_size
+    if config.name == "mnist":
+        scale = [transforms.Resize((size, size))]
+        if train:
+            return transforms.Compose(
+                [
+                    *scale,
+                    transforms.RandomCrop(size, padding=2),
+                    transforms.RandomRotation(10),
+                    *normalize,
+                ]
+            )
+        return transforms.Compose([*scale, *normalize])
     if config.name == "cifar10":
         if train:
             return transforms.Compose(
@@ -72,6 +96,10 @@ def build_transforms(config: DatasetConfig, train: bool) -> transforms.Compose:
 
 def _build_dataset(config: DatasetConfig, data_dir: Path, train: bool, download: bool) -> Dataset:
     transform = build_transforms(config, train=train)
+    if config.name == "mnist":
+        return datasets.MNIST(
+            root=str(data_dir), train=train, download=download, transform=transform
+        )
     if config.name == "cifar10":
         return datasets.CIFAR10(
             root=str(data_dir), train=train, download=download, transform=transform

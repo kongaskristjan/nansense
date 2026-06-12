@@ -67,14 +67,18 @@ class PreActResNet(nn.Module):
     STEM_CHANNELS: int = 16
 
     def __init__(
-        self, num_classes: int = 10, blocks_per_stage: int = 3, num_stages: int = 3
+        self,
+        num_classes: int = 10,
+        blocks_per_stage: int = 3,
+        num_stages: int = 3,
+        in_channels: int = 3,
     ) -> None:
         super().__init__()
         if num_stages < 1:
             raise ValueError(f"num_stages must be >= 1, got {num_stages}")
         self.num_stages = num_stages
         self.stem = nn.Conv2d(
-            3, self.STEM_CHANNELS, kernel_size=3, stride=1, padding=1, bias=False
+            in_channels, self.STEM_CHANNELS, kernel_size=3, stride=1, padding=1, bias=False
         )
         in_channels = self.STEM_CHANNELS
         for i in range(num_stages):

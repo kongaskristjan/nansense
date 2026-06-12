@@ -45,12 +45,12 @@ Available examples:
 
 - `examples.mnist_linear.main` — a single linear layer on MNIST with the
   minimal nansense wiring (no scheduler, no time travel).
-- `examples.mnist_lenet.main` — LeNet-5 on MNIST: SGD + momentum, basic
-  augmentation, and the full wiring (scheduler, time travel, checkpoints).
 - `examples.vision.main` — a small pre-activation ResNet (default), a
-  deeper five-stage variant (`--model resnet_deep`), or a simple ViT
-  (`--model vit`) on CIFAR10 (default) or Imagenette
-  (`--dataset imagenette`), trained with AdamW + a cosine schedule.
+  deeper five-stage variant (`--model resnet_deep`), a simple ViT
+  (`--model vit`), or LeNet-5 (`--model lenet`) on CIFAR10 (default),
+  MNIST (`--dataset mnist`, scaled to 32x32), or Imagenette
+  (`--dataset imagenette`), trained with AdamW + a cosine schedule and
+  the full wiring (scheduler, time travel, checkpoints).
 
 ## Minimal example
 

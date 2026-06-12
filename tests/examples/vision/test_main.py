@@ -10,6 +10,7 @@ import torch
 from examples import common
 from examples.vision import main as main_module
 from examples.vision.data import DATASETS
+from examples.vision.lenet import LeNet
 from examples.vision.resnet import PreActResNet
 from examples.vision.vit import SimpleViT
 
@@ -35,12 +36,17 @@ def test_enable_line_buffering_tolerates_non_textiowrapper_stdout(
 @pytest.mark.parametrize("dataset", sorted(DATASETS))
 @pytest.mark.parametrize(
     ("model_name", "model_cls"),
-    [("resnet", PreActResNet), ("resnet_deep", PreActResNet), ("vit", SimpleViT)],
+    [
+        ("resnet", PreActResNet),
+        ("resnet_deep", PreActResNet),
+        ("vit", SimpleViT),
+        ("lenet", LeNet),
+    ],
 )
 def test_build_model(dataset: str, model_name: str, model_cls: type) -> None:
     config = DATASETS[dataset]
     model = main_module.build_model(model_name, config, blocks_per_stage=1)
     assert isinstance(model, model_cls)
-    # Both architectures must accept the dataset's native input size.
-    x = torch.randn(2, 3, config.image_size, config.image_size)
+    # Every architecture must accept the dataset's native input shape.
+    x = torch.randn(2, config.in_channels, config.image_size, config.image_size)
     assert model(x).shape == (2, config.num_classes)

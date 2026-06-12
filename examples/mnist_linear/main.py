@@ -2,8 +2,8 @@
 
 Everything lives in this one file: a `Flatten -> Linear` model, plain SGD,
 and the minimal nansense wiring (`nansense.start` + `session.batches`).
-No scheduler, no time travel, no checkpointing — see `examples/mnist_lenet`
-and `examples/vision` for the full wiring.
+No scheduler, no time travel, no checkpointing — see `examples/vision`
+for the full wiring.
 """
 
 from __future__ import annotations
