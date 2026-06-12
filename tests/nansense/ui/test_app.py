@@ -1,4 +1,4 @@
-"""Tests for pure helpers in `nansense.ui.app`."""
+"""Tests for pure helpers in `nansense.ui`."""
 
 from __future__ import annotations
 
@@ -10,41 +10,49 @@ from nansense.patches import PATCH_TYPES, PatchAccumulator
 from nansense.probe import ProbeResult
 from nansense.schedule import BatchPosition, Schedule
 from nansense.session import BatchSnapshot
-from nansense.ui.app import (
+from nansense.ui.app import serve
+from nansense.ui.common import _strip_html
+from nansense.ui.histograms import (
     _BIN_WIDTHS,
     _HIST_EDGES,
     _PLOT_HEIGHT,
-    _PLOTLY_CONFIG,
-    _PROBE_NO_GRADIENTS_HTML,
-    _RenderCache,
     _axis_ranges,
-    _bin_samples_html,
-    _compute_frame,
-    _display_batch_size,
-    _default_roles,
-    _dims_from_roles,
-    _figure_payload,
     _fill_fraction,
-    _filter_phase,
-    _input_img_src,
     _linear_x_range,
     _linear_y_range,
     _log_x_range,
     _make_histogram_figure,
-    _patch_grids_html,
-    _patch_grids_signature,
     _phases_with_data,
     _probabilities,
     _probability_densities,
-    _role_options,
     _stats_table_html,
-    _step_until_default_position,
-    _strip_html,
-    _summarize_epoch_ranges,
     _trimmed_bin_bounds,
     _use_density,
+)
+from nansense.ui.main_page import (
+    _PROBE_NO_GRADIENTS_HTML,
+    _RenderCache,
+    _compute_frame,
+    _display_batch_size,
+    _input_img_src,
+)
+from nansense.ui.top_bar import (
+    _step_until_default_position,
+    _summarize_epoch_ranges,
     _validate_step_until_target,
-    serve,
+)
+from nansense.ui.watch_page import (
+    _PLOTLY_CONFIG,
+    _bin_samples_html,
+    _figure_payload,
+    _filter_phase,
+    _patch_grids_html,
+    _patch_grids_signature,
+)
+from nansense.ui.weights_page import (
+    _default_roles,
+    _dims_from_roles,
+    _role_options,
 )
 from nansense.ui.render import (
     INPUT_IMAGE_SIZE,
@@ -1057,7 +1065,7 @@ def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
 
 def test_experiment_params_cover_every_kind() -> None:
     from nansense.experiments import EXPERIMENT_KINDS
-    from nansense.ui.app import _EXPERIMENT_PARAMS
+    from nansense.ui.experiment_page import _EXPERIMENT_PARAMS
 
     assert set(_EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
     for kind, specs in _EXPERIMENT_PARAMS.items():
@@ -1071,7 +1079,7 @@ def test_experiment_params_cover_every_kind() -> None:
 
 
 def test_layer_channel_count_reads_snapshot_activation() -> None:
-    from nansense.ui.app import _layer_channel_count
+    from nansense.ui.experiment_page import _layer_channel_count
 
     snap = _frame_snapshot()
     snap.activations["vec"] = torch.rand(5)  # channel-less activation

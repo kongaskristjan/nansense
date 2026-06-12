@@ -725,6 +725,21 @@ DataLoader shuffling exact. (Lightning's sanity check runs under
 drives `Session` via the five control methods plus `detach` and `close`.
 It does not touch tensors directly until they need to be rendered.
 
+The app is split into one module per page plus shared support modules:
+`app.py` (just `serve` and the page routes), `main_page.py` (the main
+page: `_build_page`, `_LayerView`, `_compute_frame` / `_compute_probe_frame`,
+`_RenderCache`, `_RENDER_POOL`), `watch_page.py` (`_build_watch_page`,
+`_WatchLayerPanel`, `_HistPlot`, patch-grid/bin-samples HTML),
+`weights_page.py` (`_build_weights_page`, `_WeightPanel`, role helpers),
+`experiment_page.py` (`_build_experiment_page`, `_EXPERIMENT_PARAMS`),
+`top_bar.py` (the shared top-bar/step controls and the time-travel,
+settings/recording, and step-until dialogs), `histograms.py` (pure
+histogram math + Plotly figure construction), `common.py` (small
+cross-page helpers like `_strip_html` / `_strip_marker` /
+`_set_controls_enabled`), and `static.py` (the static CSS/JS blobs). The
+page modules import from `top_bar` / `common` / `histograms` / `static`;
+`app.py` imports the page modules — the graph is acyclic.
+
 - `nansense.ui.graph.build_mermaid(model)` produces the Mermaid TD source
   for the architecture view. It tries `torch.fx.symbolic_trace(model)`
   first, which yields a real data-flow graph — vertical chains, with
@@ -745,7 +760,8 @@ It does not touch tensors directly until they need to be rendered.
     CSS sizing plus `image-rendering: pixelated` — equivalent to the old
     server-side nearest-neighbour interpolation, but an 8×8 feature map
     travels as 64 pixels instead of 16k; the separators scale together
-    with the tiles (`_strip_html` in `app.py` builds the two-`<img>` row).
+    with the tiles (`_strip_html` in `nansense.ui.common` builds the
+    two-`<img>` row).
   - For `[F]` the data image is a single 1-px-tall heatmap row, downsampled
     to at most `LINEAR_MAX_BINS` bins when `F` is large, stretched
     client-side to `LINEAR_BIN_WIDTH` per bin × `LINEAR_TILE_HEIGHT`.
@@ -798,14 +814,16 @@ It does not touch tensors directly until they need to be rendered.
   last axis X, second-to-last Y, third-to-last the tile axis, the rest
   fixed — which renders 4D conv weights as kernels, 2D as one image, 1D as
   one row. Duplicate or out-of-range axes return `None`.
-- The top-bar control row is shared via `_top_bar_row()` (the row
-  container) and `_add_step_controls(session, dialog)` (the five stepping
+- The top-bar control row is shared via `nansense.ui.top_bar`:
+  `_top_bar_row()` (the row container) and
+  `_add_step_controls(session, dialog)` (the five stepping
   buttons + a live-position label, returned for the page's timer to
-  refresh through `_format_live_position`). The main page, `/watch`,
+  refresh through `format_position`). The main page, `/watch`,
   `/weights`, and `/experiment` all build their bars from these, differing
   only in the leading/trailing widgets they add around the shared controls.
 - `nansense.ui.app.serve(session, port=..., host=...)` runs the NiceGUI
-  app on a background thread. NiceGUI is mounted onto a bare FastAPI
+  app on a background thread, wiring the four page routes to their
+  page-builder modules. NiceGUI is mounted onto a bare FastAPI
   app via `ui.run_with`, which is then served by `uvicorn.Server` from
   the thread. `install_signal_handlers` is patched to a no-op because
   uvicorn would otherwise try to register SIGINT/SIGTERM handlers from

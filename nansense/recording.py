@@ -575,7 +575,7 @@ def _tensor_hw(tensor: Tensor | None) -> tuple[int, int] | None:
 
 def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | None:
     """One layer's weight / gradient / optimizer strips under frozen axes."""
-    from nansense.ui.app import _dims_from_roles
+    from nansense.ui.weights_page import _dims_from_roles
     from nansense.ui.render import default_weight_dims, render_weight
 
     snap = session.snapshot
@@ -717,7 +717,7 @@ def _draw_histogram_axes(
     log_y: bool,
 ) -> None:
     """One subplot: the same bars/ranges the watch page draws with Plotly."""
-    from nansense.ui.app import (
+    from nansense.ui.histograms import (
         _BIN_CENTERS,
         _BIN_WIDTHS,
         _axis_ranges,
