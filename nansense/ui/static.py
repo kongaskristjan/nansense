@@ -37,6 +37,24 @@ _ARCHITECTURE_CLICK_CSS: str = """
       drop-shadow(0 0 6px rgb(245 158 11))
       drop-shadow(0 0 4px rgb(96 165 250));
   }
+  /* Hyperparameter tooltip shown while hovering a diagram node or a card
+     header (see the layer-info block in the JS blob). `pointer-events:
+     none` keeps the cursor-chasing div from stealing the hover it serves. */
+  .nansense-layer-tooltip {
+    position: fixed;
+    z-index: 10000;
+    max-width: 28rem;
+    padding: 4px 8px;
+    background: rgb(15 23 42 / 0.92);
+    color: rgb(241 245 249);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    border-radius: 4px;
+    pointer-events: none;
+    overflow-wrap: anywhere;
+    display: none;
+  }
 </style>
 """
 
@@ -130,6 +148,51 @@ _ARCHITECTURE_CLICK_JS: str = """
   });
   document.addEventListener('mouseleave', function() {
     setHighlight(null);
+  });
+
+  // Layer-info tooltip: the page publishes `window.nansenseLayerInfo`
+  // (slug -> hyperparameter string, see `_layer_info_script`); hovering a
+  // diagram node or a card *header* shows the hovered layer's entry next
+  // to the cursor. Layers without an entry (relu, add, inputs) show none.
+  const infoTooltip = document.createElement('div');
+  infoTooltip.className = 'nansense-layer-tooltip';
+  document.body.appendChild(infoTooltip);
+
+  function infoSlug(el) {
+    if (!el || !el.closest) return null;
+    const node = el.closest('g.node');
+    if (node) return slugFromMermaidId(node.id);
+    const card = el.closest('[data-layer]');
+    // Only the header names the layer; the strip area below is data.
+    if (card && card.firstElementChild && card.firstElementChild.contains(el)) {
+      return card.getAttribute('data-layer');
+    }
+    return null;
+  }
+  function moveInfoTooltip(e) {
+    const pad = 14;
+    const rect = infoTooltip.getBoundingClientRect();
+    let x = e.clientX + pad;
+    let y = e.clientY + pad;
+    if (x + rect.width > window.innerWidth - 4) x = e.clientX - rect.width - pad;
+    if (y + rect.height > window.innerHeight - 4) y = e.clientY - rect.height - pad;
+    infoTooltip.style.left = Math.max(x, 4) + 'px';
+    infoTooltip.style.top = Math.max(y, 4) + 'px';
+  }
+  document.addEventListener('mousemove', function(e) {
+    const slug = infoSlug(e.target);
+    const info = slug && window.nansenseLayerInfo
+      ? window.nansenseLayerInfo[slug] : null;
+    if (!info) {
+      infoTooltip.style.display = 'none';
+      return;
+    }
+    infoTooltip.textContent = info;
+    infoTooltip.style.display = 'block';
+    moveInfoTooltip(e);
+  });
+  document.addEventListener('mouseleave', function() {
+    infoTooltip.style.display = 'none';
   });
 
   document.addEventListener('click', function(e) {

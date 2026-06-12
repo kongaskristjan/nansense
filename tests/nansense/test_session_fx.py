@@ -1,4 +1,5 @@
-"""Tests for fx tracing, scoped intermediates, and the layer_weights mapping."""
+"""Tests for fx tracing, scoped intermediates, and the layer_weights and
+layer_info mappings."""
 
 from __future__ import annotations
 
@@ -189,6 +190,42 @@ def test_layer_weights_uses_module_subtree_in_hook_fallback() -> None:
     session = nansense.start(DynamicNet(), epochs=1, phases={"train": 1})
     assert not session.fx_traced
     assert session.layer_weights == {"x": [], "fc": ["fc.bias", "fc.weight"]}
+
+
+def test_layer_info_reports_module_and_functional_hyperparameters() -> None:
+    """Module layers carry their extra_repr signature, fx ops their literal
+    call arguments, and tensor-only ops / graph inputs carry nothing."""
+
+    class PoolNet(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv = nn.Conv2d(3, 4, kernel_size=3, stride=2, padding=1, bias=False)
+
+        def forward(self, x: Tensor) -> Tensor:
+            y = torch.relu(self.conv(x))
+            y = nn.functional.max_pool2d(y, 2)
+            return torch.flatten(y, 1)
+
+    session = nansense.start(PoolNet(), epochs=1, phases={"train": 1})
+    assert session.fx_traced
+    info = session.layer_info
+    assert set(info) == set(session.layer_names)
+    assert info["conv"] == (
+        "Conv2d(3, 4, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)"
+    )
+    assert info["x"] == ""
+    assert info["relu"] == ""  # all-tensor args: nothing to report
+    assert info["max_pool2d"].startswith("max_pool2d(2")
+    assert info["flatten"] == "flatten(1)"
+
+
+def test_layer_info_uses_module_repr_in_hook_fallback() -> None:
+    session = nansense.start(DynamicNet(), epochs=1, phases={"train": 1})
+    assert not session.fx_traced
+    assert session.layer_info == {
+        "x": "",
+        "fc": "Linear(in_features=4, out_features=2, bias=True)",
+    }
 
 
 def test_layer_weights_keys_index_into_snapshot_weights() -> None:

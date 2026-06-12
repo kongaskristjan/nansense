@@ -110,6 +110,19 @@ class _RenderCache:
         return html
 
 
+def _layer_info_script(layer_info: dict[str, str]) -> str:
+    """Body script publishing the slug -> hyperparameter map the tooltip reads.
+
+    Empty entries (graph inputs, relu, add, …) are dropped so the client
+    can treat "no entry" as "no tooltip". The `</` escape keeps a
+    pathological `extra_repr` from closing the script tag early.
+    """
+    payload = json.dumps(
+        {slug(name): info for name, info in layer_info.items() if info}
+    ).replace("</", "<\\/")
+    return f"<script>window.nansenseLayerInfo = {payload};</script>"
+
+
 def _build_page(
     session: Session,
     mermaid_src: str,
@@ -151,6 +164,7 @@ def _build_page(
     ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
     ui.add_head_html(_STRIP_MARKER_CSS)
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
+    ui.add_body_html(_layer_info_script(session.layer_info))
 
     step_until_custom = _build_step_until_custom_dialog(session)
 

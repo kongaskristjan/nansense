@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import torch
 
@@ -13,6 +15,7 @@ from nansense.ui.main_page import (
     _compute_frame,
     _display_batch_size,
     _input_img_src,
+    _layer_info_script,
 )
 from nansense.ui.render import image_mime, render_image, render_strip
 from tests.nansense.helpers import _frame_snapshot, _make_snapshot
@@ -24,6 +27,26 @@ def test_input_img_src_is_a_data_uri() -> None:
     src = _input_img_src(png)
     assert src.startswith(f"data:{image_mime()};base64,")
     assert _input_img_src(None) == ""
+
+
+def test_layer_info_script_publishes_nonempty_entries_by_slug() -> None:
+    script = _layer_info_script({"stage1.0.conv": "Conv2d(3, 4)", "relu": ""})
+    prefix = "<script>window.nansenseLayerInfo = "
+    suffix = ";</script>"
+    assert script.startswith(prefix) and script.endswith(suffix)
+    payload = json.loads(script[len(prefix) : -len(suffix)])
+    # Keyed by slug (dots become underscores, matching the DOM ids), and
+    # empty entries are dropped so "no entry" means "no tooltip".
+    assert payload == {"stage1_0_conv": "Conv2d(3, 4)"}
+
+
+def test_layer_info_script_cannot_close_its_script_tag_early() -> None:
+    script = _layer_info_script({"m": "Weird(</script>)"})
+    inner = script[len("<script>") : -len("</script>")]
+    assert "</" not in inner
+    # The escaped payload still decodes back to the original string.
+    payload = json.loads(inner[len("window.nansenseLayerInfo = ") : -1])
+    assert payload == {"m": "Weird(</script>)"}
 
 
 def test_render_cache_renders_once_per_key() -> None:

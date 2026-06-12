@@ -177,6 +177,11 @@ class Session:
             if enabled
             else {}
         )
+        self._layer_info: dict[str, str] = (
+            capture.compute_layer_info(self._fx_graph, model, self._input_names)
+            if enabled
+            else {}
+        )
         self._original_forward: object | None = None
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
@@ -309,6 +314,21 @@ class Session:
         weights that contributed to the output the hook captured).
         """
         return {name: list(params) for name, params in self._layer_weights.items()}
+
+    @property
+    def layer_info(self) -> dict[str, str]:
+        """Map each layer name to a human-readable hyperparameter string.
+
+        Keys match `layer_names`. Module layers carry their
+        `print(model)`-style signature (`Conv2d(3, 64, kernel_size=(3, 3),
+        ...)` — built from `extra_repr()`, which custom modules can override
+        to surface their own knobs); fx function/method ops carry their
+        literal call arguments (`max_pool2d(2, stride=None, ...)`); layers
+        with nothing to report (graph inputs, `relu`, `add`, …) map to "".
+        The UI shows these as hover tooltips on diagram nodes and layer
+        cards.
+        """
+        return dict(self._layer_info)
 
     @property
     def fx_traced(self) -> bool:
