@@ -6,6 +6,7 @@ import pytest
 import torch
 from torch import nn
 
+import nansense
 from examples.vision.resnet import PreActBlock, PreActResNet, resnet20, resnet_deep
 from examples.common import evaluate, train_one_epoch
 
@@ -126,9 +127,18 @@ def test_train_and_eval_loops_run(amp_dtype: torch.dtype | None) -> None:
     targets = torch.randint(0, 10, (16,))
     dataset = torch.utils.data.TensorDataset(inputs, targets)
     loader = torch.utils.data.DataLoader(dataset, batch_size=4)
+    # A disabled session is the loops' no-op off switch, exactly as in main().
+    session = nansense.start(
+        model, epochs=1, phases={"train": 4, "val": 4}, enabled=False
+    )
 
-    train_stats = train_one_epoch(model, loader, optimizer, criterion, device, amp_dtype=amp_dtype)
-    eval_stats = evaluate(model, loader, criterion, device, amp_dtype=amp_dtype)
+    train_stats = train_one_epoch(
+        model, loader, optimizer, criterion, device, amp_dtype=amp_dtype, session=session
+    )
+    eval_stats = evaluate(
+        model, loader, criterion, device, amp_dtype=amp_dtype, session=session
+    )
+    session.close()
 
     assert 0.0 <= train_stats.accuracy <= 1.0
     assert 0.0 <= eval_stats.accuracy <= 1.0
