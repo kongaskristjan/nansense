@@ -11,8 +11,9 @@ import torch
 from torch import Tensor, nn
 
 import nansense
-from nansense.probe import apply_perturbations
-from nansense.session import Session, _CaptureInterpreter
+from nansense.capture import _CaptureInterpreter
+from nansense.probe import apply_perturbations, request_probe_locked
+from nansense.session import Session
 
 
 class BnDropNet(nn.Module):
@@ -420,7 +421,7 @@ def test_failing_probe_publishes_error_not_crash() -> None:
     session._pinned_input = torch.randn(2, 3, 9, 9)  # type: ignore[reportPrivateUsage]
     count = session.probe_count
     with session._cv:  # type: ignore[reportPrivateUsage]
-        session._request_probe_locked()  # type: ignore[reportPrivateUsage]
+        request_probe_locked(session)
     assert session.wait_for_probe(after_count=count, timeout=5)
     assert session.probe_error is not None
     # The worker is still paused and responsive.

@@ -87,11 +87,16 @@ the training thread and resets when the setting changes.
 
 ## Hook lifecycle, gradient pickup, snapshot copy
 
+The capture machinery — hook installation, the fx interpreter,
+construction-time name/weight discovery, and the live `current_*` weight
+and optimizer reads — lives in `nansense.capture`; `_BatchContext` and the
+thin `Session` methods call into it.
+
 There are two capture paths, picked once at session construction by
-trying `torch.fx.symbolic_trace(model)`.
+trying `torch.fx.symbolic_trace(model)` (`capture.try_trace`).
 
 **fx path (preferred).** When the trace succeeds, the session holds the
-resulting `fx.GraphModule` and `_install_hooks` monkey-patches
+resulting `fx.GraphModule` and `capture.install_hooks` monkey-patches
 `model.forward` with a function that runs a custom `fx.Interpreter`
 subclass against that graph. The interpreter overrides `run_node` so that
 after every node executes — placeholders, `call_module`, `call_function`,
@@ -107,8 +112,8 @@ Each captured tensor gets `retain_grad()` so the user's `loss.backward()`
 populates `.grad`. This is what lets `torch.relu(...)`, `out + shortcut(x)`,
 and similar non-module operations show up in the UI on equal footing with
 named modules — and the Mermaid graph builder reuses the same map, so each
-node's id and label line up with its layer card. `_remove_hooks` restores
-the original `forward`.
+node's id and label line up with its layer card. `capture.remove_hooks`
+restores the original `forward`.
 
 **Hook fallback.** When `fx.symbolic_trace` raises (data-dependent
 control flow, tracing-unfriendly ops, etc.), the session falls back to:
@@ -142,7 +147,7 @@ parameters is covered by a `call_module` node.
 
 At `__exit__`:
 
-1. `_remove_hooks()` removes every registered hook.
+1. `capture.remove_hooks()` removes every registered hook.
 2. If the batch ran without an exception and the session isn't closed,
    `_publish_snapshot()` builds a `BatchSnapshot` containing **CPU clones**
    of four tensor dicts:
@@ -165,10 +170,13 @@ At `__exit__`:
      knobs (`lr`, `momentum`, `weight_decay`, …) as floats, captured at
      the same instant — so a scheduler-mutated `lr` is the batch's
      actual one. Available from batch 0 (groups are not lazy).
-   Every clone goes through `tensor.detach().to("cpu", copy=True)`, so the
-   snapshot is fully independent of the live computation graph — the next
-   batch can free / overwrite all of its source tensors without affecting
-   the snapshot.
+   Every clone goes through `tensor.detach().to("cpu", copy=True)`
+   (`capture.cpu_clone`), so the snapshot is fully independent of the live
+   computation graph — the next batch can free / overwrite all of its
+   source tensors without affecting the snapshot. The weight and optimizer
+   dicts come from `nansense.capture`'s `current_*` functions — the same
+   live-read functions behind `Session.current_weights` & co., called here
+   on the training thread so they're consistent with the just-run batch.
 3. The training thread calls `_wait_for_proceed()` (described below).
 4. After resume, `_activations` is cleared so the next batch starts clean.
 
@@ -248,7 +256,7 @@ name in `session.layer_names`: named modules, fx-traced intermediates
 
 `_BatchContext` extends the capture machinery to cover watching too.
 If any layer is watched but the batch is *not* a capture batch
-(`detach`, mid-`step_run`, etc.), `_install_hooks()` still runs — the
+(`detach`, mid-`step_run`, etc.), `capture.install_hooks()` still runs — the
 same fx interpreter or pre-hook+per-module-hook installation that the
 snapshot path uses — so every name in `layer_names` lands in
 `_activations` with `retain_grad()` applied. The only difference
@@ -385,6 +393,9 @@ the last snapshot's input tensor (already a CPU clone); from then on every
 capture re-runs the model on it right after `_publish_snapshot` and
 publishes a `ProbeResult` — CPU clones of the input and of every layer
 output, keyed like `layer_names`. Probes are forward-only: no gradients.
+The probe config lives on the `Session` (under `_cv`), but every state
+transition and the runs themselves are module functions in
+`nansense.probe` that the thin `Session` methods delegate to.
 
 **Execution stays on the training thread.** The model is never touched from
 the UI thread (the invariant the snapshot path already relies on). Probes
@@ -401,7 +412,7 @@ run at two points:
    running work. A request arriving mid-`detach` stays armed until the next
    capture.
 
-**Isolation contract** (`_probe_forwards`): probes never mutate training
+**Isolation contract** (`isolated_model`): probes never mutate training
 state. Per-module `training` flags are saved and restored ("eval" / "train"
 probe modes flip the whole model; "unchanged" runs as-is); every buffer is
 restored afterwards (a train-mode BatchNorm forward updates running stats
@@ -409,11 +420,11 @@ in place); the RNG is forked (`torch.random.fork_rng`, CUDA/MPS-aware) so
 e.g. train-mode dropout doesn't perturb the global stream that time-travel
 replays depend on; and the whole run sits under `torch.no_grad()`.
 
-**Capture reuse without interference** (`_capture_forward`): in fx mode the
-probe runs `_CaptureInterpreter` against a fresh local dict — the original
-`model.forward` is never patched, since the interpreter is invoked
-directly. In the hook fallback, temporary pre/forward hooks write into the
-local dict and are removed in a `finally`. Neither path touches
+**Capture reuse without interference** (`capture.capture_forward`): in fx
+mode the probe runs `_CaptureInterpreter` against a fresh local dict — the
+original `model.forward` is never patched, since the interpreter is
+invoked directly. In the hook fallback, temporary pre/forward hooks write
+into the local dict and are removed in a `finally`. Neither path touches
 `_activations` or `_hook_handles`; both are safe because probes only run
 between batches, when the batch path's hooks are uninstalled.
 
@@ -447,7 +458,7 @@ publishes under the lock only if the version is unchanged — a config change
 mid-run wins and its own request re-runs the probe. `_probe_count` is the
 monotonic completion counter (`wait_for_probe` mirrors `wait_until_paused`
 for tests and the UI). A probe that raises publishes `probe_error` instead
-of killing the training thread (`_run_probe_guarded`); deactivating the
+of killing the training thread (`run_probe_guarded`); deactivating the
 probe (`unpin_batch` / `clear_perturbations` with nothing else active)
 clears the published result so the UI falls back to the snapshot.
 
@@ -459,9 +470,12 @@ cancellable extension of the probe job queue. Each client (browser tab)
 queues an `ExperimentRequest` (`Session.request_experiment`, returning a
 seq); the pause loop in `_wait_for_proceed` drains the queue in order and
 calls `experiments.run(...)`, a generator yielding `ExperimentResult`
-progress snapshots that the session publishes one by one
-(`_publish_experiment`) — that's what streams the evolving deep-dream
-image to the page. Results are kept per seq in a bounded map (the
+progress snapshots that are published one by one (`_publish_experiment`)
+— that's what streams the evolving deep-dream image to the page. The
+queue state lives on the `Session`, but the plumbing — `request_experiment`
+/ `cancel_experiment`, the auto-experiment registry, and the guarded
+runner (`run_experiment_guarded`) — are module functions in
+`nansense.experiments` behind thin `Session` delegators. Results are kept per seq in a bounded map (the
 `_EXPERIMENT_RESULTS_KEPT` most recently updated seqs;
 `experiment_result_for(seq)`) plus a latest-result slot
 (`experiment_result`), so concurrent tabs each poll their own run without
@@ -478,7 +492,7 @@ next pause (`experiment_pending` lets the UI say so). A raising experiment
 publishes an error result instead of killing the training thread.
 
 **Isolation.** Experiments share the probe contract via
-`Session._isolated_model` (the refactored common core): eval-mode forwards
+`probe.isolated_model` (the refactored common core): eval-mode forwards
 with per-module flags and all buffers restored, forked RNG. Gradients are
 taken w.r.t. the *input* only (`torch.autograd.grad`), so parameter
 `.grad` — which the snapshot path reads at `__exit__` — is never touched.
@@ -537,7 +551,7 @@ on every update. A registration expires `_AUTO_EXPERIMENT_TTL` (5 s) after
 the page's last `touch_auto_experiment` heartbeat (its 200 ms tick), so
 closing the page stops the reruns; an active experiment recording pins the
 entry (`pin_auto_experiment`) for its own lifetime. At each update,
-`_run_auto_experiments` first removes any still-queued duplicate of a
+`run_auto_experiments` first removes any still-queued duplicate of a
 registered request so it runs exactly once per update.
 
 ## Recording (`nansense.recording`)
@@ -1087,7 +1101,7 @@ imports only those, never page modules.
 the intended way to leave nansense wiring in a training script and turn it
 off with one flag:
 
-- **Construction** skips `_try_trace(model)` (the proxy forward pass is the
+- **Construction** skips `capture.try_trace(model)` (the proxy forward pass is the
   only expensive part) and leaves `_input_names` / `_layer_names` empty.
 - **`_BatchContext.__enter__`** checks `self._session._enabled` *first* — a
   plain attribute read, no lock. When false it returns immediately, so a
@@ -1113,14 +1127,14 @@ nansense.start(model, epochs, phases, enabled=True)
         │   _should_capture()? ── no ──┐
         │       │ yes                   │
         │       ▼                       │
-        │   _install_hooks()            │
+        │   capture.install_hooks()     │
         │       │                       │
         │       (user code:             │
         │        zero_grad, forward,    │
         │        backward, step)        │
         │       │                       │
         │       ▼                       │
-        │   _remove_hooks()             │
+        │   capture.remove_hooks()      │
         │   _publish_snapshot()         │
         │   _wait_for_proceed() ────────┤
         │       │                       │
