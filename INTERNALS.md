@@ -835,10 +835,10 @@ imports only those, never page modules.
   fixed — which renders 4D conv weights as kernels, 2D as one image, 1D as
   one row. Duplicate or out-of-range axes return `None`.
 - The top-bar control row is shared via `nansense.ui.top_bar`:
-  `_top_bar_row()` (the row container) and
-  `_add_step_controls(session, dialog)` (the five stepping
-  buttons + a live-position label, returned for the page's timer to
-  refresh through `format_position`). The main page, `/watch`,
+  `_top_bar_row()` (the row container), `_back_button()` (the subpages'
+  back-to-main button), and `_add_step_controls(session, dialog)` (the
+  stepping buttons + a live-position label, kept current through
+  `format_position` by a timer registered alongside). The main page, `/watch`,
   `/weights`, and `/experiment` all build their bars from these, differing
   only in the leading/trailing widgets they add around the shared controls.
 - `nansense.ui.app.serve(session, port=..., host=...)` runs the NiceGUI
@@ -911,15 +911,15 @@ imports only those, never page modules.
   calls `session.add_perturbation` for the viewed sample. The "Click to
   perturb" switch only gates clicking (and toggles a crosshair cursor);
   recorded edits persist until cleared.
-- The same timer also refreshes the top-bar position label from
-  `session.live_position` — the position recorded on *every* batch's
-  `__enter__`, independent of capture. This is what keeps the displayed
-  epoch/batch advancing during `step_epoch`, `step_until_position`,
-  `step_run`, and `detach`, where `snapshot.position` would otherwise stay
-  frozen until the next boundary capture (or never, under `detach`). It is
-  a single label write per tick, decoupled from the strip rendering; the
-  200 ms timer is the natural throttle for the rapid batch advances those
-  modes produce.
+- A separate 200 ms timer, registered by `_add_step_controls` on every
+  page, refreshes the top-bar position label from `session.live_position`
+  — the position recorded on *every* batch's `__enter__`, independent of
+  capture. This is what keeps the displayed epoch/batch advancing during
+  `step_epoch`, `step_until_position`, `step_run`, and `detach`, where
+  `snapshot.position` would otherwise stay frozen until the next boundary
+  capture (or never, under `detach`). It is a single label write per tick,
+  decoupled from the strip rendering; the 200 ms timer is the natural
+  throttle for the rapid batch advances those modes produce.
 - Rendering is intentionally eager when a new snapshot lands — and during
   `RUN` / `DETACH` modes no snapshots are produced so the UI is idle.
   Per-layer renders are independent, so a frame fans out over a shared

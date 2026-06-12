@@ -23,6 +23,7 @@ from nicegui import ui
 from torch import Tensor
 
 from nansense.session import Session
+from nansense.ui.common import _defer_value_write, _set_controls_enabled
 from nansense.ui.render import INPUT_IMAGE_SIZE
 
 _PROBE_MODE_OPTIONS: dict[str, str] = {
@@ -224,19 +225,17 @@ class InputPanel:
         if frozen == self._frozen:
             return
         self._frozen = frozen
-        controls = (
-            self._sample_input,
-            self._pin_switch,
-            self._mode_toggle,
-            self._perturb_switch,
-            self._color_button,
-            self._clear_button,
+        _set_controls_enabled(
+            (
+                self._sample_input,
+                self._pin_switch,
+                self._mode_toggle,
+                self._perturb_switch,
+                self._color_button,
+                self._clear_button,
+            ),
+            not frozen,
         )
-        for control in controls:
-            if frozen:
-                control.disable()
-            else:
-                control.enable()
 
     def set_image(self, src: str) -> None:
         self._image.set_source(src)
@@ -284,13 +283,6 @@ class InputPanel:
             return None
         return snap.activations.get(self._input_name)
 
-    @staticmethod
-    def _defer(write: Callable[[], object]) -> None:
-        # NiceGUI suppresses .value writes made from inside a value-change
-        # handler; schedule the correction for the next event-loop iteration
-        # so it actually reaches the client.
-        ui.timer(0.0, write, once=True)
-
     def _on_sample_change(self, e: object) -> None:
         value = getattr(e, "value", None)
         idx = int(value) if value is not None else 0
@@ -300,7 +292,7 @@ class InputPanel:
             idx = self._spinner_max
         if idx != value:
             clamped = idx
-            self._defer(lambda: self._sample_input.set_value(clamped))
+            _defer_value_write(lambda: self._sample_input.set_value(clamped))
         self.sample_idx = idx
         self._on_change()
 
@@ -311,7 +303,7 @@ class InputPanel:
                     "Nothing to pin yet — run at least one batch first",
                     type="warning",
                 )
-                self._defer(lambda: self._pin_switch.set_value(False))
+                _defer_value_write(lambda: self._pin_switch.set_value(False))
         else:
             self._session.unpin_batch()
             self._on_change()

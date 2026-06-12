@@ -16,10 +16,10 @@ from nansense.experiments import (
     available_experiment_kinds,
 )
 from nansense.recording import RecordedView
-from nansense.schedule import format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _b64_img_src,
+    _page_scaffold,
     _set_controls_enabled,
     _strip_html,
     _weights_placeholder,
@@ -29,6 +29,7 @@ from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_settings_button,
     _add_step_controls,
+    _back_button,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
@@ -202,6 +203,19 @@ def _layer_channel_count(snap: BatchSnapshot | None, layer: str) -> int | None:
     return int(act.shape[1])
 
 
+@dataclass
+class _ExperimentPageState:
+    """Mutable page state shared by the form, Run/Cancel, and tick closures."""
+
+    kind: str = "deep_dream"
+    # This page's own request; `None` until the first Run.
+    my_seq: int | None = None
+    last_result: ExperimentResult | None = None
+    # Last frozen flag pushed to the client, so the tick only sends
+    # enable/disable when the recording state actually changed.
+    frozen: bool | None = None
+
+
 def _build_experiment_page(
     session: Session,
     layer: str,
@@ -227,28 +241,22 @@ def _build_experiment_page(
     explain.
     """
     title = f"Experiment · {layer}" if layer else "Experiment"
-    ui.page_title(f"Nansense — {title}")
-    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
-    ui.query("body").classes("overflow-hidden")
-    ui.query("html").classes("overflow-hidden")
+    _page_scaffold(title)
     ui.add_head_html(_STRIP_MARKER_CSS)
 
     step_until_custom = _build_step_until_custom_dialog(session)
     widgets: dict[str, ui.element] = {}
-    kind_holder = {"kind": "deep_dream"}
-    my_seq: list[int | None] = [None]  # this page's own request
-    last_result: list[ExperimentResult | None] = [None]
+    state = _ExperimentPageState()
     # This page's auto-experiment registration: Run registers the request
     # so it re-runs on every visualization update (same seq → same seeded
     # noise); the page's tick heartbeats it and it expires when the page
     # closes, unless a recording pins it.
     page_key = f"experiment-page-{uuid4().hex}"
     record_key = f"experiment:{layer}"
-    frozen_state: dict[str, bool | None] = {"on": None}
 
     def collect_params() -> dict[str, object]:
         params: dict[str, object] = {"mean": input_mean, "std": input_std}
-        for spec in _EXPERIMENT_PARAMS[kind_holder["kind"]]:
+        for spec in _EXPERIMENT_PARAMS[state.kind]:
             value: object = getattr(widgets.get(spec.key), "value", None)
             if spec.kind in ("int", "float"):
                 if not isinstance(value, (int, float)):
@@ -262,34 +270,34 @@ def _build_experiment_page(
         return params
 
     def run() -> None:
-        if my_seq[0] is not None:  # a re-Run replaces this page's request
-            session.cancel_experiment(my_seq[0])
-        my_seq[0] = session.register_auto_experiment(
-            page_key, kind=kind_holder["kind"], layer=layer, params=collect_params()
+        if state.my_seq is not None:  # a re-Run replaces this page's request
+            session.cancel_experiment(state.my_seq)
+        state.my_seq = session.register_auto_experiment(
+            page_key, kind=state.kind, layer=layer, params=collect_params()
         )
-        last_result[0] = None
+        state.last_result = None
         error_label.text = ""
 
     def cancel() -> None:
-        if my_seq[0] is None:
+        if state.my_seq is None:
             return
-        session.cancel_experiment(my_seq[0])
+        session.cancel_experiment(state.my_seq)
         # Stop the auto reruns too — unless a recording pinned the request
         # (Cancel is disabled while recorded, but another tab may differ).
         if not session.recording.is_recording(record_key):
             session.unregister_auto_experiment(page_key)
 
     def record_view() -> RecordedView | None:
-        if my_seq[0] is None:
+        if state.my_seq is None:
             return None  # nothing to record until an experiment has run
-        kind = kind_holder["kind"]
+        kind = state.kind
         return RecordedView(
             key=record_key,
             page="experiment",
             label=f"Experiment · {EXPERIMENT_KINDS.get(kind, kind)} · {layer}",
             params={
                 "layer": layer,
-                "seq": my_seq[0],
+                "seq": state.my_seq,
                 "auto_key": page_key,
                 "input_mean": input_mean,
                 "input_std": input_std,
@@ -299,17 +307,13 @@ def _build_experiment_page(
     def on_kind_change(e: object) -> None:
         value = getattr(e, "value", None)
         if value is not None:
-            kind_holder["kind"] = str(value)
+            state.kind = str(value)
             rebuild_params()
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            ui.button(
-                icon="arrow_back",
-                on_click=lambda: ui.navigate.to("/"),
-                color="slate-500",
-            ).props("dense size=md").tooltip("Back to the main page")
-            position_label = _add_step_controls(session, step_until_custom)
+            _back_button()
+            _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
@@ -330,7 +334,7 @@ def _build_experiment_page(
                 kind_select = ui.select(
                     available_experiment_kinds(),
                     label="Experiment",
-                    value=kind_holder["kind"],
+                    value=state.kind,
                     on_change=on_kind_change,
                 ).props("dense outlined").classes("w-full")
                 with ui.row().classes("w-full no-wrap gap-2"):
@@ -364,7 +368,7 @@ def _build_experiment_page(
         params_pane.clear()
         with params_pane:
             ui.label("Parameters").classes("font-mono text-sm")
-            for spec in _EXPERIMENT_PARAMS[kind_holder["kind"]]:
+            for spec in _EXPERIMENT_PARAMS[state.kind]:
                 if spec.kind == "bool":
                     widget: ui.element = ui.switch(
                         spec.label, value=bool(spec.default)
@@ -398,7 +402,7 @@ def _build_experiment_page(
                 if spec.tooltip:
                     widget.tooltip(spec.tooltip)
                 widgets[spec.key] = widget
-        if frozen_state["on"]:
+        if state.frozen:
             _set_controls_enabled(_param_controls(), False)
 
     def _param_controls() -> list[DisableableElement]:
@@ -450,25 +454,22 @@ def _build_experiment_page(
                 render_batch_images("Input", result.reference)
 
     def tick() -> None:
-        live = session.live_position
-        if live is not None:
-            position_label.text = format_position(live)
         # Keep this page's auto experiment alive while the page is open.
         session.touch_auto_experiment(page_key)
         # While this experiment records, its request must stay as-is: Run
         # would replace the recorded seq and parameter edits would lie.
         frozen = session.recording.is_recording(record_key)
-        if frozen != frozen_state["on"]:
-            frozen_state["on"] = frozen
+        if frozen != state.frozen:
+            state.frozen = frozen
             _set_controls_enabled(
                 [kind_select, run_button, cancel_button, *_param_controls()],
                 not frozen,
             )
-        if my_seq[0] is None:
+        if state.my_seq is None:
             return  # nothing requested from this page yet
-        result = session.experiment_result_for(my_seq[0])
+        result = session.experiment_result_for(state.my_seq)
         if result is None:
-            if last_result[0] is None:
+            if state.last_result is None:
                 status_label.text = (
                     "queued — waiting for the training thread to pause "
                     "or for earlier experiments (use Stop / Step Batch above)"
@@ -476,8 +477,8 @@ def _build_experiment_page(
             return
         status_label.text = _experiment_status(result)
         error_label.text = result.error or ""
-        if result is not last_result[0]:
-            last_result[0] = result
+        if result is not state.last_result:
+            state.last_result = result
             if result.error is None:
                 render_result(result)
 

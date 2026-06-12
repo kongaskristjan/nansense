@@ -6,9 +6,10 @@ from nicegui import ui
 from torch import Tensor
 
 from nansense.recording import RecordedView
-from nansense.schedule import format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
+    _defer_value_write,
+    _page_scaffold,
     _set_controls_enabled,
     _strip_html,
     _strip_marker,
@@ -20,6 +21,7 @@ from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_settings_button,
     _add_step_controls,
+    _back_button,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
@@ -65,10 +67,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     by index.
     """
     title = f"Weights · {layer}" if layer else "Weights"
-    ui.page_title(f"Nansense — {title}")
-    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
-    ui.query("body").classes("overflow-hidden")
-    ui.query("html").classes("overflow-hidden")
+    _page_scaffold(title)
     ui.add_head_html(_STRIP_MARKER_CSS)
 
     weight_names = session.layer_weights.get(layer, [])
@@ -102,15 +101,11 @@ def _build_weights_page(session: Session, layer: str) -> None:
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            ui.button(
-                icon="arrow_back",
-                on_click=lambda: ui.navigate.to("/"),
-                color="slate-500",
-            ).props("dense size=md").tooltip("Back to the main page")
+            _back_button()
             ui.label(title).classes(
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
-            position_label = _add_step_controls(session, step_until_custom)
+            _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
             ui.button(
                 icon="refresh",
@@ -152,9 +147,6 @@ def _build_weights_page(session: Session, layer: str) -> None:
             )
 
     def tick() -> None:
-        live = session.live_position
-        if live is not None:
-            position_label.text = format_position(live)
         frozen = session.recording.is_recording(record_key)
         for panel in panels:
             panel.set_frozen(frozen)
@@ -287,10 +279,8 @@ class _WeightPanel:
                 if other != dim and self._roles[other] == role:
                     self._roles[other] = "index"
         self._roles[dim] = role
-        # Writes to widget `.value` made from inside a value-change handler are
-        # suppressed by NiceGUI; defer the select/visibility sync one loop tick
-        # so demotions actually reach the client.
-        ui.timer(0.0, self._apply_control_state, once=True)
+        # Defer the select/visibility sync so demotions reach the client.
+        _defer_value_write(self._apply_control_state)
         self._render_current()
 
     def _on_index(self, dim: int, value: float | None) -> None:

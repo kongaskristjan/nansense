@@ -18,13 +18,13 @@ from torch import Tensor
 
 from nansense.probe import ProbeResult
 from nansense.recording import RecordedView
-from nansense.schedule import format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _b64_img_src,
+    _page_scaffold,
+    _refuse_unwatch_while_recording,
     _strip_html,
     _strip_marker,
-    _watch_views_recording,
 )
 from nansense.ui.graph import slug
 from nansense.ui.input_panel import InputPanel
@@ -147,10 +147,7 @@ def _build_page(
             },
         )
 
-    ui.page_title("Nansense")
-    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
-    ui.query("body").classes("overflow-hidden")
-    ui.query("html").classes("overflow-hidden")
+    _page_scaffold()
     ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
     ui.add_head_html(_STRIP_MARKER_CSS)
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
@@ -163,11 +160,7 @@ def _build_page(
         sync_watch_ui()
 
     def clear_all() -> None:
-        if _watch_views_recording(session):
-            ui.notify(
-                "Watched layers are frozen while a watch view is recording",
-                type="warning",
-            )
+        if _refuse_unwatch_while_recording(session):
             return
         for name in list(session.watched_layers):
             session.unwatch(name)
@@ -198,7 +191,7 @@ def _build_page(
             architecture_toggle = ui.button(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
-            position_label = _add_step_controls(session, step_until_custom)
+            _add_step_controls(session, step_until_custom)
             watch_chip = ui.button(
                 str(len(session.watched_layers)),
                 icon="visibility",
@@ -301,14 +294,7 @@ def _build_page(
             # Any name in `session.layer_names` is watchable (modules, fx
             # intermediates, graph inputs); False means an unknown name.
             if name in session.watched_layers:
-                # Unwatching drops the layer's accumulated stats, which the
-                # watch-page recordings render from — refuse while one runs.
-                if _watch_views_recording(session):
-                    ui.notify(
-                        "Watched layers are frozen while a watch view is "
-                        "recording",
-                        type="warning",
-                    )
+                if _refuse_unwatch_while_recording(session):
                     return
                 session.unwatch(name)
             elif not session.watch(name):
@@ -400,15 +386,6 @@ def _build_page(
         )
 
     async def tick() -> None:
-        # Top-bar position tracks the *live* training position, refreshed on
-        # every tick independently of the (possibly much heavier) strip
-        # rendering below. The 0.2s timer is the throttle: rapid batches in
-        # step_epoch / step_run / detach coalesce into at most ~5 cheap label
-        # updates per second, and NiceGUI skips the write when text is
-        # unchanged. The strips still re-render only when a new snapshot lands.
-        live = session.live_position
-        if live is not None:
-            position_label.text = format_position(live)
         input_panel.refresh_status()
         # While the main view records, its render parameters (sample, pin,
         # perturbations, probe mode) are frozen: the recording renders with

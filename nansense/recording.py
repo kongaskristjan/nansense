@@ -58,6 +58,7 @@ from matplotlib.figure import Figure
 from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 
+from nansense.params import float_tuple, int_param, str_tuple
 from nansense.patches import PATCH_TYPES, PatchType
 from nansense.schedule import BatchPosition, format_position
 from nansense.watch import N_BINS, LayerStatsSnapshot, TensorStatsSnapshot
@@ -393,23 +394,6 @@ def _render_view_frames(
     raise ValueError(f"unknown recorded view page {view.page!r}")
 
 
-def _str_tuple(value: object) -> tuple[str, ...]:
-    if isinstance(value, (list, tuple)):
-        return tuple(str(v) for v in value)
-    return ()
-
-
-def _int_param(params: dict[str, object], key: str, default: int = 0) -> int:
-    value = params.get(key, default)
-    return int(value) if isinstance(value, (int, float)) else default
-
-
-def _stats_tuple(value: object) -> tuple[float, ...] | None:
-    if not isinstance(value, (list, tuple)):
-        return None
-    return tuple(float(v) for v in value if isinstance(v, (int, float)))
-
-
 def _strip_section(strip: object) -> Image.Image | None:
     """Decode a `StripRender` to one display-resolution PIL image.
 
@@ -487,10 +471,10 @@ def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | Non
     probe = session.probe_result
     if snap is None and probe is None:
         return None
-    layers = _str_tuple(view.params.get("layers"))
-    sample_idx = _int_param(view.params, "sample_idx")
-    mean = _stats_tuple(view.params.get("input_mean"))
-    std = _stats_tuple(view.params.get("input_std"))
+    layers = str_tuple(view.params.get("layers"))
+    sample_idx = int_param(view.params, "sample_idx")
+    mean = float_tuple(view.params.get("input_mean"))
+    std = float_tuple(view.params.get("input_std"))
     input_name = str(view.params.get("input_name") or "") or None
     compare = bool(session.perturbations)
 
@@ -561,7 +545,7 @@ def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | 
         if not (isinstance(spec, (list, tuple)) and len(spec) == 3):
             continue
         name = str(spec[0])
-        roles = [str(r) for r in _str_tuple(spec[1])]
+        roles = [str(r) for r in str_tuple(spec[1])]
         fixed: dict[int, int] = {}
         if isinstance(spec[2], (list, tuple)):
             for pair in spec[2]:
@@ -643,7 +627,7 @@ def _render_histogram_frame(
     view: RecordedView, session: Session
 ) -> np.ndarray | None:
     """Matplotlib re-render of the frozen layers' histograms (one phase)."""
-    layers = _str_tuple(view.params.get("layers"))
+    layers = str_tuple(view.params.get("layers"))
     phase = str(view.params.get("phase") or "")
     log_x = bool(view.params.get("log_x"))
     log_y = bool(view.params.get("log_y"))
@@ -741,12 +725,12 @@ def _render_minmax_frames(
     """The frozen patch grids, split into pixel/average video streams."""
     from nansense.ui.render import render_patch_grid
 
-    layers = _str_tuple(view.params.get("layers"))
+    layers = str_tuple(view.params.get("layers"))
     phase = str(view.params.get("phase") or "")
-    enabled = [t for t in PATCH_TYPES if t in _str_tuple(view.params.get("grids"))]
+    enabled = [t for t in PATCH_TYPES if t in str_tuple(view.params.get("grids"))]
     heatmap = bool(view.params.get("heatmap"))
-    mean = _stats_tuple(view.params.get("input_mean"))
-    std = _stats_tuple(view.params.get("input_std"))
+    mean = float_tuple(view.params.get("input_mean"))
+    std = float_tuple(view.params.get("input_std"))
     snap = session._watch_accumulator.snapshot(layers=layers, include_patches=True)
     sections: dict[str, list[tuple[str, Image.Image | None]]] = {}
     for layer in layers:
@@ -783,9 +767,9 @@ def _render_experiment_frame(
     """The freshest result of the view's pinned auto experiment."""
     from nansense.ui.render import render_strip, tensor_hw
 
-    seq = _int_param(view.params, "seq")
-    mean = _stats_tuple(view.params.get("input_mean"))
-    std = _stats_tuple(view.params.get("input_std"))
+    seq = int_param(view.params, "seq")
+    mean = float_tuple(view.params.get("input_mean"))
+    std = float_tuple(view.params.get("input_std"))
     result = session.experiment_result_for(seq)
     if result is None:
         return None
