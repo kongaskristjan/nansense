@@ -1,4 +1,4 @@
-"""Tests for pure helpers in `nansense.ui.app`."""
+"""Tests for pure helpers in `nansense.ui`."""
 
 from __future__ import annotations
 
@@ -10,44 +10,52 @@ from nansense.patches import PATCH_TYPES, PatchAccumulator
 from nansense.probe import ProbeResult
 from nansense.schedule import BatchPosition, Schedule
 from nansense.session import BatchSnapshot
-from nansense.ui.app import (
-    _BIN_WIDTHS,
+from nansense.ui.app import serve
+from nansense.ui.common import _strip_html
+from nansense.ui.histograms import (
+    BIN_WIDTHS,
     _HIST_EDGES,
     _PLOT_HEIGHT,
-    _PLOTLY_CONFIG,
-    _PROBE_NO_GRADIENTS_HTML,
-    _RenderCache,
-    _axis_ranges,
-    _bin_samples_html,
-    _compute_frame,
-    _display_batch_size,
-    _default_roles,
-    _dims_from_roles,
-    _figure_payload,
+    axis_ranges,
     _fill_fraction,
-    _filter_phase,
-    _input_img_src,
     _linear_x_range,
     _linear_y_range,
     _log_x_range,
     _make_histogram_figure,
-    _patch_grids_html,
-    _patch_grids_signature,
     _phases_with_data,
     _probabilities,
     _probability_densities,
-    _role_options,
     _stats_table_html,
-    _step_until_default_position,
-    _strip_html,
-    _summarize_epoch_ranges,
     _trimmed_bin_bounds,
-    _use_density,
+    use_density,
+)
+from nansense.ui.main_page import (
+    _PROBE_NO_GRADIENTS_HTML,
+    _RenderCache,
+    _compute_frame,
+    _display_batch_size,
+    _input_img_src,
+)
+from nansense.ui.top_bar import (
+    _step_until_default_position,
+    _summarize_epoch_ranges,
     _validate_step_until_target,
-    serve,
+)
+from nansense.ui.watch_page import (
+    _PLOTLY_CONFIG,
+    _bin_samples_html,
+    _figure_payload,
+    _filter_phase,
+    _patch_grids_html,
+    _patch_grids_signature,
+)
+from nansense.ui.weights_page import (
+    _default_roles,
+    _role_options,
 )
 from nansense.ui.render import (
     INPUT_IMAGE_SIZE,
+    dims_from_roles,
     image_mime,
     render_image,
     render_strip,
@@ -250,9 +258,9 @@ def test_default_roles_match_default_dims(ndim: int, roles: list[str]) -> None:
 
 
 def test_dims_from_roles_resolves_axes() -> None:
-    assert _dims_from_roles(["index", "tile", "y", "x"]) == (3, 2, 1)
-    assert _dims_from_roles(["x"]) == (0, None, None)
-    assert _dims_from_roles(["index", "index"]) == (None, None, None)
+    assert dims_from_roles(["index", "tile", "y", "x"]) == (3, 2, 1)
+    assert dims_from_roles(["x"]) == (0, None, None)
+    assert dims_from_roles(["index", "index"]) == (None, None, None)
 
 
 # --- Watching histogram: trace structure / restyle signature --------------
@@ -436,7 +444,7 @@ def test_axis_ranges_keep_base_share_when_plot_is_full() -> None:
     # adaptive loop leaves the base ranges untouched.
     hist = {ZERO_BIN + 60 + i: 100 for i in range(5)}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    x_range, y_range = _axis_ranges(
+    x_range, y_range = axis_ranges(
         per_phase, "activation", log_x=False, log_y=False
     )
     assert x_range == _linear_x_range(per_phase, "activation")
@@ -454,7 +462,7 @@ def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
     per_phase = {"train": _layer_snap("train", hist=hist)}
     base_x = _linear_x_range(per_phase, "activation")
     base_y = _linear_y_range(per_phase, "activation", density=True)
-    x_range, y_range = _axis_ranges(
+    x_range, y_range = axis_ranges(
         per_phase, "activation", log_x=False, log_y=False
     )
     assert base_x is not None and base_y is not None
@@ -468,7 +476,7 @@ def test_axis_ranges_log_y_keeps_base_trim_and_autorange() -> None:
     # autoranges and the x-trim sticks to the base budget.
     hist = {ZERO_BIN: 50_000, ZERO_BIN + 60: 5}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    x_range, y_range = _axis_ranges(
+    x_range, y_range = axis_ranges(
         per_phase, "activation", log_x=False, log_y=True
     )
     assert y_range is None
@@ -476,7 +484,7 @@ def test_axis_ranges_log_y_keeps_base_trim_and_autorange() -> None:
 
 
 def test_axis_ranges_none_when_empty() -> None:
-    assert _axis_ranges({}, "activation", log_x=False, log_y=False) == (
+    assert axis_ranges({}, "activation", log_x=False, log_y=False) == (
         None,
         None,
     )
@@ -529,7 +537,7 @@ def test_histogram_defaults_to_linear_density_mode() -> None:
 
 @pytest.mark.parametrize("log_x, expected", [(True, False), (False, True)])
 def test_use_density_depends_only_on_log_x(log_x: bool, expected: bool) -> None:
-    assert _use_density(log_x) is expected
+    assert use_density(log_x) is expected
 
 
 def test_probabilities_normalize_counts() -> None:
@@ -547,11 +555,11 @@ def test_probability_densities_normalize_by_count_and_width() -> None:
     hist[ZERO_BIN] = 4
     hist[ZERO_BIN + 10] = 6
     heights = _probability_densities(tuple(hist))
-    assert heights[ZERO_BIN] == pytest.approx(0.4 / _BIN_WIDTHS[ZERO_BIN])
-    assert heights[ZERO_BIN + 10] == pytest.approx(0.6 / _BIN_WIDTHS[ZERO_BIN + 10])
+    assert heights[ZERO_BIN] == pytest.approx(0.4 / BIN_WIDTHS[ZERO_BIN])
+    assert heights[ZERO_BIN + 10] == pytest.approx(0.6 / BIN_WIDTHS[ZERO_BIN + 10])
     assert heights[0] == 0
     # Bar areas integrate to 1 — it's a probability density.
-    assert sum(h * w for h, w in zip(heights, _BIN_WIDTHS)) == pytest.approx(1.0)
+    assert sum(h * w for h, w in zip(heights, BIN_WIDTHS)) == pytest.approx(1.0)
 
 
 def test_probability_helpers_handle_empty_hist() -> None:
@@ -1057,7 +1065,7 @@ def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
 
 def test_experiment_params_cover_every_kind() -> None:
     from nansense.experiments import EXPERIMENT_KINDS
-    from nansense.ui.app import _EXPERIMENT_PARAMS
+    from nansense.ui.experiment_page import _EXPERIMENT_PARAMS
 
     assert set(_EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
     for kind, specs in _EXPERIMENT_PARAMS.items():
@@ -1071,7 +1079,7 @@ def test_experiment_params_cover_every_kind() -> None:
 
 
 def test_layer_channel_count_reads_snapshot_activation() -> None:
-    from nansense.ui.app import _layer_channel_count
+    from nansense.ui.experiment_page import _layer_channel_count
 
     snap = _frame_snapshot()
     snap.activations["vec"] = torch.rand(5)  # channel-less activation

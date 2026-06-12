@@ -7,7 +7,7 @@ import torch
 from torch import nn
 
 from examples.vision.resnet import PreActBlock, PreActResNet, resnet20, resnet_deep
-from examples.vision.train import evaluate, train_one_epoch
+from examples.common import evaluate, train_one_epoch
 
 
 @pytest.mark.parametrize(

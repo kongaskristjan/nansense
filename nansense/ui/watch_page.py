@@ -1,0 +1,1042 @@
+"""The `/watch` page: per-layer histograms and extreme-patch grids."""
+
+from __future__ import annotations
+
+import asyncio
+import html
+import json
+from collections.abc import Callable
+from dataclasses import replace
+
+import plotly.graph_objects as go
+from nicegui import ui
+from nicegui.events import GenericEventArguments, ValueChangeEventArguments
+
+from nansense.patches import PATCH_TYPES, PatchType
+from nansense.recording import RecordedView
+from nansense.schedule import format_position
+from nansense.session import BatchSnapshot, Session
+from nansense.ui.bin_samples import sample_bin
+from nansense.ui.common import (
+    _b64_img_src,
+    _set_controls_enabled,
+    _watch_views_recording,
+)
+from nansense.ui.histograms import (
+    _BIN_VALUE_LABELS,
+    axis_ranges,
+    _format_stat,
+    _hover_customdata,
+    kind_stats,
+    _make_histogram_figure,
+    phase_color,
+    _phases_with_data,
+    _stats_table_html,
+    trace_heights,
+    use_density,
+)
+from nansense.ui.render import PatchGridRender, render_image, render_patch_grid
+from nansense.ui.top_bar import (
+    _add_settings_button,
+    _add_step_controls,
+    _build_step_until_custom_dialog,
+    _top_bar_row,
+)
+from nansense.watch import N_BINS, LayerStatsSnapshot, WatchSnapshot
+
+
+def _build_watch_page(
+    session: Session,
+    layer_names: list[str],
+    *,
+    input_mean: tuple[float, ...] | None = None,
+    input_std: tuple[float, ...] | None = None,
+) -> None:
+    """The deep-dive page for watched layers.
+
+    The top bar carries the shared stepping controls, like the main page.
+    A left-sidebar dropdown switches every layer card between two views,
+    and a second dropdown picks which phase (train / val / …) the cards
+    show — one phase at a time, in both views:
+
+    - HISTOGRAM (the default) — one plotly figure per tensor kind for the
+      selected phase's latest epoch, with the "Log x" / "Log y" axis
+      checkboxes and a per-histogram "Per channel" switch.
+    - MIN/MAX — the extreme-activation patch grids
+      (channels across, per-channel top samples down), one per patch
+      type, each toggleable by its own checkbox (only "Max pixel" starts
+      checked), plus a heatmap checkbox
+      that blends the stored activation maps over the patches.
+    Each checkbox group is only visible while its view is selected. A
+    `ui.timer` polls `session.watch_snapshot()` and refreshes the visible
+    view in place. Layers can also be unwatched directly from the card
+    header here, which drops the corresponding accumulator entry — the
+    change is reflected on the main page on next navigation.
+    """
+    ui.page_title("Nansense — Watching")
+    ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
+    ui.query("body").classes("overflow-hidden")
+    ui.query("html").classes("overflow-hidden")
+
+    layer_panels: dict[str, _WatchLayerPanel] = {}
+    count_label_holder: dict[str, ui.label] = {}
+    body_container: ui.column
+    # Whether the value (x) and probability (y) axes use a log-based scale.
+    # Both default off — linear axes showing probability density (see
+    # `use_density`); the sidebar checkboxes flip them and re-render every
+    # plot immediately.
+    axis_log = {"x": False, "y": False}
+    # MIN/MAX view state: which of the four grids are shown (only "Max
+    # pixel" starts checked) and whether the activation heatmap is blended
+    # over the patches. HISTOGRAM is the default view.
+    view_minmax = {"on": False}
+    grid_on: dict[PatchType, bool] = {t: t == "max_pixel" for t in PATCH_TYPES}
+    heat_on = {"on": False}
+    # Every card shows one phase at a time, picked by a header dropdown
+    # shared by both views; defaults to the schedule's first phase.
+    phase_names = list(session.schedule.phases)
+    selected_phase = {"name": phase_names[0] if phase_names else ""}
+
+    async def set_axis_log(axis: str, value: bool) -> None:
+        axis_log[axis] = value
+        await refresh()
+
+    async def set_mode(value: object) -> None:
+        view_minmax["on"] = value == _VIEW_MINMAX
+        hist_controls.set_visibility(not view_minmax["on"])
+        minmax_controls.set_visibility(view_minmax["on"])
+        await refresh()
+
+    async def set_phase(value: object) -> None:
+        selected_phase["name"] = str(value)
+        await refresh()
+
+    async def set_grid(ptype: PatchType, value: bool) -> None:
+        grid_on[ptype] = value
+        await refresh()
+
+    async def set_heat(value: bool) -> None:
+        heat_on["on"] = value
+        await refresh()
+
+    step_until_custom = _build_step_until_custom_dialog(session)
+
+    def record_view() -> RecordedView | None:
+        watched = [n for n in layer_names if n in session.watched_layers]
+        if not watched:
+            return None
+        phase = selected_phase["name"]
+        if view_minmax["on"]:
+            grids = tuple(t for t in PATCH_TYPES if grid_on[t])
+            if not grids:
+                return None
+            return RecordedView(
+                key="watch_minmax",
+                page="watch_minmax",
+                label=f"Watch · MIN/MAX grids ({phase})",
+                params={
+                    "layers": tuple(watched),
+                    "phase": phase,
+                    "grids": grids,
+                    "heatmap": heat_on["on"],
+                    "input_mean": input_mean,
+                    "input_std": input_std,
+                },
+            )
+        return RecordedView(
+            key="watch_histogram",
+            page="watch_histogram",
+            label=f"Watch · histograms ({phase})",
+            params={
+                "layers": tuple(watched),
+                "phase": phase,
+                "log_x": axis_log["x"],
+                "log_y": axis_log["y"],
+            },
+        )
+
+    with ui.column().classes("w-full h-screen no-wrap gap-0"):
+        with _top_bar_row():
+            ui.button(
+                icon="arrow_back",
+                on_click=lambda: ui.navigate.to("/"),
+                color="slate-500",
+            ).props("dense size=md").tooltip("Back to the main page")
+            position_label = _add_step_controls(session, step_until_custom)
+            _add_settings_button(session, record_view).classes("ml-auto")
+            ui.button(
+                icon="refresh",
+                on_click=lambda: refresh(),
+                color="slate-500",
+            ).props("dense size=md flat").tooltip("Refresh now")
+
+        with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
+            with ui.column().classes(
+                "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
+                "border-r-2 border-slate-300 bg-slate-50"
+            ):
+                with ui.row().classes("items-baseline gap-2 no-wrap"):
+                    ui.label("Watching").classes("font-mono text-base font-bold")
+                    count_label_holder["count"] = ui.label("").classes(
+                        "text-sm text-slate-500"
+                    )
+                ui.separator()
+                ui.select(
+                    [_VIEW_HISTOGRAM, _VIEW_MINMAX],
+                    label="View",
+                    value=_VIEW_HISTOGRAM,
+                    on_change=lambda e: set_mode(e.value),
+                ).props("dense outlined options-dense").classes(
+                    "w-full text-sm"
+                ).tooltip("What each layer card shows")
+                phase_select = ui.select(
+                    phase_names,
+                    label="Phase",
+                    value=selected_phase["name"],
+                    on_change=lambda e: set_phase(e.value),
+                ).props("dense outlined options-dense").classes(
+                    "w-full text-sm"
+                ).tooltip("Which phase the cards show")
+                hist_boxes: list[ui.checkbox] = []
+                minmax_boxes: list[ui.checkbox] = []
+                with ui.column().classes("w-full gap-1") as hist_controls:
+                    hist_boxes.append(
+                        ui.checkbox(
+                            "Log x",
+                            value=axis_log["x"],
+                            on_change=lambda e: set_axis_log("x", bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Log-based (signed-log) scale on the value axis"
+                        )
+                    )
+                    hist_boxes.append(
+                        ui.checkbox(
+                            "Log y",
+                            value=axis_log["y"],
+                            on_change=lambda e: set_axis_log("y", bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Log scale on the probability axis"
+                        )
+                    )
+                with ui.column().classes("w-full gap-1") as minmax_controls:
+                    for ptype in PATCH_TYPES:
+                        minmax_boxes.append(
+                            ui.checkbox(
+                                _PATCH_TYPE_LABELS[ptype],
+                                value=grid_on[ptype],
+                                on_change=lambda e, p=ptype: set_grid(
+                                    p, bool(e.value)
+                                ),
+                            ).props("dense").classes("text-sm").tooltip(
+                                f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} "
+                                "grid"
+                            )
+                        )
+                    minmax_boxes.append(
+                        ui.checkbox(
+                            "Enable heatmap",
+                            value=heat_on["on"],
+                            on_change=lambda e: set_heat(bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Blend each channel's activation strength over the "
+                            "patches (red positive, blue negative), with a scale "
+                            "next to each grid"
+                        )
+                    )
+                minmax_controls.set_visibility(False)
+
+            body_container = ui.column().classes(
+                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
+            )
+
+    def rebuild_cards() -> None:
+        layer_panels.clear()
+        body_container.clear()
+        watched = session.watched_layers
+        with body_container:
+            if not watched:
+                with ui.column().classes("items-center gap-2 py-12 w-full"):
+                    ui.icon("visibility_off", size="lg").classes("text-slate-400")
+                    ui.label("No layers selected.").classes("text-slate-600")
+                    ui.label(
+                        "Go back and click the eye icon on a layer card "
+                        "to start watching."
+                    ).classes("text-slate-500 text-sm")
+                return
+            for name in layer_names:
+                if name not in watched:
+                    continue
+                layer_panels[name] = _WatchLayerPanel(
+                    name=name,
+                    session=session,
+                    on_unwatched=rebuild_cards,
+                    axis_log=axis_log,
+                    view_minmax=view_minmax,
+                    grid_on=grid_on,
+                    heat_on=heat_on,
+                    selected_phase=selected_phase,
+                    input_mean=input_mean,
+                    input_std=input_std,
+                )
+
+    # Single-flight refresh: snapshotting and grid rendering run in a worker
+    # thread so the event loop keeps serving websocket traffic (a blocked
+    # loop starves keepalive pings and kills the connection). A toggle that
+    # lands while a pass is in flight just marks it dirty — rapid Heatmap
+    # clicks coalesce into one follow-up pass instead of queueing a full
+    # re-render per click.
+    refresh_state = {"running": False, "dirty": False}
+
+    async def refresh() -> None:
+        if refresh_state["running"]:
+            refresh_state["dirty"] = True
+            return
+        refresh_state["running"] = True
+        try:
+            while True:
+                refresh_state["dirty"] = False
+                watched = session.watched_layers
+                n = len(watched)
+                count_label_holder["count"].text = (
+                    f"{n} layer{'' if n == 1 else 's'}"
+                )
+                if set(layer_panels) != set(watched):
+                    rebuild_cards()
+                panels = dict(layer_panels)
+                minmax = view_minmax["on"]
+
+                def compute(
+                    panels: dict[str, _WatchLayerPanel] = panels,
+                    minmax: bool = minmax,
+                ) -> tuple[
+                    WatchSnapshot,
+                    dict[str, tuple[tuple[object, ...], str] | None],
+                ]:
+                    # The GPU→CPU patch sync is only paid when the MIN/MAX
+                    # view will actually consume it.
+                    snap = session.watch_snapshot(include_patches=minmax)
+                    grids: dict[str, tuple[tuple[object, ...], str] | None] = {}
+                    if minmax:
+                        for name, panel in panels.items():
+                            grids[name] = panel.prepare_grids(snap)
+                    return snap, grids
+
+                snap, grids = await asyncio.to_thread(compute)
+                for name, panel in panels.items():
+                    if layer_panels.get(name) is panel:  # not rebuilt meanwhile
+                        panel.update(snap, grids.get(name))
+                if not refresh_state["dirty"]:
+                    return
+        finally:
+            refresh_state["running"] = False
+
+    # Last frozen flags pushed to the client, so the per-tick sync only
+    # sends enable/disable when something actually changed.
+    frozen_state: dict[str, bool | None] = {"hist": None, "minmax": None}
+
+    def sync_frozen() -> None:
+        hist = session.recording.is_recording("watch_histogram")
+        minmax = session.recording.is_recording("watch_minmax")
+        if hist != frozen_state["hist"] or minmax != frozen_state["minmax"]:
+            frozen_state["hist"] = hist
+            frozen_state["minmax"] = minmax
+            # The phase applies to both views, so either recording locks it.
+            _set_controls_enabled([phase_select], not (hist or minmax))
+            _set_controls_enabled(hist_boxes, not hist)
+            _set_controls_enabled(minmax_boxes, not minmax)
+
+    def tick() -> None:
+        live = session.live_position
+        if live is not None:
+            position_label.text = format_position(live)
+        sync_frozen()
+
+    ui.timer(0.2, tick)
+    ui.timer(0.0, refresh, once=True)
+    ui.timer(2.0, refresh)
+
+
+def _plotly_restyle(
+    plot: ui.plotly,
+    update: dict[str, object],
+    indices: list[int],
+    layout: dict[str, object] | None = None,
+) -> None:
+    """Update trace attributes of an existing figure in place.
+
+    Calls `Plotly.update` on the live graph div instead of replacing the
+    figure, so client-side state (legend visibility toggles, zoom/pan) is left
+    untouched. `update` maps each attribute to a list of per-trace values
+    (e.g. `{"y": [y0, y1]}`) aligned with `indices`. `layout` optionally
+    carries relayout-style updates (e.g. `{"yaxis.range": [0, 5]}`) applied in
+    the same call; note an explicit axis-range write does reset any user zoom
+    on that axis.
+
+    The guard makes this a no-op until Plotly's module has loaded and drawn the
+    graph (a just-connected client can fire a timer tick before then); the next
+    refresh re-applies the data, so nothing is lost.
+    """
+    ui.run_javascript(
+        f"const gd = getHtmlElement({plot.id}); "
+        f"if (gd && gd.data && window.Plotly) "
+        f"window.Plotly.update(gd, {json.dumps(update)}, "
+        f"{json.dumps(layout or {})}, {json.dumps(indices)});"
+    )
+
+
+# Plotly config shared by all watch histograms. "Autoscale" would expand the
+# axes to fit every bar — including the freak spikes and outlier tails the
+# capped ranges deliberately clip — landing on a different scale than the
+# initial render, so the button is removed; "Reset axes" and double-click
+# restore the ranges the figure was built with instead.
+_PLOTLY_CONFIG: dict[str, object] = {
+    "modeBarButtonsToRemove": ["autoScale2d"],
+    "doubleClick": "reset",
+}
+
+
+def _figure_payload(fig: go.Figure) -> dict[str, object]:
+    """The data/layout/config dict NiceGUI hands to `Plotly.react`."""
+    return {**fig.to_plotly_json(), "config": _PLOTLY_CONFIG}
+
+
+def _hover_attach_js(element_id: int) -> str:
+    """JS that wires the figure's `plotly_hover` to a NiceGUI event.
+
+    Plotly events fire on the graph div's own emitter, not as DOM events,
+    so NiceGUI's `.on()` can't subscribe to them — the handler is attached
+    with `gd.on` instead, with retries until Plotly has drawn the figure
+    (which is when `gd.on` exists). Idempotent via the `_nansenseHover`
+    flag, and throttled to one event per 200 ms so hovering across many
+    bars doesn't flood the websocket. Handlers attached to the div survive
+    `Plotly.react`/`update`, so one attach covers later figure rebuilds.
+    """
+    event = f"nansense_hist_hover_{element_id}"
+    return (
+        "(function attach(tries) {"
+        f"const gd = getHtmlElement({element_id});"
+        "if (!gd || !gd.on) {"
+        "  if (tries > 0) setTimeout(() => attach(tries - 1), 300);"
+        "  return;"
+        "}"
+        "if (gd._nansenseHover) return;"
+        "gd._nansenseHover = true;"
+        "gd.on('plotly_hover', (ev) => {"
+        "  const p = ev.points && ev.points[0];"
+        "  if (!p) return;"
+        "  const now = Date.now();"
+        "  if (gd._nansenseHoverAt && now - gd._nansenseHoverAt < 200) return;"
+        "  gd._nansenseHoverAt = now;"
+        f"  emitEvent('{event}', {{bin: p.pointNumber}});"
+        "});"
+        "})(20);"
+    )
+
+
+def _bin_samples_note(text: str) -> str:
+    return f'<div class="text-xs text-slate-400 italic py-1">{text}</div>'
+
+
+_HOVER_HINT_HTML: str = _bin_samples_note(
+    "hover a bar to see a few random input samples from that value range "
+    "(drawn from the last captured batch only)"
+)
+
+
+def _bin_samples_html(
+    snapshot: BatchSnapshot | None,
+    layer: str,
+    kind: str,
+    channel: int,
+    bin_idx: int,
+    input_name: str | None,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+    k: int = 4,
+) -> str:
+    """The hover strip for one (channel, bin) bar of a per-channel histogram.
+
+    The histogram aggregates whole epochs, but its source values are
+    discarded every batch — samples can only come from the last captured
+    batch (`session.snapshot`), and every caption names that batch so the
+    narrower population is explicit.
+    """
+    if snapshot is None:
+        return _bin_samples_note(
+            "no batch captured yet — sampling needs a captured batch"
+        )
+    pos = snapshot.position
+    source = (
+        "last captured batch only — "
+        f"{html.escape(pos.phase)} ep {pos.epoch}, batch {pos.batch_idx}"
+    )
+    tensors = (
+        snapshot.activations
+        if kind == "activation"
+        else snapshot.activation_gradients
+    )
+    tensor = tensors.get(layer)
+    if tensor is None:
+        return _bin_samples_note(
+            f"no captured {kind}s for this layer in the {source}"
+        )
+    input_tensor = snapshot.activations.get(input_name) if input_name else None
+    samples = sample_bin(
+        tensor, input_tensor, channel=channel, bin_idx=bin_idx, k=k
+    )
+    header = (
+        '<div class="text-xs text-slate-600">'
+        f'<span class="font-bold">ch {channel}</span>, '
+        f"value ≈ {_BIN_VALUE_LABELS[bin_idx]} — random samples, "
+        f'<span class="font-bold">{source}</span></div>'
+    )
+    if not samples:
+        return header + _bin_samples_note(
+            "no values in this bar in the last captured batch "
+            "(the bar may aggregate earlier batches)"
+        )
+    cells: list[str] = []
+    for sample in samples:
+        image = (
+            render_image(
+                sample.image.unsqueeze(0), 0, mean=mean, std=std
+            )
+            if sample.image is not None
+            else None
+        )
+        img_html = (
+            f'<img src="{_b64_img_src(image)}" '
+            'style="width:64px;image-rendering:pixelated;display:block;" />'
+            if image is not None
+            else '<div class="w-16 h-16 bg-slate-200 rounded"></div>'
+        )
+        cells.append(
+            '<div class="flex flex-col items-center gap-0.5">'
+            + img_html
+            + f'<div class="text-[10px] font-mono text-slate-600">'
+            f"{_format_stat(sample.value)}</div>"
+            f'<div class="text-[10px] text-slate-400">'
+            f"sample {sample.sample_idx}</div></div>"
+        )
+    return header + '<div class="flex gap-3 py-1">' + "".join(cells) + "</div>"
+
+
+class _HistPlot:
+    """One Plotly histogram figure that refreshes its data in place.
+
+    The figure (one subplot row per phase) is built once and rebuilt only
+    when the set of phases or the axis scale
+    changes. Routine per-tick updates go through `Plotly.update`, which
+    leaves client-side state — zoom/pan — untouched.
+
+    A "Per channel" switch narrows the plot from the universal histogram to
+    a single channel's row of the per-channel histogram (dim 1 of the
+    tensor), stepped through with an index spinner. While per-channel,
+    hovering a bar fills the strip below the plot with a few random input
+    samples whose values landed in that bar — drawn from the *last captured
+    batch* only, since the running histogram's source values are discarded
+    every batch; the strip's caption spells that out.
+    """
+
+    def __init__(
+        self,
+        kind: str,
+        title: str,
+        axis_log: dict[str, bool],
+        *,
+        session: Session,
+        layer: str,
+        input_mean: tuple[float, ...] | None = None,
+        input_std: tuple[float, ...] | None = None,
+    ) -> None:
+        self._kind = kind
+        self._title = title
+        self._axis_log = axis_log
+        self._session = session
+        self._layer = layer
+        self._input_mean = input_mean
+        self._input_std = input_std
+        self._per_channel = False
+        self._channel = 0
+        # Channel count of the latest data seen; `None` until per-channel
+        # rows exist (no data yet, 1D tensors, or collapsed buffers).
+        self._channel_count: int | None = None
+        # Last stats handed to `update`, so control changes re-render
+        # immediately instead of waiting for the next 2 s tick.
+        self._last_per_phase: dict[str, LayerStatsSnapshot] = {}
+        # Signature of what's currently drawn, so `update` can tell a plain
+        # data refresh (restyle) from a structural change (rebuild).
+        self._phases: list[str] = []
+        self._axis = self._current_axis()
+        # Last axis ranges applied, so refreshes only push a relayout when a
+        # cap actually moved (a range write resets zoom on that axis).
+        self._y_range: list[float] | None = None
+        self._x_range: list[float] | None = None
+        with ui.row().classes("items-center gap-x-3 no-wrap"):
+            self._channel_switch = (
+                ui.switch("Per channel", value=False, on_change=self._set_mode)
+                .props("dense")
+                .classes("text-sm")
+            )
+            self._channel_switch.tooltip(
+                "Show one channel's histogram instead of all values pooled; "
+                "hover a bar to sample inputs from that value range"
+            )
+            self._channel_spinner = (
+                ui.number(
+                    value=0,
+                    min=0,
+                    step=1,
+                    format="%d",
+                    on_change=self._set_channel,
+                )
+                .props("dense outlined")
+                .classes("w-24")
+            )
+            self._channel_total = ui.label("").classes("text-xs text-slate-500")
+        self.element = ui.plotly(
+            _figure_payload(
+                _make_histogram_figure(
+                    {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
+                )
+            )
+        ).classes("w-full")
+        self._samples = ui.html(_HOVER_HINT_HTML).classes("w-full")
+        self._sync_control_visibility()
+        ui.on(f"nansense_hist_hover_{self.element.id}", self._on_hover)
+
+    def _current_axis(self) -> tuple[bool, bool]:
+        return self._axis_log["x"], self._axis_log["y"]
+
+    def _set_mode(self, e: ValueChangeEventArguments) -> None:
+        self._per_channel = bool(e.value)
+        self._sync_control_visibility()
+        self.update(self._last_per_phase)
+
+    def _set_channel(self, e: ValueChangeEventArguments) -> None:
+        value = e.value if isinstance(e.value, (int, float)) else 0
+        self._channel = max(0, int(value))
+        self.update(self._last_per_phase)
+
+    def _sync_control_visibility(self) -> None:
+        self._channel_spinner.set_visibility(self._per_channel)
+        self._channel_total.set_visibility(self._per_channel)
+        self._samples.set_visibility(self._per_channel)
+        if self._per_channel:
+            self._samples.set_content(_HOVER_HINT_HTML)
+            # Attaching is idempotent client-side; (re-)sending it on every
+            # mode flip covers clients that connected after page build.
+            ui.run_javascript(_hover_attach_js(self.element.id))
+
+    def _channel_rows(
+        self, per_phase: dict[str, LayerStatsSnapshot]
+    ) -> tuple[tuple[int, ...], ...] | None:
+        """The drawn phase's per-channel rows, `None` when unavailable."""
+        for snap in per_phase.values():
+            rows = kind_stats(snap, self._kind).channel_hists
+            if rows is not None:
+                return rows
+        return None
+
+    def _sync_channel_controls(
+        self, per_phase: dict[str, LayerStatsSnapshot]
+    ) -> None:
+        rows = self._channel_rows(per_phase)
+        self._channel_count = len(rows) if rows is not None else None
+        if self._channel_count is None:
+            self._channel_total.text = "(no per-channel data)"
+            return
+        self._channel = min(self._channel, self._channel_count - 1)
+        self._channel_total.text = f"of {self._channel_count} channels"
+        self._channel_spinner.max = self._channel_count - 1
+        if self._channel_spinner.value != self._channel:
+            # NiceGUI suppresses value writes from inside a value-change
+            # handler; defer one tick (same workaround as the weight panels).
+            ui.timer(
+                0.0,
+                lambda: self._channel_spinner.set_value(self._channel),
+                once=True,
+            )
+
+    def _view(
+        self, per_phase: dict[str, LayerStatsSnapshot]
+    ) -> dict[str, LayerStatsSnapshot]:
+        """`per_phase` with each phase's histogram narrowed to the channel.
+
+        Falls back to the universal histogram for phases without
+        per-channel rows (1D tensors, collapsed older epochs).
+        """
+        if not self._per_channel:
+            return per_phase
+        out: dict[str, LayerStatsSnapshot] = {}
+        for phase, snap in per_phase.items():
+            stats = kind_stats(snap, self._kind)
+            if stats.channel_hists is None:
+                out[phase] = snap
+                continue
+            channel = min(self._channel, len(stats.channel_hists) - 1)
+            narrowed = replace(stats, hist=stats.channel_hists[channel])
+            field = "activations" if self._kind == "activation" else "gradients"
+            out[phase] = replace(snap, **{field: narrowed})
+        return out
+
+    def _trace_names(self, view: dict[str, LayerStatsSnapshot]) -> list[str]:
+        suffix = (
+            f" — ch {self._channel}"
+            if self._per_channel and self._channel_count is not None
+            else ""
+        )
+        phases = _phases_with_data(view, self._kind)
+        return [f"{p} (ep {view[p].epoch}){suffix}" for p in phases]
+
+    async def _on_hover(self, e: GenericEventArguments) -> None:
+        if not self._per_channel:
+            return
+        bin_idx = int(e.args.get("bin", -1))
+        if not 0 <= bin_idx < N_BINS:
+            return
+        snapshot = self._session.snapshot
+        input_names = self._session.input_names
+        content = await asyncio.to_thread(
+            _bin_samples_html,
+            snapshot,
+            self._layer,
+            self._kind,
+            self._channel,
+            bin_idx,
+            input_names[0] if input_names else None,
+            self._input_mean,
+            self._input_std,
+        )
+        self._samples.set_content(content)
+
+    def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
+        self._last_per_phase = per_phase
+        self._sync_channel_controls(per_phase)
+        per_phase = self._view(per_phase)
+        phases = _phases_with_data(per_phase, self._kind)
+        axis = self._current_axis()
+        log_x = axis[0]
+        density = use_density(log_x)
+        if phases != self._phases or axis != self._axis:
+            # A phase appeared/disappeared or an axis-scale checkbox
+            # flipped — rebuild the whole figure.
+            self.element.update_figure(
+                _figure_payload(
+                    _make_histogram_figure(
+                        per_phase,
+                        self._kind,
+                        self._title,
+                        log_x=axis[0],
+                        log_y=axis[1],
+                        trace_names=self._trace_names(per_phase),
+                    )
+                )
+            )
+            self._phases = phases
+            self._axis = axis
+            self._x_range, self._y_range = axis_ranges(
+                per_phase, self._kind, log_x=log_x, log_y=axis[1]
+            )
+        elif phases:
+            # Same rows and axes — only counts (and the epoch label) moved.
+            # Restyle in place so zoom/pan survives. A channel index change
+            # lands here too: same structure, new bar heights.
+            hists = [kind_stats(per_phase[p], self._kind).hist for p in phases]
+            names = self._trace_names(per_phase)
+            update: dict[str, object] = {
+                "name": names,
+                "y": [trace_heights(h, density) for h in hists],
+                "customdata": [_hover_customdata(h, density) for h in hists],
+            }
+            # The subplot titles carry the epoch, so refresh them with the
+            # data (annotation order matches row order).
+            layout: dict[str, object] = {
+                f"annotations[{i}].text": name for i, name in enumerate(names)
+            }
+            # The caps follow the data; re-apply them only when they moved so
+            # an idle refresh doesn't keep snapping the user's zoom back.
+            x_range, y_range = axis_ranges(
+                per_phase, self._kind, log_x=log_x, log_y=axis[1]
+            )
+            if y_range is not None and y_range != self._y_range:
+                # Every row gets the same range (row 1 is "yaxis", row n is
+                # "yaxis{n}") so the subplots stay comparable.
+                self._y_range = y_range
+                for i in range(len(phases)):
+                    axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
+                    layout[f"{axis_name}.range"] = y_range
+            if x_range != self._x_range:
+                # The rows' x-axes are matched, so one key updates every row.
+                self._x_range = x_range
+                layout["xaxis.range"] = x_range
+            _plotly_restyle(
+                self.element, update, list(range(len(phases))), layout
+            )
+
+
+class _WatchLayerPanel:
+    """One card per watched layer — histograms or extreme-patch grids.
+
+    Both views are built up front; `update` shows the one matching the
+    header dropdown and only refreshes that view's content (hidden plotly
+    figures and patch grids are left untouched until switched back). Patch
+    grids re-render only when their cheap signature — toggles plus the
+    stored extreme values — actually changes, so idle 2s refreshes don't
+    re-encode images.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        session: Session,
+        on_unwatched: Callable[[], None],
+        axis_log: dict[str, bool],
+        view_minmax: dict[str, bool],
+        grid_on: dict[PatchType, bool],
+        heat_on: dict[str, bool],
+        selected_phase: dict[str, str],
+        input_mean: tuple[float, ...] | None,
+        input_std: tuple[float, ...] | None,
+    ) -> None:
+        self.name = name
+        self._session = session
+        self._view_minmax = view_minmax
+        self._grid_on = grid_on
+        self._heat_on = heat_on
+        self._selected_phase = selected_phase
+        self._input_mean = input_mean
+        self._input_std = input_std
+        self._grid_sig: tuple[object, ...] | None = None
+
+        def unwatch() -> None:
+            # The watch recordings render from this layer's accumulators,
+            # which unwatching drops — refuse while one is active.
+            if _watch_views_recording(session):
+                ui.notify(
+                    "Watched layers are frozen while a watch view is "
+                    "recording",
+                    type="warning",
+                )
+                return
+            session.unwatch(name)
+            on_unwatched()
+
+        with ui.card().classes("w-full p-4 gap-2"):
+            with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                ui.label(name).classes("font-mono text-base font-bold grow")
+                ui.button(
+                    icon="visibility_off",
+                    color="amber-600",
+                    on_click=unwatch,
+                ).props("dense size=sm flat round").tooltip("Stop watching")
+            self._hist_section = ui.column().classes("w-full gap-3")
+            with self._hist_section:
+                ui.label("Activations").classes(
+                    "font-mono text-sm text-slate-600"
+                )
+                self._act_stats = ui.html(
+                    _stats_table_html({}, "activation")
+                ).classes("font-mono text-sm")
+                self._act = _HistPlot(
+                    "activation",
+                    "activations",
+                    axis_log,
+                    session=session,
+                    layer=name,
+                    input_mean=input_mean,
+                    input_std=input_std,
+                )
+                ui.label("Gradients").classes(
+                    "font-mono text-sm text-slate-600"
+                )
+                self._grad_stats = ui.html(
+                    _stats_table_html({}, "gradient")
+                ).classes("font-mono text-sm")
+                self._grad = _HistPlot(
+                    "gradient",
+                    "gradients",
+                    axis_log,
+                    session=session,
+                    layer=name,
+                    input_mean=input_mean,
+                    input_std=input_std,
+                )
+            self._patch_section = ui.column().classes("w-full gap-2")
+            with self._patch_section:
+                self._grids = ui.html(_NO_PATCHES_HTML).classes("w-full")
+            self._hist_section.set_visibility(not view_minmax["on"])
+            self._patch_section.set_visibility(view_minmax["on"])
+
+    def update(
+        self,
+        snap: WatchSnapshot,
+        grids: tuple[tuple[object, ...], str] | None = None,
+    ) -> None:
+        """Refresh the visible view. Runs on the UI event loop.
+
+        `grids` is the output of `prepare_grids` (computed off the event
+        loop by the page's refresh); `None` means the grids are unchanged.
+        """
+        per_phase = self._phase_view(snap)
+        minmax = self._view_minmax["on"]
+        self._hist_section.set_visibility(not minmax)
+        self._patch_section.set_visibility(minmax)
+        if minmax:
+            if grids is not None:
+                self._grid_sig, html = grids
+                self._grids.set_content(html)
+            return
+        self._act_stats.set_content(_stats_table_html(per_phase, "activation"))
+        self._grad_stats.set_content(_stats_table_html(per_phase, "gradient"))
+        self._act.update(per_phase)
+        self._grad.update(per_phase)
+
+    def _phase_view(self, snap: WatchSnapshot) -> dict[str, LayerStatsSnapshot]:
+        """The layer's latest-epoch stats, narrowed to the selected phase."""
+        return _filter_phase(
+            snap.latest_per_phase(self.name), self._selected_phase["name"]
+        )
+
+    def prepare_grids(
+        self, snap: WatchSnapshot
+    ) -> tuple[tuple[object, ...], str] | None:
+        """Render this panel's patch grids if their signature changed.
+
+        Pure compute — no UI element access — so the page's refresh can run
+        it in a worker thread: blending heatmaps and encoding a card's worth
+        of grid images would otherwise block the event loop long enough to
+        starve websocket keepalive pings when toggles re-render every card.
+        Returns `(signature, html)` for `update` to apply, or `None` when
+        the current content is already up to date.
+        """
+        per_phase = self._phase_view(snap)
+        enabled = [t for t in PATCH_TYPES if self._grid_on[t]]
+        heatmap = self._heat_on["on"]
+        sig = _patch_grids_signature(per_phase, enabled, heatmap)
+        if sig == self._grid_sig:
+            return None
+        html = _patch_grids_html(
+            per_phase,
+            enabled=enabled,
+            heatmap=heatmap,
+            mean=self._input_mean,
+            std=self._input_std,
+        )
+        return sig, html
+
+
+def _filter_phase(
+    per_phase: dict[str, LayerStatsSnapshot], phase: str
+) -> dict[str, LayerStatsSnapshot]:
+    """Narrow a `phase -> stats` mapping to the dropdown-selected phase."""
+    return {p: s for p, s in per_phase.items() if p == phase}
+
+
+_VIEW_HISTOGRAM: str = "HISTOGRAM"
+_VIEW_MINMAX: str = "MIN/MAX"
+
+_PATCH_TYPE_LABELS: dict[PatchType, str] = {
+    "max_pixel": "Max pixel",
+    "min_pixel": "Min pixel",
+    "max_average": "Max average",
+    "min_average": "Min average",
+}
+
+_NO_PATCHES_HTML: str = (
+    '<div class="text-xs text-slate-400 italic py-1">no patches gathered '
+    "yet — patches need an image-like (4D) model input</div>"
+)
+
+
+def _patch_grids_signature(
+    per_phase: dict[str, LayerStatsSnapshot],
+    enabled: list[PatchType],
+    heatmap: bool,
+) -> tuple[object, ...]:
+    """Cheap change-detection key for a panel's patch grids.
+
+    The stored extreme values identify the buffer contents: any accepted
+    candidate changes its channel's value row, so unchanged values ⇒
+    unchanged patches (within one epoch bucket, which the phase/epoch part
+    of the key pins down).
+    """
+    parts: list[object] = [tuple(enabled), heatmap]
+    for phase, layer_snap in per_phase.items():
+        patches = layer_snap.patches
+        if patches is None:
+            parts.append((phase, layer_snap.epoch, None))
+            continue
+        for ptype in enabled:
+            tp = patches.by_type.get(ptype)
+            values = tp.values.numpy().tobytes() if tp is not None else None
+            parts.append((phase, layer_snap.epoch, ptype, values))
+    return tuple(parts)
+
+
+def _patch_grids_html(
+    per_phase: dict[str, LayerStatsSnapshot],
+    *,
+    enabled: list[PatchType],
+    heatmap: bool,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+) -> str:
+    """The MIN/MAX view body for one layer: per-phase blocks of grids."""
+    blocks: list[str] = []
+    for i, (phase, layer_snap) in enumerate(per_phase.items()):
+        patches = layer_snap.patches
+        if patches is None:
+            continue
+        rows: list[str] = []
+        for ptype in enabled:
+            tp = patches.by_type.get(ptype)
+            if tp is None:
+                continue
+            grid = render_patch_grid(tp, mean=mean, std=std, heatmap=heatmap)
+            if grid is None:
+                continue
+            rows.append(_patch_grid_row_html(_PATCH_TYPE_LABELS[ptype], grid))
+        if not rows:
+            continue
+        color = phase_color(phase, i)
+        blocks.append(
+            '<div class="flex flex-col gap-2 w-full">'
+            f'<div class="font-mono text-xs font-bold" style="color:{color}">'
+            f"{phase} (ep {layer_snap.epoch})</div>" + "".join(rows) + "</div>"
+        )
+    if not blocks:
+        return _NO_PATCHES_HTML
+    return '<div class="flex flex-col gap-4 w-full">' + "".join(blocks) + "</div>"
+
+
+def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
+    """One labeled grid: channels as columns, top samples as rows.
+
+    With the heatmap enabled the grid is flanked by its crisp
+    display-resolution colorbar (the overlay's `±vmax` scale), which sits
+    outside the scroll container so it stays visible on wide grids.
+    `max-width:none` opts the images out of the preflight `max-width:100%`
+    so wide grids scroll horizontally instead of being squashed.
+    """
+    legend = (
+        f'<img src="{_b64_img_src(grid.heat_legend)}" '
+        'style="display:block; flex:none; max-width:none;" />'
+        if grid.heat_legend is not None
+        else ""
+    )
+    return (
+        '<div class="flex flex-col gap-0.5 w-full">'
+        '<div class="text-base font-bold uppercase tracking-widest '
+        f'text-slate-800 font-mono">{label}</div>'
+        '<div style="display:flex; align-items:flex-start;" class="w-full">'
+        f"{legend}"
+        '<div class="overflow-x-auto" style="flex:1; min-width:0;">'
+        f'<img src="{_b64_img_src(grid.image, mime=grid.mime)}" '
+        f'style="width:{grid.width}px; height:{grid.height}px; '
+        'image-rendering:pixelated; display:block; max-width:none;" '
+        f'title="{label} — columns: channels, rows: top samples '
+        '(best first)" />'
+        "</div></div></div>"
+    )

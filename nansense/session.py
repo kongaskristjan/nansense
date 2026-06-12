@@ -1,4 +1,4 @@
-"""Nansense session: state machine, hook installation, snapshot publishing.
+"""Nansense session: state machine, batch lifecycle, snapshot publishing.
 
 A `Session` is created once per training run via `nansense.start(...)`.
 The user wraps each batch with `with session.batch(phase=..., epoch=...)`:
@@ -23,41 +23,36 @@ Whether the session captures activations/gradients for a given batch is
 decided up-front at `__enter__` from the schedule + current mode, so
 forward hooks are only installed for batches that will actually be
 inspected.
+
+The heavy lifting lives in sibling modules that this one delegates to:
+`nansense.capture` (hook installation, fx interpretation, live weight /
+optimizer reads), `nansense.probe` (pinned-input probe state and runs),
+and `nansense.experiments` (the experiment queue and runners).
 """
 
 from __future__ import annotations
 
-import inspect
 import threading
-import time
 from collections import OrderedDict, deque
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Self
 
-import torch
 from torch import Tensor, fx, nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
-from nansense import experiments
+from nansense import capture, experiments, probe
 from nansense.experiments import (
-    EXPERIMENT_KINDS,
     ExperimentRequest,
     ExperimentResult,
+    _AutoExperiment,
 )
-from nansense.fx_names import friendly_names
-from nansense.probe import (
-    PROBE_MODES,
-    PerturbationMap,
-    ProbeResult,
-    apply_perturbations,
-)
+from nansense.probe import PerturbationMap, ProbeResult
 from nansense.restore import (
     DEFAULT_CACHE_DIR,
     TimeTravelError,
@@ -82,15 +77,6 @@ class Mode(StrEnum):
     DETACH = "detach"
 
 
-# How many per-seq experiment results stay retrievable (oldest evicted
-# first); generous enough for every open client plus a little history.
-_EXPERIMENT_RESULTS_KEPT: int = 8
-
-# How long an auto-experiment registration survives without a heartbeat
-# (`touch_auto_experiment`). UI pages tick every ~0.2 s, so anything beyond
-# a few seconds means the page is gone.
-_AUTO_EXPERIMENT_TTL: float = 5.0
-
 FREQUENCY_UNITS: tuple[str, ...] = ("batch", "epoch")
 
 
@@ -109,21 +95,6 @@ class UpdateFrequency:
     unit: str = "epoch"
     n: int = 1
     phase: str | None = None
-
-
-@dataclass
-class _AutoExperiment:
-    """One experiment re-run on every visualization update.
-
-    The request keeps its seq for the registration's whole lifetime, so
-    `experiment_result_for(seq)` always returns the freshest rerun and a
-    seeded experiment (deep dream derives its noise from the seq) draws the
-    same start on every update. `expires_at` is a `time.monotonic` deadline
-    refreshed by page heartbeats; `None` pins the entry (an active
-    recording holds the view)."""
-
-    request: ExperimentRequest
-    expires_at: float | None
 
 
 @dataclass(frozen=True)
@@ -184,11 +155,21 @@ class Session:
         # the only expensive part of construction. A disabled session never
         # installs hooks, so these stay empty and every per-batch path
         # short-circuits.
-        self._fx_graph: fx.GraphModule | None = _try_trace(model) if enabled else None
-        self._input_names: list[str] = self._compute_input_names() if enabled else []
-        self._layer_names: list[str] = self._compute_layer_names() if enabled else []
+        self._fx_graph: fx.GraphModule | None = (
+            capture.try_trace(model) if enabled else None
+        )
+        self._input_names: list[str] = (
+            capture.compute_input_names(self._fx_graph, model) if enabled else []
+        )
+        self._layer_names: list[str] = (
+            capture.compute_layer_names(self._fx_graph, model, self._input_names)
+            if enabled
+            else []
+        )
         self._layer_weights: dict[str, list[str]] = (
-            self._compute_layer_weights() if enabled else {}
+            capture.compute_layer_weights(self._fx_graph, model, self._input_names)
+            if enabled
+            else {}
         )
         self._original_forward: object | None = None
         self._had_instance_forward: bool = False
@@ -442,33 +423,11 @@ class Session:
         and time travel. Pinning while paused runs the probe immediately on
         the paused training thread (see `_wait_for_proceed`).
         """
-        if not self._enabled:
-            return False
-        snap = self._snapshot
-        input_name = self._input_names[0] if self._input_names else None
-        if snap is None or input_name is None:
-            return False
-        pinned = snap.activations.get(input_name)
-        if pinned is None:
-            return False
-        with self._cv:
-            self._pinned_input = pinned
-            self._pinned_position = snap.position
-            self._request_probe_locked()
-        return True
+        return probe.pin_current_batch(self)
 
     def unpin_batch(self) -> None:
         """Drop the pinned input (and the probe result, absent perturbations)."""
-        with self._cv:
-            if self._pinned_input is None:
-                return
-            self._pinned_input = None
-            self._pinned_position = None
-            if self._perturbations:
-                # Perturbations keep probing, now against the snapshot input.
-                self._request_probe_locked()
-                return
-            self._clear_probe_result_locked()
+        probe.unpin_batch(self)
 
     @property
     def perturbations(self) -> PerturbationMap:
@@ -489,30 +448,11 @@ class Session:
         captures the perturbed activations. Entries that don't fit the base
         (out of range, wrong channel count) are skipped at apply time.
         """
-        if not self._enabled:
-            return
-        with self._cv:
-            self._perturbations[(sample, y, x)] = tuple(values)
-            self._request_probe_locked()
+        probe.add_perturbation(self, sample=sample, y=y, x=x, values=values)
 
     def clear_perturbations(self) -> None:
         """Drop all perturbations (and the probe result, when not pinned)."""
-        with self._cv:
-            if not self._perturbations:
-                return
-            self._perturbations.clear()
-            if self._pinned_input is not None:
-                self._request_probe_locked()
-                return
-            self._clear_probe_result_locked()
-
-    def _clear_probe_result_locked(self) -> None:
-        """Deactivate probing and drop the published result (caller holds `_cv`)."""
-        self._probe_version += 1
-        self._probe_request = False
-        self._probe_result = None
-        self._probe_error = None
-        self._cv.notify_all()
+        probe.clear_perturbations(self)
 
     def set_probe_mode(self, mode: str) -> None:
         """Set train/eval handling for probe forwards.
@@ -527,18 +467,7 @@ class Session:
         flags and all buffers are restored after the run, and the RNG is
         forked around it. A mode change while pinned re-runs the probe.
         """
-        if mode not in PROBE_MODES:
-            raise ValueError(
-                f"unknown probe mode {mode!r}; expected one of {PROBE_MODES}"
-            )
-        with self._cv:
-            if mode == self._probe_mode:
-                return
-            self._probe_mode = mode
-            if self._probe_active_locked():
-                self._request_probe_locked()
-            else:
-                self._probe_version += 1
+        probe.set_probe_mode(self, mode)
 
     def wait_for_probe(
         self, *, after_count: int = 0, timeout: float | None = None
@@ -591,23 +520,9 @@ class Session:
         supersedes a running one (use `cancel_experiment(seq)` to replace
         your own). Returns the request's seq.
         """
-        if kind not in EXPERIMENT_KINDS:
-            raise ValueError(
-                f"unknown experiment kind {kind!r}; "
-                f"expected one of {list(EXPERIMENT_KINDS)}"
-            )
-        with self._cv:
-            self._experiment_seq += 1
-            self._experiment_queue.append(
-                ExperimentRequest(
-                    kind=kind,
-                    layer=layer,
-                    params=dict(params),
-                    seq=self._experiment_seq,
-                )
-            )
-            self._cv.notify_all()
-            return self._experiment_seq
+        return experiments.request_experiment(
+            self, kind=kind, layer=layer, params=params
+        )
 
     def cancel_experiment(self, seq: int | None = None) -> None:
         """Cancel one request by seq, or every request when `seq` is None.
@@ -616,18 +531,7 @@ class Session:
         at its next abort check and stops. Other clients' requests are
         untouched when a seq is given.
         """
-        with self._cv:
-            if seq is None:
-                self._experiment_queue.clear()
-                if self._experiment_running is not None:
-                    self._experiment_cancelled.add(self._experiment_running)
-            else:
-                queued = [r for r in self._experiment_queue if r.seq != seq]
-                if len(queued) != len(self._experiment_queue):
-                    self._experiment_queue = deque(queued)
-                elif self._experiment_running == seq:
-                    self._experiment_cancelled.add(seq)
-            self._cv.notify_all()
+        experiments.cancel_experiment(self, seq)
 
     def wait_for_experiment(self, *, timeout: float | None = None) -> bool:
         """Block until the latest request publishes its final result.
@@ -708,53 +612,27 @@ class Session:
         recording (`pin_auto_experiment`). Re-registering a key replaces its
         request. Returns the request's seq.
         """
-        if kind not in EXPERIMENT_KINDS:
-            raise ValueError(
-                f"unknown experiment kind {kind!r}; "
-                f"expected one of {list(EXPERIMENT_KINDS)}"
-            )
-        with self._cv:
-            self._experiment_seq += 1
-            request = ExperimentRequest(
-                kind=kind, layer=layer, params=dict(params), seq=self._experiment_seq
-            )
-            self._auto_experiments[key] = _AutoExperiment(
-                request=request,
-                expires_at=time.monotonic() + _AUTO_EXPERIMENT_TTL,
-            )
-            self._experiment_queue.append(request)
-            self._cv.notify_all()
-            return request.seq
+        return experiments.register_auto_experiment(
+            self, key, kind=kind, layer=layer, params=params
+        )
 
     def touch_auto_experiment(self, key: str) -> None:
         """Heartbeat: keep `key`'s auto experiment alive (no-op when pinned)."""
-        with self._cv:
-            entry = self._auto_experiments.get(key)
-            if entry is not None and entry.expires_at is not None:
-                entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+        experiments.touch_auto_experiment(self, key)
 
     def pin_auto_experiment(self, key: str) -> bool:
         """Keep `key`'s auto experiment alive indefinitely (recordings).
 
         Returns `False` when no such registration exists."""
-        with self._cv:
-            entry = self._auto_experiments.get(key)
-            if entry is None:
-                return False
-            entry.expires_at = None
-            return True
+        return experiments.pin_auto_experiment(self, key)
 
     def unpin_auto_experiment(self, key: str) -> None:
         """Put `key`'s auto experiment back on the heartbeat clock."""
-        with self._cv:
-            entry = self._auto_experiments.get(key)
-            if entry is not None and entry.expires_at is None:
-                entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+        experiments.unpin_auto_experiment(self, key)
 
     def unregister_auto_experiment(self, key: str) -> None:
         """Drop `key`'s auto experiment (already-published results remain)."""
-        with self._cv:
-            self._auto_experiments.pop(key, None)
+        experiments.unregister_auto_experiment(self, key)
 
     def current_weights(self) -> dict[str, Tensor]:
         """CPU clones of the model's parameters, read live at call time.
@@ -767,7 +645,7 @@ class Session:
         crash. Keys match `named_parameters()`, the same keys
         `layer_weights` indexes into.
         """
-        return {n: self._cpu_clone(p) for n, p in self.model.named_parameters()}
+        return capture.current_weights(self.model)
 
     def current_weight_gradients(self) -> dict[str, Tensor]:
         """CPU clones of the parameters' current `.grad`, read live at call time.
@@ -777,11 +655,7 @@ class Session:
         backward yet, or `zero_grad(set_to_none=True)` just cleared them) are
         omitted. Same benign-race caveat as `current_weights`.
         """
-        return {
-            n: self._cpu_clone(p.grad)
-            for n, p in self.model.named_parameters()
-            if p.grad is not None
-        }
+        return capture.current_weight_gradients(self.model)
 
     def current_optimizer_state(self) -> dict[str, dict[str, Tensor]]:
         """Per-parameter optimizer state, read live at call time.
@@ -796,23 +670,7 @@ class Session:
         `start()`, or before the first `optimizer.step()` (state is lazily
         initialised). Same benign-race caveat as `current_weights`.
         """
-        if self._optimizer is None:
-            return {}
-        names = {id(p): n for n, p in self.model.named_parameters()}
-        result: dict[str, dict[str, Tensor]] = {}
-        for param, state in self._optimizer.state.items():
-            name = names.get(id(param))
-            if name is None:
-                continue  # parameter from some other model
-            entries: dict[str, Tensor] = {}
-            for key, value in state.items():
-                if isinstance(value, Tensor):
-                    entries[key] = self._cpu_clone(value)
-                elif isinstance(value, (int, float)):
-                    entries[key] = torch.tensor(float(value))
-            if entries:
-                result[name] = entries
-        return result
+        return capture.current_optimizer_state(self.model, self._optimizer)
 
     def current_optimizer_hyperparams(self) -> dict[str, dict[str, float]]:
         """Per-parameter numeric hyperparameters of the optimizer group.
@@ -824,23 +682,7 @@ class Session:
         exists — groups are not lazily initialised. Empty when no optimizer
         was passed to `start()`.
         """
-        if self._optimizer is None:
-            return {}
-        names = {id(p): n for n, p in self.model.named_parameters()}
-        result: dict[str, dict[str, float]] = {}
-        for group in self._optimizer.param_groups:
-            numeric = {
-                key: float(value)
-                for key, value in group.items()
-                if key != "params"
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-            }
-            for param in group["params"]:
-                name = names.get(id(param))
-                if name is not None:
-                    result[name] = dict(numeric)
-        return result
+        return capture.current_optimizer_hyperparams(self.model, self._optimizer)
 
     def set_schedule(
         self,
@@ -1037,33 +879,6 @@ class Session:
         self._freq_counter += 1
         return self._freq_counter % freq.n == 0
 
-    def _run_auto_experiments(self) -> None:
-        """Re-run every live auto experiment (training thread, post-publish).
-
-        Runs at every snapshot publish — frequency updates and mode
-        captures alike — so open experiment pages and recordings track the
-        evolving weights. Expired registrations (no page heartbeat, not
-        pinned by a recording) are dropped first. A registration whose
-        initial request is still queued is taken over here: the queued
-        duplicate is removed so the request runs exactly once per update.
-        """
-        now = time.monotonic()
-        with self._cv:
-            for key in [
-                k
-                for k, e in self._auto_experiments.items()
-                if e.expires_at is not None and e.expires_at < now
-            ]:
-                del self._auto_experiments[key]
-            requests = [e.request for e in self._auto_experiments.values()]
-            seqs = {r.seq for r in requests}
-            if seqs:
-                self._experiment_queue = deque(
-                    r for r in self._experiment_queue if r.seq not in seqs
-                )
-        for request in requests:
-            self._run_experiment_guarded(request)
-
     def _record_frames(self) -> None:
         """Append one frame to every active recording (training thread).
 
@@ -1075,30 +890,6 @@ class Session:
         manager = self._recording_manager
         if manager is not None:
             manager.capture_frames(self)
-
-    def _install_hooks(self) -> None:
-        self._activations.clear()
-        if self._fx_graph is not None:
-            self._patch_forward()
-            return
-        pre = self.model.register_forward_pre_hook(
-            self._make_pre_hook(self._activations)
-        )
-        self._hook_handles.append(pre)
-        for name, module in self.model.named_modules():
-            if module is self.model:
-                continue
-            handle = module.register_forward_hook(
-                self._make_hook(name, self._activations)
-            )
-            self._hook_handles.append(handle)
-
-    def _remove_hooks(self) -> None:
-        if self._original_forward is not None:
-            self._unpatch_forward()
-        for h in self._hook_handles:
-            h.remove()
-        self._hook_handles.clear()
 
     def _update_watch_stats(self, pos: BatchPosition) -> None:
         source = self._patch_source_input()
@@ -1149,145 +940,21 @@ class Session:
                 fallback = t
         return fallback
 
-    def _patch_forward(self) -> None:
-        # Stash whatever .forward currently resolves to so we can put it back,
-        # remembering whether it was an instance attribute or a class method.
-        self._had_instance_forward = "forward" in self.model.__dict__
-        self._original_forward = self.model.forward
-        graph = self._fx_graph
-        capture = self._activations
-        assert graph is not None
-
-        def fx_forward(*args: Tensor) -> object:
-            # fx.Interpreter.run takes positional args matched to placeholder
-            # order; kwargs aren't passed through.
-            return _CaptureInterpreter(graph, capture).run(*args)
-
-        object.__setattr__(self.model, "forward", fx_forward)
-
-    def _unpatch_forward(self) -> None:
-        if self._had_instance_forward and self._original_forward is not None:
-            object.__setattr__(self.model, "forward", self._original_forward)
-        elif "forward" in self.model.__dict__:
-            object.__delattr__(self.model, "forward")
-        self._original_forward = None
-        self._had_instance_forward = False
-
-    def _make_hook(
-        self, name: str, capture: dict[str, Tensor], *, to_cpu: bool = False
-    ) -> Callable[[nn.Module, object, object], None]:
-        # `to_cpu` mirrors `_CaptureInterpreter`: probe forwards clone each
-        # output to CPU as it is produced instead of retaining live tensors.
-        def hook(_module: nn.Module, _inputs: object, output: object) -> None:
-            if not isinstance(output, Tensor):
-                return
-            if to_cpu:
-                capture[name] = self._cpu_clone(output)
-                return
-            if output.requires_grad:
-                output.retain_grad()
-            capture[name] = output
-
-        return hook
-
-    def _make_pre_hook(
-        self, capture: dict[str, Tensor], *, to_cpu: bool = False
-    ) -> Callable[[nn.Module, tuple[object, ...]], None]:
-        def hook(_module: nn.Module, inputs: tuple[object, ...]) -> None:
-            for i, inp in enumerate(inputs):
-                if not isinstance(inp, Tensor):
-                    continue
-                name = (
-                    self._input_names[i]
-                    if i < len(self._input_names)
-                    else f"arg_{i}"
-                )
-                if to_cpu:
-                    capture[name] = self._cpu_clone(inp)
-                    continue
-                if inp.requires_grad:
-                    inp.retain_grad()
-                capture[name] = inp
-
-        return hook
-
-    def _compute_input_names(self) -> list[str]:
-        if self._fx_graph is not None:
-            return [
-                n.name for n in self._fx_graph.graph.nodes if n.op == "placeholder"
-            ]
-        return _infer_input_names(self.model)
-
-    def _compute_layer_names(self) -> list[str]:
-        if self._fx_graph is not None:
-            names = friendly_names(self._fx_graph.graph)
-            return [
-                names[n]
-                for n in self._fx_graph.graph.nodes
-                if n.op != "output"
-            ]
-        return self._input_names + [
-            name for name, m in self.model.named_modules() if m is not self.model
-        ]
-
-    def _compute_layer_weights(self) -> dict[str, list[str]]:
-        param_names = [name for name, _ in self.model.named_parameters()]
-        if self._fx_graph is not None:
-            return self._fx_layer_weights(param_names)
-        return self._hook_layer_weights(param_names)
-
-    def _fx_layer_weights(self, param_names: list[str]) -> dict[str, list[str]]:
-        assert self._fx_graph is not None
-        param_set = set(param_names)
-        names = friendly_names(self._fx_graph.graph)
-        result: dict[str, list[str]] = {}
-        for node in self._fx_graph.graph.nodes:
-            if node.op == "output":
-                continue
-            used: set[str] = set()
-            if node.op == "call_module":
-                used.update(_params_under(param_names, str(node.target)))
-            # Parameters used functionally (e.g. F.conv2d(x, self.weight)) reach
-            # the node through a get_attr input whose target is the param name.
-            for inp in node.all_input_nodes:
-                if inp.op == "get_attr" and inp.target in param_set:
-                    used.add(str(inp.target))
-            result[names[node]] = sorted(used)
-        return result
-
-    def _hook_layer_weights(self, param_names: list[str]) -> dict[str, list[str]]:
-        result: dict[str, list[str]] = {name: [] for name in self._input_names}
-        for name, module in self.model.named_modules():
-            if module is self.model:
-                continue
-            result[name] = _params_under(param_names, name)
-        return result
-
-    @staticmethod
-    def _cpu_clone(t: Tensor) -> Tensor:
-        return t.detach().to("cpu", copy=True)
-
     def _publish_snapshot(self, pos: BatchPosition) -> None:
-        activations = {n: self._cpu_clone(a) for n, a in self._activations.items()}
+        activations = {
+            n: capture.cpu_clone(a) for n, a in self._activations.items()
+        }
         activation_gradients = {
-            n: self._cpu_clone(a.grad)
+            n: capture.cpu_clone(a.grad)
             for n, a in self._activations.items()
             if a.grad is not None
-        }
-        weights = {
-            n: self._cpu_clone(p) for n, p in self.model.named_parameters()
-        }
-        weight_gradients = {
-            n: self._cpu_clone(p.grad)
-            for n, p in self.model.named_parameters()
-            if p.grad is not None
         }
         self._snapshot = BatchSnapshot(
             position=pos,
             activations=activations,
             activation_gradients=activation_gradients,
-            weights=weights,
-            weight_gradients=weight_gradients,
+            weights=capture.current_weights(self.model),
+            weight_gradients=capture.current_weight_gradients(self.model),
             # Runs on the training thread at __exit__, so these reads are
             # consistent with the weights above ({} when no optimizer given).
             optimizer_state=self.current_optimizer_state(),
@@ -1358,83 +1025,9 @@ class Session:
                 # stay queued for the next pause.
                 return
             if run_probe:
-                self._run_probe_guarded()
+                probe.run_probe_guarded(self)
             if experiment is not None:
-                self._run_experiment_guarded(experiment)
-
-    def _probe_active_locked(self) -> bool:
-        """Whether probe runs should happen at all (caller holds `_cv`)."""
-        return self._pinned_input is not None or bool(self._perturbations)
-
-    def _request_probe_locked(self) -> None:
-        """Arm a probe run and wake a paused training thread (caller holds `_cv`)."""
-        self._probe_version += 1
-        self._probe_request = True
-        self._cv.notify_all()
-
-    def _maybe_run_probe_at_capture(self) -> None:
-        """Run a probe right after a capture published its snapshot.
-
-        Called by `_BatchContext.__exit__` before the pause, so every pause
-        shows a probe result consistent with the just-captured weights. Any
-        UI request armed in the meantime is consumed here — the run below
-        uses the current config either way.
-        """
-        with self._cv:
-            self._probe_request = False
-            active = self._probe_active_locked()
-        if active:
-            self._run_probe_guarded()
-
-    def _run_probe_guarded(self) -> None:
-        # A failing probe (bad input, OOM, model quirk) must not kill the
-        # training thread or wedge the pause loop; the error is published
-        # for the UI to display instead.
-        try:
-            self._run_probe()
-        except Exception as e:  # noqa: BLE001 — surfaced via probe_error
-            with self._cv:
-                self._probe_error = f"{type(e).__name__}: {e}"
-                self._probe_count += 1
-                self._cv.notify_all()
-
-    def _run_probe(self) -> None:
-        """One probe run: isolated forwards on the base (and perturbed) input.
-
-        Training-thread only. Reads the probe config under `_cv`, runs the
-        forwards without the lock, and publishes the result only if the
-        config is still current — a config change mid-run (re-pin, mode flip,
-        new perturbation) wins and its own request re-runs the probe. The
-        base input is the pinned batch, or the snapshot's input when only
-        perturbations are active.
-        """
-        with self._cv:
-            version = self._probe_version
-            pinned = self._pinned_input
-            mode = self._probe_mode
-            perturbations = dict(self._perturbations)
-        if pinned is None and not perturbations:
-            return
-        base = pinned if pinned is not None else self._snapshot_input()
-        if base is None:
-            return
-        perturbed = apply_perturbations(base, perturbations)
-        inputs = [base] if perturbed is None else [base, perturbed]
-        captures = self._probe_forwards(inputs, mode=mode)
-        result = ProbeResult(
-            input=base,
-            activations=captures[0],
-            mode=mode,
-            perturbed_input=perturbed,
-            perturbed_activations=captures[1] if perturbed is not None else None,
-        )
-        with self._cv:
-            if self._probe_version != version:
-                return
-            self._probe_result = result
-            self._probe_error = None
-            self._probe_count += 1
-            self._cv.notify_all()
+                experiments.run_experiment_guarded(self, experiment)
 
     def _snapshot_input(self) -> Tensor | None:
         """The last snapshot's input tensor (the probe base when unpinned)."""
@@ -1444,153 +1037,13 @@ class Session:
             return None
         return snap.activations.get(input_name)
 
-    @contextmanager
-    def _isolated_model(self, mode: str) -> Iterator[torch.device]:
-        """Run model inference without mutating training state.
-
-        The shared isolation contract of probes and experiments:
-
-        - Per-module `training` flags are saved and restored ("eval"/"train"
-          flip the whole model; "unchanged" runs with whatever the loop set).
-        - Every buffer is restored afterwards (a train-mode BatchNorm forward
-          updates running stats in place).
-        - The RNG is forked, so e.g. train-mode dropout doesn't perturb the
-          global stream that time-travel replays depend on.
-
-        Callers add their own gradient policy: probes wrap the body in
-        `torch.no_grad()`; experiments take input gradients via
-        `torch.autograd.grad`, which leaves parameter `.grad` untouched.
-        Yields the model's device.
-        """
-        device = self._model_device()
-        saved_flags = [(m, m.training) for m in self.model.modules()]
-        saved_buffers = [(b, b.detach().clone()) for _, b in self.model.named_buffers()]
-        try:
-            if mode == "eval":
-                self.model.eval()
-            elif mode == "train":
-                self.model.train()
-            with self._fork_rng(device):
-                yield device
-        finally:
-            for module, flag in saved_flags:
-                module.training = flag
-            with torch.no_grad():
-                for buffer, saved in saved_buffers:
-                    buffer.copy_(saved)
-
-    def _probe_forwards(
-        self, inputs: list[Tensor], *, mode: str
-    ) -> list[dict[str, Tensor]]:
-        """Run isolated no-grad forwards, capturing every layer's output."""
-        with self._isolated_model(mode) as device, torch.no_grad():
-            return [self._capture_forward(inp.to(device)) for inp in inputs]
-
-    def _run_experiment_guarded(self, request: ExperimentRequest) -> None:
-        """Drive one experiment to completion on the training thread.
-
-        Streams every yielded progress result through `_publish_experiment`.
-        The abort predicate stops the run on `cancel_experiment` (for this
-        seq) and on anything that ends the pause — resume commands, a
-        pending time-travel jump, `close()` — so the pause loop regains
-        control promptly; queued requests from other clients wait their
-        turn instead of aborting the run. A failing experiment publishes an
-        error result instead of killing the training thread.
-        """
-        with self._cv:
-            resume_seen = self._resume_token
-            self._experiment_running = request.seq
-
-        def should_abort() -> bool:
-            with self._cv:
-                return (
-                    request.seq in self._experiment_cancelled
-                    or self._closed
-                    or self._pending_jump is not None
-                    or self._resume_token != resume_seen
-                )
-
-        try:
-            for partial in experiments.run(self, request, should_abort):
-                self._publish_experiment(partial)
-        except Exception as e:  # noqa: BLE001 — surfaced via the result
-            self._publish_experiment(
-                ExperimentResult(
-                    seq=request.seq,
-                    kind=request.kind,
-                    layer=request.layer,
-                    step=0,
-                    total_steps=0,
-                    done=True,
-                    error=f"{type(e).__name__}: {e}",
-                )
-            )
-        finally:
-            with self._cv:
-                self._experiment_running = None
-                self._experiment_cancelled.discard(request.seq)
-
-    def _publish_experiment(self, result: ExperimentResult) -> None:
-        with self._cv:
-            self._experiment_results[result.seq] = result
-            self._experiment_results.move_to_end(result.seq)
-            while len(self._experiment_results) > _EXPERIMENT_RESULTS_KEPT:
-                self._experiment_results.popitem(last=False)
-            self._experiment_result = result
-            self._cv.notify_all()
-
     def _capture_forward(self, inp: Tensor) -> dict[str, Tensor]:
-        """One forward pass capturing every layer output as a fresh CPU clone.
+        """One isolated forward, every layer output as a fresh CPU clone.
 
-        Never touches the batch path's state (`_activations`,
-        `_hook_handles`, the patched forward): in fx mode the interpreter
-        writes straight into a local dict, and in the hook fallback temporary
-        hooks are registered and removed around the call. Safe because probes
-        only run between batches, when the batch path's hooks are
-        uninstalled.
-
-        Captures clone to CPU eagerly (`to_cpu=True`): holding live outputs
-        until the end of the forward would keep every layer's activation
-        resident on the GPU at once — roughly a training forward's worth of
-        memory on top of the training step's own.
+        Thin wrapper over `capture.capture_forward` so probe runs go
+        through the session (tests intercept probe forwards here).
         """
-        capture: dict[str, Tensor] = {}
-        if self._fx_graph is not None:
-            _CaptureInterpreter(self._fx_graph, capture, to_cpu=True).run(inp)
-        else:
-            handles = [
-                self.model.register_forward_pre_hook(
-                    self._make_pre_hook(capture, to_cpu=True)
-                )
-            ]
-            handles += [
-                module.register_forward_hook(
-                    self._make_hook(name, capture, to_cpu=True)
-                )
-                for name, module in self.model.named_modules()
-                if module is not self.model
-            ]
-            try:
-                self.model(inp)
-            finally:
-                for handle in handles:
-                    handle.remove()
-        return capture
-
-    def _model_device(self) -> torch.device:
-        param = next(self.model.parameters(), None)
-        if param is not None:
-            return param.device
-        buffer = next(self.model.buffers(), None)
-        if buffer is not None:
-            return buffer.device
-        return torch.device("cpu")
-
-    @staticmethod
-    def _fork_rng(device: torch.device) -> AbstractContextManager[None]:
-        if device.type in ("cuda", "mps"):
-            return torch.random.fork_rng(devices=[device], device_type=device.type)
-        return torch.random.fork_rng(devices=[])
+        return capture.capture_forward(self, inp)
 
 
 class _BatchContext:
@@ -1648,7 +1101,7 @@ class _BatchContext:
         # inputs, fx intermediates, modules — can be watched. The only
         # difference is what happens at __exit__ (publish / pause / stats).
         if self._captured or self._freq_update or self._stats_only:
-            self._session._install_hooks()
+            capture.install_hooks(self._session)
         return self
 
     def __exit__(
@@ -1662,7 +1115,7 @@ class _BatchContext:
         if self._captured or self._freq_update or self._stats_only:
             if exc is None and self._session._watched_layers:
                 self._session._update_watch_stats(self._position)
-            self._session._remove_hooks()
+            capture.remove_hooks(self._session)
             if exc is None and not self._session.closed:
                 if self._captured or self._freq_update:
                     self._session._publish_snapshot(self._position)
@@ -1671,11 +1124,11 @@ class _BatchContext:
                     # the probe's forward below doesn't stack a second
                     # batch's worth of memory on top of them.
                     self._session._activations.clear()
-                    self._session._maybe_run_probe_at_capture()
+                    probe.maybe_run_probe_at_capture(self._session)
                     # Auto experiments re-run on every publish, so a pause
                     # shows fresh results and a free-running frequency
                     # update keeps open pages / recordings current.
-                    self._session._run_auto_experiments()
+                    experiments.run_auto_experiments(self._session)
                 if self._freq_update:
                     self._session._record_frames()
                 if self._captured:
@@ -1749,74 +1202,3 @@ def start(
             session, port=port, host=host, input_mean=input_mean, input_std=input_std
         )
     return session
-
-
-def _try_trace(model: nn.Module) -> fx.GraphModule | None:
-    try:
-        return fx.symbolic_trace(model)
-    except Exception:
-        return None
-
-
-def _params_under(param_names: list[str], target: str) -> list[str]:
-    """Qualified parameter names owned by the module at dotted path `target`.
-
-    Matches `target.*` (the params the module and its descendants hold). The
-    bare `target` is included too for the degenerate case of a parameter
-    registered directly under that name.
-    """
-    prefix = f"{target}."
-    return sorted(p for p in param_names if p == target or p.startswith(prefix))
-
-
-class _CaptureInterpreter(fx.Interpreter):
-    """fx interpreter that snapshots every node's tensor output.
-
-    The interpreter runs the traced graph one node at a time and lets us
-    intercept after each run. We retain_grad on every non-leaf tensor so
-    the user's subsequent loss.backward() populates `.grad`, and store the
-    live tensor under its friendly name in `capture`.
-
-    With `to_cpu=True` (probe forwards, which never backward), each output
-    is cloned to CPU as it is produced instead — so a whole model's worth
-    of layer outputs never accumulates on the GPU during the run.
-    """
-
-    def __init__(
-        self, gm: fx.GraphModule, capture: dict[str, Tensor], *, to_cpu: bool = False
-    ) -> None:
-        super().__init__(gm)
-        self._capture = capture
-        self._names = friendly_names(gm.graph)
-        self._to_cpu = to_cpu
-
-    def run_node(self, n: fx.Node) -> object:
-        result = super().run_node(n)
-        if n.op == "output":
-            return result
-        if isinstance(result, Tensor):
-            if self._to_cpu:
-                self._capture[self._names[n]] = Session._cpu_clone(result)
-            else:
-                if result.requires_grad:
-                    result.retain_grad()
-                self._capture[self._names[n]] = result
-        return result
-
-
-def _infer_input_names(model: nn.Module) -> list[str]:
-    """Positional parameter names of model.forward (excluding self/*args/**kwargs)."""
-    try:
-        params = inspect.signature(model.forward).parameters
-    except (TypeError, ValueError):
-        return ["x"]
-    names = [
-        name
-        for name, p in params.items()
-        if p.kind
-        in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-    ]
-    return names or ["x"]

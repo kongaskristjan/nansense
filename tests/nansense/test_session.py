@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 
 import pytest
@@ -11,41 +10,44 @@ from torch import Tensor, nn
 
 import nansense
 from nansense.session import Mode, Session, _BatchContext
+from tests.nansense.helpers import (
+    DynamicNet,
+    TinyNet,
+    make_session,
+    optimizer_train_step,
+    paused_session,
+    paused_worker,
+    run_in_thread,
+    train_step,
+)
 
 
-class TinyNet(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.fc1 = nn.Linear(4, 8)
-        self.fc2 = nn.Linear(8, 3)
+def _capture_positions_loop(
+    session: Session,
+    model: TinyNet,
+    out: list[tuple[str, int, int]],
+    *,
+    epochs: int,
+    phases: dict[str, int],
+) -> Callable[[], None]:
+    """A worker target that runs the schedule and records captured positions."""
 
-    def forward(self, x: Tensor) -> Tensor:
-        return self.fc2(torch.relu(self.fc1(x)))
+    def loop() -> None:
+        for epoch in range(epochs):
+            for phase, n in phases.items():
+                for _ in range(n):
+                    with session.batch(phase=phase, epoch=epoch) as ctx:
+                        train_step(model)
+                    if ctx.captured and ctx.position is not None:
+                        out.append(
+                            (ctx.position.phase, ctx.position.epoch, ctx.position.batch_idx)
+                        )
 
-
-def _train_step(model: TinyNet) -> None:
-    x = torch.randn(2, 4)
-    y = torch.randint(0, 3, (2,))
-    model.zero_grad(set_to_none=True)
-    loss = nn.functional.cross_entropy(model(x), y)
-    loss.backward()
-
-
-def _make_session(epochs: int = 2, phases: dict[str, int] | None = None) -> tuple[Session, TinyNet]:
-    if phases is None:
-        phases = {"train": 2, "val": 2}
-    model = TinyNet()
-    return nansense.start(model, epochs=epochs, phases=phases), model
-
-
-def _run_in_thread(target) -> threading.Thread:
-    thread = threading.Thread(target=target, daemon=True)
-    thread.start()
-    return thread
+    return loop
 
 
 def test_detach_skips_capture_for_every_batch() -> None:
-    session, model = _make_session()
+    session, model = make_session()
     session.detach()
 
     captured: list[bool] = []
@@ -53,7 +55,7 @@ def test_detach_skips_capture_for_every_batch() -> None:
         for phase, n in [("train", 2), ("val", 2)]:
             for _ in range(n):
                 with session.batch(phase=phase, epoch=epoch) as ctx:
-                    _train_step(model)
+                    train_step(model)
                 captured.append(ctx.captured)
 
     assert captured == [False] * 8
@@ -66,149 +68,91 @@ def test_detach_skips_capture_for_every_batch() -> None:
 
 
 def test_step_run_pauses_only_at_last_overall() -> None:
-    session, model = _make_session(epochs=2, phases={"train": 2, "val": 2})
+    phases = {"train": 2, "val": 2}
+    session, model = make_session(epochs=2, phases=phases)
 
     captured_positions: list[tuple[str, int, int]] = []
-
-    def loop() -> None:
-        for epoch in range(2):
-            for phase, n in [("train", 2), ("val", 2)]:
-                for _ in range(n):
-                    with session.batch(phase=phase, epoch=epoch) as ctx:
-                        _train_step(model)
-                    if ctx.captured and ctx.position is not None:
-                        captured_positions.append(
-                            (ctx.position.phase, ctx.position.epoch, ctx.position.batch_idx)
-                        )
+    loop = _capture_positions_loop(
+        session, model, captured_positions, epochs=2, phases=phases
+    )
 
     session.step_run()
-    thread = _run_in_thread(loop)
-
-    assert session.wait_until_paused(timeout=5)
-    session.close()
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+    with paused_worker(session, loop):
+        session.close()
     assert captured_positions == [("val", 1, 1)]
     assert session.snapshot is not None
     assert session.snapshot.position.is_last_overall
 
 
 def test_step_mode_pauses_on_every_batch() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 2})
+    model = TinyNet()
+    with paused_session(model, phases={"train": 2}) as session:
+        assert session.snapshot is not None
+        assert session.snapshot.position.batch_idx == 0
+        session.step_batch()
 
-    def loop() -> None:
-        for _ in range(2):
-            with session.batch(phase="train", epoch=0):
-                _train_step(model)
-
-    thread = _run_in_thread(loop)
-
-    assert session.wait_until_paused(timeout=5)
-    assert session.snapshot is not None
-    assert session.snapshot.position.batch_idx == 0
-    session.step_batch()
-
-    assert session.wait_until_paused(after_pauses=1, timeout=5)
-    assert session.snapshot is not None
-    assert session.snapshot.position.batch_idx == 1
-    session.detach()
-
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+        assert session.wait_until_paused(after_pauses=1, timeout=5)
+        assert session.snapshot is not None
+        assert session.snapshot.position.batch_idx == 1
     assert session.pause_count == 2
 
 
 def test_until_phase_change_captures_only_phase_end() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 3, "val": 2})
+    phases = {"train": 3, "val": 2}
+    session, model = make_session(epochs=1, phases=phases)
 
     captured_positions: list[tuple[str, int, int]] = []
-
-    def loop() -> None:
-        for phase, n in [("train", 3), ("val", 2)]:
-            for _ in range(n):
-                with session.batch(phase=phase, epoch=0) as ctx:
-                    _train_step(model)
-                if ctx.captured and ctx.position is not None:
-                    captured_positions.append(
-                        (ctx.position.phase, ctx.position.epoch, ctx.position.batch_idx)
-                    )
+    loop = _capture_positions_loop(
+        session, model, captured_positions, epochs=1, phases=phases
+    )
 
     session.step_phase()
-    thread = _run_in_thread(loop)
-
-    assert session.wait_until_paused(timeout=5)
-    session.detach()
-
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+    with paused_worker(session, loop):
+        pass  # exit releases the worker paused at the phase boundary
     assert captured_positions == [("train", 0, 2)]
 
 
 def test_step_until_position_captures_only_at_target() -> None:
-    session, model = _make_session(epochs=2, phases={"train": 2, "val": 2})
+    phases = {"train": 2, "val": 2}
+    session, model = make_session(epochs=2, phases=phases)
 
     captured_positions: list[tuple[str, int, int]] = []
-
-    def loop() -> None:
-        for epoch in range(2):
-            for phase, n in [("train", 2), ("val", 2)]:
-                for _ in range(n):
-                    with session.batch(phase=phase, epoch=epoch) as ctx:
-                        _train_step(model)
-                    if ctx.captured and ctx.position is not None:
-                        captured_positions.append(
-                            (ctx.position.phase, ctx.position.epoch, ctx.position.batch_idx)
-                        )
+    loop = _capture_positions_loop(
+        session, model, captured_positions, epochs=2, phases=phases
+    )
 
     session.step_until_position(phase="val", epoch=0, batch_idx=1)
-    thread = _run_in_thread(loop)
-
-    assert session.wait_until_paused(timeout=5)
-    session.detach()
-
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+    with paused_worker(session, loop):
+        pass  # exit releases the worker paused at the target position
     assert captured_positions == [("val", 0, 1)]
 
 
 def test_until_epoch_change_captures_only_epoch_end() -> None:
-    session, model = _make_session(epochs=2, phases={"train": 2, "val": 2})
+    phases = {"train": 2, "val": 2}
+    session, model = make_session(epochs=2, phases=phases)
 
     captured_positions: list[tuple[str, int, int]] = []
-
-    def loop() -> None:
-        for epoch in range(2):
-            for phase, n in [("train", 2), ("val", 2)]:
-                for _ in range(n):
-                    with session.batch(phase=phase, epoch=epoch) as ctx:
-                        _train_step(model)
-                    if ctx.captured and ctx.position is not None:
-                        captured_positions.append(
-                            (ctx.position.phase, ctx.position.epoch, ctx.position.batch_idx)
-                        )
+    loop = _capture_positions_loop(
+        session, model, captured_positions, epochs=2, phases=phases
+    )
 
     session.step_epoch()
-    thread = _run_in_thread(loop)
-
-    assert session.wait_until_paused(timeout=5)
-    session.detach()
-
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+    with paused_worker(session, loop):
+        pass  # exit releases the worker paused at the epoch boundary
     assert captured_positions == [("val", 0, 1)]
 
 
 def test_live_position_starts_none_and_tracks_every_batch_under_detach() -> None:
     """Detach never captures a snapshot, yet `live_position` advances on every
     batch — this is what keeps the UI top bar moving when nothing is paused."""
-    session, model = _make_session(epochs=1, phases={"train": 3})
+    session, model = make_session(epochs=1, phases={"train": 3})
     session.detach()
     assert session.live_position is None  # nothing has entered a batch yet
 
     seen: list[tuple[str, int, int]] = []
     for i in range(3):
         with session.batch(phase="train", epoch=0) as ctx:
-            _train_step(model)
+            train_step(model)
             assert ctx.captured is False  # detach: no capture
         if i < 2:
             # No snapshot until the default update frequency (every epoch)
@@ -226,7 +170,7 @@ def test_live_position_tracks_non_captured_batches_during_step_epoch() -> None:
     """STEP EPOCH captures only the epoch's last batch, but `live_position` is
     recorded for every batch the worker passes through — including the
     non-captured ones, so the top bar advances batch-by-batch."""
-    session, model = _make_session(epochs=1, phases={"train": 2, "val": 2})
+    session, model = make_session(epochs=1, phases={"train": 2, "val": 2})
 
     observed: list[tuple[tuple[str, int, int], bool]] = []
 
@@ -234,19 +178,14 @@ def test_live_position_tracks_non_captured_batches_during_step_epoch() -> None:
         for phase, n in [("train", 2), ("val", 2)]:
             for _ in range(n):
                 with session.batch(phase=phase, epoch=0) as ctx:
-                    _train_step(model)
+                    train_step(model)
                 lp = session.live_position
                 assert lp is not None
                 observed.append(((lp.phase, lp.epoch, lp.batch_idx), ctx.captured))
 
     session.step_epoch()
-    thread = _run_in_thread(loop)
-
-    assert session.wait_until_paused(timeout=5)
-    session.detach()  # release the worker paused at the epoch boundary
-
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+    with paused_worker(session, loop):
+        pass  # exit releases the worker paused at the epoch boundary
 
     positions = [pos for pos, _ in observed]
     captured = [cap for _, cap in observed]
@@ -261,55 +200,35 @@ def test_live_position_tracks_non_captured_batches_during_step_epoch() -> None:
 
 
 def test_snapshot_contains_all_four_tensor_categories() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    model = TinyNet()
+    with paused_session(model, phases={"train": 1}) as session:
+        snap = session.snapshot
+        assert snap is not None
 
-    def loop() -> None:
-        with session.batch(phase="train", epoch=0):
-            _train_step(model)
+        module_names = {"fc1", "fc2"}
+        param_names = {"fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"}
+        assert module_names <= set(snap.activations)
+        assert module_names <= set(snap.activation_gradients)
+        assert param_names <= set(snap.weights)
+        assert param_names <= set(snap.weight_gradients)
 
-    thread = _run_in_thread(loop)
+        expected_param_shapes = {n: p.shape for n, p in model.named_parameters()}
+        for name in param_names:
+            assert snap.weights[name].shape == expected_param_shapes[name]
+            assert snap.weight_gradients[name].shape == expected_param_shapes[name]
 
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-
-    module_names = {"fc1", "fc2"}
-    param_names = {"fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"}
-    assert module_names <= set(snap.activations)
-    assert module_names <= set(snap.activation_gradients)
-    assert param_names <= set(snap.weights)
-    assert param_names <= set(snap.weight_gradients)
-
-    expected_param_shapes = {n: p.shape for n, p in model.named_parameters()}
-    for name in param_names:
-        assert snap.weights[name].shape == expected_param_shapes[name]
-        assert snap.weight_gradients[name].shape == expected_param_shapes[name]
-
-    # No optimizer was passed to start(): the optimizer fields stay empty.
-    assert snap.optimizer_state == {}
-    assert snap.optimizer_hyperparams == {}
-
-    session.detach()
-    thread.join(timeout=5)
+        # No optimizer was passed to start(): the optimizer fields stay empty.
+        assert snap.optimizer_state == {}
+        assert snap.optimizer_hyperparams == {}
 
 
 def test_snapshot_captures_model_input_as_x() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
-
-    def loop() -> None:
-        with session.batch(phase="train", epoch=0):
-            _train_step(model)
-
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-    assert "x" in snap.activations
-    assert snap.activations["x"].shape == (2, 4)
-    assert session.input_names == ["x"]
-
-    session.detach()
-    thread.join(timeout=5)
+    with paused_session(TinyNet(), phases={"train": 1}) as session:
+        snap = session.snapshot
+        assert snap is not None
+        assert "x" in snap.activations
+        assert snap.activations["x"].shape == (2, 4)
+        assert session.input_names == ["x"]
 
 
 def test_input_name_comes_from_forward_signature() -> None:
@@ -327,21 +246,13 @@ def test_input_name_comes_from_forward_signature() -> None:
 
     def loop() -> None:
         with session.batch(phase="train", epoch=0):
-            x = torch.randn(2, 4)
-            y = torch.randint(0, 3, (2,))
-            model.zero_grad(set_to_none=True)
-            loss = nn.functional.cross_entropy(model(x), y)
-            loss.backward()
+            train_step(model)
 
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-    assert "image" in snap.activations
-    assert "x" not in snap.activations
-
-    session.detach()
-    thread.join(timeout=5)
+    with paused_worker(session, loop):
+        snap = session.snapshot
+        assert snap is not None
+        assert "image" in snap.activations
+        assert "x" not in snap.activations
 
 
 def test_fx_mode_captures_function_call_outputs() -> None:
@@ -372,17 +283,13 @@ def test_fx_mode_captures_function_call_outputs() -> None:
             loss = nn.functional.cross_entropy(logits, y)
             loss.backward()
 
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-    assert "relu" in snap.activations
-    # relu was applied to a tensor that requires grad, so we should also
-    # have captured the gradient of its output.
-    assert "relu" in snap.activation_gradients
-
-    session.detach()
-    thread.join(timeout=5)
+    with paused_worker(session, loop):
+        snap = session.snapshot
+        assert snap is not None
+        assert "relu" in snap.activations
+        # relu was applied to a tensor that requires grad, so we should also
+        # have captured the gradient of its output.
+        assert "relu" in snap.activation_gradients
 
 
 def test_fx_mode_scopes_repeated_function_ops_by_submodule() -> None:
@@ -422,16 +329,12 @@ def test_fx_mode_scopes_repeated_function_ops_by_submodule() -> None:
             loss = nn.functional.cross_entropy(model(x), y)
             loss.backward()
 
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-    assert "block.relu1" in snap.activations
-    assert "block.relu2" in snap.activations
-    assert session.watch("block.relu2") is True
-
-    session.detach()
-    thread.join(timeout=5)
+    with paused_worker(session, loop):
+        snap = session.snapshot
+        assert snap is not None
+        assert "block.relu1" in snap.activations
+        assert "block.relu2" in snap.activations
+        assert session.watch("block.relu2") is True
 
 
 def test_fx_mode_restores_original_forward_after_batch() -> None:
@@ -454,37 +357,16 @@ def test_fx_mode_restores_original_forward_after_batch() -> None:
 
     def loop() -> None:
         with session.batch(phase="train", epoch=0):
-            x = torch.randn(2, 4)
-            y = torch.randint(0, 2, (2,))
-            model.zero_grad(set_to_none=True)
-            loss = nn.functional.cross_entropy(model(x), y)
-            loss.backward()
+            train_step(model, num_classes=2)
 
-    thread = _run_in_thread(loop)
-    try:
-        assert session.wait_until_paused(timeout=5)
+    with paused_worker(session, loop):
         assert "forward" not in model.__dict__
         assert model.forward == original_forward
-    finally:
-        session.detach()
-    thread.join(timeout=5)
-    assert not thread.is_alive()
     assert "forward" not in model.__dict__
 
 
 def test_fx_failure_falls_back_to_hooks() -> None:
-    class Dynamic(nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.fc = nn.Linear(4, 2)
-
-        def forward(self, x: Tensor) -> Tensor:
-            if x.sum() > 0:
-                return self.fc(x)
-            return self.fc(-x)
-
-    model = Dynamic()
-    session = nansense.start(model, epochs=1, phases={"train": 1})
+    session = nansense.start(DynamicNet(), epochs=1, phases={"train": 1})
     assert not session.fx_traced
     # Hook-mode layer_names: inputs + module names.
     assert session.layer_names == ["x", "fc"]
@@ -517,7 +399,7 @@ def test_layer_weights_maps_modules_to_their_parameters_fx() -> None:
 def test_layer_weights_covers_every_parameter_exactly() -> None:
     """In fx mode the per-layer mapping accounts for all of the model's
     parameters (TinyNet's two Linear layers, weight + bias each)."""
-    session, model = _make_session()
+    session, model = make_session()
     mapped = {p for params in session.layer_weights.values() for p in params}
     assert mapped == {n for n, _ in model.named_parameters()}
     assert session.layer_weights["fc1"] == ["fc1.bias", "fc1.weight"]
@@ -543,45 +425,25 @@ def test_layer_weights_detects_functional_parameter_use() -> None:
 
 def test_layer_weights_uses_module_subtree_in_hook_fallback() -> None:
     """When fx tracing fails, a module maps to every parameter in its subtree."""
-
-    class Dynamic(nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.fc = nn.Linear(4, 2)
-
-        def forward(self, x: Tensor) -> Tensor:
-            if x.sum() > 0:
-                return self.fc(x)
-            return self.fc(-x)
-
-    session = nansense.start(Dynamic(), epochs=1, phases={"train": 1})
+    session = nansense.start(DynamicNet(), epochs=1, phases={"train": 1})
     assert not session.fx_traced
     assert session.layer_weights == {"x": [], "fc": ["fc.bias", "fc.weight"]}
 
 
 def test_layer_weights_keys_index_into_snapshot_weights() -> None:
     """Every parameter named by layer_weights is present in a snapshot."""
-    session, model = _make_session(epochs=1, phases={"train": 1})
-
-    def loop() -> None:
-        with session.batch(phase="train", epoch=0):
-            _train_step(model)
-
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-    for params in session.layer_weights.values():
-        for name in params:
-            assert name in snap.weights
-    session.detach()
-    thread.join(timeout=5)
+    with paused_session(TinyNet(), phases={"train": 1}) as session:
+        snap = session.snapshot
+        assert snap is not None
+        for params in session.layer_weights.values():
+            for name in params:
+                assert name in snap.weights
 
 
 def test_current_weights_reads_live_params_without_a_snapshot() -> None:
     """current_weights() works before any batch runs (no snapshot needed) and
     returns independent CPU clones of every parameter."""
-    session, model = _make_session()
+    session, model = make_session()
     assert session.snapshot is None  # nothing captured yet
 
     weights = session.current_weights()
@@ -598,7 +460,7 @@ def test_current_weights_reads_live_params_without_a_snapshot() -> None:
 def test_current_weights_tracks_parameter_updates() -> None:
     """A fresh call reflects in-place parameter changes (e.g. an optimizer
     step), so the weights view can refresh mid-training."""
-    session, model = _make_session()
+    session, model = make_session()
     before = session.current_weights()["fc1.weight"]
     with torch.no_grad():
         model.fc1.weight.add_(1.0)
@@ -609,10 +471,10 @@ def test_current_weights_tracks_parameter_updates() -> None:
 def test_current_weight_gradients_empty_before_backward_then_live() -> None:
     """Before any backward pass there are no gradients; after one, every
     parameter's `.grad` is returned as an independent CPU clone."""
-    session, model = _make_session()
+    session, model = make_session()
     assert session.current_weight_gradients() == {}
 
-    _train_step(model)  # zero_grad + forward + backward
+    train_step(model)  # zero_grad + forward + backward
     grads = session.current_weight_gradients()
     expected = {n: p.grad for n, p in model.named_parameters() if p.grad is not None}
     assert set(grads) == set(expected) == {n for n, _ in model.named_parameters()}
@@ -623,15 +485,6 @@ def test_current_weight_gradients_empty_before_backward_then_live() -> None:
 
     model.zero_grad(set_to_none=True)
     assert session.current_weight_gradients() == {}
-
-
-def _opt_step(model: TinyNet, optimizer: torch.optim.Optimizer) -> None:
-    x = torch.randn(2, 4)
-    y = torch.randint(0, 3, (2,))
-    optimizer.zero_grad()
-    loss = nn.functional.cross_entropy(model(x), y)
-    loss.backward()
-    optimizer.step()
 
 
 @pytest.mark.parametrize(
@@ -660,7 +513,7 @@ def test_current_optimizer_state_gathers_per_parameter_entries(
     )
     assert session.current_optimizer_state() == {}
 
-    _opt_step(model, optimizer)
+    optimizer_train_step(model, optimizer)
     state = session.current_optimizer_state()
     assert set(state) == {n for n, _ in model.named_parameters()}
     entry = state["fc1.weight"]
@@ -697,8 +550,8 @@ def test_current_optimizer_hyperparams_numeric_only_and_eager() -> None:
 
 
 def test_optimizer_methods_empty_without_optimizer() -> None:
-    session, model = _make_session()
-    _train_step(model)
+    session, model = make_session()
+    train_step(model)
     assert session.current_optimizer_state() == {}
     assert session.current_optimizer_hyperparams() == {}
 
@@ -706,56 +559,41 @@ def test_optimizer_methods_empty_without_optimizer() -> None:
 def test_snapshot_carries_optimizer_values_when_attached() -> None:
     model = TinyNet()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-    session = nansense.start(
-        model, epochs=1, phases={"train": 1}, optimizer=optimizer
-    )
-
-    def loop() -> None:
-        with session.batch(phase="train", epoch=0):
-            _opt_step(model, optimizer)
-
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-    assert set(snap.optimizer_state["fc1.weight"]) == {"momentum_buffer"}
-    assert snap.optimizer_hyperparams["fc1.weight"]["lr"] == pytest.approx(0.1)
-    session.detach()
-    thread.join(timeout=5)
+    with paused_session(
+        model,
+        lambda m: optimizer_train_step(m, optimizer),
+        phases={"train": 1},
+        optimizer=optimizer,
+    ) as session:
+        snap = session.snapshot
+        assert snap is not None
+        assert set(snap.optimizer_state["fc1.weight"]) == {"momentum_buffer"}
+        assert snap.optimizer_hyperparams["fc1.weight"]["lr"] == pytest.approx(0.1)
 
 
 def test_snapshot_tensors_are_cpu_and_independent() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    model = TinyNet()
+    with paused_session(model, phases={"train": 1}) as session:
+        snap = session.snapshot
+        assert snap is not None
 
-    def loop() -> None:
-        with session.batch(phase="train", epoch=0):
-            _train_step(model)
+        all_tensors = {
+            **snap.activations,
+            **snap.activation_gradients,
+            **snap.weights,
+            **snap.weight_gradients,
+        }
+        for name, t in all_tensors.items():
+            assert t.device.type == "cpu", name
+            assert not t.requires_grad, name
 
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.snapshot
-    assert snap is not None
-
-    all_tensors = {
-        **snap.activations,
-        **snap.activation_gradients,
-        **snap.weights,
-        **snap.weight_gradients,
-    }
-    for name, t in all_tensors.items():
-        assert t.device.type == "cpu", name
-        assert not t.requires_grad, name
-
-    live_weight = dict(model.named_parameters())["fc1.weight"]
-    snap_weight = snap.weights["fc1.weight"]
-    assert snap_weight.data_ptr() != live_weight.data_ptr()
-
-    session.detach()
-    thread.join(timeout=5)
+        live_weight = dict(model.named_parameters())["fc1.weight"]
+        snap_weight = snap.weights["fc1.weight"]
+        assert snap_weight.data_ptr() != live_weight.data_ptr()
 
 
 def test_stop_then_step_pauses_at_next_batch() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 3})
+    session, model = make_session(epochs=1, phases={"train": 3})
     session.detach()
 
     captured: list[bool] = []
@@ -763,10 +601,10 @@ def test_stop_then_step_pauses_at_next_batch() -> None:
     def loop() -> None:
         for _ in range(3):
             with session.batch(phase="train", epoch=0) as ctx:
-                _train_step(model)
+                train_step(model)
             captured.append(ctx.captured)
 
-    thread = _run_in_thread(loop)
+    thread = run_in_thread(loop)
     session.stop()  # next batch boundary should pause
     assert session.wait_until_paused(timeout=5)
     session.detach()
@@ -776,53 +614,44 @@ def test_stop_then_step_pauses_at_next_batch() -> None:
 
 
 def test_set_schedule_mid_run() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 2})
+    session, model = make_session(epochs=1, phases={"train": 2})
     session.detach()
 
     with session.batch(phase="train", epoch=0):
-        _train_step(model)
+        train_step(model)
 
     session.set_schedule(phases={"train": 5})
     for _ in range(4):
         with session.batch(phase="train", epoch=0):
-            _train_step(model)
+            train_step(model)
 
 
 def test_close_releases_waiter_and_is_idempotent() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
-
-    def loop() -> None:
-        with session.batch(phase="train", epoch=0):
-            _train_step(model)
-
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    session.close()
-    session.close()
-    thread.join(timeout=5)
-    assert not thread.is_alive()
+    with paused_session(TinyNet(), phases={"train": 1}) as session:
+        session.close()
+        session.close()
     assert session.closed
 
 
 def test_close_before_any_batch_is_safe() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     session.close()
     with session.batch(phase="train", epoch=0) as ctx:
-        _train_step(model)
+        train_step(model)
     assert not ctx.captured
     assert session.snapshot is None
 
 
 def test_unknown_phase_raises_through_context() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     session.detach()
     with pytest.raises(ValueError, match="unknown phase"):
         with session.batch(phase="bogus", epoch=0):
-            _train_step(model)
+            train_step(model)
 
 
 def test_user_exception_does_not_pause() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     # default mode is STEP: would normally pause, but user exception should
     # propagate without us blocking the worker.
 
@@ -834,7 +663,7 @@ def test_user_exception_does_not_pause() -> None:
             with session.batch(phase="train", epoch=0):
                 raise Boom
 
-    thread = _run_in_thread(loop)
+    thread = run_in_thread(loop)
     thread.join(timeout=5)
     assert not thread.is_alive()
     assert session.snapshot is None
@@ -842,24 +671,14 @@ def test_user_exception_does_not_pause() -> None:
 
 
 def test_hooks_removed_after_each_batch() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 2})
-
-    def loop() -> None:
-        for _ in range(2):
-            with session.batch(phase="train", epoch=0):
-                _train_step(model)
-
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    # Between pauses, hooks should have been removed even though we still hold
-    # the activations from the previous batch on the snapshot.
-    assert session._hook_handles == []  # type: ignore[reportPrivateUsage]
-    session.detach()
-    thread.join(timeout=5)
+    with paused_session(TinyNet(), phases={"train": 2}) as session:
+        # Between pauses, hooks should have been removed even though we still
+        # hold the activations from the previous batch on the snapshot.
+        assert session._hook_handles == []  # type: ignore[reportPrivateUsage]
 
 
 def test_watch_accepts_any_layer_name_and_rejects_unknown() -> None:
-    session, model = _make_session()
+    session, model = make_session()
     # Modules, fx intermediates, and the input are all in layer_names.
     assert session.watch("fc1") is True
     assert session.watch("relu") is True  # fx intermediate
@@ -870,13 +689,13 @@ def test_watch_accepts_any_layer_name_and_rejects_unknown() -> None:
 
 def test_watch_accumulates_stats_while_detached() -> None:
     """Stats accumulate on every batch even when detach() means no captures."""
-    session, model = _make_session(epochs=1, phases={"train": 3})
+    session, model = make_session(epochs=1, phases={"train": 3})
     session.watch("fc1")
     session.detach()
 
     for _ in range(3):
         with session.batch(phase="train", epoch=0) as ctx:
-            _train_step(model)
+            train_step(model)
             assert ctx.captured is False  # detach mode
 
     snap = session.watch_snapshot()
@@ -890,28 +709,25 @@ def test_watch_accumulates_stats_while_detached() -> None:
 
 def test_watch_accumulates_stats_alongside_capture() -> None:
     """Stats also accumulate when the batch is being captured for the snapshot."""
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     session.watch("fc1")
 
     def loop() -> None:
         with session.batch(phase="train", epoch=0):
-            _train_step(model)
+            train_step(model)
 
-    thread = _run_in_thread(loop)
-    assert session.wait_until_paused(timeout=5)
-    snap = session.watch_snapshot()
-    assert ("fc1", "train", 0) in snap.stats
-    assert snap.stats[("fc1", "train", 0)].activations.n == 16
-    session.detach()
-    thread.join(timeout=5)
+    with paused_worker(session, loop):
+        snap = session.watch_snapshot()
+        assert ("fc1", "train", 0) in snap.stats
+        assert snap.stats[("fc1", "train", 0)].activations.n == 16
 
 
 def test_unwatch_drops_collected_stats() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     session.watch("fc1")
     session.detach()
     with session.batch(phase="train", epoch=0):
-        _train_step(model)
+        train_step(model)
     assert ("fc1", "train", 0) in session.watch_snapshot().stats
 
     session.unwatch("fc1")
@@ -951,11 +767,11 @@ def test_watch_gathers_patches_for_image_inputs() -> None:
 
 
 def test_watch_skips_patches_without_image_input() -> None:
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     session.watch("fc1")
     session.detach()
     with session.batch(phase="train", epoch=0):
-        _train_step(model)
+        train_step(model)
     # TinyNet's input is 2D — stats accumulate but no patches are gathered.
     layer_stats = session.watch_snapshot().stats[("fc1", "train", 0)]
     assert layer_stats.activations.n > 0
@@ -964,7 +780,7 @@ def test_watch_skips_patches_without_image_input() -> None:
 
 def test_watching_uses_full_capture_machinery_under_detach() -> None:
     """Watching engages the same hook path as capture, so fx intermediates work."""
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     session.watch("fc1")
     session.detach()
 
@@ -979,21 +795,21 @@ def test_watching_uses_full_capture_machinery_under_detach() -> None:
             or session._original_forward is not None  # type: ignore[reportPrivateUsage]
         )
         assert installed
-        _train_step(model)
+        train_step(model)
     assert session._hook_handles == []  # type: ignore[reportPrivateUsage]
     assert session._original_forward is None  # type: ignore[reportPrivateUsage]
 
 
 def test_watch_fx_intermediate_accumulates_stats() -> None:
     """Watching an fx-traced intermediate op (`relu`) produces stats."""
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     assert session.fx_traced
     assert "relu" in session.layer_names
     session.watch("relu")
     session.detach()
 
     with session.batch(phase="train", epoch=0):
-        _train_step(model)
+        train_step(model)
 
     snap = session.watch_snapshot()
     assert ("relu", "train", 0) in snap.stats
@@ -1007,13 +823,13 @@ def test_watch_fx_intermediate_accumulates_stats() -> None:
 
 def test_watch_input_x_accumulates_stats() -> None:
     """Watching the graph input `x` produces stats."""
-    session, model = _make_session(epochs=1, phases={"train": 1})
+    session, model = make_session(epochs=1, phases={"train": 1})
     assert "x" in session.layer_names
     session.watch("x")
     session.detach()
 
     with session.batch(phase="train", epoch=0):
-        _train_step(model)
+        train_step(model)
 
     snap = session.watch_snapshot()
     assert ("x", "train", 0) in snap.stats
@@ -1055,7 +871,7 @@ def test_disabled_session_batch_captures_nothing_and_never_pauses() -> None:
 
     for _ in range(2):
         with session.batch(phase="train", epoch=0) as ctx:
-            _train_step(model)
+            train_step(model)
             assert isinstance(ctx, _BatchContext)
             assert ctx.captured is False
             assert ctx.position is None
@@ -1075,11 +891,11 @@ def test_disabled_session_does_not_advance_the_schedule() -> None:
 
     for _ in range(5):  # far more than the single declared batch
         with session.batch(phase="train", epoch=0):
-            _train_step(model)
+            train_step(model)
 
 
 def test_batches_runs_each_item_inside_a_batch_context() -> None:
-    session, _ = _make_session(epochs=1, phases={"train": 3})
+    session, _ = make_session(epochs=1, phases={"train": 3})
     session.detach()
 
     items = ["a", "b", "c"]

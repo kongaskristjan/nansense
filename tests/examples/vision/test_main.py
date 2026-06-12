@@ -7,6 +7,7 @@ import io
 import pytest
 import torch
 
+from examples import common
 from examples.vision import main as main_module
 from examples.vision.data import DATASETS
 from examples.vision.resnet import PreActResNet
@@ -15,9 +16,9 @@ from examples.vision.vit import SimpleViT
 
 def test_enable_line_buffering_sets_line_buffering(monkeypatch: pytest.MonkeyPatch) -> None:
     stream = io.TextIOWrapper(io.BytesIO(), line_buffering=False)
-    monkeypatch.setattr(main_module.sys, "stdout", stream)
+    monkeypatch.setattr(common.sys, "stdout", stream)
 
-    main_module.enable_line_buffering()
+    common.enable_line_buffering()
 
     assert stream.line_buffering is True
 
@@ -26,9 +27,9 @@ def test_enable_line_buffering_tolerates_non_textiowrapper_stdout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A capture/proxy stdout (not a TextIOWrapper) must be left untouched, not raise."""
-    monkeypatch.setattr(main_module.sys, "stdout", io.StringIO())
+    monkeypatch.setattr(common.sys, "stdout", io.StringIO())
 
-    main_module.enable_line_buffering()  # must be a no-op, not an error
+    common.enable_line_buffering()  # must be a no-op, not an error
 
 
 @pytest.mark.parametrize("dataset", sorted(DATASETS))

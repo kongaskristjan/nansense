@@ -11,10 +11,16 @@ cancellation cheap: the runner checks `should_abort()` between steps, and
 the session aborts on cancel, on a newer request, and on any resume
 command.
 
-Experiments reuse the probe isolation contract (`Session._isolated_model`):
+Experiments reuse the probe isolation contract (`nansense.probe.isolated_model`):
 eval-mode forwards with flags/buffers restored, a forked RNG, and gradients
 taken via `torch.autograd.grad` w.r.t. the *input* only — parameter `.grad`
 is never touched, so the training loop's gradient pickup stays intact.
+
+Besides the experiment kinds, this module owns the request plumbing the
+`Session` methods delegate to: the request queue (`request_experiment` /
+`cancel_experiment`), the auto-experiment registry (re-run on every
+visualization update, kept alive by page heartbeats or a recording's pin),
+and the guarded runner that streams results back onto the session.
 
 Captum method selection (deliberately small):
 
@@ -35,6 +41,8 @@ Deep dream works on *any* captured layer via the fx interpreter.
 from __future__ import annotations
 
 import importlib.util
+import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -42,6 +50,9 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+
+from nansense.capture import _CaptureInterpreter
+from nansense.probe import isolated_model
 
 if TYPE_CHECKING:
     from nansense.session import Session
@@ -126,6 +137,214 @@ def run(
         yield from _run_captum(session, request, should_abort)
     else:
         yield _error(request, f"unknown experiment kind {request.kind!r}")
+
+
+# --- Request queue and lifecycle (driven by the Session) -------------------
+
+# How many per-seq experiment results stay retrievable (oldest evicted
+# first); generous enough for every open client plus a little history.
+_EXPERIMENT_RESULTS_KEPT: int = 8
+
+# How long an auto-experiment registration survives without a heartbeat
+# (`touch_auto_experiment`). UI pages tick every ~0.2 s, so anything beyond
+# a few seconds means the page is gone.
+_AUTO_EXPERIMENT_TTL: float = 5.0
+
+
+@dataclass
+class _AutoExperiment:
+    """One experiment re-run on every visualization update.
+
+    The request keeps its seq for the registration's whole lifetime, so
+    `experiment_result_for(seq)` always returns the freshest rerun and a
+    seeded experiment (deep dream derives its noise from the seq) draws the
+    same start on every update. `expires_at` is a `time.monotonic` deadline
+    refreshed by page heartbeats; `None` pins the entry (an active
+    recording holds the view)."""
+
+    request: ExperimentRequest
+    expires_at: float | None
+
+
+def request_experiment(
+    session: Session, *, kind: str, layer: str, params: dict[str, object]
+) -> int:
+    """Implementation of `Session.request_experiment`."""
+    if kind not in EXPERIMENT_KINDS:
+        raise ValueError(
+            f"unknown experiment kind {kind!r}; "
+            f"expected one of {list(EXPERIMENT_KINDS)}"
+        )
+    with session._cv:
+        session._experiment_seq += 1
+        session._experiment_queue.append(
+            ExperimentRequest(
+                kind=kind,
+                layer=layer,
+                params=dict(params),
+                seq=session._experiment_seq,
+            )
+        )
+        session._cv.notify_all()
+        return session._experiment_seq
+
+
+def cancel_experiment(session: Session, seq: int | None = None) -> None:
+    """Implementation of `Session.cancel_experiment`."""
+    with session._cv:
+        if seq is None:
+            session._experiment_queue.clear()
+            if session._experiment_running is not None:
+                session._experiment_cancelled.add(session._experiment_running)
+        else:
+            queued = [r for r in session._experiment_queue if r.seq != seq]
+            if len(queued) != len(session._experiment_queue):
+                session._experiment_queue = deque(queued)
+            elif session._experiment_running == seq:
+                session._experiment_cancelled.add(seq)
+        session._cv.notify_all()
+
+
+def register_auto_experiment(
+    session: Session, key: str, *, kind: str, layer: str, params: dict[str, object]
+) -> int:
+    """Implementation of `Session.register_auto_experiment`."""
+    if kind not in EXPERIMENT_KINDS:
+        raise ValueError(
+            f"unknown experiment kind {kind!r}; "
+            f"expected one of {list(EXPERIMENT_KINDS)}"
+        )
+    with session._cv:
+        session._experiment_seq += 1
+        request = ExperimentRequest(
+            kind=kind, layer=layer, params=dict(params), seq=session._experiment_seq
+        )
+        session._auto_experiments[key] = _AutoExperiment(
+            request=request,
+            expires_at=time.monotonic() + _AUTO_EXPERIMENT_TTL,
+        )
+        session._experiment_queue.append(request)
+        session._cv.notify_all()
+        return request.seq
+
+
+def touch_auto_experiment(session: Session, key: str) -> None:
+    """Implementation of `Session.touch_auto_experiment`."""
+    with session._cv:
+        entry = session._auto_experiments.get(key)
+        if entry is not None and entry.expires_at is not None:
+            entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+
+
+def pin_auto_experiment(session: Session, key: str) -> bool:
+    """Implementation of `Session.pin_auto_experiment`."""
+    with session._cv:
+        entry = session._auto_experiments.get(key)
+        if entry is None:
+            return False
+        entry.expires_at = None
+        return True
+
+
+def unpin_auto_experiment(session: Session, key: str) -> None:
+    """Implementation of `Session.unpin_auto_experiment`."""
+    with session._cv:
+        entry = session._auto_experiments.get(key)
+        if entry is not None and entry.expires_at is None:
+            entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+
+
+def unregister_auto_experiment(session: Session, key: str) -> None:
+    """Implementation of `Session.unregister_auto_experiment`."""
+    with session._cv:
+        session._auto_experiments.pop(key, None)
+
+
+def run_auto_experiments(session: Session) -> None:
+    """Re-run every live auto experiment (training thread, post-publish).
+
+    Runs at every snapshot publish — frequency updates and mode
+    captures alike — so open experiment pages and recordings track the
+    evolving weights. Expired registrations (no page heartbeat, not
+    pinned by a recording) are dropped first. A registration whose
+    initial request is still queued is taken over here: the queued
+    duplicate is removed so the request runs exactly once per update.
+    """
+    now = time.monotonic()
+    with session._cv:
+        for key in [
+            k
+            for k, e in session._auto_experiments.items()
+            if e.expires_at is not None and e.expires_at < now
+        ]:
+            del session._auto_experiments[key]
+        requests = [e.request for e in session._auto_experiments.values()]
+        seqs = {r.seq for r in requests}
+        if seqs:
+            session._experiment_queue = deque(
+                r for r in session._experiment_queue if r.seq not in seqs
+            )
+    for request in requests:
+        run_experiment_guarded(session, request)
+
+
+def run_experiment_guarded(session: Session, request: ExperimentRequest) -> None:
+    """Drive one experiment to completion on the training thread.
+
+    Streams every yielded progress result through `_publish_experiment`.
+    The abort predicate stops the run on `cancel_experiment` (for this
+    seq) and on anything that ends the pause — resume commands, a
+    pending time-travel jump, `close()` — so the pause loop regains
+    control promptly; queued requests from other clients wait their
+    turn instead of aborting the run. A failing experiment publishes an
+    error result instead of killing the training thread.
+    """
+    with session._cv:
+        resume_seen = session._resume_token
+        session._experiment_running = request.seq
+
+    def should_abort() -> bool:
+        with session._cv:
+            return (
+                request.seq in session._experiment_cancelled
+                or session._closed
+                or session._pending_jump is not None
+                or session._resume_token != resume_seen
+            )
+
+    try:
+        for partial in run(session, request, should_abort):
+            _publish_experiment(session, partial)
+    except Exception as e:  # noqa: BLE001 — surfaced via the result
+        _publish_experiment(
+            session,
+            ExperimentResult(
+                seq=request.seq,
+                kind=request.kind,
+                layer=request.layer,
+                step=0,
+                total_steps=0,
+                done=True,
+                error=f"{type(e).__name__}: {e}",
+            ),
+        )
+    finally:
+        with session._cv:
+            session._experiment_running = None
+            session._experiment_cancelled.discard(request.seq)
+
+
+def _publish_experiment(session: Session, result: ExperimentResult) -> None:
+    with session._cv:
+        session._experiment_results[result.seq] = result
+        session._experiment_results.move_to_end(result.seq)
+        while len(session._experiment_results) > _EXPERIMENT_RESULTS_KEPT:
+            session._experiment_results.popitem(last=False)
+        session._experiment_result = result
+        session._cv.notify_all()
+
+
+# --- Experiment-kind implementations ---------------------------------------
 
 
 def _error(request: ExperimentRequest, message: str) -> ExperimentResult:
@@ -238,9 +457,6 @@ def _target_activation(session: Session, x: Tensor, layer: str) -> Tensor:
     flow through it like through any tensor ops. The hook fallback registers
     a single temporary hook on the target module.
     """
-    # Imported lazily: nansense.session imports this module at the top level.
-    from nansense.session import _CaptureInterpreter
-
     if session._fx_graph is not None:
         capture: dict[str, Tensor] = {}
         _CaptureInterpreter(session._fx_graph, capture).run(x)
@@ -342,7 +558,7 @@ def _run_deep_dream(
             objective=objective,
         )
 
-    with session._isolated_model("eval") as device:
+    with isolated_model(session, "eval") as device:
         lo, hi = lo.to(device), hi.to(device)
         x = x0.to(device)
         objective_value = 0.0
@@ -449,7 +665,7 @@ def _run_captum(
         yield _error(request, "cancelled")
         return
 
-    with session._isolated_model("eval") as device:
+    with isolated_model(session, "eval") as device:
         x = x0.to(device)
         if request.kind == "gradcam":
             assert module is not None  # checked above

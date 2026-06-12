@@ -1,8 +1,15 @@
-"""Training loop primitives for the vision example."""
+"""Support code shared by the examples: training-loop primitives and CLI utilities.
+
+The pedagogical content — wiring nansense into a training script — lives in
+each example's `main.py`; this module holds the plain training plumbing those
+scripts would otherwise duplicate verbatim.
+"""
 
 from __future__ import annotations
 
 import contextlib
+import io
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -116,3 +123,25 @@ def evaluate(
         loss=total_loss / total_samples,
         accuracy=total_correct / total_samples,
     )
+
+
+def enable_line_buffering() -> None:
+    """Flush stdout on every newline so progress prints appear immediately.
+
+    Python block-buffers stdout when it is not a TTY (e.g. redirected to a
+    file or pipe), which can hide progress output until the buffer fills or
+    the process exits. Reconfiguring to line buffering restores TTY-like
+    behaviour regardless of how the script is launched.
+    """
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
+
+
+def select_device(name: str | None) -> torch.device:
+    if name is not None:
+        return torch.device(name)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")

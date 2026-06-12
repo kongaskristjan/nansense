@@ -2,34 +2,12 @@
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 import torch
-from torch import Tensor, nn
 
-import nansense
 from nansense.experiments import ExperimentResult
 from nansense.session import Session, UpdateFrequency
-
-
-class TinyNet(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.fc1 = nn.Linear(4, 8)
-        self.fc2 = nn.Linear(8, 3)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.fc2(torch.relu(self.fc1(x)))
-
-
-def _make_session(
-    epochs: int = 2, phases: dict[str, int] | None = None
-) -> tuple[Session, TinyNet]:
-    if phases is None:
-        phases = {"train": 3, "val": 2}
-    model = TinyNet()
-    return nansense.start(model, epochs=epochs, phases=phases), model
+from tests.nansense.helpers import TinyNet, make_session, paused_worker
 
 
 def _run_detached(
@@ -55,7 +33,7 @@ def _run_detached(
 
 
 def test_default_frequency_is_every_epoch() -> None:
-    session, _ = _make_session()
+    session, _ = make_session()
     assert session.update_frequency == UpdateFrequency(unit="epoch", n=1, phase=None)
 
 
@@ -71,14 +49,14 @@ def test_default_frequency_is_every_epoch() -> None:
 def test_set_update_frequency_rejects_invalid(
     kwargs: dict[str, object], match: str
 ) -> None:
-    session, _ = _make_session()
+    session, _ = make_session()
     with pytest.raises(ValueError, match=match):
         session.set_update_frequency(**kwargs)  # ty: ignore[invalid-argument-type]
 
 
 def test_epoch_frequency_publishes_at_nth_epoch_ends() -> None:
     phases = {"train": 2, "val": 2}
-    session, model = _make_session(epochs=4, phases=phases)
+    session, model = make_session(epochs=4, phases=phases)
     session.set_update_frequency(unit="epoch", n=2)
     published = _run_detached(session, model, epochs=4, phases=phases)
     # Every 2nd epoch's last batch: epochs 1 and 3, last phase, last batch.
@@ -87,7 +65,7 @@ def test_epoch_frequency_publishes_at_nth_epoch_ends() -> None:
 
 def test_batch_frequency_publishes_every_nth_batch() -> None:
     phases = {"train": 3, "val": 2}
-    session, model = _make_session(epochs=1, phases=phases)
+    session, model = make_session(epochs=1, phases=phases)
     session.set_update_frequency(unit="batch", n=2)
     published = _run_detached(session, model, epochs=1, phases=phases)
     # Five batches overall; every 2nd one publishes.
@@ -96,7 +74,7 @@ def test_batch_frequency_publishes_every_nth_batch() -> None:
 
 def test_batch_frequency_with_phase_counts_only_that_phase() -> None:
     phases = {"train": 3, "val": 3}
-    session, model = _make_session(epochs=1, phases=phases)
+    session, model = make_session(epochs=1, phases=phases)
     session.set_update_frequency(unit="batch", n=2, phase="val")
     published = _run_detached(session, model, epochs=1, phases=phases)
     assert published == [("val", 0, 1)]
@@ -104,7 +82,7 @@ def test_batch_frequency_with_phase_counts_only_that_phase() -> None:
 
 def test_capture_still_pauses_and_publishes_with_sparse_frequency() -> None:
     """Mode captures stay independent of the frequency setting."""
-    session, model = _make_session(epochs=1, phases={"train": 2})
+    session, model = make_session(epochs=1, phases={"train": 2})
     session.set_update_frequency(unit="epoch", n=100)  # effectively never
 
     def loop() -> None:
@@ -114,21 +92,17 @@ def test_capture_still_pauses_and_publishes_with_sparse_frequency() -> None:
                 model.zero_grad(set_to_none=True)
                 model(x).sum().backward()
 
-    thread = threading.Thread(target=loop, daemon=True)
-    thread.start()
     # The default STEP mode captures (and pauses) the very first batch.
-    assert session.wait_until_paused(timeout=10.0)
-    snap = session.snapshot
-    assert snap is not None
-    assert (snap.position.phase, snap.position.batch_idx) == ("train", 0)
-    session.close()
-    thread.join(timeout=10.0)
-    assert not thread.is_alive()
+    with paused_worker(session, loop, timeout=10.0):
+        snap = session.snapshot
+        assert snap is not None
+        assert (snap.position.phase, snap.position.batch_idx) == ("train", 0)
+        session.close()
 
 
 def test_auto_experiment_reruns_with_same_seq_on_updates() -> None:
     phases = {"train": 2}
-    session, model = _make_session(epochs=3, phases=phases)
+    session, model = make_session(epochs=3, phases=phases)
     session.set_update_frequency(unit="epoch", n=1)
     seq = session.register_auto_experiment(
         "page-1",
@@ -164,7 +138,7 @@ def test_auto_experiment_reruns_with_same_seq_on_updates() -> None:
 
 def test_auto_experiment_expires_without_heartbeat() -> None:
     phases = {"train": 1}
-    session, model = _make_session(epochs=2, phases=phases)
+    session, model = make_session(epochs=2, phases=phases)
     seq = session.register_auto_experiment(
         "page-1",
         kind="deep_dream",
@@ -190,7 +164,7 @@ def test_auto_experiment_expires_without_heartbeat() -> None:
 
 
 def test_pinned_auto_experiment_survives_expiry_check() -> None:
-    session, model = _make_session(epochs=2, phases={"train": 1})
+    session, model = make_session(epochs=2, phases={"train": 1})
     seq = session.register_auto_experiment(
         "page-1",
         kind="deep_dream",
