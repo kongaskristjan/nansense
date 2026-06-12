@@ -53,6 +53,11 @@ Available examples:
   MNIST (`--dataset mnist`, scaled to 32x32), or Imagenette
   (`--dataset imagenette`), trained with AdamW + a cosine schedule and
   the full wiring (scheduler, time travel, checkpoints).
+- `examples.ddp_mnist.main` — a small MLP on MNIST trained with
+  DistributedDataParallel across two (or more) ranks; launch with
+  `uv run torchrun --nproc_per_node=2 -m examples.ddp_mnist.main`
+  (falls back from NCCL to CPU/gloo when there are fewer GPUs than
+  ranks, so it runs anywhere).
 
 ## Minimal example
 
@@ -118,6 +123,45 @@ session.close()
 `enabled=False` on `nansense.start()` turns the whole thing into a
 near-zero-overhead no-op, so the wiring can stay in place for plain training
 runs. The runnable version of this loop is `examples/vision/main.py`.
+
+## Distributed training (DDP)
+
+Multi-rank `DistributedDataParallel` runs need no special wiring: call
+`nansense.start()` on every rank — passing the DDP-wrapped model is fine,
+it is unwrapped automatically — and wrap batches as usual:
+
+```python
+model = DistributedDataParallel(build_model().to(device))
+session = nansense.start(
+    model,
+    epochs=10,
+    phases={"train": len(train_loader)},  # per-rank batch counts
+    port=8080,
+)
+```
+
+The ranks then play different roles:
+
+- **Rank 0** serves the UI and behaves like a single-process session:
+  snapshots, pausing/stepping, probes, experiments, recordings. Pausing
+  pauses the whole run — the other ranks block at their next batch start
+  until rank 0 resumes. (Pause longer than the process group's collective
+  timeout — 10–30 min by default — and the other ranks time out; raise
+  `init_process_group(timeout=...)` for long interactive sessions.)
+- **Every other rank** skips the UI and never pauses on its own, but
+  follows rank 0's watched-layer set and folds its data shard into the
+  watch page's statistics at every visualization update — histograms and
+  the stats table cover the global batch, not just rank 0's shard.
+
+Per-rank views (snapshot strips, the input pane, extreme-input patches,
+histogram bar samples) show rank 0's shard. Every rank must run the same
+batch structure — `DistributedSampler` on each phase's loader gives equal
+per-rank batch counts. Time travel is not supported in distributed mode.
+The runnable version is `examples/ddp_mnist/main.py`:
+
+```bash
+uv run torchrun --nproc_per_node=2 -m examples.ddp_mnist.main --nansense-port 8080
+```
 
 ## PyTorch Lightning
 

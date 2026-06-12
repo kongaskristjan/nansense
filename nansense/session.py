@@ -35,7 +35,7 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
@@ -46,7 +46,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
-from nansense import capture, experiments, probe
+from nansense import capture, distributed, experiments, probe
 from nansense.experiments import (
     ExperimentRequest,
     ExperimentResult,
@@ -135,8 +135,23 @@ class Session:
         optimizer: Optimizer | None = None,
         scheduler: LRScheduler | None = None,
     ) -> None:
+        # A DDP-wrapped model is unwrapped up front: hooks on the inner
+        # module still fire through the wrapper's forward, while names and
+        # the fx trace stay clean (no `module.` prefix, traceable graph).
+        model = distributed.unwrap_ddp(model)
         self.model = model
         self._enabled = enabled
+        # Multi-rank coordination (None outside distributed runs): rank 0
+        # leads (UI, snapshots, pauses), other ranks follow — they sync the
+        # watched set per batch and join the watch-stats reductions, but
+        # never serve, publish, or pause. See `nansense.distributed`.
+        self._dist: distributed.DistContext | None = (
+            distributed.context() if enabled else None
+        )
+        self._watch_version = 0
+        # Last cross-rank-reduced watch stats (leader only); overlaid on the
+        # local view by `watch_snapshot`. Atomic-reference read contract.
+        self._dist_watch_stats: distributed.ReducedStats | None = None
         self._optimizer = optimizer
         self._scheduler = scheduler
         self._schedule = Schedule(epochs=epochs, phases=phases)
@@ -278,6 +293,17 @@ class Session:
         return self._enabled
 
     @property
+    def is_leader(self) -> bool:
+        """Whether this session drives the run's UI and snapshots.
+
+        Always True outside distributed training. In a multi-rank run only
+        rank 0 leads; follower sessions never serve, publish snapshots, or
+        pause — they contribute their shard's watch stats to the leader's
+        global view (see `nansense.distributed`).
+        """
+        return self._dist is None or self._dist.is_leader
+
+    @property
     def input_names(self) -> list[str]:
         return list(self._input_names)
 
@@ -390,12 +416,14 @@ class Session:
             return False
         with self._cv:
             self._watched_layers.add(layer)
+            self._watch_version += 1
         return True
 
     def unwatch(self, layer: str) -> None:
         """Stop watching `layer` and drop any stats already collected for it."""
         with self._cv:
             self._watched_layers.discard(layer)
+            self._watch_version += 1
         self._watch_accumulator.forget_layer(layer)
 
     def watch_snapshot(self, *, include_patches: bool = True) -> WatchSnapshot:
@@ -403,12 +431,29 @@ class Session:
 
         `include_patches=False` skips the extreme-patch GPU→CPU copies for
         callers that only need the scalar/histogram stats.
+
+        In a distributed run the leader overlays the last cross-rank
+        reduction on its local view: histogram/scalar stats become global
+        (refreshed at every snapshot publish), while patches — and any
+        bucket the reduction hasn't covered yet — stay rank-local.
         """
         with self._cv:
             layers = list(self._watched_layers)
-        return self._watch_accumulator.snapshot(
+        snap = self._watch_accumulator.snapshot(
             layers=layers, include_patches=include_patches
         )
+        reduced = self._dist_watch_stats
+        if reduced is None:
+            return snap
+        stats = {
+            key: (
+                replace(layer_snap, activations=r[0], gradients=r[1])
+                if (r := reduced.get(key)) is not None
+                else layer_snap
+            )
+            for key, layer_snap in snap.stats.items()
+        }
+        return WatchSnapshot(stats=stats)
 
     @property
     def probe_result(self) -> ProbeResult | None:
@@ -762,6 +807,12 @@ class Session:
         `TimeTravelJump`. On a disabled session the restorer is inert: the
         loop runs exactly once and nothing touches the disk.
         """
+        if self._dist is not None:
+            raise RuntimeError(
+                "Time travel is not supported with distributed training: a "
+                "jump would have to restore and rewind every rank in "
+                "lockstep. Run without a restorer (or on a single rank)."
+            )
         restorer = TrainingRestorer(self, cache_dir=cache_dir)
         self.attach_restorer(restorer)
         return restorer
@@ -945,7 +996,9 @@ class Session:
         # iteration" RuntimeError. Mirrors `watched_layers` / `watch_snapshot`.
         with self._cv:
             watched = list(self._watched_layers)
-        source = self._patch_source_input()
+        # Extreme-input patches stay rank-local in distributed runs: only
+        # the leader renders them, so followers skip the buffers entirely.
+        source = self._patch_source_input() if self.is_leader else None
         for name in watched:
             tensor = self._activations.get(name)
             if tensor is None:
@@ -1130,6 +1183,7 @@ class _BatchContext:
         self._captured = False
         self._freq_update = False
         self._stats_only = False
+        self._dist_reduce = False
 
     def __enter__(self) -> Self:
         # `_enabled` is a plain attribute read (no lock), checked first so a
@@ -1160,11 +1214,23 @@ class _BatchContext:
             self._session._maybe_save_epoch_start(
                 self._position.phase, self._epoch
             )
-        self._captured = self._session._should_capture(self._position)
-        # A frequency update publishes like a capture but never pauses; it
-        # is decided independently of the mode, so visualizations keep
-        # refreshing during step-epoch / run / detach.
-        self._freq_update = self._session._should_freq_update(self._position)
+        dist_ctx = self._session._dist
+        if dist_ctx is None or dist_ctx.is_leader:
+            self._captured = self._session._should_capture(self._position)
+            # A frequency update publishes like a capture but never pauses;
+            # it is decided independently of the mode, so visualizations
+            # keep refreshing during step-epoch / run / detach.
+            self._freq_update = self._session._should_freq_update(self._position)
+        if dist_ctx is not None:
+            # Per-batch control sync (every rank): the leader announces
+            # whether this batch's watch stats get globally reduced at
+            # __exit__ and shares watched-set changes; followers apply them
+            # (and never capture or publish themselves). This is also the
+            # pacing point — a leader paused in the UI holds every other
+            # rank right here, at its next batch start.
+            self._dist_reduce = distributed.sync_batch_control(
+                self._session, publish=self._captured or self._freq_update
+            )
         self._stats_only = (
             not self._captured
             and not self._freq_update
@@ -1202,6 +1268,12 @@ class _BatchContext:
             try:
                 if exc is None and self._session._watched_layers:
                     self._session._update_watch_stats(self._position)
+                if exc is None and self._dist_reduce:
+                    # Collective: every rank folds its shard's accumulated
+                    # watch stats into the leader's global view, right
+                    # before the leader publishes (and possibly pauses), so
+                    # the UI never shows a pause with stale global stats.
+                    distributed.reduce_watch_stats(self._session)
                 capture.remove_hooks(self._session)
                 if exc is None and not self._session.closed:
                     if self._captured or self._freq_update:
@@ -1274,6 +1346,13 @@ def start(
     port (equivalent to a separate `nansense.serve(session, port=...)`
     call, which remains available for finer control). `host`, `input_mean`,
     and `input_std` are forwarded to `serve`.
+
+    Distributed (DDP) runs need no special wiring: call `start()` on every
+    rank (a `DistributedDataParallel`-wrapped model is unwrapped
+    automatically). Rank 0 serves the UI and drives pausing/stepping;
+    the other ranks skip the UI, follow rank 0's pace, and contribute
+    their data shard to the watch page's statistics, which become global
+    across ranks. Time travel is not supported in distributed mode.
     """
     session = Session(
         model,

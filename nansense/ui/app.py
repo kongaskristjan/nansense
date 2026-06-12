@@ -75,7 +75,9 @@ def serve(
 
     Returns `None` without starting anything when `session` is disabled
     (`nansense.start(..., enabled=False)`), so a training script can call
-    `serve()` unconditionally and pay nothing when the UI is turned off.
+    `serve()` unconditionally and pay nothing when the UI is turned off —
+    and likewise on the non-zero ranks of a distributed run, where the UI
+    lives on rank 0.
 
     NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is
     then served by uvicorn from a non-main thread, with signal handlers
@@ -87,6 +89,11 @@ def serve(
     is `None`, the renderer assumes the input is already in `[0, 1]`.
     """
     if not session.enabled:
+        return None
+    if not session.is_leader:
+        # Non-zero ranks of a distributed run never serve: the UI lives on
+        # rank 0, which presents the cross-rank-reduced watch stats. This
+        # is also what keeps every rank from fighting over the same port.
         return None
     mermaid_src = build_mermaid(session.model)
     layer_names = session.layer_names

@@ -338,6 +338,66 @@ class TensorAccumulator:
         self._channel_hist = None
         self._channels_off = True
 
+    def channel_count(self) -> int:
+        """Rows in the per-channel histogram, or 0 when none is kept."""
+        return 0 if self._channel_hist is None else int(self._channel_hist.shape[0])
+
+    def reduce_payload(
+        self, *, channels: int, device: torch.device
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Flat tensors for a cross-rank reduction of this accumulator.
+
+        `channels` is the channel-row count the reduction leader declared
+        for this stream (0 = no per-channel slots). Returns, on `device`:
+
+        - ints  int64 `[1 + N_BINS + channels*N_BINS]`: n, the universal
+          histogram, and the per-channel rows (zeros when this rank has
+          none or its row count differs from `channels`).
+        - sums  float32 `[2]`: sum, sum_sq.
+        - mins  float32 `[2]`: min, and a channel-ok flag — 0 when this
+          rank holds data but no per-channel rows matching `channels`, so
+          a MIN-reduce tells the leader the combined rows are incomplete.
+        - maxs  float32 `[1]`: max.
+
+        An accumulator that never saw data contributes neutral values
+        (zero counts, ±inf extremes, channel-ok 1). The local state is
+        not mutated, so repeated reductions cannot double-count.
+        """
+        stats = self._stats
+        if stats is None:
+            return (
+                torch.zeros(
+                    1 + N_BINS + channels * N_BINS, dtype=torch.int64, device=device
+                ),
+                torch.zeros(2, dtype=torch.float32, device=device),
+                torch.tensor([float("inf"), 1.0], dtype=torch.float32, device=device),
+                torch.tensor([float("-inf")], dtype=torch.float32, device=device),
+            )
+        ch_ok = 1.0
+        int_pieces = [stats.n.reshape(1), stats.hist]
+        if channels > 0:
+            ch = self._channel_hist
+            if ch is not None and ch.shape[0] == channels:
+                int_pieces.append(ch.reshape(-1))
+            else:
+                ch_ok = 0.0
+                int_pieces.append(
+                    torch.zeros(
+                        channels * N_BINS, dtype=torch.int64, device=stats.hist.device
+                    )
+                )
+        return (
+            torch.cat(int_pieces).to(device),
+            torch.stack([stats.sum, stats.sum_sq]).to(device),
+            torch.stack(
+                [
+                    stats.min,
+                    torch.tensor(ch_ok, dtype=torch.float32, device=stats.min.device),
+                ]
+            ).to(device),
+            stats.max.reshape(1).to(device),
+        )
+
     def snapshot(self) -> TensorStatsSnapshot:
         stats = self._stats
         if stats is None:
@@ -489,6 +549,62 @@ class WatchAccumulator:
             for key in list(self._stats):
                 if key[2] >= epoch:
                     del self._stats[key]
+
+    def reduce_meta(
+        self, layers: Iterable[str]
+    ) -> list[tuple[tuple[str, str, int], int, int]]:
+        """Bucket list for a cross-rank reduction (the leader's side).
+
+        Returns the sorted `(layer, phase, epoch)` keys restricted to
+        `layers`, each with the activation and gradient streams' local
+        per-channel row counts (0 = no per-channel buffer) — the layout
+        contract every rank's `export_for_reduce` then packs against.
+        """
+        wanted = set(layers)
+        with self._lock:
+            keys = sorted(k for k in self._stats if k[0] in wanted)
+            return [
+                (
+                    key,
+                    self._stats[key].activations.channel_count(),
+                    self._stats[key].gradients.channel_count(),
+                )
+                for key in keys
+            ]
+
+    def export_for_reduce(
+        self,
+        meta: list[tuple[tuple[str, str, int], int, int]],
+        *,
+        device: torch.device,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Pack the buckets named by `meta` into flat reduction tensors.
+
+        Concatenates each bucket's activation- and gradient-stream
+        `reduce_payload` in `meta` order; buckets this rank never created
+        contribute neutral values. Runs on the training thread, which is
+        the only writer, so the payload reads happen safely outside the
+        lock.
+        """
+        with self._lock:
+            buckets = [self._stats.get(key) for key, _, _ in meta]
+        empty = _LayerStats()
+        ints: list[Tensor] = []
+        sums: list[Tensor] = []
+        mins: list[Tensor] = []
+        maxs: list[Tensor] = []
+        for (_, c_act, c_grad), bucket in zip(meta, buckets):
+            stats = bucket if bucket is not None else empty
+            for acc, channels in (
+                (stats.activations, c_act),
+                (stats.gradients, c_grad),
+            ):
+                i, s, mn, mx = acc.reduce_payload(channels=channels, device=device)
+                ints.append(i)
+                sums.append(s)
+                mins.append(mn)
+                maxs.append(mx)
+        return torch.cat(ints), torch.cat(sums), torch.cat(mins), torch.cat(maxs)
 
     def snapshot(
         self,
