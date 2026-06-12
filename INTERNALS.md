@@ -396,6 +396,64 @@ travel) drop patches together with the rest of the bucket.
 `LayerStatsSnapshot.patches`; slots never filled keep their `∓inf`
 values and are masked by the renderer.
 
+## Distributed training (`nansense.distributed`)
+
+In a multi-rank `torch.distributed` run, every rank constructs a session
+(`Session.__init__` picks up an initialized process group via
+`distributed.context()`; a world size of 1 gets `None` and the
+single-process behaviour). A `DistributedDataParallel`-wrapped model is
+unwrapped up front — hooks on the inner module still fire through the
+wrapper's forward, while names and the fx trace stay clean (the wrapper
+adds a `module.` prefix everywhere and is not fx-traceable).
+
+Rank 0 **leads**: it alone serves the UI (`serve()` no-ops elsewhere,
+which also keeps the ranks from fighting over one port), publishes
+snapshots, pauses on captures, and runs probes/experiments — all
+single-rank work on the inner model, with no collectives. The other
+ranks **follow**: they never capture, publish, or pause, but accumulate
+watch stats over their own data shard. Two collective touch points, both
+on the training thread:
+
+1. **Per-batch control broadcast** (`sync_batch_control`, at
+   `_BatchContext.__enter__`): a 2-int tensor — "does this batch's
+   `__exit__` reduce watch stats" (true on the leader's mode captures and
+   frequency updates, when anything is watched) and the watched-set
+   version. On a version change, a follow-up object broadcast carries the
+   watched-layer list; followers apply it, dropping buckets of unwatched
+   layers like `Session.unwatch` does. The version advances in lockstep
+   on every rank, so "changed since the last batch" is a decision each
+   rank makes identically and the object broadcast stays collective.
+   This is also the pacing point: a paused leader holds every follower
+   at its next batch start (the same place DDP's own gradient all-reduce
+   would block them — but also covering forward-only phases like `val`).
+2. **Stats reduction** (`reduce_watch_stats`, at `__exit__` right after
+   `_update_watch_stats`, before the leader publishes — so a pause never
+   shows stale global stats): the leader broadcasts its sorted bucket
+   list with per-stream channel counts (`WatchAccumulator.reduce_meta`),
+   each rank packs those buckets into four flat tensors
+   (`TensorAccumulator.reduce_payload`; missing buckets contribute
+   neutral values), and four all-reduces combine them — SUM for
+   counts/sums/histograms, MIN/MAX for the extremes, plus a MIN-reduced
+   per-stream "channel-ok" flag that drops the combined per-channel rows
+   when any rank's buffer is missing or shaped differently (the universal
+   histogram stays exact). The reduction never mutates local
+   accumulators, so repeated reductions can't double-count. The leader
+   unpacks the result (`_unpack_reduced`) into per-bucket
+   `TensorStatsSnapshot`s stored on `Session._dist_watch_stats` (atomic
+   reference), and `watch_snapshot()` overlays them on its local view —
+   patches, and buckets no reduction has covered yet, stay rank-local.
+
+Collectives run on the process group's natural device (CUDA for NCCL,
+CPU otherwise) over the default group; orderings stay consistent because
+every rank issues the same sequence (control broadcast → forward/backward
+→ optional reduction) per batch. That also defines the contract: every
+rank must drive the same `session.batch` structure, which
+`DistributedSampler`-sharded loaders give naturally. Time travel is
+unsupported (`training_restorer` raises) — a jump would have to restore
+and rewind every rank in lockstep. `close()` should run after the loop on
+all ranks; a leader closed mid-loop stops broadcasting and would leave
+followers blocked at their next batch start until the collective timeout.
+
 ## Probe runs (`nansense.probe`)
 
 A probe is a nansense-internal forward pass on a *pinned* input batch, run
