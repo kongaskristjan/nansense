@@ -41,17 +41,24 @@ if TYPE_CHECKING:
 DEFAULT_CACHE_DIR = Path("models/latest")
 
 
+def _mps_available() -> bool:
+    return hasattr(torch, "mps") and torch.backends.mps.is_available()
+
+
 def capture_rng() -> dict[str, Any]:
-    """Snapshot the global torch (and per-device CUDA) RNG states.
+    """Snapshot the global torch (and per-device CUDA / MPS) RNG states.
 
     The counterpart of `restore_rng`; stashed alongside checkpoints so a
-    time-travel replay reproduces DataLoader shuffling and dropout.
+    time-travel replay reproduces DataLoader shuffling and dropout. The MPS
+    state is captured on Apple Silicon so replays there are deterministic
+    too, not just on CPU/CUDA.
     """
     return {
         "torch": torch.get_rng_state(),
         "cuda": (
             torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
         ),
+        "mps": torch.mps.get_rng_state() if _mps_available() else None,
     }
 
 
@@ -61,7 +68,8 @@ def restore_rng(rng: dict[str, Any] | None) -> None:
     Restoring the global torch RNG also reproduces DataLoader shuffling:
     the loader draws its base seed from the global generator when its
     iterator is created. CUDA states are restored only when the device
-    count still matches what was saved.
+    count still matches what was saved; the MPS state is restored when the
+    backend is available (checkpoints predating MPS capture simply omit it).
     """
     if rng is None:
         return
@@ -77,6 +85,9 @@ def restore_rng(rng: dict[str, Any] | None) -> None:
         torch.cuda.set_rng_state_all(
             [s.cpu().to(torch.uint8) for s in cuda_states]
         )
+    mps_state = rng.get("mps")
+    if isinstance(mps_state, torch.Tensor) and _mps_available():
+        torch.mps.set_rng_state(mps_state.cpu().to(torch.uint8))
 
 
 class TimeTravelJump(BaseException):
