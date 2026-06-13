@@ -115,8 +115,19 @@ def _build_watch_page(
     _install_panel_resize()
 
     layer_panels: dict[str, _WatchLayerPanel] = {}
+    # element id -> the histogram plot to forward that element's hovers to.
+    # Repopulated on every `rebuild_cards`, so a single page-level `ui.on`
+    # replaces the per-element handlers that used to leak on rebuild.
+    hover_registry: dict[int, _HistPlot] = {}
     body_container: ui.column
     phase_names = list(session.schedule.phases)
+
+    async def _dispatch_hover(e: GenericEventArguments) -> None:
+        view = hover_registry.get(int(e.args.get("id", -1)))
+        if view is not None:
+            await view._on_hover(e)
+
+    ui.on(_HOVER_EVENT, _dispatch_hover)
     state = _WatchPageState(
         selected_phase=phase_names[0] if phase_names else ""
     )
@@ -276,6 +287,10 @@ def _build_watch_page(
 
     def rebuild_cards() -> None:
         layer_panels.clear()
+        # Drop the previous cards' hover routes; the rebuilt plots re-register
+        # below. Without this the registry (and the dead plots it points at)
+        # would grow on every rebuild.
+        hover_registry.clear()
         body_container.clear()
         watched = session.watched_layers
         with body_container:
@@ -296,6 +311,7 @@ def _build_watch_page(
                     session=session,
                     on_unwatched=rebuild_cards,
                     state=state,
+                    hover_registry=hover_registry,
                     input_mean=input_mean,
                     input_std=input_std,
                 )
@@ -409,6 +425,13 @@ def _figure_payload(fig: go.Figure) -> dict[str, object]:
     return {**fig.to_plotly_json(), "config": _PLOTLY_CONFIG}
 
 
+# One shared global event for every histogram's hover; the emitted payload
+# carries the source element id so the page-level handler can route it to the
+# right plot. Using a single stable event (rather than one per element id)
+# keeps a card rebuild from piling up dead `ui.on` handlers on the page layout.
+_HOVER_EVENT: str = "nansense_hist_hover"
+
+
 def _hover_attach_js(element_id: int) -> str:
     """JS that wires the figure's `plotly_hover` to a NiceGUI event.
 
@@ -418,9 +441,10 @@ def _hover_attach_js(element_id: int) -> str:
     (which is when `gd.on` exists). Idempotent via the `_nansenseHover`
     flag, and throttled to one event per 200 ms so hovering across many
     bars doesn't flood the websocket. Handlers attached to the div survive
-    `Plotly.react`/`update`, so one attach covers later figure rebuilds.
+    `Plotly.react`/`update`, so one attach covers later figure rebuilds. The
+    event is emitted on the shared `_HOVER_EVENT` channel with this element's
+    id so the page's single handler can dispatch it to the right plot.
     """
-    event = f"nansense_hist_hover_{element_id}"
     return (
         "(function attach(tries) {"
         f"const gd = getHtmlElement({element_id});"
@@ -436,7 +460,7 @@ def _hover_attach_js(element_id: int) -> str:
         "  const now = Date.now();"
         "  if (gd._nansenseHoverAt && now - gd._nansenseHoverAt < 200) return;"
         "  gd._nansenseHoverAt = now;"
-        f"  emitEvent('{event}', {{bin: p.pointNumber}});"
+        f"  emitEvent('{_HOVER_EVENT}', {{id: {element_id}, bin: p.pointNumber}});"
         "});"
         "})(20);"
     )
@@ -555,6 +579,7 @@ class _HistPlot:
         *,
         session: Session,
         layer: str,
+        hover_registry: dict[int, _HistPlot],
         input_mean: tuple[float, ...] | None = None,
         input_std: tuple[float, ...] | None = None,
     ) -> None:
@@ -563,6 +588,7 @@ class _HistPlot:
         self._state = state
         self._session = session
         self._layer = layer
+        self._hover_registry = hover_registry
         self._input_mean = input_mean
         self._input_std = input_std
         self._per_channel = False
@@ -610,7 +636,10 @@ class _HistPlot:
         self.element = ui.plotly(_figure_payload(fig)).classes("w-full")
         self._samples = ui.html(_HOVER_HINT_HTML).classes("w-full")
         self._sync_control_visibility()
-        ui.on(f"nansense_hist_hover_{self.element.id}", self._on_hover)
+        # Route hovers through the page's single shared handler (see
+        # `_HOVER_EVENT`); the registry is cleared on each card rebuild, so
+        # this view is released instead of lingering in a global `ui.on`.
+        self._hover_registry[self.element.id] = self
 
     def _current_axis(self) -> tuple[bool, bool]:
         return self._state.axis_log_x, self._state.axis_log_y
@@ -797,6 +826,7 @@ class _WatchLayerPanel:
         session: Session,
         on_unwatched: Callable[[], None],
         state: _WatchPageState,
+        hover_registry: dict[int, _HistPlot],
         input_mean: tuple[float, ...] | None,
         input_std: tuple[float, ...] | None,
     ) -> None:
@@ -835,6 +865,7 @@ class _WatchLayerPanel:
                     state,
                     session=session,
                     layer=name,
+                    hover_registry=hover_registry,
                     input_mean=input_mean,
                     input_std=input_std,
                 )
@@ -850,6 +881,7 @@ class _WatchLayerPanel:
                     state,
                     session=session,
                     layer=name,
+                    hover_registry=hover_registry,
                     input_mean=input_mean,
                     input_std=input_std,
                 )

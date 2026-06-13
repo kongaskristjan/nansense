@@ -8,15 +8,30 @@ from nansense.patches import PATCH_TYPES, PatchAccumulator
 from nansense.session import BatchSnapshot
 from nansense.ui.histograms import _make_histogram_figure
 from nansense.ui.watch_page import (
+    _HOVER_EVENT,
     _PLOTLY_CONFIG,
     _bin_samples_html,
     _figure_payload,
     _filter_phase,
+    _hover_attach_js,
     _patch_grids_html,
     _patch_grids_signature,
 )
 from nansense.watch import ZERO_BIN, LayerStatsSnapshot, bin_index
 from tests.nansense.helpers import _layer_snap, _make_snapshot, _tensor_stats
+
+
+def test_hover_attach_js_uses_one_shared_event_with_element_id() -> None:
+    """Each plot emits the single shared hover event with its element id in
+    the payload — not a per-element event name. That's what lets one
+    page-level handler serve every plot, so a card rebuild no longer piles up
+    a `ui.on` handler (and the dead plot it closes over) per rebuild."""
+    js = _hover_attach_js(42)
+    assert f"emitEvent('{_HOVER_EVENT}'" in js
+    assert "id: 42" in js
+    assert "bin: p.pointNumber" in js
+    # The old per-element event name must be gone.
+    assert "nansense_hist_hover_42" not in js
 
 
 def test_figure_payload_carries_plotly_config() -> None:
