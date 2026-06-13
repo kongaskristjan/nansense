@@ -28,6 +28,7 @@ from nansense.ui.histograms import (
     use_density,
 )
 from nansense.watch import (
+    BINS_PER_DECADE,
     N_BINS,
     ZERO_BIN,
     LayerStatsSnapshot,
@@ -299,7 +300,7 @@ def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
     # A huge exact-zero peak flanked by tall narrow near-zero bars plus a
     # long thin tail: at the base 0.5% budget the y-cap chases the narrow
     # near-zero bars and the tail stretches the x-span, leaving the bars
-    # covering almost none of the plot. The budget then rises (up to 5%),
+    # covering almost none of the plot. The budget then rises (up to 50%),
     # clipping the near-zero bars and trimming more of the tail.
     hist = {ZERO_BIN: 50_000, ZERO_BIN + 1: 600, ZERO_BIN + 2: 500}
     hist.update({ZERO_BIN + 60 + i: 250 for i in range(40)})
@@ -314,6 +315,29 @@ def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
     assert x_range is not None and y_range is not None
     assert y_range[1] < base_y[1]  # cap dropped below the near-zero bars
     assert x_range[1] < base_x[1]  # tail trimmed harder
+
+
+def test_axis_ranges_zoom_into_multi_decade_gradient_spike() -> None:
+    # Activation-gradient magnitudes often spread near-uniformly over many
+    # decades (equal counts per signed-log bin, here 1e-9..1e-4 on each
+    # side). On a linear value axis the base trim leaves a hairline spike at
+    # zero — the trimmed span is dominated by the outermost decade while
+    # most points sit orders of magnitude closer to zero. The adaptive loop
+    # must keep raising the clip budget until the bulk is readable.
+    hist = {
+        ZERO_BIN + offset * sign: 1_000
+        for offset in range(1, 5 * BINS_PER_DECADE + 1)
+        for sign in (1, -1)
+    }
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    hists = _phase_hists(per_phase, "activation")
+    base_x = _linear_x_range(_trimmed_bin_bounds(hists))
+    x_range, y_range = axis_ranges(
+        per_phase, "activation", log_x=False, log_y=False
+    )
+    assert base_x is not None and x_range is not None and y_range is not None
+    # Zoomed an order of magnitude past the base trim, not just nudged.
+    assert x_range[1] - x_range[0] < (base_x[1] - base_x[0]) / 10
 
 
 def test_axis_ranges_log_y_keeps_base_trim_and_autorange() -> None:

@@ -232,14 +232,23 @@ _BIN_VALUE_LABELS: list[str] = [f"{bin_midpoint(i):.3g}" for i in range(N_BINS)]
 # Axis trims may clip bins/bars holding up to this share of the data points
 # (see `_trimmed_bin_bounds` / `_linear_y_range`). `_axis_ranges` starts at
 # the base share and raises it in steps up to the max while the bars would
-# fill less than `_MIN_FILL_FRACTION` of the plot area.
+# fill less than `_MIN_FILL_FRACTION` of the plot area. The max is high
+# because activation-gradient magnitudes routinely spread near-uniformly
+# over several decades: on a linear value axis such a distribution stays a
+# hairline spike until well over half the points are allowed off-view, and
+# a clipped-but-readable plot beats an unclipped empty one (the loop stops
+# escalating the moment the plot is readable, so compact distributions
+# never get near the max).
 _BASE_CLIP_SHARE: float = 0.005
-_MAX_CLIP_SHARE: float = 0.05
+_MAX_CLIP_SHARE: float = 0.5
 _CLIP_SHARE_STEP: float = 0.005
 
 # Minimum share of the plot area the bars should cover; below this the clip
-# share keeps being raised (up to `_MAX_CLIP_SHARE`).
-_MIN_FILL_FRACTION: float = 0.05
+# share keeps being raised (up to `_MAX_CLIP_SHARE`). A lone Gaussian-ish
+# mode drawn over a ±4σ window covers ~0.2 of the plot, so 0.15 keeps such
+# well-behaved distributions at the base trim while pushing spike-plus-tail
+# shapes to zoom in further.
+_MIN_FILL_FRACTION: float = 0.15
 
 # A bar more than this many times taller than the runner-up in its phase is
 # a freak spike (e.g. ReLU's exact zeros) and never anchors the y-scale.
@@ -387,14 +396,27 @@ def _phase_hists(
 def _trimmed_bin_bounds(
     phase_hists: _PhaseHists,
     clip_share: float = _BASE_CLIP_SHARE,
+    *,
+    density: bool = False,
 ) -> tuple[int, int] | None:
     """Smallest/largest bin indices after trimming the extreme-tail bins.
 
     Pooled across the drawn traces, the outermost populated bins are dropped
-    greedily — lighter end first — while the dropped bins together hold less
-    than `clip_share` of the data points, so the x-range keeps the bins
-    holding the rest of the values and a lone outlier value no longer
-    stretches the whole value axis. Returns `None` when there's no data.
+    greedily while the dropped bins together hold less than `clip_share` of
+    the data points, so the x-range keeps the bins holding the rest of the
+    values and a lone outlier value no longer stretches the whole value
+    axis. Which end gets trimmed each step depends on `density`:
+
+    - `density=False` (the uniform-width signed-log axis): drop the lighter
+      end first, minimising the mass clipped per step.
+    - `density=True` (the linear value axis): drop the end that frees the
+      most *value* span per point clipped. The signed-log bins differ in
+      linear width by orders of magnitude, so trimming purely by mass eats
+      one whole tail before touching the other and leaves a lopsided window;
+      weighting by the width actually freed keeps a symmetric distribution
+      symmetric and zooms past the wide outer bins where the bulk isn't.
+
+    Returns `None` when there's no data.
     """
     counts = [0] * N_BINS
     for _, hist in phase_hists:
@@ -408,18 +430,23 @@ def _trimmed_bin_bounds(
     allowed = clip_share * total
     trimmed = 0
     while lo < hi:
-        side = lo if counts[lo] <= counts[hi] else hi
+        # Trimming an end pulls the bound in to the next populated bin.
+        next_lo = next(i for i in range(lo + 1, hi + 1) if counts[i] > 0)
+        next_hi = next(i for i in range(hi - 1, lo - 1, -1) if counts[i] > 0)
+        if density:
+            # Value span freed per point clipped, compared cross-multiplied;
+            # ties go to the low end, which alternates ends on symmetric
+            # tails. The span includes the width of any emptied bins skipped.
+            gain_lo = _HIST_EDGES[next_lo] - _HIST_EDGES[lo]
+            gain_hi = _HIST_EDGES[hi + 1] - _HIST_EDGES[next_hi + 1]
+            trim_lo = gain_lo * counts[hi] >= gain_hi * counts[lo]
+        else:
+            trim_lo = counts[lo] <= counts[hi]
+        side = lo if trim_lo else hi
         if trimmed + counts[side] > allowed:
             break
         trimmed += counts[side]
-        if side == lo:
-            lo += 1
-            while counts[lo] == 0:
-                lo += 1
-        else:
-            hi -= 1
-            while counts[hi] == 0:
-                hi -= 1
+        lo, hi = (next_lo, hi) if side == lo else (lo, next_hi)
     return lo, hi
 
 
@@ -529,10 +556,11 @@ def _axis_ranges(
         return _log_x_range(bounds) if log_x else _linear_x_range(bounds)
 
     if log_y:
-        return x_range_at(_trimmed_bin_bounds(phase_hists)), None
+        bounds = _trimmed_bin_bounds(phase_hists, density=density)
+        return x_range_at(bounds), None
     share = _BASE_CLIP_SHARE
     while True:
-        bounds = _trimmed_bin_bounds(phase_hists, share)
+        bounds = _trimmed_bin_bounds(phase_hists, share, density=density)
         y_range = _linear_y_range(phase_hists, density, share)
         if bounds is None or y_range is None:
             return None, None
