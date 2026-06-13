@@ -208,10 +208,19 @@ def run_probe_guarded(session: Session) -> None:
     # A failing probe (bad input, OOM, model quirk) must not kill the
     # training thread or wedge the pause loop; the error is published
     # for the UI to display instead.
+    with session._cv:
+        version = session._probe_version
     try:
         _run_probe(session)
     except Exception as e:  # noqa: BLE001 — surfaced via probe_error
         with session._cv:
+            # Mirror the success path's staleness guard: a config change
+            # mid-run (re-pin, mode flip, un-pin) bumps the version and arms
+            # its own probe, so a superseded run must not leave a stuck error
+            # behind that newer config — especially when the new config makes
+            # probing inactive and nothing else clears it.
+            if session._probe_version != version:
+                return
             session._probe_error = f"{type(e).__name__}: {e}"
             session._probe_count += 1
             session._cv.notify_all()

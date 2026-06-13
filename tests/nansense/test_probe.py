@@ -11,7 +11,12 @@ from torch import Tensor, nn
 
 import nansense
 from nansense.capture import _CaptureInterpreter
-from nansense.probe import apply_perturbations, request_probe_locked
+from nansense.probe import (
+    apply_perturbations,
+    request_probe_locked,
+    run_probe_guarded,
+)
+from nansense.session import Session
 from tests.nansense.helpers import DynamicNet, paused_session, train_step
 
 
@@ -351,3 +356,37 @@ def test_failing_probe_publishes_error_not_crash() -> None:
         assert session.pause_count == 1
         session.step_batch()
         assert session.wait_until_paused(after_pauses=1, timeout=5)
+
+
+def test_failing_probe_publishes_error_when_still_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A probe that fails while its config is still current surfaces the error
+    for the UI (the original behaviour)."""
+    session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
+
+    def fail(_s: Session) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("nansense.probe._run_probe", fail)
+    run_probe_guarded(session)
+    assert session.probe_error is not None and "boom" in session.probe_error
+
+
+def test_failing_probe_does_not_publish_a_superseded_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A probe whose config changed mid-run (version bumped) must not leave a
+    stuck error behind the newer config — the newer request re-runs and owns
+    the result. Without the staleness guard the failure path published
+    unconditionally, stranding an error the new config never cleared."""
+    session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
+
+    def bump_then_fail(s: Session) -> None:
+        with s._cv:
+            s._probe_version += 1  # a newer request supersedes this run
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("nansense.probe._run_probe", bump_then_fail)
+    run_probe_guarded(session)
+    assert session.probe_error is None
