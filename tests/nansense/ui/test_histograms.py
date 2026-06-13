@@ -12,6 +12,7 @@ from nansense.ui.histograms import (
     _HIST_EDGES,
     _PLOT_HEIGHT,
     axis_ranges,
+    _bin_coord_to_value,
     dead_channels,
     _fill_fraction,
     _linear_bar_x,
@@ -19,15 +20,21 @@ from nansense.ui.histograms import (
     _linear_y_range,
     _log_x_range,
     _make_histogram_figure,
+    _min_positive_height,
     _phase_hists,
     _phases_with_data,
     _probabilities,
     _probability_densities,
+    _retained_y_range,
     _stats_table_html,
     _trimmed_bin_bounds,
+    _value_to_bin_coord,
+    _x_range_linear_to_log,
+    _x_range_log_to_linear,
     use_density,
 )
 from nansense.watch import (
+    BINS_PER_DECADE,
     N_BINS,
     ZERO_BIN,
     LayerStatsSnapshot,
@@ -299,7 +306,7 @@ def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
     # A huge exact-zero peak flanked by tall narrow near-zero bars plus a
     # long thin tail: at the base 0.5% budget the y-cap chases the narrow
     # near-zero bars and the tail stretches the x-span, leaving the bars
-    # covering almost none of the plot. The budget then rises (up to 5%),
+    # covering almost none of the plot. The budget then rises (up to 50%),
     # clipping the near-zero bars and trimming more of the tail.
     hist = {ZERO_BIN: 50_000, ZERO_BIN + 1: 600, ZERO_BIN + 2: 500}
     hist.update({ZERO_BIN + 60 + i: 250 for i in range(40)})
@@ -314,6 +321,29 @@ def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
     assert x_range is not None and y_range is not None
     assert y_range[1] < base_y[1]  # cap dropped below the near-zero bars
     assert x_range[1] < base_x[1]  # tail trimmed harder
+
+
+def test_axis_ranges_zoom_into_multi_decade_gradient_spike() -> None:
+    # Activation-gradient magnitudes often spread near-uniformly over many
+    # decades (equal counts per signed-log bin, here 1e-9..1e-4 on each
+    # side). On a linear value axis the base trim leaves a hairline spike at
+    # zero — the trimmed span is dominated by the outermost decade while
+    # most points sit orders of magnitude closer to zero. The adaptive loop
+    # must keep raising the clip budget until the bulk is readable.
+    hist = {
+        ZERO_BIN + offset * sign: 1_000
+        for offset in range(1, 5 * BINS_PER_DECADE + 1)
+        for sign in (1, -1)
+    }
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    hists = _phase_hists(per_phase, "activation")
+    base_x = _linear_x_range(_trimmed_bin_bounds(hists))
+    x_range, y_range = axis_ranges(
+        per_phase, "activation", log_x=False, log_y=False
+    )
+    assert base_x is not None and x_range is not None and y_range is not None
+    # Zoomed an order of magnitude past the base trim, not just nudged.
+    assert x_range[1] - x_range[0] < (base_x[1] - base_x[0]) / 10
 
 
 def test_axis_ranges_log_y_keeps_base_trim_and_autorange() -> None:
@@ -714,3 +744,135 @@ def test_linear_hover_keeps_value_from_bar_position() -> None:
     )
     assert "value %{x:.2e}" in fig.data[0].hovertemplate
     assert fig.data[0].customdata[ZERO_BIN] == 9
+
+
+# --- Retaining axes: value <-> bin-index coordinate conversion --------------
+
+
+def test_value_to_bin_coord_maps_zero_to_zero_band_centre() -> None:
+    # The value 0 sits at the centre of the zero band, ZERO_BIN.
+    assert _value_to_bin_coord(0.0) == pytest.approx(ZERO_BIN)
+    assert _bin_coord_to_value(float(ZERO_BIN)) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("coord", [5.0, 40.0, 105.0, 150.0, 205.0])
+def test_value_bin_coord_round_trips(coord: float) -> None:
+    value = _bin_coord_to_value(coord)
+    assert _value_to_bin_coord(value) == pytest.approx(coord, abs=1e-6)
+
+
+def test_value_to_bin_coord_clamps_beyond_the_span() -> None:
+    # The bin-index axis runs from the left edge of bin 0 (-0.5) to the right
+    # edge of the last bin (N_BINS - 0.5); values past +/-1e6 clamp there.
+    assert _value_to_bin_coord(1e9) == pytest.approx(N_BINS - 0.5)
+    assert _value_to_bin_coord(-1e9) == pytest.approx(-0.5)
+
+
+# --- Retaining axes: x-range conversion across a Log x toggle ---------------
+
+
+def test_x_range_linear_to_log_round_trips() -> None:
+    linear = [-0.05, 0.05]
+    back = _x_range_log_to_linear(_x_range_linear_to_log(linear))
+    assert back[0] == pytest.approx(linear[0], rel=1e-6)
+    assert back[1] == pytest.approx(linear[1], rel=1e-6)
+
+
+def test_x_range_linear_to_log_straddles_the_zero_bin() -> None:
+    log_range = _x_range_linear_to_log([-0.05, 0.05])
+    assert log_range[0] < ZERO_BIN < log_range[1]
+
+
+def test_x_range_linear_to_log_enforces_min_span_near_zero() -> None:
+    # A window narrower than the zero band would collapse to ~zero width on
+    # the bin axis; the guard keeps it at least one bin wide, centred on zero.
+    log_range = _x_range_linear_to_log([-1e-12, 1e-12])
+    assert log_range[1] - log_range[0] >= 1.0
+    assert log_range[0] < ZERO_BIN < log_range[1]
+
+
+def test_x_range_log_to_linear_zero_band_straddles_zero() -> None:
+    linear = _x_range_log_to_linear([ZERO_BIN - 1.0, ZERO_BIN + 1.0])
+    assert linear[0] < 0.0 < linear[1]
+
+
+# --- Retaining axes: y-cap conversion across a Log y toggle -----------------
+
+
+def test_retained_y_range_linear_keeps_top_from_zero() -> None:
+    assert _retained_y_range(5.0, log_y=False, floor=0.01) == [0.0, 5.0]
+
+
+def test_retained_y_range_log_spans_floor_to_top() -> None:
+    assert _retained_y_range(100.0, log_y=True, floor=0.1) == [
+        pytest.approx(math.log10(0.1)),
+        pytest.approx(math.log10(100.0)),
+    ]
+
+
+@pytest.mark.parametrize("floor", [None, 0.0, -1.0, 5.0, 10.0])
+def test_retained_y_range_log_floor_near_zero_falls_back(floor: float | None) -> None:
+    # Without a usable positive floor below the top (the "near 0" case — a
+    # linear bottom of 0 has no log), the bottom drops three decades.
+    rng = _retained_y_range(5.0, log_y=True, floor=floor)
+    assert rng is not None
+    assert rng[1] == pytest.approx(math.log10(5.0))
+    assert rng[0] == pytest.approx(math.log10(5.0 * 1e-3))
+
+
+def test_retained_y_range_none_without_a_cap() -> None:
+    assert _retained_y_range(None, log_y=False, floor=1.0) is None
+    assert _retained_y_range(0.0, log_y=True, floor=1.0) is None
+
+
+def test_min_positive_height_finds_smallest_positive_bar() -> None:
+    per_phase = {
+        "train": _layer_snap("train", hist={ZERO_BIN: 1000, ZERO_BIN + 50: 1})
+    }
+    hists = _phase_hists(per_phase, "activation")
+    probs = _probabilities(per_phase["train"].activations.hist)
+    expected = min(p for p in probs if p > 0)
+    assert _min_positive_height(hists, density=False) == pytest.approx(expected)
+
+
+def test_min_positive_height_none_when_empty() -> None:
+    assert _min_positive_height([], density=True) is None
+
+
+# --- Retaining axes: forcing the figure's ranges ---------------------------
+
+
+def test_make_histogram_figure_uses_override_ranges() -> None:
+    per_phase = {"train": _layer_snap("train", hist={ZERO_BIN + 10: 100})}
+    fig, (x_range, y_range) = _make_histogram_figure(
+        per_phase,
+        "activation",
+        "activations",
+        log_x=False,
+        log_y=False,
+        override_ranges=([-0.3, 0.3], [0.0, 7.0]),
+    )
+    # The forced ranges are applied and returned verbatim (no data fit).
+    assert x_range == [-0.3, 0.3]
+    assert y_range == [0.0, 7.0]
+    assert tuple(fig.layout.xaxis.range) == (-0.3, 0.3)
+    assert tuple(fig.layout.yaxis.range) == (0.0, 7.0)
+    # Off-view bars are still blanked to the applied x-range, so hover stays
+    # confined to the bins on screen.
+    kept = [c for c in fig.data[0].x if not math.isnan(c)]
+    assert kept and all(-0.3 <= c <= 0.3 for c in kept)
+
+
+def test_make_histogram_figure_override_carries_log_y_range() -> None:
+    per_phase = {"train": _layer_snap("train", n=50)}
+    fig, (_, y_range) = _make_histogram_figure(
+        per_phase,
+        "activation",
+        "activations",
+        log_x=False,
+        log_y=True,
+        override_ranges=([-0.3, 0.3], [-3.0, 0.0]),
+    )
+    assert fig.layout.yaxis.type == "log"
+    assert y_range == [-3.0, 0.0]
+    assert tuple(fig.layout.yaxis.range) == (-3.0, 0.0)
