@@ -13,6 +13,7 @@ from nansense.restore import (
     EpochCache,
     TimeTravelError,
     TrainingRestorer,
+    capture_rng,
     restore_rng,
     validate_model_state,
     validate_optimizer_state,
@@ -423,3 +424,36 @@ def test_session_batches_saves_pre_iter_rng_for_deterministic_replay(
         assert _epoch_order(loader) == recorded[epoch], (
             f"epoch {epoch} checkpoint did not reproduce its data order"
         )
+
+
+def test_capture_rng_includes_torch_cuda_and_mps_slots() -> None:
+    rng = capture_rng()
+    assert isinstance(rng["torch"], torch.Tensor)
+    assert isinstance(rng["cuda"], list)
+    # The MPS slot is always present (None off Apple Silicon) so the schema
+    # is stable; it carries a tensor only when the backend is available.
+    assert "mps" in rng
+    mps_available = hasattr(torch, "mps") and torch.backends.mps.is_available()
+    assert isinstance(rng["mps"], torch.Tensor) if mps_available else rng["mps"] is None
+
+
+def test_restore_rng_round_trips_torch_state() -> None:
+    rng = capture_rng()
+    before = torch.rand(8)
+    restore_rng(rng)
+    after = torch.rand(8)
+    assert torch.equal(before, after)
+
+
+def test_restore_rng_tolerates_checkpoint_without_mps_slot() -> None:
+    # Checkpoints written before MPS capture omit the key entirely.
+    legacy = {"torch": torch.get_rng_state(), "cuda": []}
+    restore_rng(legacy)  # must not raise
+
+
+def test_restore_rng_ignores_mps_state_when_backend_unavailable() -> None:
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        pytest.skip("MPS available — cannot exercise the unavailable path")
+    rng = capture_rng()
+    rng["mps"] = torch.zeros(16, dtype=torch.uint8)
+    restore_rng(rng)  # the bogus MPS state is skipped, not applied

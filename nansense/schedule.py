@@ -9,6 +9,7 @@ logic at `__exit__` time.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 
@@ -29,8 +30,19 @@ def format_position(position: BatchPosition) -> str:
 
 
 class Schedule:
+    """Batch-position bookkeeping, safe to touch from both session threads.
+
+    `advance` runs on the training thread (every batch) while the UI thread
+    reads `epochs`/`phases` and may `update`/`rewind_to_epoch`; a lock guards
+    the shared counters and the phase/epoch fields so a mid-`advance` schedule
+    swap can't yield an inconsistent `BatchPosition` or corrupt the counters.
+    The lock is never held while touching the session's condition variable, so
+    it only ever nests *inside* it — no lock-ordering cycle.
+    """
+
     def __init__(self, epochs: int, phases: dict[str, int]) -> None:
         self._validate(epochs, phases)
+        self._lock = threading.Lock()
         self._epochs = epochs
         self._phases: dict[str, int] = dict(phases)
         self._counters: dict[tuple[str, int], int] = {}
@@ -47,19 +59,23 @@ class Schedule:
 
     @property
     def epochs(self) -> int:
-        return self._epochs
+        with self._lock:
+            return self._epochs
 
     @property
     def phases(self) -> dict[str, int]:
-        return dict(self._phases)
+        with self._lock:
+            return dict(self._phases)
 
     @property
     def first_phase_name(self) -> str:
-        return next(iter(self._phases))
+        with self._lock:
+            return next(iter(self._phases))
 
     @property
     def last_phase_name(self) -> str:
-        return next(reversed(self._phases))
+        with self._lock:
+            return next(reversed(self._phases))
 
     def rewind_to_epoch(self, epoch: int) -> None:
         """Forget batch counters for `epoch` and everything after it.
@@ -68,37 +84,44 @@ class Schedule:
         re-run epochs advance from batch 0 again instead of tripping the
         more-batches-than-declared check.
         """
-        for key in [k for k in self._counters if k[1] >= epoch]:
-            del self._counters[key]
+        with self._lock:
+            for key in [k for k in self._counters if k[1] >= epoch]:
+                del self._counters[key]
 
     def update(self, *, epochs: int | None = None, phases: dict[str, int] | None = None) -> None:
-        new_epochs = self._epochs if epochs is None else epochs
-        new_phases = self._phases if phases is None else dict(phases)
-        self._validate(new_epochs, new_phases)
-        self._epochs = new_epochs
-        self._phases = new_phases
+        with self._lock:
+            new_epochs = self._epochs if epochs is None else epochs
+            new_phases = self._phases if phases is None else dict(phases)
+            self._validate(new_epochs, new_phases)
+            self._epochs = new_epochs
+            self._phases = new_phases
 
     def advance(self, phase: str, epoch: int) -> BatchPosition:
-        if phase not in self._phases:
-            raise ValueError(
-                f"unknown phase {phase!r}; declared: {list(self._phases)}"
-            )
-        if not 0 <= epoch < self._epochs:
-            raise ValueError(f"epoch {epoch} out of range [0, {self._epochs})")
+        with self._lock:
+            if phase not in self._phases:
+                raise ValueError(
+                    f"unknown phase {phase!r}; declared: {list(self._phases)}"
+                )
+            if not 0 <= epoch < self._epochs:
+                raise ValueError(f"epoch {epoch} out of range [0, {self._epochs})")
 
-        key = (phase, epoch)
-        batch_idx = self._counters.get(key, 0)
-        declared = self._phases[phase]
-        if batch_idx >= declared:
-            raise ValueError(
-                f"more batches than declared for phase {phase!r} "
-                f"(declared {declared}, got {batch_idx + 1})"
-            )
-        self._counters[key] = batch_idx + 1
+            key = (phase, epoch)
+            batch_idx = self._counters.get(key, 0)
+            declared = self._phases[phase]
+            if batch_idx >= declared:
+                raise ValueError(
+                    f"more batches than declared for phase {phase!r} "
+                    f"(declared {declared}, got {batch_idx + 1})"
+                )
+            self._counters[key] = batch_idx + 1
 
-        is_last_in_phase = batch_idx == declared - 1
-        is_last_in_epoch = is_last_in_phase and phase == self.last_phase_name
-        is_last_overall = is_last_in_epoch and epoch == self._epochs - 1
+            is_last_in_phase = batch_idx == declared - 1
+            # Raw read (not the locked `last_phase_name` property) — the lock
+            # is not reentrant and is already held here.
+            is_last_in_epoch = is_last_in_phase and phase == next(
+                reversed(self._phases)
+            )
+            is_last_overall = is_last_in_epoch and epoch == self._epochs - 1
         return BatchPosition(
             phase=phase,
             epoch=epoch,

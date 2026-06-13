@@ -284,8 +284,6 @@ grid starts enabled; the other three have their own checkboxes.
 
 ![Watch page, min/max view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-minmax.png)
 
-![Watch page, histogram view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
-
 ### Weights
 
 Each parameterized layer card has a "Weights" button opening

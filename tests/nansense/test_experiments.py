@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -66,6 +67,34 @@ def _dream_params(**overrides: object) -> dict[str, object]:
     }
     params.update(overrides)
     return params
+
+
+def test_pause_loop_marks_experiment_running_before_running_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pause loop sets `_experiment_running` atomically with the dequeue
+    (under the lock), so a `cancel_experiment(seq)` arriving before
+    `run_experiment_guarded` starts is honoured rather than a silent no-op."""
+    import nansense.experiments as experiments_mod
+
+    called = threading.Event()
+    running_at_entry: list[int | None] = []
+
+    def spy(session: Session, request: object) -> None:
+        # Record what the pause loop already set, then return without running
+        # (and without clearing it): we only care about the dequeue invariant.
+        running_at_entry.append(session._experiment_running)  # type: ignore[attr-defined]
+        called.set()
+
+    with _paused_session() as (session, _):
+        monkeypatch.setattr(experiments_mod, "run_experiment_guarded", spy)
+        seq = session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params()
+        )
+        assert called.wait(timeout=5)
+        # Already this seq at entry — the dequeue set it, not the (replaced)
+        # run_experiment_guarded, closing the cancel-race window.
+        assert running_at_entry == [seq]
 
 
 def test_deep_dream_publishes_done_result_with_image() -> None:

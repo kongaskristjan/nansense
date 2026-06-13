@@ -202,6 +202,55 @@ def test_diverged_activation_lands_in_overflow_and_zero_bins() -> None:
     assert snap.hist[ZERO_BIN + 1] == 0
 
 
+def test_non_finite_values_do_not_poison_scalar_stats() -> None:
+    """A NaN or inf must not poison min/max/sum for good — scalar reductions
+    run over the finite values only, while the histogram still counts the
+    non-finite ones in the overflow/zero bins."""
+    acc = TensorAccumulator()
+    acc.update(torch.tensor([1.0, 3.0]))
+    acc.update(torch.tensor([float("nan"), float("inf"), float("-inf"), 5.0]))
+    snap = acc.snapshot()
+    # Finite population is {1, 3, 5} — three values, not the six fed in.
+    assert snap.n == 3
+    assert snap.min == 1.0
+    assert snap.max == 5.0
+    assert math.isfinite(snap.mean) and snap.mean == pytest.approx(3.0)
+    assert math.isfinite(snap.std)
+    # The non-finite values stay visible in the histogram.
+    assert snap.hist[N_BINS - 1] == 1  # +inf
+    assert snap.hist[0] == 1  # -inf
+    assert snap.hist[ZERO_BIN] == 1  # nan in the zero band
+
+
+def test_all_non_finite_update_leaves_scalar_stats_empty() -> None:
+    acc = TensorAccumulator()
+    acc.update(torch.tensor([float("nan"), float("inf")]))
+    snap = acc.snapshot()
+    assert snap.n == 0  # nothing finite contributed
+    assert math.isnan(snap.mean)  # n == 0
+    # but the divergence is still counted in the histogram.
+    assert snap.hist[ZERO_BIN] == 1 and snap.hist[N_BINS - 1] == 1
+
+
+def test_retain_layers_drops_unwatched_buckets() -> None:
+    acc = WatchAccumulator()
+    acc.update(layer="a", phase="train", epoch=0, kind="activation", x=torch.tensor([1.0]))
+    acc.update(layer="b", phase="train", epoch=0, kind="activation", x=torch.tensor([2.0]))
+    acc.update(layer="b", phase="val", epoch=1, kind="activation", x=torch.tensor([3.0]))
+    assert {k[0] for k in acc.snapshot().stats} == {"a", "b"}
+    acc.retain_layers(["a"])
+    # Every "b" bucket (both phases and epochs) is gone; "a" survives.
+    assert {k[0] for k in acc.snapshot().stats} == {"a"}
+
+
+def test_retain_layers_keeps_all_epochs_of_a_kept_layer() -> None:
+    acc = WatchAccumulator()
+    acc.update(layer="a", phase="train", epoch=0, kind="activation", x=torch.tensor([1.0]))
+    acc.update(layer="a", phase="train", epoch=1, kind="activation", x=torch.tensor([2.0]))
+    acc.retain_layers(["a"])
+    assert set(acc.snapshot().stats) == {("a", "train", 0), ("a", "train", 1)}
+
+
 def test_watch_accumulator_diverged_activation_lands_in_overflow_bins() -> None:
     """The same divergence routed through WatchAccumulator's per-channel path
     bins each non-finite element into the overflow/zero bins."""

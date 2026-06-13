@@ -969,12 +969,14 @@ class Session:
             if self._closed:
                 return False
             freq = self._update_frequency
-        if freq.unit == "epoch":
-            return pos.is_last_in_epoch and (pos.epoch + 1) % freq.n == 0
-        if freq.phase is not None and pos.phase != freq.phase:
-            return False
-        self._freq_counter += 1
-        return self._freq_counter % freq.n == 0
+            if freq.unit == "epoch":
+                return pos.is_last_in_epoch and (pos.epoch + 1) % freq.n == 0
+            if freq.phase is not None and pos.phase != freq.phase:
+                return False
+            # Mutated under the lock so `set_update_frequency`'s reset to 0
+            # can't be lost to a racing unlocked read-modify-write here.
+            self._freq_counter += 1
+            return self._freq_counter % freq.n == 0
 
     def _record_frames(self) -> None:
         """Append one frame to every active recording (training thread).
@@ -996,6 +998,11 @@ class Session:
         # iteration" RuntimeError. Mirrors `watched_layers` / `watch_snapshot`.
         with self._cv:
             watched = list(self._watched_layers)
+        # Reap buckets for layers no longer watched before updating. `unwatch`
+        # forgets on the UI thread, which can race this batch and let an
+        # `update` below resurrect a just-forgotten bucket; doing it here, on
+        # the only `update` caller, makes that leak impossible.
+        self._watch_accumulator.retain_layers(watched)
         # Extreme-input patches stay rank-local in distributed runs: only
         # the leader renders them, so followers skip the buffers entirely.
         source = self._patch_source_input() if self.is_leader else None
@@ -1107,6 +1114,9 @@ class Session:
         """
         with self._cv:
             self._schedule.rewind_to_epoch(epoch)
+            # Restart the per-batch update cadence so post-jump frames fire on
+            # a clean phase instead of wherever the abandoned timeline left it.
+            self._freq_counter = 0
         self._watch_accumulator.forget_epochs_from(epoch)
         # Re-running this (or any later) epoch must re-save fresh RNG, so clear
         # the "already saved" marker — otherwise the re-run's pre-iter save in
@@ -1147,6 +1157,13 @@ class Session:
                     self._probe_request = False
                     if self._experiment_queue:
                         experiment = self._experiment_queue.popleft()
+                        # Mark it running while still holding the lock and
+                        # atomically with the dequeue: otherwise a
+                        # `cancel_experiment(seq)` landing between here and
+                        # `run_experiment_guarded` acquiring the lock would
+                        # find the seq neither queued nor running and be a
+                        # silent no-op, letting a cancelled experiment run.
+                        self._experiment_running = experiment.seq
             if done:
                 # A coalesced probe request is dropped (resuming into a
                 # capture re-runs the probe anyway); queued experiments

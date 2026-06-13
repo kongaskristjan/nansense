@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from nansense.schedule import Schedule, format_position
@@ -119,3 +121,27 @@ def test_rewind_to_epoch_resets_counters_for_that_epoch_onward() -> None:
     # ...while epoch 0's counters survive the rewind.
     with pytest.raises(ValueError, match="more batches than declared"):
         schedule.advance("train", 0)
+
+
+def test_advance_is_thread_safe_under_concurrency() -> None:
+    """`advance` runs on the training thread while the UI thread reads/updates
+    the schedule; concurrent advances must not lose increments. Many threads
+    sharing one (phase, epoch) should be handed every batch index exactly
+    once — no duplicates from a torn read-modify-write of the counter."""
+    n_threads, per_thread = 8, 50
+    declared = n_threads * per_thread
+    schedule = Schedule(epochs=1, phases={"train": declared})
+    seen: list[int] = []
+    seen_lock = threading.Lock()
+
+    def worker() -> None:
+        local = [schedule.advance("train", 0).batch_idx for _ in range(per_thread)]
+        with seen_lock:
+            seen.extend(local)
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(seen) == list(range(declared))
