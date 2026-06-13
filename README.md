@@ -264,7 +264,10 @@ The HISTOGRAM view (the default) shows activation and activation-gradient
 distributions over the most recent epoch as signed-log histograms with a
 stats table (`n`, `mean`, `std`, `median`, `min`/`max`); a phase dropdown
 switches between train/val, and Log x / Log y checkboxes handle
-distributions spanning many decades. Each histogram has a "Per channel"
+distributions spanning many decades. A "Retain axes" checkbox keeps the
+current axis ranges when toggling Log x / Log y or switching phase (instead
+of auto-fitting to the data) — handy for comparing phases or scales on a
+fixed frame. Each histogram has a "Per channel"
 switch that narrows it to a single channel (stepped with an index spinner);
 while per-channel, hovering a bar shows a few random input samples whose
 values fell in that bar — drawn from the last captured batch only, since

@@ -28,15 +28,20 @@ from nansense.ui.common import (
 )
 from nansense.ui.histograms import (
     _BIN_VALUE_LABELS,
-    axis_ranges,
+    _axis_ranges,
     _format_stat,
     _hover_customdata,
     kind_stats,
     _linear_bar_x,
     _make_histogram_figure,
+    _min_positive_height,
     phase_color,
+    _phase_hists,
     _phases_with_data,
+    _retained_y_range,
     _stats_table_html,
+    _x_range_linear_to_log,
+    _x_range_log_to_linear,
     trace_heights,
     use_density,
 )
@@ -61,6 +66,10 @@ class _WatchPageState:
     # plot immediately.
     axis_log_x: bool = False
     axis_log_y: bool = False
+    # When set, a Log x / Log y / phase change keeps the current axis ranges
+    # (re-expressed for the new scale) instead of auto-fitting to the data —
+    # see `_HistPlot`. Lives with the histogram-view controls.
+    retain_axes: bool = False
     # MIN/MAX view state: which of the four grids are shown (only "Max
     # pixel" starts checked) and whether the activation heatmap is blended
     # over the patches. HISTOGRAM is the default view.
@@ -127,6 +136,12 @@ def _build_watch_page(
 
     async def set_axis_log_y(value: bool) -> None:
         state.axis_log_y = value
+        await refresh()
+
+    async def set_retain_axes(value: bool) -> None:
+        # Just flips the flag; the refresh leaves a frozen view untouched and
+        # re-fits on un-check (so the axes snap back to the data immediately).
+        state.retain_axes = value
         await refresh()
 
     async def set_mode(value: object) -> None:
@@ -240,6 +255,17 @@ def _build_watch_page(
                             on_change=lambda e: set_axis_log_y(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
                             "Log scale on the probability axis"
+                        )
+                    )
+                    hist_boxes.append(
+                        ui.checkbox(
+                            "Retain axes",
+                            value=state.retain_axes,
+                            on_change=lambda e: set_retain_axes(bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Keep the current axis ranges when toggling Log x / "
+                            "Log y or switching phase, instead of auto-fitting "
+                            "to the data"
                         )
                     )
                 with ui.column().classes("w-full gap-1") as minmax_controls:
@@ -582,6 +608,11 @@ class _HistPlot:
         # actually moved (a range write resets zoom on that axis).
         self._y_range: list[float] | None = None
         self._x_range: list[float] | None = None
+        # The retained linear y-cap (and the density mode it was measured in),
+        # tracked while "Retain axes" is off so it's current the moment it
+        # turns on — see `_retained_ranges` / `_capture_y_top`.
+        self._y_top: float | None = None
+        self._y_top_density: bool = use_density(self._axis[0])
         with ui.row().classes("items-center gap-x-3 no-wrap"):
             self._channel_switch = (
                 ui.switch("Per channel", value=False, on_change=self._set_mode)
@@ -719,23 +750,32 @@ class _HistPlot:
         per_phase = self._view(per_phase)
         phases = _phases_with_data(per_phase, self._kind)
         axis = self._current_axis()
-        log_x = axis[0]
+        log_x, log_y = axis
         density = use_density(log_x)
+        retain = self._state.retain_axes
+        phase_hists = _phase_hists(per_phase, self._kind)
         if phases != self._phases or axis != self._axis:
             # A phase appeared/disappeared or an axis-scale checkbox
-            # flipped — rebuild the whole figure. The build hands back the
-            # ranges it applied, so caching them costs no recompute.
+            # flipped — rebuild the whole figure. With "Retain axes" on, carry
+            # the current view across (re-expressed for the new scale); else
+            # let the build fit the ranges to the data and cache them.
+            override = (
+                self._retained_ranges(axis, phase_hists) if retain else None
+            )
             fig, (self._x_range, self._y_range) = _make_histogram_figure(
                 per_phase,
                 self._kind,
                 self._title,
-                log_x=axis[0],
-                log_y=axis[1],
+                log_x=log_x,
+                log_y=log_y,
                 trace_names=self._trace_names(per_phase),
+                override_ranges=override,
             )
             self.element.update_figure(_figure_payload(fig))
             self._phases = phases
             self._axis = axis
+            if not retain:
+                self._capture_y_top(phase_hists, density, self._y_range)
         elif phases:
             # Same rows and axes — only counts (and the epoch label) moved.
             # Restyle in place so zoom/pan survives. A channel index change
@@ -752,31 +792,91 @@ class _HistPlot:
             layout: dict[str, object] = {
                 f"annotations[{i}].text": name for i, name in enumerate(names)
             }
-            # The caps follow the data; re-apply them only when they moved so
-            # an idle refresh doesn't keep snapping the user's zoom back.
-            x_range, y_range = axis_ranges(
-                per_phase, self._kind, log_x=log_x, log_y=axis[1]
-            )
-            if y_range is not None and y_range != self._y_range:
-                # Every row gets the same range (row 1 is "yaxis", row n is
-                # "yaxis{n}") so the subplots stay comparable.
-                self._y_range = y_range
-                for i in range(len(phases)):
-                    axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
-                    layout[f"{axis_name}.range"] = y_range
-            if x_range != self._x_range:
-                # The rows' x-axes are matched, so one key updates every row.
-                self._x_range = x_range
-                layout["xaxis.range"] = x_range
-                # On the linear value axis the bars sit at bin centres with the
-                # off-view tail bins blanked (see `_linear_bar_x`); that blanking
-                # tracks the visible range, so a moved range re-blanks the bars.
-                if density:
-                    bar_x = _linear_bar_x(x_range)
-                    update["x"] = [bar_x for _ in phases]
+            # While retaining, the ranges are frozen — leave them untouched so
+            # the kept view (and any client zoom) survives the refresh. Else
+            # the caps follow the data, re-applied only when they moved so an
+            # idle refresh doesn't keep snapping the user's zoom back.
+            if not retain:
+                x_range, y_range = _axis_ranges(
+                    phase_hists, log_x=log_x, log_y=log_y
+                )
+                if y_range is not None and y_range != self._y_range:
+                    # Every row gets the same range (row 1 is "yaxis", row n is
+                    # "yaxis{n}") so the subplots stay comparable.
+                    self._y_range = y_range
+                    for i in range(len(phases)):
+                        axis_name = "yaxis" if i == 0 else f"yaxis{i + 1}"
+                        layout[f"{axis_name}.range"] = y_range
+                if x_range != self._x_range:
+                    # The rows' x-axes are matched, so one key updates every row.
+                    self._x_range = x_range
+                    layout["xaxis.range"] = x_range
+                    # On the linear value axis the bars sit at bin centres with
+                    # the off-view tail bins blanked (see `_linear_bar_x`); that
+                    # blanking tracks the visible range, so a moved range
+                    # re-blanks the bars.
+                    if density:
+                        bar_x = _linear_bar_x(x_range)
+                        update["x"] = [bar_x for _ in phases]
+                # `_axis_ranges` returns no y-range on a log-y axis, so this
+                # is the linear cap when there is one and `None` otherwise.
+                self._capture_y_top(phase_hists, density, y_range)
             _plotly_restyle(
                 self.element, update, list(range(len(phases))), layout
             )
+
+    def _capture_y_top(
+        self,
+        phase_hists: list[tuple[str, tuple[int, ...]]],
+        density: bool,
+        linear_y_range: list[float] | None,
+    ) -> None:
+        """Track the linear y-cap so it's ready when "Retain axes" turns on.
+
+        `linear_y_range` is the freshly computed linear-y range when one is at
+        hand (the cap is its top); on a log-y axis there isn't one, so the
+        linear cap is computed separately.
+        """
+        if linear_y_range is not None:
+            self._y_top = linear_y_range[1]
+        else:
+            _, lin = _axis_ranges(phase_hists, log_x=self._axis[0], log_y=False)
+            self._y_top = lin[1] if lin is not None else None
+        self._y_top_density = density
+
+    def _retained_ranges(
+        self,
+        target_axis: tuple[bool, bool],
+        phase_hists: list[tuple[str, tuple[int, ...]]],
+    ) -> tuple[list[float] | None, list[float] | None]:
+        """The `(x_range, y_range)` that keep the current view on a rebuild.
+
+        The x-window is preserved, re-expressed between the linear value axis
+        and the signed-log bin-index axis when Log x flipped. The linear y-cap
+        is preserved too, re-expressed for the y-scale; only a Log x flip
+        (which swaps the bar units between density and probability) re-fits it
+        from the data. Falls back to a data fit before any view exists.
+        """
+        new_log_x, new_log_y = target_axis
+        old_log_x = self._axis[0]
+        if self._x_range is None:
+            x_range, _ = _axis_ranges(
+                phase_hists, log_x=new_log_x, log_y=new_log_y
+            )
+        elif new_log_x == old_log_x:
+            x_range = list(self._x_range)
+        elif new_log_x:
+            x_range = _x_range_linear_to_log(self._x_range)
+        else:
+            x_range = _x_range_log_to_linear(self._x_range)
+        new_density = use_density(new_log_x)
+        if self._y_top is None or self._y_top_density != new_density:
+            _, lin = _axis_ranges(phase_hists, log_x=new_log_x, log_y=False)
+            self._y_top = lin[1] if lin is not None else None
+            self._y_top_density = new_density
+        floor = _min_positive_height(phase_hists, new_density)
+        y_range = _retained_y_range(self._y_top, log_y=new_log_y, floor=floor)
+        return x_range, y_range
 
 
 class _WatchLayerPanel:
