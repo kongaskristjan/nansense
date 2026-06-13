@@ -277,11 +277,20 @@ class TensorAccumulator:
             self._stats = _RunningStats.zeros(x.device)
         stats = self._stats
         flat = x.detach().to(torch.float32).reshape(-1)
-        stats.n += flat.numel()
-        stats.sum += flat.sum()
-        stats.sum_sq += flat.square().sum()
-        stats.min = torch.minimum(stats.min, flat.min())
-        stats.max = torch.maximum(stats.max, flat.max())
+        # Scalar reductions run over the finite values only. A single NaN
+        # would otherwise poison min/max for good (torch.minimum/maximum
+        # propagate NaN) and an inf would push sum/mean/variance to nan or
+        # inf — so `n`, `sum`, `min`, `max` describe the finite population.
+        # Non-finite values are still counted in the histogram below (NaN in
+        # the zero bin, ±inf in the end bins via `_bin_indices`), so a
+        # diverged layer stays visible there and in the dead-channels row.
+        finite = flat[torch.isfinite(flat)]
+        if finite.numel() > 0:
+            stats.n += finite.numel()
+            stats.sum += finite.sum()
+            stats.sum_sq += finite.square().sum()
+            stats.min = torch.minimum(stats.min, finite.min())
+            stats.max = torch.maximum(stats.max, finite.max())
         idx = _bin_indices(flat)
         channels = self._usable_channels(x)
         if channels is None:
@@ -450,12 +459,16 @@ def _evict_patches(stats: _LayerStats) -> None:
 
 
 class WatchAccumulator:
-    """Thread-safe per-(layer, phase, epoch) accumulator store.
+    """Per-(layer, phase, epoch) accumulator store shared across threads.
 
-    Training-thread writes (`update`) and UI-thread reads (`snapshot`) are
-    serialised by a single lock. Hold time is dominated by the GPU→CPU sync
-    that `snapshot()` does once per UI refresh; per-batch `update()` only
-    mutates GPU-side tensors so it's nearly lock-free in practice.
+    A single lock guards the bucket *map* — get-or-create on the training
+    thread's `update`, the eviction passes, and the UI thread's `snapshot`
+    walk. The heavy per-bucket tensor accumulation runs *outside* the lock
+    (only the bucket lookup is serialised), so a `snapshot` may observe a
+    bucket mid-update; the stats are monotonic running aggregates, so such a
+    transient read simply reconciles on the next refresh. Hold time is
+    dominated by the GPU→CPU sync `snapshot()` does once per UI refresh;
+    per-batch `update()` only launches GPU kernels.
     """
 
     def __init__(self) -> None:
@@ -536,6 +549,24 @@ class WatchAccumulator:
         with self._lock:
             for key in list(self._stats):
                 if key[0] == layer:
+                    del self._stats[key]
+
+    def retain_layers(self, layers: Iterable[str]) -> None:
+        """Drop buckets for any layer not in `layers`.
+
+        Called by the training thread — the sole `update` caller — before
+        its per-batch updates. `forget_layer` on `unwatch` runs on the UI
+        thread and can race a batch: the training thread may already hold a
+        snapshot of the watched set and recreate the just-forgotten bucket in
+        `update`, leaving it stranded (the layer is no longer watched, so
+        nothing ever forgets it again) and leaking its GPU buffers. Reaping
+        unwatched layers here, where no `update` can resurrect them, closes
+        that leak.
+        """
+        keep = set(layers)
+        with self._lock:
+            for key in list(self._stats):
+                if key[0] not in keep:
                     del self._stats[key]
 
     def forget_epochs_from(self, epoch: int) -> None:
