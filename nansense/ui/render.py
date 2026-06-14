@@ -444,6 +444,51 @@ def render_image(
     return _pil_to_bytes(pil)
 
 
+def render_attribution_overlay(
+    input_sample: Tensor,
+    attribution_sample: Tensor,
+    *,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+    vmax: float,
+) -> StripRender | None:
+    """One overlay tile per attribution channel over the input sample image.
+
+    `input_sample` is `[C_in, H, W]` and `attribution_sample` is
+    `[C_a, h, w]`; the input is denormalized to an RGB image (like
+    `render_image`) and each attribution channel's heat — nearest-resized to
+    the input size — is blended over a copy of it with `blend_signed_heat`
+    (the MIN/MAX overlay scheme) on the shared `±vmax` scale. Returns `None`
+    when the input can't be denormalized to a `C in (1, 3)` image.
+    """
+    if input_sample.ndim != 3 or input_sample.shape[0] not in (1, 3):
+        return None
+    base = _denormalize_uint8(
+        input_sample.detach().float().cpu().numpy(), mean, std, channel_axis=0
+    )
+    if base is None:
+        return None
+    rgb = np.moveaxis(base, 0, -1)  # [H, W, C_in]
+    if rgb.shape[-1] == 1:
+        rgb = np.repeat(rgb, 3, axis=-1)
+    rgb = np.ascontiguousarray(rgb)
+    h, w = rgb.shape[:2]
+    heat = attribution_sample.detach().float().cpu().numpy()  # [C_a, h, w]
+    if heat.ndim != 3 or heat.size == 0:
+        return None
+    tiles = [
+        blend_signed_heat(rgb, _nearest_resize(channel, h, w), vmax=vmax)
+        for channel in heat
+    ]
+    strip = _concat_tiles_with_gaps(tiles, _tile_gap(w))
+    return StripRender(
+        legend_image=_encode_image(_render_legend(TILE_SIZE, abs_max=vmax)),
+        data_image=_encode_strip_data(strip, image_mime()),
+        width=round(strip.shape[1] * TILE_SIZE / w),
+        height=TILE_SIZE,
+    )
+
+
 @dataclass(frozen=True)
 class PatchGridRender:
     """One extreme-patch grid: channels across, top-N samples down.
@@ -570,12 +615,32 @@ def _heat_vmax(tp: TypePatches) -> float:
     return float(np.abs(finite).max()) if finite.size else 0.0
 
 
+def blend_signed_heat(rgb: np.ndarray, heat: np.ndarray, *, vmax: float) -> np.ndarray:
+    """Alpha-blend a signed heat map over an RGB image (red +, blue −).
+
+    Shared by the MIN/MAX patch overlay and the experiment attribution
+    overlay: each pixel is transparent at 0, opacifying toward red (positive)
+    / blue (negative) at `±vmax` (`HEAT_MAX_ALPHA` at the extreme). `rgb` is
+    `(H, W, 3)` uint8, `heat` is `(H, W)`, both the same spatial size.
+    """
+    if vmax > 0.0:
+        norm = (heat / vmax).clip(-1.0, 1.0)
+    else:
+        norm = np.zeros(heat.shape, dtype=np.float32)
+    alpha = (np.abs(norm) * HEAT_MAX_ALPHA)[..., None]
+    color = np.zeros((*heat.shape, 3), dtype=np.float32)
+    color[..., 0] = np.where(norm > 0, 255.0, 0.0)
+    color[..., 2] = np.where(norm < 0, 255.0, 0.0)
+    blended = rgb.astype(np.float32) * (1 - alpha) + color * alpha
+    return blended.round().astype(np.uint8)
+
+
 def _blend_heat(cells: np.ndarray, tp: TypePatches, *, vmax: float) -> np.ndarray:
-    """Overlay each cell's activation map: 0 transparent, ±vmax red/blue."""
+    """Overlay each cell's activation map via `blend_signed_heat`."""
     heat = tp.heat.numpy()  # (C, N, Hh, Wh)
     valid = np.isfinite(tp.values.numpy())
     c, n, ph, pw, _ = cells.shape
-    out = cells.astype(np.float32)
+    out = cells.copy()
     top = tp.top.numpy()
     left = tp.left.numpy()
     hin, win = tp.input_hw
@@ -589,13 +654,8 @@ def _blend_heat(cells: np.ndarray, tp: TypePatches, *, vmax: float) -> np.ndarra
                 window=(top[col, row], left[col, row], ph, pw),
                 input_hw=(hin, win),
             )
-            norm = (cell_heat / vmax).clip(-1.0, 1.0)
-            alpha = (np.abs(norm) * HEAT_MAX_ALPHA)[..., None]
-            color = np.zeros((ph, pw, 3), dtype=np.float32)
-            color[..., 0] = np.where(norm > 0, 255.0, 0.0)
-            color[..., 2] = np.where(norm < 0, 255.0, 0.0)
-            out[col, row] = out[col, row] * (1 - alpha) + color * alpha
-    return out.round().astype(np.uint8)
+            out[col, row] = blend_signed_heat(cells[col, row], cell_heat, vmax=vmax)
+    return out
 
 
 def _cell_heat(
@@ -620,9 +680,14 @@ def _cell_heat(
         x0 = max(0, int(np.floor(left * wh / win)))
         x1 = min(wh, max(x0 + 1, int(np.ceil((left + pw) * wh / win))))
         heat = heat[y0:y1, x0:x1]
-    ys = (np.arange(ph) * heat.shape[0] / ph).astype(np.int64)
-    xs = (np.arange(pw) * heat.shape[1] / pw).astype(np.int64)
-    return heat[ys[:, None], xs[None, :]]
+    return _nearest_resize(heat, ph, pw)
+
+
+def _nearest_resize(arr: np.ndarray, h: int, w: int) -> np.ndarray:
+    """Nearest-neighbour resize of a 2D map to `(h, w)`."""
+    ys = (np.arange(h) * arr.shape[0] / h).astype(np.int64)
+    xs = (np.arange(w) * arr.shape[1] / w).astype(np.int64)
+    return arr[ys[:, None], xs[None, :]]
 
 
 def _render_1d(tensor: Tensor) -> StripRender | None:

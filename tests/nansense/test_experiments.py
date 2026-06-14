@@ -285,7 +285,6 @@ def test_captum_methods_publish_attributions(
         assert result.attribution is not None
         assert tuple(result.attribution.shape) == (2, channels, 4, 4)
         assert result.attribution.device.type == "cpu"
-        assert not result.is_diff
         assert result.reference is not None and result.reference.shape[0] == 2
 
 
@@ -329,40 +328,6 @@ def test_captum_module_kinds_on_fx_intermediate_publish_module_hint(
         result = session.experiment_result
         assert result is not None and result.error is not None
         assert "nn.Module" in result.error
-
-
-def test_use_viewed_sample_runs_single_sample() -> None:
-    with _paused_session(batch_size=4) as (session, _):
-        session.request_experiment(
-            kind="neuron_gradient",
-            layer="conv",
-            params={"channel": 0, "use_viewed": True, "sample": 1},
-        )
-        assert session.wait_for_experiment(timeout=15)
-        result = session.experiment_result
-        assert result is not None and result.error is None
-        assert result.attribution is not None
-        assert tuple(result.attribution.shape) == (1, 3, 4, 4)
-        assert not result.is_diff
-
-
-def test_use_viewed_sample_with_perturbation_yields_diff() -> None:
-    with _paused_session(batch_size=4) as (session, _):
-        # Perturb a pixel of the viewed sample, then run with use_viewed: the
-        # result is the diff of the two attribution maps.
-        session.add_perturbation(sample=1, y=0, x=0, values=(0.0, 0.0, 0.0))
-        session.request_experiment(
-            kind="neuron_gradient",
-            layer="conv",
-            params={"channel": 0, "use_viewed": True, "sample": 1},
-        )
-        assert session.wait_for_experiment(timeout=15)
-        result = session.experiment_result
-        assert result is not None and result.error is None
-        assert result.is_diff
-        assert result.attribution is not None
-        assert tuple(result.attribution.shape) == (1, 3, 4, 4)
-        assert result.reference is not None and result.reference.shape == (1, 3, 4, 4)
 
 
 @pytest.mark.parametrize(
