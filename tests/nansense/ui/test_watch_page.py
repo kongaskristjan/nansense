@@ -8,12 +8,18 @@ from nansense.patches import PATCH_TYPES, PatchAccumulator
 from nansense.session import BatchSnapshot
 from nansense.ui.histograms import _make_histogram_figure
 from nansense.ui.watch_page import (
+    _ALL_LAYERS_MAX,
+    _LAYER_ALL,
     _PLOTLY_CONFIG,
     _bin_samples_html,
     _figure_payload,
     _filter_phase,
+    _layer_select_options,
     _patch_grids_html,
     _patch_grids_signature,
+    _reconcile_selected_layer,
+    _visible_layers,
+    _watched_in_order,
 )
 from nansense.watch import ZERO_BIN, LayerStatsSnapshot, bin_index
 from tests.nansense.helpers import _layer_snap, _make_snapshot, _tensor_stats
@@ -110,6 +116,62 @@ def test_patch_grids_signature_tracks_toggles_and_values() -> None:
     assert base != _patch_grids_signature(per_phase, ["max_pixel"], False)
     other = {"train": _layer_snap_with_patches("train")}  # new random extremes
     assert base != _patch_grids_signature(other, list(PATCH_TYPES), False)
+
+
+_NAMES = ["a", "b", "c", "d"]
+
+
+def test_watched_in_order_follows_layer_names_not_set_order() -> None:
+    # `watched` is an unordered set; order must come from `layer_names`.
+    assert _watched_in_order(_NAMES, frozenset({"c", "a"})) == ["a", "c"]
+    assert _watched_in_order(_NAMES, frozenset()) == []
+    # A name not in `layer_names` is ignored.
+    assert _watched_in_order(_NAMES, frozenset({"a", "z"})) == ["a"]
+
+
+def test_layer_select_options_offers_all_only_when_few_watched() -> None:
+    opts = _layer_select_options(["a", "b"])
+    assert list(opts) == [_LAYER_ALL, "a", "b"]  # "all" first, in graph order
+    assert opts["a"] == "a"
+    # No layers → no options at all (not even "all").
+    assert _layer_select_options([]) == {}
+
+
+def test_layer_select_options_drops_all_at_threshold() -> None:
+    below = [str(i) for i in range(_ALL_LAYERS_MAX - 1)]
+    assert _LAYER_ALL in _layer_select_options(below)
+    at = [str(i) for i in range(_ALL_LAYERS_MAX)]
+    assert _LAYER_ALL not in _layer_select_options(at)
+    assert list(_layer_select_options(at)) == at
+
+
+def test_reconcile_selected_layer_defaults_to_first_watched() -> None:
+    # Empty/unset selection (and any stale name) falls back to the first.
+    assert _reconcile_selected_layer("", ["a", "b"]) == "a"
+    assert _reconcile_selected_layer("gone", ["a", "b"]) == "a"
+    # A still-watched layer is kept.
+    assert _reconcile_selected_layer("b", ["a", "b"]) == "b"
+    # Nothing watched → empty selection.
+    assert _reconcile_selected_layer("a", []) == ""
+
+
+def test_reconcile_selected_layer_keeps_all_only_below_threshold() -> None:
+    below = [str(i) for i in range(_ALL_LAYERS_MAX - 1)]
+    assert _reconcile_selected_layer(_LAYER_ALL, below) == _LAYER_ALL
+    # At the threshold "all" is no longer offered, so it falls back to first.
+    at = [str(i) for i in range(_ALL_LAYERS_MAX)]
+    assert _reconcile_selected_layer(_LAYER_ALL, at) == "0"
+
+
+def test_visible_layers_picks_one_or_all() -> None:
+    assert _visible_layers("b", ["a", "b", "c"]) == ["b"]
+    assert _visible_layers(_LAYER_ALL, ["a", "b", "c"]) == ["a", "b", "c"]
+    # "all" past the threshold renders just the first (the safe fallback).
+    at = [str(i) for i in range(_ALL_LAYERS_MAX)]
+    assert _visible_layers(_LAYER_ALL, at) == ["0"]
+    # A stale single selection falls back to the first watched layer.
+    assert _visible_layers("gone", ["a", "b"]) == ["a"]
+    assert _visible_layers("", []) == []
 
 
 def test_filter_phase_narrows_to_selected_phase() -> None:
