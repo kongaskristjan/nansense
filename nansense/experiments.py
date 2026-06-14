@@ -34,10 +34,8 @@ Captum method selection (deliberately small):
   input and measure the drop in the selected layer-channel's mean activation
   (a thin wrapper exposes that channel as the model output to attribute).
 
-The Captum methods run on a *batch* of inputs (like deep dream), or — with
-"use viewed sample" — on the single sample the input pane is viewing, taken
-from the pinned/perturbed probe input; a perturbed sample yields the diff of
-its attribution maps (perturbed − original) instead of the raw map.
+The Captum methods run on a *batch* of inputs (like deep dream) and publish
+one attribution per sample.
 
 Grad-CAM and the neuron methods need an `nn.Module`; fx intermediates
 (`relu`, `add`, …) are rejected with a pointer to the producing module.
@@ -60,7 +58,7 @@ from torch.nn import functional as F
 
 from nansense.capture import _CaptureInterpreter
 from nansense.params import bool_param, float_param, float_tuple, int_param
-from nansense.probe import apply_perturbations, isolated_model
+from nansense.probe import isolated_model
 
 if TYPE_CHECKING:
     from nansense.session import Session
@@ -138,8 +136,7 @@ class ExperimentResult:
     which case `step < total_steps`. Exactly one of `image` (input-space,
     shown denormalized) or `attribution` (signed, shown with the diverging
     colormap) is set on success; `reference` carries the input batch the
-    experiment started from. `is_diff` marks an attribution that is the
-    difference of two runs (a perturbed viewed sample minus its original).
+    experiment started from.
     """
 
     seq: int
@@ -153,7 +150,6 @@ class ExperimentResult:
     attribution: Tensor | None = None
     reference: Tensor | None = None
     objective: float | None = None
-    is_diff: bool = False
 
 
 def run(
@@ -391,65 +387,14 @@ def _error(request: ExperimentRequest, message: str) -> ExperimentResult:
     )
 
 
-def _experiment_base(session: Session) -> Tensor | None:
-    """The probe base the "use viewed sample" mode draws from.
-
-    Mirrors the probe input (`nansense.probe`): the pinned batch when one is
-    pinned, otherwise the live snapshot input. Returned detached and float,
-    or `None` when no input exists yet.
-    """
-    with session._cv:
-        pinned = session._pinned_input
-    base = pinned if pinned is not None else session._snapshot_input()
-    return None if base is None else base.detach().float()
-
-
-def _viewed_sample(
-    session: Session, request: ExperimentRequest
-) -> tuple[Tensor, Tensor | None] | ExperimentResult:
-    """The single viewed sample `[1, ...]` and its perturbed copy (or `None`).
-
-    The sample the input pane is viewing (`sample` param) taken from the
-    probe base (pinned batch or live input). When that sample carries pixel
-    perturbations, the second tensor is the edited copy so the caller can
-    diff the two runs; otherwise it is `None`.
-    """
-    base = _experiment_base(session)
-    if base is None:
-        return _error(
-            request, "no input available yet — run at least one batch first"
-        )
-    if base.ndim < 2:
-        return _error(request, "experiments need a batched input [B, ...]")
-    sample = min(max(0, int_param(request.params, "sample", 0)), int(base.shape[0]) - 1)
-    with session._cv:
-        sample_perturbs = {
-            k: v for k, v in session._perturbations.items() if k[0] == sample
-        }
-    x = base[sample : sample + 1].clone()
-    perturbed_full = apply_perturbations(base, sample_perturbs)
-    perturbed = (
-        None if perturbed_full is None else perturbed_full[sample : sample + 1].clone()
-    )
-    return x, perturbed
-
-
 def _captum_input(
     session: Session, request: ExperimentRequest
-) -> tuple[Tensor, Tensor | None] | ExperimentResult:
-    """`(input_batch, perturbed_or_None)` a Captum run attributes.
+) -> Tensor | ExperimentResult:
+    """The `[batch, C, H, W]` input batch a Captum run attributes, or an error.
 
-    With "use viewed sample" on, the single viewed sample (plus its perturbed
-    copy for the diff); otherwise the first `batch` samples of the live
-    snapshot input, so the page shows the whole batch like deep dream.
+    The first `batch` samples of the live snapshot input, so the page shows
+    the whole batch like deep dream.
     """
-    if bool_param(request.params, "use_viewed", False):
-        prepared = _viewed_sample(session, request)
-        if isinstance(prepared, ExperimentResult):
-            return prepared
-        if prepared[0].ndim != 4:
-            return _error(request, "experiments need an image input [B, C, H, W]")
-        return prepared
     base = session._snapshot_input()
     if base is None:
         return _error(
@@ -459,7 +404,7 @@ def _captum_input(
         return _error(request, "experiments need an image input [B, C, H, W]")
     batch = max(1, int_param(request.params, "batch", _DEFAULT_DREAM_BATCH))
     count = min(batch, int(base.shape[0]))
-    return base[:count].detach().clone().float(), None
+    return base[:count].detach().clone().float()
 
 
 def _dream_start(
@@ -467,22 +412,14 @@ def _dream_start(
 ) -> Tensor | ExperimentResult:
     """The `[batch, ...]` starting batch for deep dream, or an error.
 
-    With "use viewed sample" on, the start is the single sample the input
-    pane is viewing (pinned/perturbed), ignoring `batch` and `start`.
-    Otherwise it is built from the network's *real* input (the snapshot's
-    input-node tensor), so non-image inputs work too: `start="noise"` draws
-    `batch` fresh samples matching the real input's per-sample shape and
-    overall mean/std from `rng` — seeded per request, so successive runs
-    explore different noise; `start="sample"` takes the first `batch`
-    samples of the real input batch. `batch` defaults to the real batch
-    size, capped at `_DEFAULT_DREAM_BATCH`.
+    Built from the network's *real* input (the snapshot's input-node
+    tensor), so non-image inputs work too: `start="noise"` draws `batch`
+    fresh samples matching the real input's per-sample shape and overall
+    mean/std from `rng` — seeded per request, so successive runs explore
+    different noise; `start="sample"` takes the first `batch` samples of the
+    real input batch. `batch` defaults to the real batch size, capped at
+    `_DEFAULT_DREAM_BATCH`.
     """
-    if bool_param(request.params, "use_viewed", False):
-        prepared = _viewed_sample(session, request)
-        if isinstance(prepared, ExperimentResult):
-            return prepared
-        x, perturbed = prepared
-        return perturbed if perturbed is not None else x
     base = session._snapshot_input()
     if base is None:
         return _error(
@@ -730,13 +667,11 @@ def _run_captum(
     request: ExperimentRequest,
     should_abort: Callable[[], bool],
 ) -> Iterator[ExperimentResult]:
-    """Captum attribution over a batch (or a single perturbed-diff sample).
+    """Captum attribution over a batch, one attribution per sample.
 
     All methods run the *unpatched* model (probes/experiments only execute
     between batches) inside the isolation scope. Gradient-based methods use
-    `torch.autograd.grad` internally, so parameter `.grad` survives. With a
-    perturbed viewed sample the attribution is run twice and the diff
-    (perturbed − original) is published instead of the raw map.
+    `torch.autograd.grad` internally, so parameter `.grad` survives.
     """
     try:
         from captum import attr as captum_attr
@@ -745,11 +680,10 @@ def _run_captum(
         return
 
     p = request.params
-    prepared = _captum_input(session, request)
-    if isinstance(prepared, ExperimentResult):
-        yield prepared
+    x0 = _captum_input(session, request)
+    if isinstance(x0, ExperimentResult):
+        yield x0
         return
-    x0, perturbed0 = prepared
     module: nn.Module | None = dict(session.model.named_modules()).get(request.layer)
     if request.kind in _MODULE_KINDS and module is None:
         yield _error(
@@ -805,11 +739,6 @@ def _run_captum(
 
     with isolated_model(session, "eval") as device:
         attribution = attribute(x0.to(device))
-        is_diff = perturbed0 is not None
-        reference = x0
-        if perturbed0 is not None:
-            attribution = attribute(perturbed0.to(device)) - attribution
-            reference = perturbed0
 
     yield ExperimentResult(
         seq=request.seq,
@@ -819,6 +748,5 @@ def _run_captum(
         total_steps=1,
         done=True,
         attribution=attribution.detach().cpu().float(),
-        reference=reference,
-        is_diff=is_diff,
+        reference=x0,
     )

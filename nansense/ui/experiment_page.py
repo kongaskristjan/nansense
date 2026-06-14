@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import uuid4
 
+import torch
 from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.elements.mixins.value_element import ValueElement
@@ -30,8 +31,14 @@ from nansense.ui.common import (
     _strip_html,
     _weights_placeholder,
 )
-from nansense.ui.input_panel import InputPanel
-from nansense.ui.render import INPUT_IMAGE_SIZE, render_image, render_strip, tensor_hw
+from nansense.ui.render import (
+    INPUT_IMAGE_SIZE,
+    StripRender,
+    render_attribution_overlay,
+    render_image,
+    render_strip,
+    tensor_hw,
+)
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_settings_button,
@@ -83,8 +90,7 @@ _BATCH_PARAM = _ExperimentParam(
     minimum=1,
     tooltip=(
         "How many inputs to run on (defaults to the current batch size, "
-        f"capped at {_DEFAULT_DREAM_BATCH}); ignored while 'Use viewed "
-        "sample' is on"
+        f"capped at {_DEFAULT_DREAM_BATCH})"
     ),
 )
 _START_PARAM = _ExperimentParam(
@@ -97,17 +103,6 @@ _START_PARAM = _ExperimentParam(
         "Noise draws fresh inputs shaped and scaled like the network's real "
         "input — different on every run; Current batch starts from the real "
         "input batch itself"
-    ),
-)
-_USE_VIEWED_PARAM = _ExperimentParam(
-    "use_viewed",
-    "Use viewed sample",
-    "bool",
-    False,
-    tooltip=(
-        "Run on the single sample the Input Selection is viewing (which may "
-        "be pinned and/or perturbed) instead of a fresh batch. A perturbed "
-        "sample shows the attribution diff (perturbed − original)"
     ),
 )
 _CLAMP_PARAM = _ExperimentParam(
@@ -147,15 +142,14 @@ _ZOOM_PARAM = _ExperimentParam(
     ),
 )
 
-# Ordered per kind: Channel/Target first, then Inputs, then (deep dream)
-# Start from, then Use viewed sample, then the method-specific knobs (point 1
-# / 1.5). The Layer selector is rendered above this list (point 2).
+# Ordered per kind: Channel/Target first, then Inputs, then (deep dream) Start
+# from, then the method-specific knobs (point 1). The Layer selector is
+# rendered above this list (point 2).
 _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
     "deep_dream": [
         _CHANNEL_PARAM,
         _BATCH_PARAM,
         _START_PARAM,
-        _USE_VIEWED_PARAM,
         _ExperimentParam("steps", "Steps", "int", 100, minimum=1),
         _ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0, step=0.01),
         _DIFFUSION_PARAM,
@@ -163,18 +157,16 @@ _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
         _ZOOM_PARAM,
         _CLAMP_PARAM,
     ],
-    "gradcam": [_TARGET_PARAM, _BATCH_PARAM, _USE_VIEWED_PARAM],
-    "neuron_gradient": [_CHANNEL_PARAM, _BATCH_PARAM, _USE_VIEWED_PARAM],
+    "gradcam": [_TARGET_PARAM, _BATCH_PARAM],
+    "neuron_gradient": [_CHANNEL_PARAM, _BATCH_PARAM],
     "neuron_ig": [
         _CHANNEL_PARAM,
         _BATCH_PARAM,
-        _USE_VIEWED_PARAM,
         _ExperimentParam("ig_steps", "Integration steps", "int", 32, minimum=2),
     ],
     "occlusion": [
         _CHANNEL_PARAM,
         _BATCH_PARAM,
-        _USE_VIEWED_PARAM,
         _ExperimentParam(
             "window",
             "Window (px)",
@@ -257,6 +249,12 @@ def _layer_channel_count(snap: BatchSnapshot | None, layer: str) -> int | None:
     return int(act.shape[1])
 
 
+def _attribution_vmax(attribution: Tensor) -> float:
+    """Largest `|x|` over finite attribution values — the overlay's ±scale."""
+    finite = attribution[torch.isfinite(attribution)]
+    return float(finite.abs().max()) if finite.numel() else 0.0
+
+
 @dataclass
 class _ExperimentPageState:
     """Mutable page state shared by the form, Run/Cancel, and tick closures."""
@@ -266,23 +264,19 @@ class _ExperimentPageState:
     # Parameter values persisted across kind switches (point 1): keyed by
     # param key, so a shared key keeps its value when the experiment changes.
     values: dict[str, object] = field(default_factory=dict)
+    # Render Captum attributions blended over the input instead of beside it.
+    overlay: bool = False
     # This page's own request; `None` until the first run.
     my_seq: int | None = None
     last_result: ExperimentResult | None = None
-    # A run is needed (init, or a parameter / layer / input change). The tick
-    # coalesces these and (re)registers at most once per tick, so a burst of
-    # edits never floods the backend.
+    # A run is needed (init, or a parameter / layer change). The tick coalesces
+    # these and (re)registers at most once per tick, so a burst of edits never
+    # floods the backend.
     dirty: bool = True
-    # Signature of the viewed input (pin / perturbations / sample) so the tick
-    # re-runs when "use viewed sample" is on and the viewed input changes.
-    last_input_sig: tuple[object, ...] | None = None
     # Last enable/disable flags pushed to the client (push only on change).
     frozen: bool | None = None
     run_enabled: bool | None = None
     cancel_enabled: bool | None = None
-    # Identity of the last-rendered input image source, to skip redundant
-    # re-renders of the embedded input pane.
-    last_input_render: tuple[object, ...] | None = None
 
 
 def _build_experiment_page(
@@ -298,18 +292,17 @@ def _build_experiment_page(
     the paused training thread, so the user can pause right from this page.
     The left pane holds the experiment-kind dropdown, Run / Cancel, the
     selected kind's parameter form (headed by a layer selector and rebuilt on
-    every dropdown change), and a description of the chosen experiment. The
-    right pane embeds the Input Selection pane (so the viewed sample is
-    visible and steerable here too) next to this page's streamed results
-    (`experiment_result_for`, so concurrent tabs never overwrite each other).
-    Deep dream renders denormalized input-space images (live while it runs);
-    attributions render with the diverging-colormap strips, one per sample.
+    every dropdown change), a Captum overlay toggle, and a description of the
+    chosen experiment. The right pane streams this page's *own* results
+    (`experiment_result_for`, so concurrent tabs never overwrite each other)
+    as one row per sample — the input image beside its deep-dream result or
+    attribution strip, or, when overlay is on, the attribution blended over
+    the input (the MIN/MAX heat-overlay scheme).
     """
     _page_scaffold("Experiment")
     _install_panel_resize()
     ui.add_head_html(_STRIP_MARKER_CSS)
 
-    input_name = session.input_names[0] if session.input_names else None
     input_set = set(session.input_names)
     selectable_layers = [n for n in session.layer_names if n not in input_set]
     if not selectable_layers:
@@ -339,10 +332,6 @@ def _build_experiment_page(
     def record_key() -> str:
         return f"experiment:{state.layer}"
 
-    def _use_viewed() -> bool:
-        widget = widgets.get("use_viewed")
-        return bool(getattr(widget, "value", False))
-
     def collect_params() -> dict[str, object]:
         params: dict[str, object] = {"mean": input_mean, "std": input_std}
         for spec in _EXPERIMENT_PARAMS[state.kind]:
@@ -356,9 +345,6 @@ def _build_experiment_page(
                 params[spec.key] = bool(value)
             else:
                 params[spec.key] = str(value if value is not None else spec.default)
-        # The viewed-sample index is per-connection input-pane state, not a
-        # form widget; the experiment reads it via the `sample` param.
-        params["sample"] = input_panel.sample_idx
         return params
 
     def run() -> None:
@@ -399,12 +385,6 @@ def _build_experiment_page(
     def schedule_run() -> None:
         state.dirty = True
 
-    def on_input_change() -> None:
-        # Sample flip / pin / clear from the input pane: re-run only when the
-        # experiment actually consumes the viewed sample.
-        if _use_viewed():
-            schedule_run()
-
     def on_kind_change(e: object) -> None:
         value = getattr(e, "value", None)
         if value is None:
@@ -423,6 +403,7 @@ def _build_experiment_page(
                 _defer_value_write(lambda: layer_select.set_value(available))
         rebuild_params()
         update_description()
+        overlay_switch.set_visibility(state.kind != "deep_dream")
         schedule_run()
 
     def on_layer_change(e: object) -> None:
@@ -440,6 +421,12 @@ def _build_experiment_page(
         state.layer = str(value)
         clip_channel()
         schedule_run()
+
+    def on_overlay_change(e: object) -> None:
+        # A pure display toggle: re-render the current result, no backend re-run.
+        state.overlay = bool(getattr(e, "value", False))
+        if state.last_result is not None and state.last_result.error is None:
+            render_result(state.last_result)
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
@@ -495,33 +482,30 @@ def _build_experiment_page(
                     .classes("w-full")
                 )
                 params_pane = ui.column().classes("w-full gap-2 p-0")
+                overlay_switch = (
+                    ui.switch("Overlay on input", value=state.overlay, on_change=on_overlay_change)
+                    .props("dense")
+                    .tooltip(
+                        "Blend each attribution map over its input image "
+                        "instead of showing them side by side"
+                    )
+                )
+                overlay_switch.set_visibility(state.kind != "deep_dream")
                 ui.space()
                 description_label = ui.label("").classes(
                     "text-xs text-slate-600 whitespace-normal leading-snug "
                     "border-t border-slate-300 pt-2 mt-1"
                 )
             _resize_handle("experiment-controls", "left")
-            with ui.row().classes("grow min-w-0 h-full no-wrap gap-0"):
-                with ui.column().classes(
-                    "w-72 shrink-0 h-full overflow-auto p-3 gap-2 "
-                    "border-r border-slate-300 bg-slate-100"
-                ):
-                    input_panel = InputPanel(
-                        session=session,
-                        input_name=input_name,
-                        input_mean=input_mean,
-                        input_std=input_std,
-                        on_change=on_input_change,
-                    )
-                with ui.column().classes(
-                    "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
-                ):
-                    status_label = ui.label(
-                        "Adjust parameters — the experiment runs automatically "
-                        "(training must be paused)."
-                    ).classes("text-sm text-slate-600")
-                    error_label = ui.label("").classes("text-sm text-red-600")
-                    results_row = ui.row().classes("gap-6 flex-wrap items-start")
+            with ui.column().classes(
+                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
+            ):
+                status_label = ui.label(
+                    "Adjust parameters — the experiment runs automatically "
+                    "(training must be paused)."
+                ).classes("text-sm text-slate-600")
+                error_label = ui.label("").classes("text-sm text-red-600")
+                results_col = ui.column().classes("gap-2 w-full")
 
     def _layer_options_with_disable() -> list[dict[str, object]]:
         return [
@@ -574,18 +558,7 @@ def _build_experiment_page(
 
     def _on_param_change(key: str, widget: ui.element) -> None:
         state.values[key] = getattr(widget, "value", None)
-        if key == "use_viewed":
-            sync_viewed_dependent()
         schedule_run()
-
-    def sync_viewed_dependent() -> None:
-        """Gray out the batch / start knobs while a single viewed sample is
-        used — neither applies then."""
-        disabled = _use_viewed() and not state.frozen
-        for key in ("batch", "start"):
-            widget = widgets.get(key)
-            if isinstance(widget, DisableableElement):
-                widget.set_enabled(not disabled)
 
     def rebuild_params() -> None:
         widgets.clear()
@@ -632,7 +605,6 @@ def _build_experiment_page(
                     lambda _e, k=spec.key, w=widget: _on_param_change(k, w)
                 )
                 widgets[spec.key] = widget
-        sync_viewed_dependent()
         if state.frozen:
             _set_controls_enabled(_param_controls(), False)
 
@@ -647,78 +619,69 @@ def _build_experiment_page(
         description_label.text = long
         kind_tooltip.set_text(short)
 
-    def render_batch_images(title: str, tensor: Tensor) -> None:
-        """A labelled, wrapping grid of every sample in `tensor`."""
-        rendered = [
-            render_image(tensor, i, mean=input_mean, std=input_std)
-            for i in range(int(tensor.shape[0]))
-        ]
-        with ui.column().classes("gap-1 min-w-0"):
-            ui.label(title).classes("font-mono text-xs text-slate-600")
-            if not any(r is not None for r in rendered):
-                ui.html(_experiment_img_html(None))
-                return
-            with ui.row().classes("gap-2 flex-wrap"):
-                for image in rendered:
-                    ui.html(_experiment_img_html(image))
-
-    def render_attribution_batch(result: ExperimentResult) -> None:
-        """One diverging-colormap strip per sample (or the diff under a
-        perturbed viewed sample)."""
-        attribution = result.attribution
-        if attribution is None:
-            return
-        title = (
-            "Attribution diff (perturbed − original)"
-            if result.is_diff
-            else "Attribution"
+    def _image_cell(tensor: Tensor | None, sample_idx: int) -> None:
+        ui.html(
+            _experiment_img_html(
+                render_image(tensor, sample_idx, mean=input_mean, std=input_std)
+            )
         )
-        input_hw = tensor_hw(result.reference)
-        with ui.column().classes("gap-1 min-w-0"):
-            ui.label(title).classes("font-mono text-xs text-slate-600")
-            with ui.row().classes("gap-2 flex-wrap"):
-                for i in range(int(attribution.shape[0])):
-                    with ui.element("div").classes("max-w-full overflow-x-auto"):
-                        ui.html(
-                            _strip_html(render_strip(attribution, i, input_hw=input_hw))
-                        )
+
+    def _strip_cell(strip: StripRender | None) -> None:
+        with ui.element("div").classes("max-w-full overflow-x-auto"):
+            ui.html(_strip_html(strip))
 
     def render_result(result: ExperimentResult) -> None:
-        results_row.clear()
-        with results_row:
+        """One row per sample: the input beside the deep-dream result or the
+        attribution strip, or — with overlay on — the attribution blended over
+        the input (point 2)."""
+        results_col.clear()
+        with results_col:
             if result.image is not None:
-                render_batch_images("Result", result.image)
-            if result.attribution is not None:
-                render_attribution_batch(result)
-            if result.reference is not None:
-                render_batch_images("Input", result.reference)
+                _render_image_rows(result.reference, result.image)
+            elif result.attribution is not None:
+                _render_attribution_rows(result)
 
-    def _input_source() -> tuple[object, Tensor | None]:
-        """The (identity, tensor) the embedded input image shows: the probe's
-        perturbed/base input when one exists, else the live snapshot input."""
-        probe = session.probe_result
-        if probe is not None:
-            tensor = (
-                probe.perturbed_input
-                if probe.perturbed_input is not None
-                else probe.input
-            )
-            return probe, tensor
-        snap = session.snapshot
-        if snap is not None and input_name is not None:
-            return snap, snap.activations.get(input_name)
-        return None, None
-
-    def refresh_input_image() -> None:
-        source, tensor = _input_source()
-        sig: tuple[object, ...] = (id(source), input_panel.sample_idx)
-        if sig == state.last_input_render:
-            return
-        state.last_input_render = sig
-        image = render_image(
-            tensor, input_panel.sample_idx, mean=input_mean, std=input_std
+    def _render_image_rows(reference: Tensor | None, image: Tensor) -> None:
+        ui.label("Input → Result (per sample)").classes(
+            "font-mono text-xs text-slate-600"
         )
-        input_panel.set_image(_b64_img_src(image) if image is not None else "")
+        for i in range(int(image.shape[0])):
+            with ui.row().classes("items-center gap-3 no-wrap"):
+                if reference is not None:
+                    _image_cell(reference, i)
+                _image_cell(image, i)
+
+    def _render_attribution_rows(result: ExperimentResult) -> None:
+        attribution = result.attribution
+        reference = result.reference
+        assert attribution is not None
+        n = int(attribution.shape[0])
+        if state.overlay and reference is not None:
+            ui.label("Attribution overlaid on input (per sample)").classes(
+                "font-mono text-xs text-slate-600"
+            )
+            vmax = _attribution_vmax(attribution)
+            for i in range(n):
+                with ui.row().classes("items-center gap-3 no-wrap"):
+                    _strip_cell(
+                        render_attribution_overlay(
+                            reference[i],
+                            attribution[i],
+                            mean=input_mean,
+                            std=input_std,
+                            vmax=vmax,
+                        )
+                    )
+            return
+        ui.label("Input → Attribution (per sample)").classes(
+            "font-mono text-xs text-slate-600"
+        )
+        input_hw = tensor_hw(reference)
+        for i in range(n):
+            with ui.row().classes("items-center gap-3 no-wrap"):
+                if reference is not None:
+                    _image_cell(reference, i)
+                _strip_cell(render_strip(attribution, i, input_hw=input_hw))
 
     def update_controls(*, running: bool) -> None:
         run_ok = not state.frozen and not session.auto_run_experiments and not running
@@ -733,27 +696,14 @@ def _build_experiment_page(
     def tick() -> None:
         # Keep this page's auto experiment alive while the page is open.
         session.touch_auto_experiment(page_key)
-        input_panel.refresh_status()
-        refresh_input_image()
-        input_panel.sync_spinner_max(session.input_batch_size)
         # While this experiment records, its request must stay as-is: a re-run
         # would replace the recorded seq and parameter edits would lie.
         frozen = session.recording.is_recording(record_key())
         if frozen != state.frozen:
             state.frozen = frozen
-            input_panel.set_frozen(frozen)
-            _set_controls_enabled([kind_select, *_param_controls()], not frozen)
-            sync_viewed_dependent()
-        # The viewed input changing (pin / perturb / sample) re-runs only when
-        # the experiment uses it — perturbation clicks don't fire on_change.
-        input_sig = (
-            session.is_pinned,
-            len(session.perturbations),
-            input_panel.sample_idx,
-        )
-        if _use_viewed() and input_sig != state.last_input_sig:
-            schedule_run()
-        state.last_input_sig = input_sig
+            _set_controls_enabled(
+                [kind_select, overlay_switch, *_param_controls()], not frozen
+            )
 
         result = session.experiment_result_for(state.my_seq) if state.my_seq else None
         running = state.my_seq is not None and not (result is not None and result.done)

@@ -629,13 +629,6 @@ selected layer-channel via the per-example mean selector
 exposing that channel's activation as the output so the slid patch
 attributes against an *intermediate* channel instead of a class.
 
-**Viewed-sample diff.** With "use viewed sample" on, `_captum_input` /
-`_dream_start` switch to `_viewed_sample`: the single sample the input pane
-is viewing (`sample` param), taken from the probe base (pinned batch or
-live input). If that sample carries perturbations
-(`probe.apply_perturbations`), `_run_captum` attributes both the original
-and perturbed input and publishes the difference (`ExperimentResult.is_diff`).
-
 **UI** (`/experiment?layer=...`, one yellow "Experiment" button per layer
 card): the left pane stacks the kind dropdown (with a hover tooltip and a
 description at the pane's foot), Run / Cancel, then the parameter form. The
@@ -646,20 +639,25 @@ graying out layers the current kind can't run; switching to a shorter layer
 clips the channel. The rest of each kind's knobs are declared in
 `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
 number/switch/select widgets) ordered Channel/Target → Inputs → Start from
-→ Use viewed sample → method knobs; values persist across kind switches via
-a shared `state.values`. The embedded `InputPanel` exposes sample / pin /
-perturb here too. A 200 ms timer streams the page's *own* request via
+→ method knobs; values persist across kind switches via a shared
+`state.values`. A 200 ms timer streams the page's *own* request via
 `session.experiment_result_for(seq)`, drives **auto-run** (re-register on
-init and on any parameter / layer / viewed-input change, buffered to one
-run per tick; `register_auto_experiment` drops a superseded queued request
-so the pause loop is never flooded) gated on the shared
-`session.auto_run_experiments` setting, and toggles Run/Cancel enablement
-(Run off while auto-run is on or a run is in flight; Cancel off while idle).
-Run replaces and Cancel aborts only this page's request, so tabs don't
-clobber each other: deep-dream result and start batches render denormalized
-via `render_image` as wrapping grids (non-image inputs fall back to a "not
-renderable" note), attributions via the shared diverging-colormap
-`render_strip`, one strip per sample (or a single diff strip).
+init and on any parameter / layer change, buffered to one run per tick;
+`register_auto_experiment` drops a superseded queued request so the pause
+loop is never flooded) gated on the shared `session.auto_run_experiments`
+setting, and toggles Run/Cancel enablement (Run off while auto-run is on or
+a run is in flight; Cancel off while idle). Run replaces and Cancel aborts
+only this page's request, so tabs don't clobber each other.
+
+Results render as one row per sample (`render_result`): for deep dream the
+input start beside its dreamed result (`render_image`; non-image inputs fall
+back to a "not renderable" note); for Captum the input beside its
+attribution strip (`render_strip`, shared diverging colormap). A Captum-only
+**Overlay** toggle instead blends each attribution channel over the input
+(`render_attribution_overlay` → `blend_signed_heat`, the same signed
+red/blue alpha overlay the MIN/MAX patch grid uses) on a shared `±vmax`
+scale — a pure display toggle that re-renders the last result without a
+backend re-run.
 
 **Auto experiments.** The experiment page's Run goes through
 `session.register_auto_experiment(key, ...)` rather than the plain

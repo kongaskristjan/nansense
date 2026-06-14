@@ -378,6 +378,51 @@ def test_input_image_returns_none_when_mean_std_size_mismatched() -> None:
     assert render_image(tensor, sample_idx=0, mean=(0.5,), std=(0.2,)) is None
 
 
+def test_blend_signed_heat_colors_by_sign() -> None:
+    rgb = np.full((1, 3, 3), 100, dtype=np.uint8)  # flat gray base
+    heat = np.array([[1.0, -1.0, 0.0]], dtype=np.float32)  # +vmax, -vmax, 0
+    out = render.blend_signed_heat(rgb, heat, vmax=1.0)
+    assert out[0, 0, 0] > out[0, 0, 2]  # positive -> red dominates
+    assert out[0, 1, 2] > out[0, 1, 0]  # negative -> blue dominates
+    assert tuple(int(v) for v in out[0, 2]) == (100, 100, 100)  # 0 -> untouched
+
+
+def test_blend_signed_heat_zero_vmax_leaves_image_unchanged() -> None:
+    rgb = np.full((2, 2, 3), 77, dtype=np.uint8)
+    out = render.blend_signed_heat(rgb, np.ones((2, 2), dtype=np.float32), vmax=0.0)
+    assert np.array_equal(out, rgb)
+
+
+def test_render_attribution_overlay_one_tile_per_channel() -> None:
+    inp = torch.rand(3, 8, 8)  # [C_in, H, W]
+    attribution = torch.randn(2, 8, 8)  # [C_a, h, w] -> two tiles
+    strip = render.render_attribution_overlay(
+        inp, attribution, mean=None, std=None, vmax=1.0
+    )
+    assert strip is not None
+    assert _decode(strip.data_image).size == (2 * 8 + 1, 8)  # 1-px gap
+    assert _decode(strip.legend_image).size == (LEGEND_WIDTH, TILE_SIZE)
+
+
+def test_render_attribution_overlay_resizes_coarse_map_to_input() -> None:
+    inp = torch.rand(1, 8, 8)
+    attribution = torch.randn(1, 2, 2)  # coarse Grad-CAM-like map
+    strip = render.render_attribution_overlay(
+        inp, attribution, mean=None, std=None, vmax=1.0
+    )
+    assert strip is not None
+    assert _decode(strip.data_image).size == (8, 8)  # single tile at input size
+
+
+def test_render_attribution_overlay_rejects_unsupported_input() -> None:
+    assert (
+        render.render_attribution_overlay(
+            torch.rand(4, 8, 8), torch.randn(1, 8, 8), mean=None, std=None, vmax=1.0
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     "ndim, x, y, tile, fixed",
     [

@@ -27,11 +27,9 @@ def test_experiment_param_order_channel_then_inputs() -> None:
 
     for kind, specs in _EXPERIMENT_PARAMS.items():
         keys = [s.key for s in specs]
-        # The targeting knob comes first, Inputs directly below it, and every
-        # kind exposes the "use viewed sample" toggle (point 1).
+        # The targeting knob comes first, Inputs directly below it (point 1).
         assert keys[0] in ("channel", "target"), kind
         assert keys[1] == "batch", kind
-        assert "use_viewed" in keys, kind
     # Deep dream's "Start from" sits directly below Inputs.
     dd = [s.key for s in _EXPERIMENT_PARAMS["deep_dream"]]
     assert dd[dd.index("batch") + 1] == "start"
