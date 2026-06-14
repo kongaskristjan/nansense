@@ -7,7 +7,7 @@ import torch
 from torch import nn
 
 import nansense
-from examples.vision.resnet import PreActBlock, PreActResNet
+from examples.standard.resnet import PreActBlock, PreActResNet
 from examples.common import evaluate, train_one_epoch
 from tests.examples.helpers import assert_training_reduces_loss
 

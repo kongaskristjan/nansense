@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 import torch
@@ -23,11 +23,16 @@ from nansense import Session
 @dataclass
 class EpochStats:
     loss: float
+    # The metric_fn output averaged over batches — classification accuracy by
+    # default, but any accuracy-like scalar (per-cell accuracy, a depth
+    # threshold ratio, ...) when the caller passes its own `metric_fn`.
     accuracy: float
 
 
-def _accuracy(logits: Tensor, targets: Tensor) -> float:
-    preds = logits.argmax(dim=1)
+def _accuracy(output: Tensor, targets: Tensor) -> float:
+    """Top-1 classification accuracy — the default metric for `train_one_epoch`
+    / `evaluate`. Regression / dense tasks pass their own `metric_fn`."""
+    preds = output.argmax(dim=1)
     return (preds == targets).float().mean().item()
 
 
@@ -50,14 +55,19 @@ def train_one_epoch(
     *,
     session: Session,
     epoch: int = 0,
+    metric_fn: Callable[[Tensor, Tensor], float] = _accuracy,
 ) -> EpochStats:
     """One training epoch under `session.batches` (a disabled session is the
     no-branching off switch — the loop body runs inside the batch context
     either way, so hooks install before the forward pass and a time-travel
-    jump surfaces from the `for` statement, not mid-body)."""
+    jump surfaces from the `for` statement, not mid-body).
+
+    `metric_fn(output, targets) -> float` defaults to classification accuracy;
+    regression / dense examples pass their own (it is only logged, never
+    backpropagated). Loss and metric are averaged over batches."""
     model.train()
     total_loss = 0.0
-    total_acc = 0.0
+    total_metric = 0.0
     n_batches = 0
     for inputs, targets in session.batches(loader, phase="train", epoch=epoch):
         inputs = inputs.to(device, non_blocking=True)
@@ -65,16 +75,16 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
         with _autocast(device, amp_dtype):
-            logits = model(inputs)
-            loss = criterion(logits, targets)
+            output = model(inputs)
+            loss = criterion(output, targets)
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
-        total_acc += _accuracy(logits, targets)
+        total_metric += metric_fn(output, targets)
         n_batches += 1
 
-    return EpochStats(loss=total_loss / n_batches, accuracy=total_acc / n_batches)
+    return EpochStats(loss=total_loss / n_batches, accuracy=total_metric / n_batches)
 
 
 @torch.no_grad()
@@ -87,27 +97,27 @@ def evaluate(
     *,
     session: Session,
     epoch: int = 0,
+    metric_fn: Callable[[Tensor, Tensor], float] = _accuracy,
 ) -> EpochStats:
+    """Mirror of `train_one_epoch` for the val phase: forward-only, with loss
+    and `metric_fn` averaged over batches."""
     model.eval()
     total_loss = 0.0
-    total_correct = 0
-    total_samples = 0
+    total_metric = 0.0
+    n_batches = 0
     for inputs, targets in session.batches(loader, phase="val", epoch=epoch):
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
         with _autocast(device, amp_dtype):
-            logits = model(inputs)
-            loss = criterion(logits, targets)
+            output = model(inputs)
+            loss = criterion(output, targets)
 
-        total_loss += loss.item() * targets.size(0)
-        total_correct += int((logits.argmax(dim=1) == targets).sum().item())
-        total_samples += targets.size(0)
+        total_loss += loss.item()
+        total_metric += metric_fn(output, targets)
+        n_batches += 1
 
-    return EpochStats(
-        loss=total_loss / total_samples,
-        accuracy=total_correct / total_samples,
-    )
+    return EpochStats(loss=total_loss / n_batches, accuracy=total_metric / n_batches)
 
 
 def enable_line_buffering() -> None:

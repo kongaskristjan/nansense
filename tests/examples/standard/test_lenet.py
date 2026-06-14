@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from examples.vision.lenet import LeNet
+from examples.standard.lenet import LeNet
 from tests.examples.helpers import assert_training_reduces_loss
 
 

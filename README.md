@@ -24,8 +24,11 @@ offers the Captum attribution methods (they are hidden otherwise), and with
 uv sync --group cpu    # CPU-only machines (smallest download)
 uv sync --group cu130  # NVIDIA GPU with CUDA 13
 
-uv run python -m examples.vision.main --nansense-port 8080
+uv run examples/standard/main.py --nansense-port 8080
 ```
+
+Each example is self-contained and downloads its dataset on first run, so
+`uv run examples/<name>/main.py` is all you need.
 
 PyTorch is installed through one of several mutually exclusive dependency
 groups, so pick the one matching your hardware: `cpu` (works everywhere),
@@ -43,21 +46,30 @@ from the top bar (stop, the Step button, time travel).
 
 Available examples:
 
-- `examples.mnist_linear.main` — a single linear layer on MNIST with the
-  minimal nansense wiring (no scheduler, no time travel).
-- `examples.lightning_mnist.main` — a tiny convnet on MNIST trained with
-  PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
-- `examples.vision.main` — a small pre-activation ResNet (default), a
+- `examples/standard/main.py` — a small pre-activation ResNet (default), a
   deeper five-stage variant (`--model resnet_deep`), a simple ViT
   (`--model vit`), or LeNet-5 (`--model lenet`) on CIFAR10 (default),
   MNIST (`--dataset mnist`, scaled to 32x32), or Imagenette
   (`--dataset imagenette`), trained with AdamW + a cosine schedule and
-  the full wiring (scheduler, time travel, checkpoints).
-- `examples.ddp_mnist.main` — a small MLP on MNIST trained with
-  DistributedDataParallel across two (or more) ranks; launch with
-  `uv run torchrun --nproc_per_node=2 -m examples.ddp_mnist.main`
-  (falls back from NCCL to CPU/gloo when there are fewer GPUs than
-  ranks, so it runs anywhere).
+  the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
+  and launch under `torchrun` for multi-rank DistributedDataParallel
+  training (see [Distributed training](#distributed-training-ddp)).
+- `examples/lightning/main.py` — a tiny convnet on MNIST trained with
+  PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
+- `examples/game_of_life/main.py` — predict Conway's Game of Life `--steps`
+  K (default 1) steps ahead on synthetic random boards (no download): a
+  fully-convolutional residual net with circular (toroidal) padding, trained
+  with per-cell `BCEWithLogitsLoss` and the full wiring. The board-shaped
+  inputs, activations, and outputs make perturbation light-cones, deep-dream
+  motifs, and time travel especially legible.
+- `examples/audio_keywords/main.py` — classify eight spoken keywords (Google's
+  mini Speech Commands, ~180 MB on first run) from torch-native log-mel
+  spectrograms fed to a small 2D CNN as single-channel "images", trained with
+  AdamW + a cosine schedule and the full wiring.
+- `examples/depth_make3d/main.py` — monocular depth estimation on Make3D
+  (~1 GB on first run) by transfer learning: a pretrained ResNet encoder plus a
+  U-Net decoder predict per-pixel depth from one RGB image, with a
+  scale-invariant log loss and the δ<1.25 accuracy metric.
 
 ## Minimal example
 
@@ -122,7 +134,7 @@ session.close()
 
 `enabled=False` on `nansense.start()` turns the whole thing into a
 near-zero-overhead no-op, so the wiring can stay in place for plain training
-runs. The runnable version of this loop is `examples/vision/main.py`.
+runs. The runnable version of this loop is `examples/standard/main.py`.
 
 ## Distributed training (DDP)
 
@@ -157,10 +169,13 @@ Per-rank views (snapshot strips, the input pane, extreme-input patches,
 histogram bar samples) show rank 0's shard. Every rank must run the same
 batch structure — `DistributedSampler` on each phase's loader gives equal
 per-rank batch counts. Time travel is not supported in distributed mode.
-The runnable version is `examples/ddp_mnist/main.py`:
+The standard example doubles as the runnable version: pass `--distributed`
+and launch it under `torchrun` (it shards both phases with
+`DistributedSampler`, wraps the model in DDP, and falls back from NCCL to
+CPU/gloo when there are fewer GPUs than ranks, so it runs anywhere):
 
 ```bash
-uv run torchrun --nproc_per_node=2 -m examples.ddp_mnist.main --nansense-port 8080
+uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080
 ```
 
 ## PyTorch Lightning
@@ -211,7 +226,7 @@ Epoch boundaries are checkpointed via `trainer.save_checkpoint` (with RNG
 states stashed alongside), and a jump re-invokes
 `trainer.fit(ckpt_path=...)`, so the replay is exactly as deterministic as
 the hand-written loop's. The runnable version of this wiring is
-`examples/lightning_mnist/main.py`. Supported: automatic optimization and
+`examples/lightning/main.py`. Supported: automatic optimization and
 epoch-boundary validation, including `check_val_every_n_epoch > 1`.
 Rejected with a clear error: mid-epoch validation
 (`val_check_interval < 1.0` or step-driven) and unsized dataloaders — the
@@ -267,7 +282,10 @@ The HISTOGRAM view (the default) shows activation and activation-gradient
 distributions over the most recent epoch as signed-log histograms with a
 stats table (`n`, `mean`, `std`, `median`, `min`/`max`); a phase dropdown
 switches between train/val, and Log x / Log y checkboxes handle
-distributions spanning many decades. Each histogram has a "Per channel"
+distributions spanning many decades. A "Retain axes" checkbox keeps the
+current axis ranges when toggling Log x / Log y or switching phase (instead
+of auto-fitting to the data) — handy for comparing phases or scales on a
+fixed frame. Each histogram has a "Per channel"
 switch that narrows it to a single channel (stepped with an index spinner);
 while per-channel, hovering a bar shows a few random input samples whose
 values fell in that bar — drawn from the last captured batch only, since
@@ -283,8 +301,6 @@ mean, with an optional activation-heatmap overlay. Only the "Max pixel"
 grid starts enabled; the other three have their own checkboxes.
 
 ![Watch page, min/max view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-minmax.png)
-
-![Watch page, histogram view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
 
 ### Weights
 
@@ -339,10 +355,11 @@ to `nansense_recordings/<timestamp>/` in the training process's working
 directory at 10 fps. Each frame carries a banner with the training
 position it was captured at (e.g. `epoch 0 | train batch 0`).
 
-The section offers a red "Record this view" button for the page you're on,
-the list of currently recorded views — each can be ended (finalize the
-MP4) or deleted (discard it) individually — and end-all / delete-all
-buttons. Recordable views:
+The section offers a red "Record" button for the page you're on and the
+list of currently recording views — each can be saved & finished (finalize
+the MP4) or deleted (discard it) individually; the page's own view, once
+recording, appears only in that list (marked "this view"). Recordable
+views:
 
 - **Main view** — the input image plus every watched layer's activation and
   gradient strips packed into a single video; a pinned batch and

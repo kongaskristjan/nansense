@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from torchvision import datasets, transforms
 
 
@@ -139,3 +139,51 @@ def build_dataloaders(
         pin_memory=True,
     )
     return train_loader, test_loader
+
+
+def ensure_downloaded(config: DatasetConfig, data_dir: Path) -> None:
+    """Fetch the dataset to disk if missing (no loaders built).
+
+    Used by the distributed launcher so a single rank downloads first and
+    the others read from the populated cache, avoiding a concurrent
+    first-run download race.
+    """
+    _build_dataset(config, data_dir, train=True, download=True)
+    _build_dataset(config, data_dir, train=False, download=True)
+
+
+def build_distributed_dataloaders(
+    config: DatasetConfig,
+    data_dir: Path,
+    batch_size: int = 128,
+    num_workers: int = 2,
+    download: bool = True,
+) -> tuple[DataLoader, DataLoader, DistributedSampler]:
+    """Per-rank loaders over `DistributedSampler` shards (returns the train
+    sampler so the caller can `set_epoch` each epoch).
+
+    Both phases are sharded with `drop_last`, so every rank runs the same
+    number of batches per phase — distributed nansense sessions (like DDP
+    itself) require the ranks to advance through batches in lockstep.
+    """
+    train_set = _build_dataset(config, data_dir, train=True, download=download)
+    test_set = _build_dataset(config, data_dir, train=False, download=download)
+
+    train_sampler = DistributedSampler(train_set, shuffle=True, drop_last=True)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=batch_size,
+        sampler=train_sampler,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    test_loader = DataLoader(
+        test_set,
+        batch_size=batch_size,
+        sampler=DistributedSampler(test_set, shuffle=False, drop_last=True),
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
+    return train_loader, test_loader, train_sampler

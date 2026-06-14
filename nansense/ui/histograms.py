@@ -7,6 +7,7 @@ watch-view frames with, so recorded histograms match the page exactly.
 
 from __future__ import annotations
 
+import bisect
 import html
 import math
 from collections.abc import Callable
@@ -573,6 +574,109 @@ def _axis_ranges(
         share = min(share + _CLIP_SHARE_STEP, _MAX_CLIP_SHARE)
 
 
+# --- Retaining axis ranges across a Log x / Log y / phase change ------------
+#
+# The "Retain axes" checkbox freezes the current view instead of auto-fitting
+# to the data. Keeping the *same window* across a Log x toggle means
+# re-expressing it between the two x-coordinate systems the figure uses — the
+# linear value axis and the signed-log bin-index axis — and across a Log y
+# toggle means re-expressing the linear y-cap on the log scale. Both edges
+# meet at zero, which has no log; the helpers below handle that explicitly.
+
+
+def _interp(values: list[float], pos: float) -> float:
+    """Linear interpolation of `values` at a fractional index, clamped to ends."""
+    last = len(values) - 1
+    if pos <= 0:
+        return values[0]
+    if pos >= last:
+        return values[last]
+    i = int(pos)
+    frac = pos - i
+    return values[i] * (1.0 - frac) + values[i + 1] * frac
+
+
+def _inverse_interp(values: list[float], target: float) -> float:
+    """Fractional index `p` with `_interp(values, p) == target` (clamped).
+
+    `values` must be strictly increasing.
+    """
+    last = len(values) - 1
+    if target <= values[0]:
+        return 0.0
+    if target >= values[last]:
+        return float(last)
+    hi = bisect.bisect_right(values, target)
+    lo = hi - 1
+    span = values[hi] - values[lo]
+    return (lo + (target - values[lo]) / span) if span else float(lo)
+
+
+def _value_to_bin_coord(value: float) -> float:
+    """Continuous bin-index coordinate of a linear value on the signed-log axis.
+
+    Inverse of `_bin_coord_to_value`. A value of `0` lands at the centre of
+    the zero band (`ZERO_BIN`); values past +/-1e6 clamp to the end bars.
+    """
+    return _inverse_interp(_HIST_EDGES, value) - 0.5
+
+
+def _bin_coord_to_value(coord: float) -> float:
+    """Linear value at a continuous bin-index coordinate (inverse of above)."""
+    return _interp(_HIST_EDGES, coord + 0.5)
+
+
+# A converted signed-log x-range never collapses below one bin: a view sitting
+# entirely inside the (2e-9-wide) zero band would otherwise map to a
+# zero-width range in bin-index space.
+_MIN_LOG_X_SPAN: float = 1.0
+
+
+def _x_range_linear_to_log(x_range: list[float]) -> list[float]:
+    """A linear value x-range re-expressed on the signed-log bin-index axis."""
+    lo = _value_to_bin_coord(x_range[0])
+    hi = _value_to_bin_coord(x_range[1])
+    if hi - lo < _MIN_LOG_X_SPAN:
+        mid = (lo + hi) / 2.0
+        lo, hi = mid - _MIN_LOG_X_SPAN / 2.0, mid + _MIN_LOG_X_SPAN / 2.0
+    return [max(-0.5, lo), min(N_BINS - 0.5, hi)]
+
+
+def _x_range_log_to_linear(x_range: list[float]) -> list[float]:
+    """A signed-log bin-index x-range re-expressed on the linear value axis."""
+    return [_bin_coord_to_value(x_range[0]), _bin_coord_to_value(x_range[1])]
+
+
+def _min_positive_height(phase_hists: _PhaseHists, density: bool) -> float | None:
+    """Smallest positive bar height across the drawn traces, or `None`."""
+    best: float | None = None
+    for _, hist in phase_hists:
+        for h in trace_heights(hist, density):
+            if h > 0.0 and (best is None or h < best):
+                best = h
+    return best
+
+
+def _retained_y_range(
+    top: float | None, *, log_y: bool, floor: float | None
+) -> list[float] | None:
+    """A retained linear y-cap re-expressed for the current y-scale.
+
+    Linear: `[0, top]`. Log: `[log10(floor), log10(top)]`, where `floor` is
+    the smallest positive bar so every bar stays visible — falling back to
+    three decades below `top` when no positive bar is available or it isn't
+    below `top`. That floor is the "reasonable near 0" handling: a linear
+    bottom of 0 has no log. Returns `None` (Plotly autorange) without a cap.
+    """
+    if top is None or top <= 0.0:
+        return None
+    if not log_y:
+        return [0.0, top]
+    if floor is None or floor <= 0.0 or floor >= top:
+        floor = top * 1e-3
+    return [math.log10(floor), math.log10(top)]
+
+
 def _make_histogram_figure(
     per_phase: dict[str, LayerStatsSnapshot],
     kind: str,
@@ -581,6 +685,7 @@ def _make_histogram_figure(
     log_x: bool = False,
     log_y: bool = False,
     trace_names: list[str] | None = None,
+    override_ranges: tuple[list[float] | None, list[float] | None] | None = None,
 ) -> tuple[go.Figure, tuple[list[float] | None, list[float] | None]]:
     """Plotly bar chart of the signed-log histogram, one subplot row per phase.
 
@@ -613,9 +718,17 @@ def _make_histogram_figure(
     they restyle the existing figure in place (see `_HistPlot`) so client-side
     state like zoom survives; the figure is only rebuilt when the set of
     phases or the axis scale changes.
+
+    `override_ranges` forces the `(x_range, y_range)` instead of fitting them
+    to the data — used by the "Retain axes" toggle to carry the current view
+    across a rebuild. The off-view bar blanking still tracks the applied
+    x-range, so hovering stays correct.
     """
     phase_hists = _phase_hists(per_phase, kind)
-    x_range, y_range = _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
+    if override_ranges is not None:
+        x_range, y_range = override_ranges
+    else:
+        x_range, y_range = _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
     # Signed-log mode draws at uniform bin indices; the linear value axis
     # draws at the bin centres but blanks the off-view tail bins so Plotly's
     # `hovermode="x"` hit-test stays on the bins on screen (see `_linear_bar_x`).

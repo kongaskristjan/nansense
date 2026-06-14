@@ -7,7 +7,12 @@ import torch
 
 from nansense.experiments import ExperimentResult
 from nansense.session import Session, UpdateFrequency
-from tests.nansense.helpers import TinyNet, make_session, paused_worker
+from tests.nansense.helpers import (
+    TinyNet,
+    make_position,
+    make_session,
+    paused_worker,
+)
 
 
 def _run_detached(
@@ -183,3 +188,27 @@ def test_pinned_auto_experiment_survives_expiry_check() -> None:
         model.zero_grad(set_to_none=True)
         model(torch.randn(2, 4)).sum().backward()
     assert session.experiment_result_for(seq) is not first
+
+
+def test_should_freq_update_mutates_counter_under_lock() -> None:
+    """The per-batch counter advance happens inside the `_cv` critical section
+    (alongside the modulo check), so `set_update_frequency`'s reset to 0 can't
+    be clobbered by a concurrent unlocked increment. The cadence itself stays
+    correct: every n-th frequency-eligible batch reports True."""
+    session, _ = make_session(epochs=1, phases={"train": 6})
+    session.set_update_frequency(unit="batch", n=3)
+    fired = [
+        session._should_freq_update(make_position("train", 0, i)) for i in range(6)
+    ]
+    assert fired == [False, False, True, False, False, True]
+
+
+def test_rewind_resets_the_frequency_counter() -> None:
+    """A time-travel jump restarts the per-batch cadence so post-jump frames
+    fire on a clean phase rather than wherever the abandoned timeline left it."""
+    session, _ = make_session(epochs=3, phases={"train": 4})
+    session.set_update_frequency(unit="batch", n=2)
+    session._should_freq_update(make_position("train", 0, 0))  # counter -> 1
+    assert session._freq_counter == 1
+    session._rewind_to_epoch(1)
+    assert session._freq_counter == 0

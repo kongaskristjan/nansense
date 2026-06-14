@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 
+import pytest
 import torch
 from torch import nn
 
@@ -131,6 +132,26 @@ def test_slug_replaces_non_alphanumeric_and_handles_empty() -> None:
     assert slug("stage1.0.conv1") == "stage1_0_conv1"
     assert slug("relu") == "relu"
     assert slug("") == ROOT_ID
+
+
+@pytest.mark.parametrize("name", ["end", "END", "End", "end.0"])
+def test_slug_avoids_the_mermaid_end_keyword(name: str) -> None:
+    # A bare `end` (any case) is the keyword Mermaid uses to close a subgraph,
+    # so a node id of exactly `end` breaks the whole diagram. `end.0` slugs to
+    # `end_0`, which is already safe and must be left alone.
+    result = slug(name)
+    assert result.lower() != "end"
+    if name == "end.0":
+        assert result == "end_0"
+    else:
+        assert result == name + "_"
+
+
+def test_slug_map_keeps_end_node_distinct_and_safe() -> None:
+    mapping = slug_map(["end", "end_", "conv"])
+    assert mapping["end"].lower() != "end"
+    # The escaped `end` and a real `end_` must not collide into one node.
+    assert len(set(mapping.values())) == len(mapping)
 
 
 def test_slug_map_disambiguates_colliding_slugs() -> None:

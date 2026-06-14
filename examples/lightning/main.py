@@ -110,8 +110,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/lightning_mnist"),
-        help="Directory for time-travel epoch checkpoints (default models/lightning_mnist).",
+        default=Path("models/lightning"),
+        help="Directory for time-travel epoch checkpoints (default models/lightning).",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(

@@ -13,19 +13,21 @@ description: Launch a nansense example (web UI on --nansense-port) and verify it
 2. Start an example in the background and capture its PID:
 
    ```bash
-   uv run python -m examples.vision.main --nansense-port <PORT> --device cpu
+   uv run examples/standard/main.py --nansense-port <PORT> --device cpu
    ```
 
-   - `examples.mnist_linear.main` — minimal wiring, fastest startup.
-   - `examples.lightning_mnist.main` — the PyTorch Lightning wiring
-     (`NansenseCallback` + `fit_with_time_travel`); use when testing
-     `nansense/lightning.py` changes.
-   - `examples.vision.main` — full wiring (scheduler, time travel):
+   - `examples/standard/main.py` — full wiring (scheduler, time travel):
      ResNet/ViT/LeNet on MNIST/CIFAR10/Imagenette
      (`--model resnet|resnet_deep|vit|lenet`,
      `--dataset mnist|cifar10|imagenette`); `--blocks-per-stage 1` makes
      the ResNet small and fast, `--dataset mnist --model lenet` is the
-     lightest full-wiring combination.
+     lightest full-wiring combination. Add `--distributed` (under
+     `torchrun`) to exercise the DDP path.
+   - `examples/lightning/main.py` — the PyTorch Lightning wiring
+     (`NansenseCallback` + `fit_with_time_travel`); use when testing
+     `nansense/lightning.py` changes.
+   - `examples/game_of_life/main.py` — synthetic data, no download, fast
+     startup; the lightest choice for a quick UI check.
 3. If running in a worktree, `data/` is gitignored — symlink it from the main
    tree first to skip the dataset download.
 4. Poll until the UI is up — training pauses on the first batch, so the page

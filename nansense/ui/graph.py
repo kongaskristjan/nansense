@@ -118,6 +118,13 @@ def _build_from_hierarchy(model: nn.Module, *, root_label: str) -> str:
     return "\n".join(lines)
 
 
+# Mermaid parses a bare `end` (any case) as the keyword that closes a
+# subgraph, so a node whose id is exactly `end` breaks the whole diagram.
+# Suffix it to keep the id a plain identifier (the DOM `data-layer` uses the
+# same slug, so the card still matches).
+_MERMAID_RESERVED: frozenset[str] = frozenset({"end"})
+
+
 def slug(name: str) -> str:
     """Map a node/layer name to the id used in Mermaid sources and the DOM.
 
@@ -130,7 +137,10 @@ def slug(name: str) -> str:
     both produce `fc_1`); when a whole set of names must map to distinct ids
     (every Mermaid build), use `slug_map`, which disambiguates collisions.
     """
-    return re.sub(r"[^A-Za-z0-9]", "_", name) or ROOT_ID
+    result = re.sub(r"[^A-Za-z0-9]", "_", name) or ROOT_ID
+    if result.lower() in _MERMAID_RESERVED:
+        result += "_"
+    return result
 
 
 def slug_map(names: Iterable[str]) -> dict[str, str]:
