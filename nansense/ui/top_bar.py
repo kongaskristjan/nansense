@@ -281,10 +281,15 @@ def _add_settings_button(
                 _FREQUENCY_UNIT_OPTIONS,
                 label="Update every",
                 value="epoch",
-                on_change=lambda: sync_phase_visibility(),
+                on_change=lambda: on_unit_change(),
             ).props("dense outlined").classes("flex-1")
             n_input = ui.number(
-                label="n", value=1, min=1, step=1, format="%d"
+                label="n",
+                value=1,
+                min=1,
+                step=1,
+                format="%d",
+                on_change=lambda: apply_frequency(),
             ).props("dense outlined").classes("w-20").tooltip(
                 "Update on every nth epoch/batch"
             )
@@ -292,6 +297,7 @@ def _add_settings_button(
                 [_ANY_PHASE] + phase_names,
                 label="Phase",
                 value=_ANY_PHASE,
+                on_change=lambda: apply_frequency(),
             ).props("dense outlined").classes("flex-1").tooltip(
                 "Count only this phase's batches (batch unit only)"
             )
@@ -300,10 +306,6 @@ def _add_settings_button(
             "The frequency is locked while recordings are active — frames "
             "are recorded at this cadence."
         ).classes("text-xs text-amber-700")
-        with ui.row().classes("w-full justify-end"):
-            apply_button = ui.button(
-                "Apply", on_click=lambda: apply(), color="purple"
-            ).props("dense size=md")
         ui.separator()
         ui.label("Recording").classes("text-lg font-bold")
         ui.label(
@@ -315,10 +317,18 @@ def _add_settings_button(
         with ui.row().classes("w-full justify-end"):
             ui.button("Close", on_click=dialog.close).props("flat")
 
+    # Guards the auto-apply handlers while `open_dialog` programmatically
+    # loads the session's current values into the controls — otherwise those
+    # writes would fire `apply_frequency` mid-load with a half-set combination.
+    loading = False
+
     def sync_phase_visibility() -> None:
         phase_select.set_visibility(unit_select.value == "batch")
 
-    def apply() -> None:
+    def apply_frequency() -> None:
+        """Push the controls' current values to the session (auto-applied)."""
+        if loading:
+            return
         unit = str(unit_select.value)
         phase = str(phase_select.value)
         try:
@@ -332,7 +342,12 @@ def _add_settings_button(
             error_label.text = str(e)
             return
         error_label.text = ""
-        ui.notify("Update frequency applied")
+
+    def on_unit_change() -> None:
+        # The phase select only applies to the batch unit; show/hide it before
+        # re-applying so a stale phase doesn't leak into an epoch-unit setting.
+        sync_phase_visibility()
+        apply_frequency()
 
     def unpin(view: RecordedView) -> None:
         # An experiment recording pins the page's auto experiment so it
@@ -459,16 +474,17 @@ def _add_settings_button(
     def refresh_recording_lock() -> None:
         locked = session.recording.count() > 0
         lock_note.set_visibility(locked)
-        if locked:
-            apply_button.disable()
-        else:
-            apply_button.enable()
+        for control in (unit_select, n_input, phase_select):
+            control.set_enabled(not locked)
 
     def open_dialog() -> None:
+        nonlocal loading
+        loading = True
         freq = session.update_frequency
         unit_select.value = freq.unit
         n_input.value = freq.n
         phase_select.value = freq.phase if freq.phase is not None else _ANY_PHASE
+        loading = False
         sync_phase_visibility()
         error_label.text = ""
         refresh_recording_lock()
