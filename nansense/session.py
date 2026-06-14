@@ -32,14 +32,28 @@ and `nansense.experiments` (the experiment queue and runners).
 
 from __future__ import annotations
 
+import sys
 import threading
+import warnings
 from collections import OrderedDict, deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, TypeVar
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+    from typing import Self
+else:  # Python 3.10: enum.StrEnum and typing.Self both landed in 3.11.
+    from enum import Enum
+
+    from typing_extensions import Self
+
+    class StrEnum(str, Enum):
+        """Minimal backport of `enum.StrEnum` for Python 3.10."""
+
+        __str__ = str.__str__
 
 from torch import Tensor, fx, nn
 from torch.optim import Optimizer
@@ -69,6 +83,24 @@ from nansense.watch import WatchAccumulator, WatchSnapshot
 if TYPE_CHECKING:
     from nansense.recording import RecordingManager
 
+# Grace period an *unserved* enabled session waits at a pause before giving up
+# and detaching (see `Session._wait_for_proceed`). A served session — or one
+# driven from another thread, like the test harness — resumes long before this;
+# it only fires for a single-threaded script that paused with no way to resume.
+_UNSERVED_PAUSE_TIMEOUT = 30.0
+
+
+def _warn_unserved_detach() -> None:
+    warnings.warn(
+        "nansense: the session paused on a batch but no UI is serving it and "
+        f"nothing resumed it within {_UNSERVED_PAUSE_TIMEOUT:.0f}s. Continuing "
+        "without pausing (detached). Pass `port=` to nansense.start() (or call "
+        "nansense.serve()) to drive the UI, or use enabled=False for plain "
+        "training.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
 
 class Mode(StrEnum):
     STEP = "step"
@@ -80,6 +112,10 @@ class Mode(StrEnum):
 
 
 FREQUENCY_UNITS: tuple[str, ...] = ("batch", "epoch")
+
+# Element type of a loader passed to `Session.batches` (PEP 695 `def batches[T]`
+# would require Python 3.12; this keeps the floor at 3.10).
+_BatchItem = TypeVar("_BatchItem")
 
 
 @dataclass(frozen=True)
@@ -141,6 +177,11 @@ class Session:
         model = distributed.unwrap_ddp(model)
         self.model = model
         self._enabled = enabled
+        # Set by `nansense.serve` once a UI is actually served. An enabled but
+        # unserved session has no way to be resumed from a pause, so it bounds
+        # each pause with a grace timeout instead of deadlocking (see
+        # `_wait_for_proceed`); a served session waits for the UI indefinitely.
+        self._served = False
         # Multi-rank coordination (None outside distributed runs): rank 0
         # leads (UI, snapshots, pauses), other ranks follow — they sync the
         # watched set per batch and join the watch-stats reductions, but
@@ -292,6 +333,15 @@ class Session:
         """
         return self._enabled
 
+    def mark_served(self) -> None:
+        """Record that a UI is now serving this session.
+
+        Called by `nansense.serve`. While served, a pause waits for the UI
+        indefinitely; while unserved, `_wait_for_proceed` bounds the wait so an
+        enabled-but-undriven session can't deadlock (it detaches instead).
+        """
+        self._served = True
+
     @property
     def is_leader(self) -> bool:
         """Whether this session drives the run's UI and snapshots.
@@ -370,9 +420,9 @@ class Session:
     def batch(self, *, phase: str, epoch: int) -> _BatchContext:
         return _BatchContext(self, phase=phase, epoch=epoch)
 
-    def batches[T](
-        self, loader: Iterable[T], *, phase: str, epoch: int
-    ) -> Iterator[T]:
+    def batches(
+        self, loader: Iterable[_BatchItem], *, phase: str, epoch: int
+    ) -> Iterator[_BatchItem]:
         """Iterate `loader` with each item wrapped in a `batch()` context.
 
         Sugar over `batch()` for the common loop shape: the user's batch
@@ -1131,6 +1181,14 @@ class Session:
             seen = self._resume_token
             self._pause_count += 1
             self._cv.notify_all()
+        # An unserved enabled session has no UI to resume a pause. A separate
+        # driver thread (e.g. the test harness) still works — it resumes within
+        # milliseconds — but a single-threaded script that forgot `port=` would
+        # otherwise deadlock here forever. So when unserved, bound each wait:
+        # if nothing resumes within the grace period, warn once and detach so
+        # training runs to completion instead of hanging. A served session
+        # waits for the UI indefinitely (grace is None).
+        grace = None if self._served else _UNSERVED_PAUSE_TIMEOUT
         # Pause-time job loop: probe and experiment requests from the UI also
         # wake the paused training thread, which runs the work *here* — the
         # model is only ever touched from the training thread — and re-enters
@@ -1138,13 +1196,20 @@ class Session:
         # ...) stay responsive meanwhile.
         while True:
             with self._cv:
-                self._cv.wait_for(
+                resumed = self._cv.wait_for(
                     lambda: self._resume_token != seen
                     or self._closed
                     or self._pending_jump is not None
                     or self._probe_request
-                    or bool(self._experiment_queue)
+                    or bool(self._experiment_queue),
+                    timeout=grace,
                 )
+                if not resumed:
+                    # Unserved and nothing resumed us within the grace period:
+                    # detach so this and every later batch run without pausing.
+                    self._mode = Mode.DETACH
+                    self._resume_token += 1
+                    self._cv.notify_all()
                 done = (
                     self._resume_token != seen
                     or self._closed
@@ -1164,6 +1229,11 @@ class Session:
                         # find the seq neither queued nor running and be a
                         # silent no-op, letting a cancelled experiment run.
                         self._experiment_running = experiment.seq
+            if not resumed:
+                # The detach above already satisfied `done`; warn outside the
+                # lock and return so the batch proceeds.
+                _warn_unserved_detach()
+                return
             if done:
                 # A coalesced probe request is dropped (resuming into a
                 # capture re-runs the probe anyway); queued experiments

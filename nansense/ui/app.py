@@ -95,6 +95,9 @@ def serve(
         # rank 0, which presents the cross-rank-reduced watch stats. This
         # is also what keeps every rank from fighting over the same port.
         return None
+    # Past the guards we are committed to serving: a pause may now wait for the
+    # UI indefinitely (an unserved session would instead detach on a timeout).
+    session.mark_served()
     mermaid_src = build_mermaid(session.model)
     layer_names = session.layer_names
     input_name = session.input_names[0] if session.input_names else None
