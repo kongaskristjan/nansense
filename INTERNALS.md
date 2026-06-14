@@ -597,28 +597,49 @@ inside the isolation scope (experiments only execute between batches).
 captum is an optional dependency the user installs themselves:
 `available_experiment_kinds()` hides the Captum kinds from the UI when it
 is absent, and `_run_captum` degrades to an error result as a safety net.
-Layer-targeted methods require an `nn.Module`; fx intermediates are
-rejected with a pointer to the producing module. Output-targeted methods
-(Grad-CAM, Occlusion) resolve target class −1 to the model's argmax and
-require a `[batch, classes]` output. Neuron methods address a channel via
-a selector callable (per-example mean of that channel).
+Like deep dream, the Captum methods run on a *batch* (`_captum_input`: the
+first `batch` samples of the live input) and publish one attribution per
+sample. Grad-CAM and the neuron methods need the layer's `nn.Module`; fx
+intermediates are rejected with a pointer to the producing module
+(`layer_available` mirrors this so the UI can gray the layer out). Grad-CAM
+explains a target class (−1 resolves to each sample's argmax, requiring a
+`[batch, classes]` output). The neuron methods and Occlusion target the
+selected layer-channel via the per-example mean selector
+(`_neuron_selector`); Occlusion wraps the model in `_LayerChannelModel`,
+exposing that channel's activation as the output so the slid patch
+attributes against an *intermediate* channel instead of a class.
+
+**Viewed-sample diff.** With "use viewed sample" on, `_captum_input` /
+`_dream_start` switch to `_viewed_sample`: the single sample the input pane
+is viewing (`sample` param), taken from the probe base (pinned batch or
+live input). If that sample carries perturbations
+(`probe.apply_perturbations`), `_run_captum` attributes both the original
+and perturbed input and publishes the difference (`ExperimentResult.is_diff`).
 
 **UI** (`/experiment?layer=...`, one yellow "Experiment" button per layer
-card): the left pane is headed by the page title (with the layer name) and
-stacks the kind dropdown (defaulting to deep dream)
-and Run / Cancel above the parameter form, so the whole experiment setup
-reads top-down in one place; each kind's knobs are
-declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
-number/switch/select widgets and collected on Run; the deep-dream "Inputs"
-count defaults to the live `session.input_batch_size`, capped at
-`_DEFAULT_DREAM_BATCH` = 8, and the channel knob is bounded by the layer's
-captured channel count, `_layer_channel_count`). A 200 ms timer streams
-the page's *own* request via `session.experiment_result_for(seq)` — Run
-replaces and Cancel aborts only this page's request, so tabs don't clobber
-each other: deep-dream result and start batches render denormalized via
-`render_image` as wrapping grids (non-image inputs fall back to a "not
+card): the left pane stacks the kind dropdown (with a hover tooltip and a
+description at the pane's foot), Run / Cancel, then the parameter form. The
+form is headed by a **layer selector** — the first knob — whose options
+carry a `disable` flag (`_patched_update_options` reassigns
+`_props['options']` so the flag survives NiceGUI's option regeneration),
+graying out layers the current kind can't run; switching to a shorter layer
+clips the channel. The rest of each kind's knobs are declared in
+`_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
+number/switch/select widgets) ordered Channel/Target → Inputs → Start from
+→ Use viewed sample → method knobs; values persist across kind switches via
+a shared `state.values`. The embedded `InputPanel` exposes sample / pin /
+perturb here too. A 200 ms timer streams the page's *own* request via
+`session.experiment_result_for(seq)`, drives **auto-run** (re-register on
+init and on any parameter / layer / viewed-input change, buffered to one
+run per tick; `register_auto_experiment` drops a superseded queued request
+so the pause loop is never flooded) gated on the shared
+`session.auto_run_experiments` setting, and toggles Run/Cancel enablement
+(Run off while auto-run is on or a run is in flight; Cancel off while idle).
+Run replaces and Cancel aborts only this page's request, so tabs don't
+clobber each other: deep-dream result and start batches render denormalized
+via `render_image` as wrapping grids (non-image inputs fall back to a "not
 renderable" note), attributions via the shared diverging-colormap
-`render_strip`, next to the input sample.
+`render_strip`, one strip per sample (or a single diff strip).
 
 **Auto experiments.** The experiment page's Run goes through
 `session.register_auto_experiment(key, ...)` rather than the plain

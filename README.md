@@ -326,18 +326,30 @@ demand, even mid-training.
 
 Each layer card's "Experiment" button opens `/experiment?layer=...`, which
 runs per-layer experiments on the paused training thread without side
-effects on training or time-travel determinism. Deep Dream runs gradient
-ascent on a channel's mean activation over a batch of inputs — by default
-fresh noise shaped like the network's real input, different on every Run —
-with configurable regularizers, streaming the evolving images live. Four
-Captum attribution methods — Grad-CAM, Neuron Gradient, Neuron Integrated
-Gradients, and Occlusion — render attributions next to the input sample
-they explain.
+effects on training or time-travel determinism. The left pane picks the
+experiment and its parameters — starting with a **layer selector** (so you
+can retarget without leaving the page; layers an experiment can't run on are
+grayed out) — and shows a description of the chosen experiment at the
+bottom; parameter values are kept when you switch experiment type.
 
-Run also registers the experiment for automatic re-runs: while the page
-stays open (or its view is being recorded), the experiment re-executes at
-every visualization update with the *same* random seed, so the result
-tracks the evolving weights instead of the changing noise.
+Deep Dream runs gradient ascent on a channel's mean activation over a batch
+of inputs — by default fresh noise shaped like the network's real input,
+different on every Run — with configurable regularizers, streaming the
+evolving images live. Four Captum attribution methods — Grad-CAM, Neuron
+Gradient, Neuron Integrated Gradients, and Occlusion — run on a batch too
+and render one attribution per sample (Occlusion and the neuron methods
+target the selected layer-channel; Grad-CAM explains a target class). The
+Input Selection pane is embedded here, so you can pick / pin / perturb the
+input without leaving the page. Toggle **Use viewed sample** to run on just
+the sample you're viewing instead of a batch; if that sample is perturbed,
+the page shows the *diff* of the attribution maps (perturbed − original).
+
+By default experiments **auto-run**: the experiment executes when the page
+opens and re-runs on every parameter change (and on every visualization
+update, with a fixed seed, so the result tracks the evolving weights). Turn
+off "Auto-run experiments" in the settings dialog to drive it with the Run
+button instead; Run is grayed out while auto-run is on or a run is in
+flight, and Cancel only while one is running.
 
 ![Experiment page](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-experiment.png)
 
