@@ -423,6 +423,43 @@ def test_render_attribution_overlay_rejects_unsupported_input() -> None:
     )
 
 
+def test_render_strip_tile_px_scales_display_and_legend() -> None:
+    # tile_px bumps the CSS size each tile is shown at (and its legend height)
+    # so the experiment page can size attribution maps to the inputs beside
+    # them; the native-resolution data image is unchanged.
+    tensor = torch.randn(1, 2, 8, 8)  # 2 tiles, max(1, 8 // 48) = 1-px gap
+    native = render_strip(tensor, sample_idx=0)
+    scaled = render_strip(tensor, sample_idx=0, tile_px=200)
+    assert native is not None and scaled is not None
+    assert _decode(scaled.data_image).size == _decode(native.data_image).size
+    assert (scaled.width, scaled.height) == (round((2 * 8 + 1) * 200 / 8), 200)
+    assert _decode(scaled.legend_image).size == (LEGEND_WIDTH, 200)
+
+
+def test_render_strip_downsamples_to_tile_px() -> None:
+    # The server-side area downsample targets tile_px, so a map larger than
+    # the requested tile is reduced to tile_px² rather than the default.
+    strip = render_strip(torch.randn(1, 1, 300, 300), sample_idx=0, tile_px=64)
+    assert strip is not None
+    assert _decode(strip.data_image).size == (64, 64)
+    assert (strip.width, strip.height) == (64, 64)
+
+
+def test_render_attribution_overlay_tile_px_scales_display() -> None:
+    strip = render.render_attribution_overlay(
+        torch.rand(1, 8, 8),
+        torch.randn(2, 8, 8),
+        mean=None,
+        std=None,
+        vmax=1.0,
+        tile_px=200,
+    )
+    assert strip is not None
+    assert _decode(strip.data_image).size == (2 * 8 + 1, 8)  # native, unchanged
+    assert (strip.width, strip.height) == (round((2 * 8 + 1) * 200 / 8), 200)
+    assert _decode(strip.legend_image).size == (LEGEND_WIDTH, 200)
+
+
 @pytest.mark.parametrize(
     "ndim, x, y, tile, fixed",
     [

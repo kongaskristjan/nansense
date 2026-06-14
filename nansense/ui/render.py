@@ -114,6 +114,7 @@ def render_strip(
     sample_idx: int,
     *,
     input_hw: tuple[int, int] | None = None,
+    tile_px: int = TILE_SIZE,
 ) -> StripRender | None:
     """Render a per-channel horizontal strip.
 
@@ -125,6 +126,12 @@ def render_strip(
     `None`, `sample_idx` is out of range, the per-sample shape is empty (any
     zero-length dim leaves no renderable tile), or the per-sample shape is
     unsupported (4D and beyond).
+
+    `tile_px` is the CSS side each (square) channel tile is shown at — and
+    the height its legend is rendered at; it defaults to `TILE_SIZE` and the
+    experiment page bumps it to `INPUT_IMAGE_SIZE` so attribution strips sit
+    at the same size as the input images beside them. It applies to the
+    tiled (2D/3D) renders only; a 1D heatmap row keeps its own height.
     """
     if tensor is None or tensor.ndim == 0:
         return None
@@ -138,9 +145,9 @@ def render_strip(
     if sample.numel() == 0:
         return None
     if sample.ndim == 3:
-        return _render_chw(sample)
+        return _render_chw(sample, tile_px=tile_px)
     if sample.ndim == 2:
-        return _render_tokens_2d(sample, input_hw)
+        return _render_tokens_2d(sample, input_hw, tile_px=tile_px)
     if sample.ndim == 1:
         return _render_1d(sample)
     return None
@@ -210,7 +217,7 @@ def _token_grid(n_tokens: int, input_hw: tuple[int, int]) -> tuple[int, int, int
 
 
 def _render_tokens_2d(
-    sample: Tensor, input_hw: tuple[int, int] | None
+    sample: Tensor, input_hw: tuple[int, int] | None, *, tile_px: int = TILE_SIZE
 ) -> StripRender | None:
     """Render a 2D per-sample tensor, recovering a token grid when possible.
 
@@ -231,8 +238,8 @@ def _render_tokens_2d(
                 continue
             extra, h, w = fit
             tokens = sample if token_axis == 0 else sample.T
-            return _render_chw(tokens[extra:].T.reshape(-1, h, w))
-    return _render_chw(sample.unsqueeze(0))
+            return _render_chw(tokens[extra:].T.reshape(-1, h, w), tile_px=tile_px)
+    return _render_chw(sample.unsqueeze(0), tile_px=tile_px)
 
 
 @dataclass(frozen=True)
@@ -336,7 +343,7 @@ def _tile_gap(tile_width: int) -> int:
     return max(1, tile_width // TILE_GAP_DIVISOR)
 
 
-def _render_chw(tensor: Tensor) -> StripRender | None:
+def _render_chw(tensor: Tensor, *, tile_px: int = TILE_SIZE) -> StripRender | None:
     data = tensor.detach().float()
     # An empty tile (any zero-length dim) has no pixels to colormap, encode,
     # or lay out — the reductions and PIL encode below would raise. The
@@ -345,29 +352,29 @@ def _render_chw(tensor: Tensor) -> StripRender | None:
     if data.numel() == 0:
         return None
     abs_max = _finite_abs_max(data)
-    if max(data.shape[1], data.shape[2]) > TILE_SIZE:
+    if max(data.shape[1], data.shape[2]) > tile_px:
         # Downsampling needs real averaging server-side; *up*scaling small
         # maps is left to the browser's nearest-neighbour (CSS `pixelated`).
         # `area` would spread a NaN/Inf cell across its neighbours; keep the
         # non-finite mask sharp by interpolating finite values and the mask
         # separately (the colormap re-derives the mask after downsampling).
-        data = _interpolate_preserving_nonfinite(data)
+        data = _interpolate_preserving_nonfinite(data, size=tile_px)
     _, h, w = data.shape
     rgb, mime = _apply_colormap(data.numpy(), abs_max=abs_max)
     strip = _concat_tiles_with_gaps(list(rgb), _tile_gap(w))
-    # Each tile spans TILE_SIZE × TILE_SIZE CSS px, so the whole strip scales
-    # by TILE_SIZE/w horizontally and TILE_SIZE/h vertically.
+    # Each tile spans tile_px × tile_px CSS px, so the whole strip scales by
+    # tile_px/w horizontally and tile_px/h vertically.
     return StripRender(
-        legend_image=_encode_image(_render_legend(TILE_SIZE, abs_max=abs_max)),
+        legend_image=_encode_image(_render_legend(tile_px, abs_max=abs_max)),
         data_image=_encode_strip_data(strip, mime),
-        width=round(strip.shape[1] * TILE_SIZE / w),
-        height=TILE_SIZE,
+        width=round(strip.shape[1] * tile_px / w),
+        height=tile_px,
         data_mime=mime,
     )
 
 
-def _interpolate_preserving_nonfinite(data: Tensor) -> Tensor:
-    """Area-downsample to `TILE_SIZE²`, keeping NaN/±Inf cells non-finite.
+def _interpolate_preserving_nonfinite(data: Tensor, *, size: int = TILE_SIZE) -> Tensor:
+    """Area-downsample to `size²`, keeping NaN/±Inf cells non-finite.
 
     `F.interpolate(mode="area")` smears a single non-finite value across a
     whole tile. To keep the bad cells localized, finite values are averaged
@@ -377,15 +384,11 @@ def _interpolate_preserving_nonfinite(data: Tensor) -> Tensor:
     """
     finite = torch.isfinite(data)
     if finite.all():
-        return F.interpolate(
-            data.unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="area"
-        )[0]
+        return F.interpolate(data.unsqueeze(0), size=(size, size), mode="area")[0]
     cleaned = torch.where(finite, data, torch.zeros_like(data))
-    down = F.interpolate(
-        cleaned.unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="area"
-    )[0]
+    down = F.interpolate(cleaned.unsqueeze(0), size=(size, size), mode="area")[0]
     mask = F.interpolate(
-        (~finite).float().unsqueeze(0), size=(TILE_SIZE, TILE_SIZE), mode="nearest"
+        (~finite).float().unsqueeze(0), size=(size, size), mode="nearest"
     )[0]
     return torch.where(mask > 0, torch.full_like(down, float("nan")), down)
 
@@ -451,6 +454,7 @@ def render_attribution_overlay(
     mean: tuple[float, ...] | None,
     std: tuple[float, ...] | None,
     vmax: float,
+    tile_px: int = TILE_SIZE,
 ) -> StripRender | None:
     """One overlay tile per attribution channel over the input sample image.
 
@@ -458,7 +462,9 @@ def render_attribution_overlay(
     `[C_a, h, w]`; the input is denormalized to an RGB image (like
     `render_image`) and each attribution channel's heat — nearest-resized to
     the input size — is blended over a copy of it with `blend_signed_heat`
-    (the MIN/MAX overlay scheme) on the shared `±vmax` scale. Returns `None`
+    (the MIN/MAX overlay scheme) on the shared `±vmax` scale. Each tile is
+    shown at `tile_px` CSS px (and its legend rendered that tall) so the
+    overlay matches the size of the input image beside it. Returns `None`
     when the input can't be denormalized to a `C in (1, 3)` image.
     """
     if input_sample.ndim != 3 or input_sample.shape[0] not in (1, 3):
@@ -482,10 +488,10 @@ def render_attribution_overlay(
     ]
     strip = _concat_tiles_with_gaps(tiles, _tile_gap(w))
     return StripRender(
-        legend_image=_encode_image(_render_legend(TILE_SIZE, abs_max=vmax)),
+        legend_image=_encode_image(_render_legend(tile_px, abs_max=vmax)),
         data_image=_encode_strip_data(strip, image_mime()),
-        width=round(strip.shape[1] * TILE_SIZE / w),
-        height=TILE_SIZE,
+        width=round(strip.shape[1] * tile_px / w),
+        height=tile_px,
     )
 
 

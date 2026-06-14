@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -295,9 +296,11 @@ def _build_experiment_page(
     every dropdown change), a Captum overlay toggle, and a description of the
     chosen experiment. The right pane streams this page's *own* results
     (`experiment_result_for`, so concurrent tabs never overwrite each other)
-    as one row per sample — the input image beside its deep-dream result or
-    attribution strip, or, when overlay is on, the attribution blended over
-    the input (the MIN/MAX heat-overlay scheme).
+    as one card per sample with captioned cells: the input image beside its
+    deep-dream result, or the attribution map beside its input (the map first),
+    or — when overlay is on — the attribution blended over the input (the
+    MIN/MAX heat-overlay scheme). Attribution maps and overlays are sized to
+    the input image they sit next to.
     """
     _page_scaffold("Experiment")
     _install_panel_resize()
@@ -619,69 +622,97 @@ def _build_experiment_page(
         description_label.text = long
         kind_tooltip.set_text(short)
 
-    def _image_cell(tensor: Tensor | None, sample_idx: int) -> None:
+    def _image_widget(tensor: Tensor | None, sample_idx: int) -> None:
         ui.html(
             _experiment_img_html(
                 render_image(tensor, sample_idx, mean=input_mean, std=input_std)
             )
         )
 
-    def _strip_cell(strip: StripRender | None) -> None:
+    def _strip_widget(strip: StripRender | None) -> None:
         with ui.element("div").classes("max-w-full overflow-x-auto"):
             ui.html(_strip_html(strip))
 
+    def _sample_card(idx: int, cells: list[tuple[str, Callable[[], None]]]) -> None:
+        """One result card per sample (point 3): a label over captioned cells
+        laid out side by side, consistent with the watch / weights cards."""
+        with ui.card().classes("w-full p-3 gap-2"):
+            ui.label(f"Sample {idx}").classes(
+                "font-mono text-sm font-bold text-slate-600"
+            )
+            with ui.row().classes("items-start gap-4 no-wrap w-full overflow-x-auto"):
+                for caption, build in cells:
+                    with ui.column().classes("items-center gap-1 shrink-0"):
+                        ui.label(caption).classes(
+                            "text-xs text-slate-500 font-mono uppercase tracking-wide"
+                        )
+                        build()
+
     def render_result(result: ExperimentResult) -> None:
-        """One row per sample: the input beside the deep-dream result or the
-        attribution strip, or — with overlay on — the attribution blended over
-        the input (point 2)."""
+        """One card per sample (point 3): for deep dream the input beside its
+        result; for Captum the attribution map beside its input (the map first,
+        point 1) — or, with overlay on, the attribution blended over the input.
+        Attribution maps and overlays are sized to match the input (point 2)."""
         results_col.clear()
         with results_col:
             if result.image is not None:
-                _render_image_rows(result.reference, result.image)
+                _render_image_cards(result.reference, result.image)
             elif result.attribution is not None:
-                _render_attribution_rows(result)
+                _render_attribution_cards(result)
 
-    def _render_image_rows(reference: Tensor | None, image: Tensor) -> None:
-        ui.label("Input → Result (per sample)").classes(
-            "font-mono text-xs text-slate-600"
-        )
+    def _render_image_cards(reference: Tensor | None, image: Tensor) -> None:
         for i in range(int(image.shape[0])):
-            with ui.row().classes("items-center gap-3 no-wrap"):
-                if reference is not None:
-                    _image_cell(reference, i)
-                _image_cell(image, i)
+            cells: list[tuple[str, Callable[[], None]]] = []
+            if reference is not None:
+                cells.append(("input", lambda i=i: _image_widget(reference, i)))
+            cells.append(("result", lambda i=i: _image_widget(image, i)))
+            _sample_card(i, cells)
 
-    def _render_attribution_rows(result: ExperimentResult) -> None:
+    def _render_attribution_cards(result: ExperimentResult) -> None:
         attribution = result.attribution
         reference = result.reference
         assert attribution is not None
-        n = int(attribution.shape[0])
+        attr = attribution  # narrowed; safe to index inside the cell closures
+        n = int(attr.shape[0])
         if state.overlay and reference is not None:
-            ui.label("Attribution overlaid on input (per sample)").classes(
-                "font-mono text-xs text-slate-600"
-            )
-            vmax = _attribution_vmax(attribution)
+            ref = reference  # narrowed for the closures below
+            vmax = _attribution_vmax(attr)
             for i in range(n):
-                with ui.row().classes("items-center gap-3 no-wrap"):
-                    _strip_cell(
-                        render_attribution_overlay(
-                            reference[i],
-                            attribution[i],
-                            mean=input_mean,
-                            std=input_std,
-                            vmax=vmax,
+                _sample_card(
+                    i,
+                    [
+                        (
+                            "overlay",
+                            lambda i=i: _strip_widget(
+                                render_attribution_overlay(
+                                    ref[i],
+                                    attr[i],
+                                    mean=input_mean,
+                                    std=input_std,
+                                    vmax=vmax,
+                                    tile_px=INPUT_IMAGE_SIZE,
+                                )
+                            ),
                         )
-                    )
+                    ],
+                )
             return
-        ui.label("Input → Attribution (per sample)").classes(
-            "font-mono text-xs text-slate-600"
-        )
         input_hw = tensor_hw(reference)
         for i in range(n):
-            with ui.row().classes("items-center gap-3 no-wrap"):
-                if reference is not None:
-                    _image_cell(reference, i)
-                _strip_cell(render_strip(attribution, i, input_hw=input_hw))
+            # Attribution map first, input second (point 1).
+            cells: list[tuple[str, Callable[[], None]]] = [
+                (
+                    "attribution",
+                    lambda i=i: _strip_widget(
+                        render_strip(
+                            attr, i, input_hw=input_hw, tile_px=INPUT_IMAGE_SIZE
+                        )
+                    ),
+                )
+            ]
+            if reference is not None:
+                cells.append(("input", lambda i=i: _image_widget(reference, i)))
+            _sample_card(i, cells)
 
     def update_controls(*, running: bool) -> None:
         run_ok = not state.frozen and not session.auto_run_experiments and not running
