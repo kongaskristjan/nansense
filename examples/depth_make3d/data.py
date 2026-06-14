@@ -21,7 +21,12 @@ from pathlib import Path
 import numpy as np
 import scipy.io
 import torch
-from PIL import Image
+from PIL import Image, ImageFile
+
+# A few Make3D JPEGs are slightly truncated (a known quirk of the dataset); PIL
+# refuses them by default. Load what's there — the depth target comes from the
+# .mat file, so a few missing pixels at an image's edge are harmless.
+ImageFile.LOAD_TRUNCATED_IMAGES = True  # ty: ignore[invalid-assignment]  # PIL stub types it Literal[False]
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -78,32 +83,70 @@ def _archive_dirs(split: str) -> tuple[tuple[str, str], tuple[str, str]]:
     raise ValueError(f"split must be 'train' or 'test', got {split!r}")
 
 
-def _maybe_download(url: str, extract_dir: str, data_dir: Path) -> Path:
-    """Fetch + extract `url` under `data_dir/extract_dir` unless already present.
+_DOWNLOAD_ATTEMPTS = 4
 
-    Make3D archives carry no published checksum and the host is occasionally
-    slow, so existence of the target directory (with files) is the skip signal.
+
+def _maybe_download(url: str, extract_dir: str, data_dir: Path, expected_glob: str) -> Path:
+    """Fetch + extract `url` into `data_dir/extract_dir` unless already present.
+
+    The archive is extracted into its own `extract_dir` (via `extract_root`) so
+    that the train and test image sets — whose files share the `img-*.jpg`
+    naming — never land in the same directory. The Make3D archives are
+    inconsistent about internal layout (the image tarball is flat, the depth
+    one nests a folder), so callers locate files with `rglob`, not a fixed
+    depth. No published checksum + a slow host means "a matching file already
+    exists under the target" is the skip signal.
+
+    The Make3D host is slow and occasionally truncates a transfer. A partial
+    archive would otherwise be silently re-used (torchvision skips re-download
+    when the file exists and there is no checksum) and fail extraction with a
+    cryptic `EOFError` forever, so each attempt first removes any stale archive
+    and the whole thing is retried a few times before giving up.
     """
     target = data_dir / extract_dir
-    if target.is_dir() and any(target.iterdir()):
+    if target.is_dir() and next(target.rglob(expected_glob), None) is not None:
         return target
-    data_dir.mkdir(parents=True, exist_ok=True)
-    download_and_extract_archive(url, download_root=str(data_dir), remove_finished=True)
-    return target
+    target.mkdir(parents=True, exist_ok=True)
+    archive = data_dir / Path(url).name  # where torchvision saves the download
+    last_error: Exception | None = None
+    for _attempt in range(_DOWNLOAD_ATTEMPTS):
+        archive.unlink(missing_ok=True)  # never extract a stale/partial download
+        try:
+            download_and_extract_archive(
+                url, download_root=str(data_dir), extract_root=str(target),
+                remove_finished=True,
+            )
+        except Exception as error:  # truncated transfer, corrupt gzip/tar, network
+            last_error = error
+            continue
+        if next(target.rglob(expected_glob), None) is not None:
+            return target
+    raise RuntimeError(
+        f"failed to download and extract {url} after {_DOWNLOAD_ATTEMPTS} attempts "
+        f"(the Make3D host is slow and sometimes truncates transfers); last error: "
+        f"{last_error}. Re-run to retry."
+    )
 
 
-def _build_index(image_dir: Path, depth_dir: Path) -> list[tuple[Path, Path]]:
-    """Pair every depth `.mat` whose image `img-<id>.jpg` exists on disk.
+def _build_index(image_root: Path, depth_root: Path) -> list[tuple[Path, Path]]:
+    """Pair every depth `.mat` with its image by id, searching recursively.
 
-    The id is the depth filename with the `depth_sph_corr-` prefix and `.mat`
-    suffix stripped; the matching image is `img-<id>.jpg` (images live flat in
-    their archive directory).
+    The id is the filename with its prefix (`depth_sph_corr-` / `img-`) and
+    suffix stripped; an image `img-<id>.jpg` matches depth
+    `depth_sph_corr-<id>.mat`. `rglob` tolerates whichever nesting each archive
+    happened to extract into.
     """
+    images = {
+        p.stem[len(_IMAGE_PREFIX) :]: p
+        for p in image_root.rglob(f"{_IMAGE_PREFIX}*.jpg")
+        if p.name.startswith(_IMAGE_PREFIX)  # skip __MACOSX '._img-*' resource forks
+    }
     pairs: list[tuple[Path, Path]] = []
-    for depth_path in sorted(depth_dir.glob(f"{_DEPTH_PREFIX}*.mat")):
-        example_id = depth_path.stem[len(_DEPTH_PREFIX) :]
-        image_path = image_dir / f"{_IMAGE_PREFIX}{example_id}.jpg"
-        if image_path.is_file():
+    for depth_path in sorted(depth_root.rglob(f"{_DEPTH_PREFIX}*.mat")):
+        if not depth_path.name.startswith(_DEPTH_PREFIX):
+            continue
+        image_path = images.get(depth_path.stem[len(_DEPTH_PREFIX) :])
+        if image_path is not None:
             pairs.append((image_path, depth_path))
     return pairs
 
@@ -137,9 +180,11 @@ class Make3DDataset(Dataset):
     def __init__(self, config: DatasetConfig, data_dir: Path, train: bool, download: bool) -> None:
         split = "train" if train else "test"
         (img_url, img_dir), (depth_url, depth_dir) = _archive_dirs(split)
+        image_glob = f"{_IMAGE_PREFIX}*.jpg"
+        depth_glob = f"{_DEPTH_PREFIX}*.mat"
         if download:
-            image_root = _maybe_download(img_url, img_dir, data_dir)
-            depth_root = _maybe_download(depth_url, depth_dir, data_dir)
+            image_root = _maybe_download(img_url, img_dir, data_dir, image_glob)
+            depth_root = _maybe_download(depth_url, depth_dir, data_dir, depth_glob)
         else:
             image_root = data_dir / img_dir
             depth_root = data_dir / depth_dir
