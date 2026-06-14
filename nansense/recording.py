@@ -47,9 +47,10 @@ import io
 import re
 import threading
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -76,6 +77,15 @@ VIDEO_FPS: int = 10
 # Hard cap on frame width/height; very wide layers (many channels) are
 # cropped rather than producing GB-sized videos.
 MAX_FRAME_SIZE: int = 4096
+
+# Upper bound (seconds) on how long finalizing one MP4 may wait for its ffmpeg
+# subprocess to exit. `imageio_ffmpeg`'s writer otherwise waits *forever* for
+# ffmpeg to quit (its `ffmpeg_timeout` defaults to None), so a stalled ffmpeg —
+# e.g. starved while the machine is under heavy memory pressure — would hang
+# `RecordingManager.end` and, through it, the UI's "Save & Finish" button
+# indefinitely. With a timeout the subprocess is killed instead, so ending a
+# recording always returns (at worst with a slightly truncated tail).
+_FFMPEG_CLOSE_TIMEOUT: float = 30.0
 
 _SECTION_GAP: int = 10
 _FRAME_PAD: int = 10
@@ -116,21 +126,22 @@ class RecordingStatus:
     paths: tuple[Path, ...]
 
 
-class _FrameWriter(Protocol):
-    """The slice of imageio's writer interface the streams use."""
-
-    def append_data(self, im: np.ndarray) -> None: ...
-
-    def close(self) -> None: ...
-
-
 class _VideoStream:
-    """One MP4 file, lazily opened and locked to its first frame's size."""
+    """One MP4 file, lazily opened and locked to its first frame's size.
+
+    Frames are pushed straight into an `imageio_ffmpeg.write_frames` generator
+    rather than through `imageio.get_writer`: the low-level API is the only one
+    that accepts `ffmpeg_timeout`, which bounds how long `close()` waits for
+    ffmpeg to finalize (see `_FFMPEG_CLOSE_TIMEOUT`) instead of waiting forever.
+    """
 
     def __init__(self, path: Path, fps: int) -> None:
         self.path = path
         self._fps = fps
-        self._writer: _FrameWriter | None = None
+        # The `write_frames` generator: seeded with `send(None)` to spawn
+        # ffmpeg, then fed one `rgb24` frame per `send(bytes)`. Created lazily
+        # on the first frame so its size locks to that frame.
+        self._writer: Generator[None, bytes, None] | None = None
         self._size: tuple[int, int] | None = None  # (height, width)
 
     def append(self, frame: np.ndarray) -> None:
@@ -140,23 +151,32 @@ class _VideoStream:
             w = min(MAX_FRAME_SIZE, frame.shape[1] + frame.shape[1] % 2)
             self._size = (h, w)
         writer = self._ensure_writer()
-        writer.append_data(_fit_frame(frame, *self._size))
+        # `tobytes()` always emits C-order `rgb24` bytes, even if `_fit_frame`
+        # returned a non-contiguous crop.
+        writer.send(_fit_frame(frame, *self._size).tobytes())
 
-    def _ensure_writer(self) -> _FrameWriter:
+    def _ensure_writer(self) -> Generator[None, bytes, None]:
         if self._writer is not None:
             return self._writer
-        import imageio.v2 as imageio
+        import imageio_ffmpeg
 
+        assert self._size is not None  # `append` sets it before calling this
+        height, width = self._size
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._writer = imageio.get_writer(
+        writer = imageio_ffmpeg.write_frames(
             str(self.path),
+            size=(width, height),
             fps=self._fps,
             codec="libx264",
             quality=8,
-            pixelformat="yuv420p",
+            pix_fmt_in="rgb24",
+            pix_fmt_out="yuv420p",
             macro_block_size=1,
+            ffmpeg_timeout=_FFMPEG_CLOSE_TIMEOUT,
         )
-        return self._writer
+        writer.send(None)  # seed: spawn the ffmpeg subprocess
+        self._writer = writer
+        return writer
 
     def close(self) -> None:
         if self._writer is not None:

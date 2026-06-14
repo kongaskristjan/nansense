@@ -670,7 +670,11 @@ connection and loses the in-flight click. Each `ViewRecorder` serialises
 just its short stream append/close sections with its own lock; a
 recording ended or deleted mid-render finishes the render and drops that
 frame (`_closed`). The dialog's end/delete actions additionally run via
-`asyncio.to_thread`, since ffmpeg finalization can take a moment.
+`asyncio.to_thread`, since ffmpeg finalization can take a moment. That
+finalization is bounded by `_FFMPEG_CLOSE_TIMEOUT`: each stream feeds an
+`imageio_ffmpeg.write_frames` generator (the only writer API exposing
+`ffmpeg_timeout`), so a stalled ffmpeg is killed rather than awaited
+forever — otherwise "Save & Finish" would hang indefinitely.
 
 ## Time travel (`nansense.restore`)
 
