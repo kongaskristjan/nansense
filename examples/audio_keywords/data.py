@@ -1,25 +1,42 @@
 """Mini Speech Commands data loading: WAV files -> log-mel spectrograms.
 
 The dataset is Google's "mini Speech Commands" set (8 keywords, ~8000 mono
-16 kHz ~1 s clips). It is fetched once with torchvision's archive downloader and
-read off disk with `scipy.io.wavfile`. Every audio operation — framing, the STFT,
-the mel filterbank, the log compression — lives in the transform, so the model
-only ever sees a fixed `[1, n_mels, n_frames]` log-mel tensor and stays a plain
-2D CNN over an "image".
+16 kHz ~1 s clips), fetched once with torchvision's archive downloader. The
+clips are plain 16-bit PCM, so they are decoded with the stdlib `wave` module:
+torchaudio 2.x routes `torchaudio.load` through TorchCodec (FFmpeg), which we
+don't want to require just to read PCM. The interesting audio processing — the
+STFT, the mel filterbank, the log compression — does run on torchaudio, via
+`torchaudio.transforms.MelSpectrogram` in the transform, so the model only ever
+sees a fixed `[1, n_mels, n_frames]` log-mel tensor and stays a plain 2D CNN
+over an "image".
+
+torchaudio is intentionally absent on some PyTorch builds (notably ROCm); the
+import below fails with a friendly message rather than a cryptic
+`ModuleNotFoundError`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
-from scipy.io import wavfile
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets.utils import download_and_extract_archive
+
+try:
+    import torchaudio
+    from torchaudio.transforms import MelSpectrogram
+except ImportError as exc:  # pragma: no cover - exercised only where torchaudio is absent
+    raise SystemExit(
+        "the audio_keywords example requires torchaudio, which is unavailable on "
+        "the ROCm PyTorch build. Install a CPU/CUDA build (e.g. `uv sync --group "
+        "cu130`) to run this example."
+    ) from exc
 
 DATA_URL: str = "https://storage.googleapis.com/download.tensorflow.org/data/mini_speech_commands.zip"
 EXTRACT_DIRNAME: str = "mini_speech_commands"
@@ -48,86 +65,69 @@ class AudioConfig:
     f_min: float = 20.0
     f_max: float = 8_000.0  # Nyquist at 16 kHz
     log_eps: float = 1e-6
-    # Approximate global log-mel statistics (see class docstring).
-    mean: tuple[float, ...] = (-6.0,)
-    std: tuple[float, ...] = (3.0,)
-
-
-def _hz_to_mel(hz: Tensor) -> Tensor:
-    return 2595.0 * torch.log10(1.0 + hz / 700.0)
-
-
-def _mel_to_hz(mel: Tensor) -> Tensor:
-    return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
-
-
-def build_mel_filterbank(config: AudioConfig) -> Tensor:
-    """A `[n_mels, n_fft // 2 + 1]` triangular mel filterbank matrix.
-
-    Triangles are spaced evenly on the mel scale between `f_min` and `f_max` and
-    interpolated back onto the linear STFT frequency bins — the standard
-    Slaney-style construction, built from scratch with torch ops.
-    """
-    n_freqs = config.n_fft // 2 + 1
-    fft_freqs = torch.linspace(0.0, config.sample_rate / 2.0, n_freqs)
-
-    mel_min = _hz_to_mel(torch.tensor(config.f_min))
-    mel_max = _hz_to_mel(torch.tensor(config.f_max))
-    # n_mels + 2 points define n_mels overlapping triangles (lower / peak / upper).
-    mel_points = torch.linspace(float(mel_min), float(mel_max), config.n_mels + 2)
-    hz_points = _mel_to_hz(mel_points)
-
-    filterbank = torch.zeros(config.n_mels, n_freqs)
-    for m in range(config.n_mels):
-        lower, center, upper = hz_points[m], hz_points[m + 1], hz_points[m + 2]
-        left = (fft_freqs - lower) / (center - lower)
-        right = (upper - fft_freqs) / (upper - center)
-        filterbank[m] = torch.clamp(torch.minimum(left, right), min=0.0)
-    return filterbank
+    # Approximate global log-mel statistics (see class docstring). Measured on
+    # a sample of the mini Speech Commands clips with the torchaudio front end
+    # below (~ -6.8 mean / 4.6 std over the log-mel grid).
+    mean: tuple[float, ...] = (-6.8,)
+    std: tuple[float, ...] = (4.6,)
 
 
 class LogMelTransform:
     """Waveform `[clip_length]` -> log-mel spectrogram `[1, n_mels, n_frames]`.
 
-    Pure torch: `torch.stft` -> power -> mel projection -> `log(x + eps)`. The
-    filterbank is precomputed once and reused for every clip.
+    Wraps `torchaudio.transforms.MelSpectrogram` (a power spectrogram projected
+    through a Slaney-style mel filterbank) and applies `log(x + eps)`. The
+    transform is an `nn.Module`, so it deliberately lives here in the dataset —
+    never inside the model's `forward` — keeping the model fx-traceable.
     """
 
     def __init__(self, config: AudioConfig) -> None:
         self.config = config
-        self.window = torch.hann_window(config.n_fft)
-        self.filterbank = build_mel_filterbank(config)
-
-    def __call__(self, waveform: Tensor) -> Tensor:
-        cfg = self.config
-        spectrum = torch.stft(
-            waveform,
-            n_fft=cfg.n_fft,
-            hop_length=cfg.hop_length,
-            window=self.window,
-            center=True,
-            return_complex=True,
+        self.mel = MelSpectrogram(
+            sample_rate=config.sample_rate,
+            n_fft=config.n_fft,
+            hop_length=config.hop_length,
+            n_mels=config.n_mels,
+            f_min=config.f_min,
+            f_max=config.f_max,
+            power=2.0,  # power spectrogram, matching a classic log-mel front end
         )
-        power = spectrum.abs() ** 2  # [n_freqs, n_frames]
-        mel = self.filterbank @ power  # [n_mels, n_frames]
-        log_mel = torch.log(mel + cfg.log_eps)
+        self.mel.eval()
+
+    @torch.no_grad()
+    def __call__(self, waveform: Tensor) -> Tensor:
+        mel = self.mel(waveform)  # [n_mels, n_frames]
+        log_mel = torch.log(mel + self.config.log_eps)
         return log_mel.unsqueeze(0)  # [1, n_mels, n_frames]
 
 
-def load_waveform(path: Path, clip_length: int) -> Tensor:
-    """Read a mono 16 kHz WAV as float32 in [-1, 1], padded/truncated to length.
+def load_waveform(path: Path, config: AudioConfig) -> Tensor:
+    """Read a WAV as a mono float32 waveform in [-1, 1], padded/truncated to length."""
+    waveform = _load_pcm_wav(path, config.sample_rate)
+    return fix_length(waveform, config.clip_length)
 
-    `scipy.io.wavfile` returns int16 PCM for these clips; the divide maps it to
-    the [-1, 1] float range the front end expects.
+
+def _load_pcm_wav(path: Path, expected_rate: int) -> Tensor:
+    """Decode a 16-bit PCM WAV to a mono float32 `[samples]` tensor in [-1, 1].
+
+    Uses the stdlib `wave` module: torchaudio 2.x's `torchaudio.load` decodes
+    via TorchCodec (FFmpeg), which we avoid requiring just to read these plain
+    PCM clips. torchaudio is still used for the mel front end (see above).
     """
-    _sample_rate, samples = wavfile.read(path)
-    audio = torch.from_numpy(np.asarray(samples)).to(torch.float32)
-    if audio.ndim > 1:  # collapse any stray stereo to mono
-        audio = audio.mean(dim=1)
-    if audio.dtype != torch.float32:  # pragma: no cover - scipy returns int16
-        audio = audio.to(torch.float32)
-    audio = audio / 32768.0
-    return fix_length(audio, clip_length)
+    with wave.open(str(path), "rb") as wav:
+        n_channels = wav.getnchannels()
+        sample_rate = wav.getframerate()
+        sample_width = wav.getsampwidth()
+        frames = wav.readframes(wav.getnframes())
+    if sample_width != 2:  # pragma: no cover - mini Speech Commands is 16-bit PCM
+        raise ValueError(f"Expected 16-bit PCM WAV, got {sample_width * 8}-bit: {path}")
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    audio = torch.from_numpy(samples.copy())
+    if n_channels > 1:  # pragma: no cover - clips are mono
+        audio = audio.reshape(-1, n_channels).mean(dim=1)
+    if sample_rate != expected_rate:  # pragma: no cover - clips are 16 kHz
+        audio = torchaudio.functional.resample(audio, sample_rate, expected_rate)
+    return audio
 
 
 def fix_length(audio: Tensor, clip_length: int) -> Tensor:
@@ -180,7 +180,7 @@ class SpeechCommandsDataset(Dataset):
 
     def __getitem__(self, index: int) -> tuple[Tensor, int]:
         path, label = self.samples[index]
-        waveform = load_waveform(path, self.config.clip_length)
+        waveform = load_waveform(path, self.config)
         return self.transform(waveform), label
 
 

@@ -11,7 +11,6 @@ from examples.audio_keywords.data import (
     KEYWORDS,
     AudioConfig,
     LogMelTransform,
-    build_mel_filterbank,
     fix_length,
 )
 
@@ -21,19 +20,10 @@ def test_keyword_classes() -> None:
     assert AudioConfig().num_classes == len(KEYWORDS) == 8
 
 
-def test_mel_filterbank_shape_and_nonnegative() -> None:
-    config = AudioConfig()
-    filterbank = build_mel_filterbank(config)
-    assert filterbank.shape == (config.n_mels, config.n_fft // 2 + 1)
-    assert torch.all(filterbank >= 0.0)
-    # Every triangle must have some support on the linear frequency grid.
-    assert torch.all(filterbank.sum(dim=1) > 0.0)
-
-
 @pytest.mark.parametrize("n_mels", [20, 40, 64])
 def test_log_mel_transform_shape_and_finite(n_mels: int) -> None:
-    """Run the transform on a synthetic waveform (no disk read) and check the
-    `[1, n_mels, n_frames]` shape and that every value is finite."""
+    """Run the torchaudio transform on a synthetic waveform (no disk read) and
+    check the `[1, n_mels, n_frames]` shape and that every value is finite."""
     config = AudioConfig(n_mels=n_mels)
     transform = LogMelTransform(config)
 
