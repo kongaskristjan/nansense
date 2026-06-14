@@ -47,5 +47,5 @@
 - Before committing: `uv run pytest && uv run ty check`
 - Before committing: run the code. For UI testing, you can run some of the examples and use the playwright MCP.
   - Use any `--nansense-port [NUMBER]`. If a port has been taken, just try another one. Don't kill sessions on other ports, as they may have been started by the user or other concurrent agents.
-- `README.md` and `INTERNALS.md` should be kept up to date
+- Keep `README.md` short and lean: only update it when previously documented behaviour becomes invalid, not to advertise every new feature. Keep `INTERNALS.md` up to date.
 

@@ -174,6 +174,8 @@ uv run examples/standard/main.py --nansense-port 8080
 Each example is self-contained and downloads its dataset on first run. Open the
 printed URL; training pauses on the first batch — drive it from the top bar.
 
+If you hit out-of-memory, lower `--batch-size` (or add `--bf16` where supported).
+
 - **`standard`** — ResNet / ViT / LeNet on CIFAR-10 / MNIST / Imagenette with
   the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
   and launch under `torchrun` for multi-rank DDP.
