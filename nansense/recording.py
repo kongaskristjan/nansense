@@ -87,6 +87,18 @@ MAX_FRAME_SIZE: int = 4096
 # recording always returns (at worst with a slightly truncated tail).
 _FFMPEG_CLOSE_TIMEOUT: float = 30.0
 
+# x264 encoder settings that keep ffmpeg's *memory* bounded. libx264's default
+# `medium` preset buffers ~40 frames of rc-lookahead and defers most encoding
+# to the stdin-EOF flush in `close()`, where its working set roughly triples —
+# a multi-GB spike *at save time* (proportional to frame area) that, stacked on
+# the training process, can trip the OOM killer or stall the flush. `ultrafast`
+# drops the lookahead and B-frames so frames encode as they stream in, and a
+# small thread cap avoids per-thread frame-buffer duplication; together they
+# cut the close-time footprint ~10x and make the flush near-instant. The only
+# cost is weaker compression (larger files), which is fine for short clips;
+# visual quality still follows `quality` (the CRF). See INTERNALS.md.
+_X264_OUTPUT_PARAMS: list[str] = ["-preset", "ultrafast", "-threads", "2"]
+
 _SECTION_GAP: int = 10
 _FRAME_PAD: int = 10
 _LABEL_COLOR: tuple[int, int, int] = (30, 41, 59)  # slate-800
@@ -173,6 +185,7 @@ class _VideoStream:
             pix_fmt_out="yuv420p",
             macro_block_size=1,
             ffmpeg_timeout=_FFMPEG_CLOSE_TIMEOUT,
+            output_params=_X264_OUTPUT_PARAMS,
         )
         writer.send(None)  # seed: spawn the ffmpeg subprocess
         self._writer = writer
