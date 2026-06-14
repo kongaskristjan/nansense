@@ -54,7 +54,7 @@ Available examples:
   the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
   and launch under `torchrun` for multi-rank DistributedDataParallel
   training (see [Distributed training](#distributed-training-ddp)).
-- `examples/lightning/main.py` — a tiny convnet on MNIST trained with
+- `examples/pytorch_lightning/main.py` — a tiny convnet on MNIST trained with
   PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
 - `examples/game_of_life/main.py` — predict Conway's Game of Life `--steps`
   K (default 1) steps ahead on synthetic random boards (no download): a
@@ -226,7 +226,7 @@ Epoch boundaries are checkpointed via `trainer.save_checkpoint` (with RNG
 states stashed alongside), and a jump re-invokes
 `trainer.fit(ckpt_path=...)`, so the replay is exactly as deterministic as
 the hand-written loop's. The runnable version of this wiring is
-`examples/lightning/main.py`. Supported: automatic optimization and
+`examples/pytorch_lightning/main.py`. Supported: automatic optimization and
 epoch-boundary validation, including `check_val_every_n_epoch > 1`.
 Rejected with a clear error: mid-epoch validation
 (`val_check_interval < 1.0` or step-driven) and unsized dataloaders — the

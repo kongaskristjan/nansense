@@ -23,7 +23,7 @@ description: Launch a nansense example (web UI on --nansense-port) and verify it
      the ResNet small and fast, `--dataset mnist --model lenet` is the
      lightest full-wiring combination. Add `--distributed` (under
      `torchrun`) to exercise the DDP path.
-   - `examples/lightning/main.py` — the PyTorch Lightning wiring
+   - `examples/pytorch_lightning/main.py` — the PyTorch Lightning wiring
      (`NansenseCallback` + `fit_with_time_travel`); use when testing
      `nansense/lightning.py` changes.
    - `examples/game_of_life/main.py` — synthetic data, no download, fast
