@@ -38,6 +38,26 @@ def _back_button() -> None:
     ).props('dense size=md href="/"').tooltip("Back to the main page")
 
 
+def _refresh_button(session: Session) -> None:
+    """The Refresh button shared by the main and weights top bars.
+
+    Arms `Session.request_snapshot` so the next training batch publishes a
+    snapshot, updating the activations, gradients, weights, and probe at once.
+    The visualizations are already current when training is paused or idle;
+    this only matters in `detach` / `step_run`, where training runs freely and
+    the views would otherwise stay frozen between frequency-cadence updates.
+    Styled like the adjacent nav button so it reads as the second left-cluster
+    control on every page that shows it.
+    """
+    ui.button(
+        icon="refresh",
+        on_click=session.request_snapshot,
+        color="slate-500",
+    ).props("dense size=md").tooltip(
+        "Update the views from the next training batch (use while training)"
+    )
+
+
 def _add_step_controls(
     session: Session,
     step_until_custom: ui.dialog,

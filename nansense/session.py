@@ -206,6 +206,12 @@ class Session:
         # with a now-stale RNG state. Reset on a time-travel rewind.
         self._epoch_start_saved_for: int | None = None
         self._pending_jump: int | None = None
+        # One-shot UI request to publish the next batch's snapshot (consumed at
+        # the batch boundary, like `_pending_jump`). The views only refresh on
+        # a published snapshot, so in detach / step_run — which run freely and
+        # publish only on the frequency cadence — this lets the Refresh button
+        # force the next batch to publish without pausing or recomputing.
+        self._snapshot_request = False
         self._cv = threading.Condition()
         self._resume_token = 0
         self._pause_count = 0
@@ -813,6 +819,22 @@ class Session:
         """
         return capture.current_optimizer_hyperparams(self.model, self._optimizer)
 
+    def request_snapshot(self) -> None:
+        """Ask the next batch to publish a snapshot (the UI Refresh button).
+
+        A snapshot is what refreshes the views (activations, gradients,
+        weights, and the pinned-input probe), but it is only published on
+        captures and on the frequency cadence — so in `detach` / `step_run`,
+        which run freely between cadence ticks, the views freeze mid-training.
+        This arms a one-shot request that makes the next batch publish without
+        pausing (like a frequency update) and without recomputing anything:
+        the already-running forward/backward is simply captured and sent to the
+        views. A no-op when training isn't producing batches (the shown
+        snapshot is then already current) and idempotent until consumed.
+        """
+        with self._cv:
+            self._snapshot_request = True
+
     def set_schedule(
         self,
         *,
@@ -1142,6 +1164,16 @@ class Session:
             self._pending_jump = None
             return jump
 
+    def _take_snapshot_request(self) -> bool:
+        """Consume the one-shot Refresh request, if armed (training thread)."""
+        # Same lock-free fast path as `_take_pending_jump`: read False on every
+        # batch in the common case, only locking to clear an actual request.
+        if not self._snapshot_request:
+            return False
+        with self._cv:
+            self._snapshot_request = False
+            return True
+
     def _peek_pending_jump(self) -> int:
         """The armed time-travel target without consuming it, -1 when none.
 
@@ -1289,8 +1321,19 @@ class _BatchContext:
         self._position: BatchPosition | None = None
         self._captured = False
         self._freq_update = False
+        self._snapshot_requested = False
         self._stats_only = False
         self._dist_reduce = False
+
+    @property
+    def _publishes(self) -> bool:
+        """Whether this batch publishes a snapshot at `__exit__`.
+
+        A mode capture, a frequency-cadence update, or a one-shot UI Refresh
+        request all publish; only a capture additionally pauses, and only a
+        frequency update additionally records a frame.
+        """
+        return self._captured or self._freq_update or self._snapshot_requested
 
     def __enter__(self) -> Self:
         # `_enabled` is a plain attribute read (no lock), checked first so a
@@ -1336,6 +1379,10 @@ class _BatchContext:
             # it is decided independently of the mode, so visualizations
             # keep refreshing during step-epoch / run / detach.
             self._freq_update = self._session._should_freq_update(self._position)
+            # A one-shot UI Refresh request also publishes (no pause), so a
+            # free-running mode shows the live model on demand. Consumed here
+            # so exactly the next batch publishes.
+            self._snapshot_requested = self._session._take_snapshot_request()
         if dist_ctx is not None:
             # Per-batch control sync (every rank): the leader announces
             # whether this batch's watch stats get globally reduced at
@@ -1346,7 +1393,7 @@ class _BatchContext:
             # batch start.
             self._dist_reduce, jump_epoch = distributed.sync_batch_control(
                 self._session,
-                publish=self._captured or self._freq_update,
+                publish=self._publishes,
                 jump_epoch=(
                     self._session._peek_pending_jump() if dist_ctx.is_leader else -1
                 ),
@@ -1361,16 +1408,14 @@ class _BatchContext:
                     self._session._take_pending_jump()
                 raise TimeTravelJump(jump_epoch)
         self._stats_only = (
-            not self._captured
-            and not self._freq_update
-            and bool(self._session._watched_layers)
+            not self._publishes and bool(self._session._watched_layers)
         )
-        # Capture, frequency-update, and stats-only batches use the same
+        # Publishing, frequency-update, and stats-only batches use the same
         # hook installation: full fx interpreter (or full per-module hooks +
         # root pre-hook in hook-mode). That way any name in `layer_names` —
         # inputs, fx intermediates, modules — can be watched. The only
         # difference is what happens at __exit__ (publish / pause / stats).
-        if self._captured or self._freq_update or self._stats_only:
+        if self._publishes or self._stats_only:
             capture.install_hooks(self._session)
         return self
 
@@ -1382,7 +1427,7 @@ class _BatchContext:
     ) -> None:
         if self._position is None:
             return
-        if self._captured or self._freq_update or self._stats_only:
+        if self._publishes or self._stats_only:
             # Hook removal MUST run once hooks were installed, even if the
             # watch-stats update raises — otherwise the fx-patched forward
             # leaks past this batch and the next install captures it as the
@@ -1405,7 +1450,7 @@ class _BatchContext:
                     distributed.reduce_watch_stats(self._session)
                 capture.remove_hooks(self._session)
                 if exc is None and not self._session.closed:
-                    if self._captured or self._freq_update:
+                    if self._publishes:
                         self._session._publish_snapshot(self._position)
                         # The snapshot holds CPU clones of everything; drop the
                         # live GPU activations (and their retained grads) now so

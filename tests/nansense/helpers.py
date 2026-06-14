@@ -199,6 +199,8 @@ def _make_snapshot(
     *,
     activations: dict[str, Tensor] | None = None,
     activation_gradients: dict[str, Tensor] | None = None,
+    weights: dict[str, Tensor] | None = None,
+    weight_gradients: dict[str, Tensor] | None = None,
 ) -> BatchSnapshot:
     """A snapshot at the given position; tensor categories default to empty."""
     return BatchSnapshot(
@@ -207,8 +209,8 @@ def _make_snapshot(
         activation_gradients=(
             activation_gradients if activation_gradients is not None else {}
         ),
-        weights={},
-        weight_gradients={},
+        weights=weights if weights is not None else {},
+        weight_gradients=weight_gradients if weight_gradients is not None else {},
     )
 
 

@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from nansense.experiments import ExperimentResult
-from nansense.session import Session, UpdateFrequency
+from nansense.session import BatchSnapshot, Session, UpdateFrequency
 from tests.nansense.helpers import (
     TinyNet,
     make_position,
@@ -103,6 +103,36 @@ def test_capture_still_pauses_and_publishes_with_sparse_frequency() -> None:
         assert snap is not None
         assert (snap.position.phase, snap.position.batch_idx) == ("train", 0)
         session.close()
+
+
+def test_request_snapshot_publishes_only_the_next_free_running_batch() -> None:
+    """The Refresh button (`request_snapshot`) arms a one-shot publish for the
+    next free-running batch — refreshing activations, gradients, and weights —
+    without pausing and without recomputing anything off the batch."""
+    session, model = make_session(epochs=1, phases={"train": 3})
+    session.set_update_frequency(unit="epoch", n=100)  # effectively never
+    session.detach()
+
+    def run_batch(batch_idx: int) -> BatchSnapshot | None:
+        before = session.snapshot
+        with session.batch(phase="train", epoch=0):
+            model.zero_grad(set_to_none=True)
+            model(torch.randn(2, 4)).sum().backward()
+        snap = session.snapshot
+        return snap if snap is not None and snap is not before else None
+
+    # Detached with no cadence due, a plain batch publishes nothing.
+    assert run_batch(0) is None
+    # Arming the request makes exactly the next batch publish a full snapshot.
+    session.request_snapshot()
+    published = run_batch(1)
+    assert published is not None
+    assert published.position.batch_idx == 1
+    assert published.activations  # activations refreshed
+    assert published.activation_gradients  # gradients refreshed
+    assert published.weights  # weights refreshed
+    # One-shot: the request is consumed, so the next batch publishes nothing.
+    assert run_batch(2) is None
 
 
 def test_auto_experiment_reruns_with_same_seq_on_updates() -> None:

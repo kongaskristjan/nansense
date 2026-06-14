@@ -26,6 +26,7 @@ from nansense.ui.top_bar import (
     _add_step_controls,
     _back_button,
     _build_step_until_custom_dialog,
+    _refresh_button,
     _top_bar_row,
 )
 
@@ -106,18 +107,12 @@ def _build_weights_page(session: Session, layer: str) -> None:
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
             _back_button()
+            _refresh_button(session)
             ui.label(title).classes(
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
-            ui.button(
-                icon="refresh",
-                on_click=lambda: do_refresh(),
-                color="slate-500",
-            ).props("dense size=md flat").tooltip(
-                "Show the model's current weights (works while training)"
-            )
 
         with ui.column().classes(
             "w-full grow min-h-0 overflow-auto p-4 gap-4 bg-slate-200"
@@ -134,21 +129,6 @@ def _build_weights_page(session: Session, layer: str) -> None:
                         _WeightPanel(name=name, shape=shapes[name], session=session)
                     )
 
-    async def do_refresh() -> None:
-        # Read the model's live parameters instead of the last snapshot, so the
-        # weights update even mid-training (detach / run modes never publish a
-        # snapshot). The live view then persists until the next captured batch.
-        #
-        # The `current_*` reads are GPU→CPU clones of every parameter and the
-        # strip rendering is CPU-heavy, so both run in a worker thread —
-        # blocking the event loop here would starve NiceGUI's websocket
-        # keepalive (~6s budget) and drop connected tabs (same reason
-        # main_page's tick offloads `_compute_frame`). UI mutations
-        # (`set_content`, …) happen back on the loop once the thread returns.
-        renders = await asyncio.to_thread(_compute_live_renders, session, panels)
-        for panel, render in zip(panels, renders, strict=True):
-            panel.apply_render(render)
-
     async def tick() -> None:
         frozen = session.recording.is_recording(record_key)
         for panel in panels:
@@ -158,7 +138,9 @@ def _build_weights_page(session: Session, layer: str) -> None:
             return
         # Only the panels with a genuinely new snapshot need rendering; that
         # decision is cheap, but the rendering it gates is not, so it runs off
-        # the loop just like `do_refresh`.
+        # the loop. The Refresh button doesn't render here — it asks the
+        # training thread to publish the next batch's snapshot, which this tick
+        # then picks up like any other (see `Session.request_snapshot`).
         pending = [panel for panel in panels if panel.needs_render(snap)]
         if not pending:
             return
@@ -167,25 +149,6 @@ def _build_weights_page(session: Session, layer: str) -> None:
             panel.apply_render(render)
 
     ui.timer(0.2, tick)
-
-
-def _compute_live_renders(
-    session: Session, panels: list[_WeightPanel]
-) -> list[_PanelRender]:
-    """GPU→CPU clone the live weights once, then render every panel (worker)."""
-    weights = session.current_weights()
-    gradients = session.current_weight_gradients()
-    optimizer_state = session.current_optimizer_state()
-    optimizer_hyperparams = session.current_optimizer_hyperparams()
-    return [
-        panel.compute_render(
-            weights,
-            gradients,
-            optimizer_state=optimizer_state,
-            optimizer_hyperparams=optimizer_hyperparams,
-        )
-        for panel in panels
-    ]
 
 
 def _compute_snapshot_renders(

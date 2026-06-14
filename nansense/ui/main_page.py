@@ -41,6 +41,7 @@ from nansense.ui.top_bar import (
     _add_settings_button,
     _add_step_controls,
     _build_step_until_custom_dialog,
+    _refresh_button,
     _top_bar_row,
 )
 
@@ -222,6 +223,7 @@ def _build_page(
             architecture_toggle = ui.button(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
+            _refresh_button(session)
             _add_step_controls(session, step_until_custom)
             watch_chip = ui.button(
                 str(len(session.watched_layers)),

@@ -11,13 +11,13 @@ import torch
 from nansense.session import Session
 from nansense.ui.weights_page import (
     _NO_GRADIENT_HTML,
-    _compute_live_renders,
+    _compute_snapshot_renders,
     _default_roles,
     _PanelRender,
     _role_options,
     _WeightPanel,
 )
-from tests.nansense.helpers import make_session
+from tests.nansense.helpers import _make_snapshot, make_session
 
 
 @pytest.mark.parametrize(
@@ -94,20 +94,23 @@ def test_compute_render_missing_weight_is_error() -> None:
     assert not render.weight_html
 
 
-def test_compute_live_renders_runs_off_the_event_loop() -> None:
-    """The Refresh payload (live `current_*` clones + strip render) is the unit
-    `do_refresh` hands to `asyncio.to_thread`; running it through a thread must
-    produce the same rendered content the loop would.
+def test_compute_snapshot_renders_runs_off_the_event_loop() -> None:
+    """The strip render from a published snapshot is the unit `tick` hands to
+    `asyncio.to_thread`; running it through a thread must produce the rendered
+    content the loop would. The Refresh button no longer renders here — it asks
+    the training thread to publish a snapshot that this same path then renders.
 
     This mirrors main_page's `tick`, which offloads `_compute_frame` so the
-    GPU→CPU clones and CPU-heavy rendering never block NiceGUI's websocket
-    keepalive.
+    CPU-heavy rendering never blocks NiceGUI's websocket keepalive.
     """
     session, _ = make_session()
     panel = _first_weight_panel(session)
+    snap = _make_snapshot(
+        "train", 0, 0, weights={panel.name: torch.randn(*panel._shape)}
+    )
 
     async def run() -> list[_PanelRender]:
-        return await asyncio.to_thread(_compute_live_renders, session, [panel])
+        return await asyncio.to_thread(_compute_snapshot_renders, [panel], snap)
 
     renders = asyncio.run(run())
     assert len(renders) == 1

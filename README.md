@@ -247,7 +247,10 @@ jump they see the replayed epochs again.
 The landing page. The top bar drives the training loop: stop, a split Step
 Batch button (clicking it steps one batch; its dropdown offers step epoch,
 step until end, and step custom — pick a phase/epoch/batch to pause at),
-and time travel (jump back to any checkpointed epoch); on the bar's right
+and time travel (jump back to any checkpointed epoch); on the left, beside
+the architecture-pane toggle, a Refresh button asks the next training batch
+to publish, so the strips catch up to the live model in `detach` / `step_run`
+where they would otherwise freeze between cadence updates; on the bar's right
 side, a gear button opens the settings dialog (update frequency and MP4
 recording — see below). The left pane shows the architecture as a diagram;
 clicking a node toggles that layer's card in the center pane — visible is
@@ -317,8 +320,9 @@ with its gradient strip below, plus — when an `optimizer=` was passed to
 `start()` — one strip per tensor-valued optimizer state entry (momentum
 buffer, Adam moments, …) and the param group's live hyperparameters.
 Per-dimension selects remap which tensor axes become X, Y, and tiling (a 4D
-conv weight defaults to kernel tiles); a Refresh button re-reads weights on
-demand, even mid-training.
+conv weight defaults to kernel tiles); the same top-bar Refresh button asks
+the next training batch to publish, so the strips catch up to the live model
+mid-training in `detach` / `step_run`.
 
 ![Weights page](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-weights.png)
 

@@ -85,6 +85,26 @@ This is what keeps the UI (and recordings) refreshing during `step_epoch`,
 `step_run`, and `detach`. The batch-unit counter (`_freq_counter`) lives on
 the training thread and resets when the setting changes.
 
+### On-demand refresh
+
+`Session.request_snapshot()` (the UI's Refresh button) arms a one-shot
+`_snapshot_request` flag, consumed at the next batch start by
+`_take_snapshot_request()` — the same lock-free fast path as `_take_pending_jump`.
+A batch that consumed it publishes exactly like a frequency update **minus the
+recording frame**: it installs hooks, and at `__exit__` publishes a snapshot,
+re-runs the probe, and re-runs auto experiments, but never records a frame and
+never pauses. `_BatchContext._publishes` (capture, frequency update, *or*
+snapshot request) is the single predicate gating hook install and the publish
+block; only `_freq_update` still gates `_record_frames()` and only `_captured`
+gates `_wait_for_proceed()`. The point is that the views only refresh on a
+published snapshot, so in `detach` / `step_run` between cadence ticks they sit
+frozen on the live model — Refresh nudges the next batch to publish without
+recomputing anything off-batch (the running forward/backward is simply
+captured). It is a no-op when no batch follows (the shown snapshot is already
+current). In distributed runs only the leader holds the flag; folding it into
+the `publish=` argument of `sync_batch_control` keeps followers in lockstep for
+the watch-stats reduce.
+
 ## Hook lifecycle, gradient pickup, snapshot copy
 
 The capture machinery — hook installation, the fx interpreter,
@@ -1199,15 +1219,15 @@ imports only those, never page modules.
   suppresses `.value` writes made from inside a value-change handler, the
   select/visibility sync after a demotion is deferred one event-loop tick
   with `ui.timer(0.0, …, once=True)` — the same workaround the main page's
-  sample spinner uses. A top-bar Refresh button calls
-  `session.current_weights()` / `current_weight_gradients()` /
-  `current_optimizer_state()` / `current_optimizer_hyperparams()`
-  (live CPU clones read at call time rather than at a pause) and pushes
-  them through each panel's `show_weights`, so every strip updates
-  mid-training even in `detach` / `step_run` where no snapshot is
-  published. Because `maybe_render` only redraws on a *new* snapshot,
-  the manually-refreshed live view persists until the next captured
-  batch.
+  sample spinner uses. The top-bar Refresh button (the shared `_refresh_button`
+  in `top_bar`, also on the main page, placed second in the left cluster) does
+  not render anything itself: it calls `session.request_snapshot()`, which arms
+  a one-shot flag so the next batch publishes a snapshot (see *On-demand
+  refresh* under *Modes and capture decisions*). The page's existing `ui.timer`
+  then renders that snapshot
+  like any other, so the strips update mid-training even in `detach` /
+  `step_run` where the frequency cadence alone would leave them frozen — with
+  no separate live-read path to keep consistent with `_publish_snapshot`.
 
 ## Enabled flag (zero-overhead off switch)
 
