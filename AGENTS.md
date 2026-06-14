@@ -20,6 +20,7 @@
   - After finishing work, merge the worktree branch back into `main`.
     - For automatic merges, additional verification after the merge is usually not necessary.
     - For complex/manual merges, run the tests/checks again. For UI conflicts, verify with Playwright.
+    - Fast forward merges if there's no conflicts.
 
 ## Code quality
 
