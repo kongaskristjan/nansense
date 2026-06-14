@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
+import pytest
 import torch
 
 from examples.audio_keywords import main as main_module
@@ -25,3 +27,9 @@ def test_build_optimizer_and_scheduler() -> None:
     optimizer, scheduler = main_module.build_optimizer_and_scheduler(model, args)
     assert isinstance(optimizer, torch.optim.AdamW)
     assert isinstance(scheduler, torch.optim.lr_scheduler.CosineAnnealingLR)
+
+
+def test_default_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The documented default keeps peak GPU memory around ~3 GB."""
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    assert main_module.parse_args().batch_size == 256

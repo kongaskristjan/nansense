@@ -104,7 +104,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=256,
+        help="Batch size (default 256; the tiny convnet stays well under 1 GB of GPU memory).",
+    )
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument(

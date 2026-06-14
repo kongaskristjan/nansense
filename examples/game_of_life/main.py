@@ -33,7 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=512,
+        help="Batch size (default 512, ~3.9 GB peak GPU memory at the default board/depth).",
+    )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument(

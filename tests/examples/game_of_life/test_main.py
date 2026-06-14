@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 import torch
 import torch.fx
@@ -70,6 +72,12 @@ def test_build_model_shape_and_fx_traceable(board_size: int, steps: int) -> None
     assert out.shape == (2, 1, board_size, board_size)
     # nansense traces the graph to name layers; tracing must succeed.
     torch.fx.symbolic_trace(model)
+
+
+def test_default_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The documented default keeps peak GPU memory around ~3.9 GB."""
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    assert main_module.parse_args().batch_size == 512
 
 
 def test_training_reduces_bce_loss() -> None:

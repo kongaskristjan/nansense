@@ -45,6 +45,10 @@ reproducible and doesn't re-lock.
 Open `http://localhost:8080`. Training pauses on the first batch; drive it
 from the top bar (stop, the Step button, time travel).
 
+Each example's default `--batch-size` is sized to keep peak GPU memory around
+~4 GB (some lighter ones use less); a few defaults depend on the dataset or
+backbone — see `--help`. Override `--batch-size` to trade memory for speed.
+
 Available examples:
 
 - `examples/standard/main.py` — a small pre-activation ResNet (default), a

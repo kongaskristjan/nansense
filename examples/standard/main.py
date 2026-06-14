@@ -60,7 +60,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Batch size (default: 256 for cifar10/mnist, 64 for imagenette — "
+            "sized to keep peak GPU memory around ~4 GB)."
+        ),
+    )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument(
@@ -104,6 +112,16 @@ def parse_args() -> argparse.Namespace:
         help="Disable nansense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
+
+
+def default_batch_size(dataset: str) -> int:
+    """Batch size that keeps peak GPU memory around ~4 GB across the models.
+
+    Imagenette's 128x128 images cost ~16x the activation memory of the 32x32
+    cifar10 / mnist crops, so it needs a much smaller batch (the ResNet
+    variants are the binding case at ~4 GB for 64; the small datasets peak at
+    ~3.3 GB for the ViT at 256)."""
+    return 64 if dataset == "imagenette" else 256
 
 
 def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> nn.Module:
@@ -343,6 +361,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     config = DATASETS[args.dataset]
+    if args.batch_size is None:
+        args.batch_size = default_batch_size(args.dataset)
     if args.distributed:
         run_distributed(args, config)
     else:

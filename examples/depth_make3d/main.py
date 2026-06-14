@@ -39,7 +39,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Batch size (default: 48 for resnet18, 32 for resnet34 — sized to "
+            "keep peak GPU memory around ~4 GB)."
+        ),
+    )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=2)
@@ -68,6 +76,13 @@ def parse_args() -> argparse.Namespace:
         help="Disable nansense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
+
+
+def default_batch_size(backbone: str) -> int:
+    """Batch size that keeps peak GPU memory around ~4 GB for the 192x256
+    inputs: the deeper resnet34 encoder needs a smaller batch (~3.4 GB at 32)
+    than resnet18 (~3.8 GB at 48)."""
+    return 32 if backbone == "resnet34" else 48
 
 
 def build_optimizer_and_scheduler(
@@ -160,6 +175,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     config = DatasetConfig()
+    if args.batch_size is None:
+        args.batch_size = default_batch_size(args.backbone)
     run_single(args, config, select_device(args.device))
 
 
