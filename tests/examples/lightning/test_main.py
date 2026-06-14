@@ -9,7 +9,7 @@ import torch
 from lightning.pytorch import Trainer, seed_everything
 from torch.utils.data import DataLoader, TensorDataset
 
-from examples.lightning_mnist.main import MNISTClassifier
+from examples.lightning.main import MNISTClassifier
 from nansense.lightning import NansenseCallback, fit_with_time_travel
 
 

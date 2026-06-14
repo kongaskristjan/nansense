@@ -24,8 +24,11 @@ offers the Captum attribution methods (they are hidden otherwise), and with
 uv sync --group cpu    # CPU-only machines (smallest download)
 uv sync --group cu130  # NVIDIA GPU with CUDA 13
 
-uv run python -m examples.vision.main --nansense-port 8080
+uv run examples/standard/main.py --nansense-port 8080
 ```
+
+Each example is self-contained and downloads its dataset on first run, so
+`uv run examples/<name>/main.py` is all you need.
 
 PyTorch is installed through one of several mutually exclusive dependency
 groups, so pick the one matching your hardware: `cpu` (works everywhere),
@@ -43,21 +46,16 @@ from the top bar (stop, the Step button, time travel).
 
 Available examples:
 
-- `examples.mnist_linear.main` — a single linear layer on MNIST with the
-  minimal nansense wiring (no scheduler, no time travel).
-- `examples.lightning_mnist.main` — a tiny convnet on MNIST trained with
-  PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
-- `examples.vision.main` — a small pre-activation ResNet (default), a
+- `examples/standard/main.py` — a small pre-activation ResNet (default), a
   deeper five-stage variant (`--model resnet_deep`), a simple ViT
   (`--model vit`), or LeNet-5 (`--model lenet`) on CIFAR10 (default),
   MNIST (`--dataset mnist`, scaled to 32x32), or Imagenette
   (`--dataset imagenette`), trained with AdamW + a cosine schedule and
-  the full wiring (scheduler, time travel, checkpoints).
-- `examples.ddp_mnist.main` — a small MLP on MNIST trained with
-  DistributedDataParallel across two (or more) ranks; launch with
-  `uv run torchrun --nproc_per_node=2 -m examples.ddp_mnist.main`
-  (falls back from NCCL to CPU/gloo when there are fewer GPUs than
-  ranks, so it runs anywhere).
+  the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
+  and launch under `torchrun` for multi-rank DistributedDataParallel
+  training (see [Distributed training](#distributed-training-ddp)).
+- `examples/lightning/main.py` — a tiny convnet on MNIST trained with
+  PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
 
 ## Minimal example
 
@@ -122,7 +120,7 @@ session.close()
 
 `enabled=False` on `nansense.start()` turns the whole thing into a
 near-zero-overhead no-op, so the wiring can stay in place for plain training
-runs. The runnable version of this loop is `examples/vision/main.py`.
+runs. The runnable version of this loop is `examples/standard/main.py`.
 
 ## Distributed training (DDP)
 
@@ -157,10 +155,13 @@ Per-rank views (snapshot strips, the input pane, extreme-input patches,
 histogram bar samples) show rank 0's shard. Every rank must run the same
 batch structure — `DistributedSampler` on each phase's loader gives equal
 per-rank batch counts. Time travel is not supported in distributed mode.
-The runnable version is `examples/ddp_mnist/main.py`:
+The standard example doubles as the runnable version: pass `--distributed`
+and launch it under `torchrun` (it shards both phases with
+`DistributedSampler`, wraps the model in DDP, and falls back from NCCL to
+CPU/gloo when there are fewer GPUs than ranks, so it runs anywhere):
 
 ```bash
-uv run torchrun --nproc_per_node=2 -m examples.ddp_mnist.main --nansense-port 8080
+uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080
 ```
 
 ## PyTorch Lightning
@@ -211,7 +212,7 @@ Epoch boundaries are checkpointed via `trainer.save_checkpoint` (with RNG
 states stashed alongside), and a jump re-invokes
 `trainer.fit(ckpt_path=...)`, so the replay is exactly as deterministic as
 the hand-written loop's. The runnable version of this wiring is
-`examples/lightning_mnist/main.py`. Supported: automatic optimization and
+`examples/lightning/main.py`. Supported: automatic optimization and
 epoch-boundary validation, including `check_val_every_n_epoch > 1`.
 Rejected with a clear error: mid-epoch validation
 (`val_check_interval < 1.0` or step-driven) and unsized dataloaders — the

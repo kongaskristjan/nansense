@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from PIL import Image
 
-from examples.vision.data import DATASETS, build_transforms
+from examples.standard.data import DATASETS, build_transforms
 
 
 def test_known_datasets() -> None:

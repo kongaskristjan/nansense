@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from examples.vision.vit import SelfAttention, SimpleViT, TransformerBlock
+from examples.standard.vit import SelfAttention, SimpleViT, TransformerBlock
 from tests.examples.helpers import assert_training_reduces_loss
 
 
