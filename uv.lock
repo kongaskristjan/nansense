@@ -1722,6 +1722,7 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu126') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu132' and extra == 'group-8-nansense-rocm7-2')" },
     { name = "pillow" },
     { name = "plotly" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11' or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu126') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu132' and extra == 'group-8-nansense-rocm7-2')" },
     { name = "uvicorn" },
 ]
 
@@ -1762,6 +1763,7 @@ dev = [
     { name = "pytest" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu126') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu132' and extra == 'group-8-nansense-rocm7-2')" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu126') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu132' and extra == 'group-8-nansense-rocm7-2')" },
+    { name = "tomli" },
     { name = "ty" },
 ]
 rocm7-2 = [
@@ -1784,6 +1786,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "plotly", specifier = ">=6.7.0" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.6" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 
@@ -1820,6 +1823,7 @@ dev = [
     { name = "lightning", specifier = ">=2.4" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "scipy", specifier = ">=1.14" },
+    { name = "tomli" },
     { name = "ty", specifier = ">=0.0.38" },
 ]
 rocm7-2 = [

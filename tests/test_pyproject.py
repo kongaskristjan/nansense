@@ -7,13 +7,22 @@ tests guard against the groups, conflict declaration, sources, and index
 definitions drifting apart when dependencies are edited.
 """
 
-import tomllib
+import sys
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python < 3.11
+    import tomli as tomllib
+
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 TORCH_GROUPS = ["cpu", "cu126", "cu130", "cu132", "rocm7-2"]
+# torchaudio (audio example only) ships no linux-x86_64 wheel on the CUDA 13.2
+# index, so it lives in every torch group except cu132.
+TORCHAUDIO_GROUPS = ["cpu", "cu126", "cu130", "rocm7-2"]
 
 
 def _load_pyproject() -> dict[str, Any]:
@@ -37,6 +46,13 @@ def test_group_contains_torch_and_torchvision(group: str) -> None:
     assert {"torch", "torchvision"} <= _requirement_names(groups[group])
 
 
+@pytest.mark.parametrize("group", TORCH_GROUPS)
+def test_torchaudio_in_every_group_except_cu132(group: str) -> None:
+    groups = _load_pyproject()["dependency-groups"]
+    has_torchaudio = "torchaudio" in _requirement_names(groups[group])
+    assert has_torchaudio == (group in TORCHAUDIO_GROUPS)
+
+
 def test_published_metadata_is_torch_free() -> None:
     """`pip install nansense` (with or without extras) must never pull torch.
 
@@ -45,7 +61,7 @@ def test_published_metadata_is_torch_free() -> None:
     unpublished dependency groups, never in the published metadata.
     """
     data = _load_pyproject()
-    forbidden = {"torch", "torchvision", "captum", "lightning"}
+    forbidden = {"torch", "torchvision", "torchaudio", "captum", "lightning"}
     assert forbidden.isdisjoint(_requirement_names(data["project"]["dependencies"]))
     for extra, requirements in data["project"].get("optional-dependencies", {}).items():
         assert forbidden.isdisjoint(_requirement_names(requirements)), extra
@@ -67,6 +83,14 @@ def test_sources_cover_all_groups(package: str) -> None:
     data = _load_pyproject()
     sources = data["tool"]["uv"]["sources"][package]
     assert {s["group"] for s in sources} == set(TORCH_GROUPS)
+    index_names = {idx["name"] for idx in data["tool"]["uv"]["index"]}
+    assert {s["index"] for s in sources} <= index_names
+
+
+def test_torchaudio_sources_cover_audio_groups() -> None:
+    data = _load_pyproject()
+    sources = data["tool"]["uv"]["sources"]["torchaudio"]
+    assert {s["group"] for s in sources} == set(TORCHAUDIO_GROUPS)
     index_names = {idx["name"] for idx in data["tool"]["uv"]["index"]}
     assert {s["index"] for s in sources} <= index_names
 

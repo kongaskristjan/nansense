@@ -62,7 +62,8 @@ _RNG_CHECKPOINT_KEY = "nansense_rng"
 
 # Lightning's TRAIN_DATALOADERS / EVAL_DATALOADERS unions are wide and
 # version-dependent; the wrapper only forwards these to `trainer.fit`.
-type _Dataloaders = Any
+# (Plain assignment rather than a PEP 695 `type` alias to keep the 3.10 floor.)
+_Dataloaders = Any
 
 
 class NansenseCallback(Callback):

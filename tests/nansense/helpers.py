@@ -10,9 +10,13 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from typing import TypeVar
 
 import torch
 from torch import Tensor, nn
+
+# PEP 695 `def paused_session[M: nn.Module]` would require Python 3.12.
+_M = TypeVar("_M", bound=nn.Module)
 
 import nansense
 from nansense.schedule import BatchPosition
@@ -132,9 +136,9 @@ def paused_worker(
 
 
 @contextmanager
-def paused_session[M: nn.Module](
-    model: M,
-    step: Callable[[M], None] = train_step,
+def paused_session(
+    model: _M,
+    step: Callable[[_M], None] = train_step,
     *,
     epochs: int = 1,
     phases: dict[str, int] | None = None,

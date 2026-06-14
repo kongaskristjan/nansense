@@ -381,7 +381,7 @@ def _phases_with_data(
 # phase with data, in render order. The entry points (`_make_histogram_figure`,
 # `axis_ranges`) extract this once via `_phase_hists` and the range helpers
 # below all work over it instead of re-deriving it from the snapshots.
-type _PhaseHists = list[tuple[str, tuple[int, ...]]]
+_PhaseHists = list[tuple[str, tuple[int, ...]]]
 
 
 def _phase_hists(
