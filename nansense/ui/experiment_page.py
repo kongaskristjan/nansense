@@ -42,6 +42,7 @@ from nansense.ui.render import (
 )
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
+    _add_error_banner,
     _add_settings_button,
     _add_step_controls,
     _back_button,
@@ -436,6 +437,8 @@ def _build_experiment_page(
             _back_button()
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
+
+        _add_error_banner(session)
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
             with ui.column().classes(

@@ -416,6 +416,68 @@ travel) drop patches together with the rest of the bucket.
 `LayerStatsSnapshot.patches`; slots never filled keep their `∓inf`
 values and are masked by the renderer.
 
+## Numerical-error debugger (`nansense.debugger`)
+
+The debugger watches for two numerical failures and pauses training when it
+finds one, surfacing a red banner in the UI. It runs every *n*th batch
+(default 10, configurable/toggleable) so a clean run pays almost nothing.
+
+- **NaN / ±Inf** — trips if a single non-finite value appears in any checked
+  tensor (forward activations, activation gradients, and weight gradients).
+  One bad value poisons the run, so there is no fraction threshold.
+- **Underflow / overflow** — trips when a layer's *gradient* magnitude
+  collapses into a precision-losing band. The band is **dtype-aware**:
+  underflow is the subnormal range (nonzero `|x|` below `finfo.tiny`, where
+  the mantissa encodes scale rather than precision), overflow is `|x| >=
+  finfo.max`. A layer trips when the summed `|x|` inside the band is at least
+  `threshold` (default 0.1) of the layer's total summed `|x|`; non-finite
+  values are excluded from those sums (they belong to the NaN/Inf check). The
+  summed-`|x|` metric makes underflow detection deliberately conservative — a
+  handful of subnormals next to normal-magnitude values barely moves the
+  ratio; it fires when the gradient has *broadly* collapsed.
+
+**Everything runs on the compute device.** `debugger.run_checks` builds one
+`[nan_count, inf_count, total_count, underflow_abssum, overflow_abssum,
+finite_abssum]` vector per layer (weight gradients are mapped to layers via
+`Session.layer_weights`, exactly like the snapshot), stacks them, and pulls
+the whole batch's counters to the CPU in a single transfer. It returns a
+frozen `DebugError` (the tripped `reasons`, the `checks_used` categories, and
+a `LayerReport` per affected layer) or `None`.
+
+**Lifecycle integration.** `_should_debug_check(pos)` mirrors
+`_should_freq_update`: a training-thread `_debug_counter` throttles checks to
+every *n*th batch, independent of mode (so detach / run-until are covered),
+leader-only under DDP. A check batch installs hooks like a capture/stats
+batch (it needs the activation gradients), and `_run_debug_checks` runs at
+`__exit__` *before* `remove_hooks`, while the activations and their retained
+`.grad` are still live. On a hit it records the error, resets `_debug_counter`
+to 0 (so the next Step re-checks immediately rather than waiting out the
+interval), and calls `stop()` — which forces this batch to publish a snapshot
+(so the affected layers have data behind the banner) and pause, even in a
+free-running mode.
+
+`Session.debug_error` is published as an atomic reference and read lock-free
+by the UI. It is cleared by any resume command (`_set_mode(resume=True)`), so
+a Step dismisses the banner and the next checked batch re-raises it if the
+problem persists; `stop()` resumes nothing, so an error-stop keeps its banner.
+`disable_debug_check(category)` turns off one check (`"nan_inf"` or
+`"under_over"`) and trims that category's reasons/columns from the active
+error via `without_category` (the banner clears entirely if nothing remains).
+
+**UI** (`top_bar._add_error_banner`, added under every page's top bar): a
+0.2 s timer polls `session.debug_error`, rebuilding the full-width banner when
+the record identity changes and hiding it when it clears. The banner shows the
+reasons and the error's `epoch | phase batch` (frozen as the live position
+advances under stepping/time travel), a hover description, a Details button,
+and one DISABLE button per present category. The details dialog explains the
+problem and lists the affected layers in a table — one column per reason whose
+check *ran* (so under/overflow columns show even when only NaN tripped),
+percentages per layer, and a per-row **Watch** button (or a **Histogram** link
+to `/watch` once the layer is watched, since the gradient histogram needs a
+few watched batches first). The gear settings dialog's "Error checks" section
+edits the `DebugSettings` (enable, interval, per-check toggles, threshold %)
+via `Session.set_debug_settings`.
+
 ## Distributed training (`nansense.distributed`)
 
 In a multi-rank `torch.distributed` run, every rank constructs a session

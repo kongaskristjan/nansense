@@ -38,6 +38,7 @@ from nansense.ui.static import (
     _STRIP_MARKER_CSS,
 )
 from nansense.ui.top_bar import (
+    _add_error_banner,
     _add_settings_button,
     _add_step_controls,
     _build_step_until_custom_dialog,
@@ -266,6 +267,8 @@ def _build_page(
             ).props("dense size=md").tooltip(
                 "Toggle input selection pane"
             )
+
+        _add_error_banner(session)
 
         def refresh_chip() -> None:
             watched = session.watched_layers

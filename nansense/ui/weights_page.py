@@ -22,6 +22,7 @@ from nansense.ui.histograms import _format_stat
 from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
+    _add_error_banner,
     _add_settings_button,
     _add_step_controls,
     _back_button,
@@ -113,6 +114,8 @@ def _build_weights_page(session: Session, layer: str) -> None:
             )
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
+
+        _add_error_banner(session)
 
         with ui.column().classes(
             "w-full grow min-h-0 overflow-auto p-4 gap-4 bg-slate-200"

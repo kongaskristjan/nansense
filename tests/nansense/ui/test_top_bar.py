@@ -5,11 +5,15 @@ from __future__ import annotations
 import pytest
 import torch
 
+from nansense import debugger
+from nansense.debugger import DebugError, LayerReport
 from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
     _best_effort_ui_update,
     _current_position,
+    _debug_banner_summary,
+    _debug_pct,
     _summarize_epoch_ranges,
     _time_travel_default_index,
     _validate_step_until_target,
@@ -217,3 +221,30 @@ def test_best_effort_ui_update_runs_then_swallows_torn_down_client() -> None:
         raise RuntimeError("The parent element this slot belongs to has been deleted.")
 
     _best_effort_ui_update(torn_down)  # must not propagate
+
+
+def test_debug_banner_summary_lists_reasons_and_position() -> None:
+    error = DebugError(
+        position=make_position("val", 2, 7),
+        reasons=("nan", "underflow"),
+        checks_used=(debugger.NAN_INF, debugger.UNDER_OVER),
+        layers=(LayerReport("l", nan=1.0, inf=0.0, underflow=0.5, overflow=0.0),),
+    )
+    summary = _debug_banner_summary(error)
+    assert "NaN" in summary
+    assert "underflow" in summary
+    assert "epoch 2" in summary
+    assert "val batch 7" in summary
+
+
+@pytest.mark.parametrize(
+    "frac, expected",
+    [
+        (0.0, "—"),
+        (0.0005, "<0.1%"),
+        (0.5, "50.0%"),
+        (1.0, "100.0%"),
+    ],
+)
+def test_debug_pct(frac: float, expected: str) -> None:
+    assert _debug_pct(frac) == expected

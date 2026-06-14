@@ -48,6 +48,7 @@ from nansense.ui.histograms import (
 )
 from nansense.ui.render import PatchGridRender, render_image, render_patch_grid
 from nansense.ui.top_bar import (
+    _add_error_banner,
     _add_settings_button,
     _add_step_controls,
     _back_button,
@@ -239,6 +240,8 @@ def _build_watch_page(
                 on_click=lambda: refresh(),
                 color="slate-500",
             ).props("dense size=md flat").tooltip("Refresh now")
+
+        _add_error_banner(session)
 
         with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
             with ui.column().classes(

@@ -8,6 +8,8 @@ from collections.abc import Callable
 
 from nicegui import ui
 
+from nansense import debugger
+from nansense.debugger import DebugError, LayerReport
 from nansense.recording import RecordedView
 from nansense.restore import TimeTravelError
 from nansense.schedule import BatchPosition, Schedule, format_position
@@ -18,6 +20,34 @@ _TOP_BAR_CLASSES: str = (
     "w-full items-center gap-x-3 gap-y-0 px-3 py-2 shrink-0 "
     "border-b-2 border-slate-300 bg-slate-100 shadow-sm z-10"
 )
+
+_DEBUG_DESCRIPTION: str = (
+    "The debugger paused training because the network produced bad numbers: "
+    "NaN/±Inf values, or gradients whose magnitude collapsed into a "
+    "precision-losing under/overflow range. Click for the affected layers."
+)
+_DEBUG_WATCH_NOTE: str = (
+    "A layer's gradient histogram only becomes available once it has been "
+    "watched for a few batches — click Watch, let training step a few times, "
+    "then open the histogram view."
+)
+
+
+def _debug_banner_summary(error: DebugError) -> str:
+    """The one-line red-banner message for a detected error."""
+    return (
+        f"Numerical error — {debugger.reasons_text(error)} — at "
+        f"{format_position(error.position)}"
+    )
+
+
+def _debug_pct(frac: float) -> str:
+    """Format a fraction in [0, 1] as a table-cell percentage."""
+    if frac <= 0.0:
+        return "—"
+    if frac < 0.001:
+        return "<0.1%"
+    return f"{frac * 100:.1f}%"
 
 
 def _top_bar_row() -> ui.row:
@@ -344,6 +374,48 @@ def _add_settings_button(
             "are recorded at this cadence."
         ).classes("text-xs text-amber-700")
         ui.separator()
+        ui.label("Error checks").classes("text-lg font-bold")
+        ui.label(
+            "Pause training automatically on numerical trouble: NaN/±Inf "
+            "values, or gradients collapsing into a precision-losing "
+            "under/overflow range. Checks run every nth batch on the compute "
+            "device."
+        ).classes("text-sm text-slate-600")
+        debug_enable = ui.switch(
+            "Enable error checks",
+            on_change=lambda: apply_debug(),
+        ).props("dense")
+        with ui.row().classes("w-full gap-2 no-wrap items-start"):
+            debug_interval = ui.number(
+                label="Check every (batches)",
+                value=10,
+                min=1,
+                step=1,
+                format="%d",
+                on_change=lambda: apply_debug(),
+            ).props("dense outlined").classes("flex-1")
+            debug_threshold = ui.number(
+                label="Under/overflow %",
+                value=10,
+                min=0,
+                max=100,
+                step=1,
+                format="%g",
+                on_change=lambda: apply_debug(),
+            ).props("dense outlined").classes("flex-1").tooltip(
+                "Trip when at least this share of a layer's summed |gradient| "
+                "falls in the under/overflow band"
+            )
+        with ui.row().classes("w-full gap-6 no-wrap"):
+            debug_nan_inf = ui.switch(
+                "NaN / Inf", on_change=lambda: apply_debug()
+            ).props("dense").tooltip("Flag any NaN or ±Inf value")
+            debug_under_over = ui.switch(
+                "Underflow / overflow", on_change=lambda: apply_debug()
+            ).props("dense").tooltip(
+                "Flag gradients in the dtype's subnormal or saturation range"
+            )
+        ui.separator()
         ui.label("Recording").classes("text-lg font-bold")
         ui.label(
             "Each recorded view becomes an MP4 file — one frame per "
@@ -385,6 +457,29 @@ def _add_settings_button(
         # re-applying so a stale phase doesn't leak into an epoch-unit setting.
         sync_phase_visibility()
         apply_frequency()
+
+    def apply_debug() -> None:
+        """Push the error-check controls to the session (auto-applied)."""
+        if loading:
+            return
+        try:
+            interval = (
+                int(debug_interval.value) if debug_interval.value is not None else 10
+            )
+            percent = (
+                float(debug_threshold.value)
+                if debug_threshold.value is not None
+                else 10.0
+            )
+        except (TypeError, ValueError):
+            return
+        session.set_debug_settings(
+            enabled=bool(debug_enable.value),
+            interval=interval,
+            check_nan_inf=bool(debug_nan_inf.value),
+            check_under_over=bool(debug_under_over.value),
+            threshold=percent / 100.0,
+        )
 
     def unpin(view: RecordedView) -> None:
         # An experiment recording pins the page's auto experiment so it
@@ -535,6 +630,12 @@ def _add_settings_button(
         unit_select.value = freq.unit
         n_input.value = freq.n
         phase_select.value = freq.phase if freq.phase is not None else _ANY_PHASE
+        debug = session.debug_settings
+        debug_enable.value = debug.enabled
+        debug_interval.value = debug.interval
+        debug_threshold.value = round(debug.threshold * 100, 4)
+        debug_nan_inf.value = debug.check_nan_inf
+        debug_under_over.value = debug.check_under_over
         loading = False
         sync_phase_visibility()
         error_label.text = ""
@@ -557,6 +658,165 @@ def _add_settings_button(
     refresh_badge()
     ui.timer(0.5, refresh_badge)
     return button
+
+
+def _add_error_banner(session: Session) -> None:
+    """Full-width red banner shown while a numerical error is active.
+
+    Placed by every page directly under its top bar. A 0.2 s timer polls
+    `session.debug_error`: the banner rebuilds when the error identity changes
+    and hides when it clears (a Step dismisses it; the next checked batch may
+    raise it again). Clicking the message opens the details dialog; per-category
+    DISABLE buttons turn off that check and drop its part of the banner.
+    """
+    container = ui.element("div").classes("w-full shrink-0")
+    container.set_visibility(False)
+    # `id(error)` of the currently-shown record, so the timer only rebuilds on
+    # a genuine change (every detection / disable makes a fresh frozen record).
+    shown: dict[str, int | None] = {"key": None}
+
+    def disable(category: str) -> None:
+        session.disable_debug_check(category)
+        refresh()
+
+    def rebuild(error: DebugError) -> None:
+        container.clear()
+        with container:
+            with ui.row().classes(
+                "w-full bg-red-600 text-white items-center gap-3 px-4 py-2 "
+                "no-wrap shadow-md"
+            ):
+                ui.icon("error").classes("text-2xl shrink-0")
+                message = ui.label(_debug_banner_summary(error)).classes(
+                    "text-sm font-medium grow min-w-0 truncate cursor-pointer"
+                )
+                message.tooltip(_DEBUG_DESCRIPTION)
+                message.on("click", lambda e=error: _open_debug_dialog(session, e))
+                ui.button(
+                    "Details", on_click=lambda e=error: _open_debug_dialog(session, e)
+                ).props("dense size=sm flat color=white no-caps")
+                for category in debugger.categories_present(error):
+                    ui.button(
+                        f"Disable {debugger.CATEGORY_LABELS[category]}",
+                        on_click=lambda c=category: disable(c),
+                    ).props(
+                        "dense size=sm outline color=white no-caps"
+                    ).tooltip("Turn off this check and remove it from the banner")
+
+    def refresh() -> None:
+        error = session.debug_error
+        if error is None:
+            if shown["key"] is not None:
+                shown["key"] = None
+                container.set_visibility(False)
+            return
+        if id(error) != shown["key"]:
+            shown["key"] = id(error)
+            rebuild(error)
+            container.set_visibility(True)
+
+    refresh()
+    ui.timer(0.2, refresh)
+
+
+def _open_debug_dialog(session: Session, error: DebugError) -> None:
+    """The details dialog: explanation + per-layer table + DISABLE buttons.
+
+    Built fresh on each open so the per-layer Watch/Histogram actions reflect
+    the current watched set (a Watch click reopens it).
+    """
+    cols = debugger.columns(error)
+    watched = session.watched_layers
+    with ui.dialog() as dialog, ui.card().classes(
+        "min-w-[36rem] max-w-[56rem] p-6 gap-3"
+    ):
+        ui.label("Numerical issue detected").classes(
+            "text-lg font-bold text-red-600"
+        )
+        ui.label(_DEBUG_DESCRIPTION).classes("text-sm text-slate-600")
+        ui.label(
+            f"Reasons: {debugger.reasons_text(error)}  ·  "
+            f"{format_position(error.position)}"
+        ).classes("text-sm font-mono")
+
+        with ui.element("div").classes(
+            "w-full overflow-auto max-h-[24rem] border rounded"
+        ):
+            with ui.row().classes(
+                "w-full items-center gap-0 px-2 py-1 no-wrap bg-slate-100 "
+                "text-xs font-semibold uppercase tracking-wider text-slate-500"
+            ):
+                ui.label("Layer").classes("grow min-w-0")
+                for col in cols:
+                    ui.label(debugger.REASON_LABELS[col]).classes(
+                        "w-20 text-right"
+                    )
+                ui.label("").classes("w-28 shrink-0")
+            for report in error.layers:
+                with ui.row().classes(
+                    "w-full items-center gap-0 px-2 py-1 no-wrap border-t"
+                ):
+                    ui.label(report.layer).classes(
+                        "grow min-w-0 font-mono text-sm truncate"
+                    )
+                    for col in cols:
+                        ui.label(_debug_pct(getattr(report, col))).classes(
+                            "w-20 text-right font-mono text-sm"
+                        )
+                    with ui.element("div").classes(
+                        "w-28 shrink-0 flex justify-end"
+                    ):
+                        _debug_action_button(session, dialog, error, report, watched)
+
+        ui.label(_DEBUG_WATCH_NOTE).classes("text-xs text-slate-500")
+        with ui.row().classes("w-full justify-end gap-2"):
+            for category in debugger.categories_present(error):
+
+                def disable(c: str = category) -> None:
+                    session.disable_debug_check(c)
+                    dialog.close()
+
+                ui.button(
+                    f"Disable {debugger.CATEGORY_LABELS[category]}",
+                    on_click=disable,
+                    color="red",
+                ).props("flat no-caps")
+            ui.button("Close", on_click=dialog.close).props("flat")
+    dialog.open()
+
+
+def _debug_action_button(
+    session: Session,
+    dialog: ui.dialog,
+    error: DebugError,
+    report: LayerReport,
+    watched: frozenset[str],
+) -> None:
+    """Per-row Watch button, or a Histogram link when already watched.
+
+    Histograms need a watched layer (the watch accumulators feed them), so an
+    unwatched layer first gets watched; the dialog reopens to surface the
+    Histogram link once the watched set includes it.
+    """
+    if report.layer in watched:
+        ui.button("Histogram").props(
+            'href="/watch" dense size=sm flat no-caps color=primary'
+        ).tooltip("Open the watch view's gradient histograms")
+        return
+
+    def watch_layer() -> None:
+        session.watch(report.layer)
+        ui.notify(
+            f"Watching {report.layer} — let training step a few batches, then "
+            "open the histogram view.",
+            type="positive",
+        )
+        dialog.close()
+        _open_debug_dialog(session, error)
+
+    ui.button("Watch", on_click=watch_layer).props(
+        "dense size=sm flat no-caps color=primary"
+    ).tooltip("Collect this layer's gradient stats for the histogram view")
 
 
 def _best_effort_ui_update(update: Callable[[], None]) -> None:

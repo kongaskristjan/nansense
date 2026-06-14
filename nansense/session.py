@@ -60,7 +60,8 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
-from nansense import capture, distributed, experiments, probe
+from nansense import capture, debugger, distributed, experiments, probe
+from nansense.debugger import DebugError, DebugSettings
 from nansense.experiments import (
     ExperimentRequest,
     ExperimentResult,
@@ -291,6 +292,13 @@ class Session:
         # lazily on first UI access so headless sessions never import the
         # rendering stack.
         self._recording_manager: RecordingManager | None = None
+        # Numerical-error debugger (see `nansense.debugger`): settings are
+        # mutated by the UI under `_cv`; `_debug_counter` counts batches on
+        # the training thread to throttle checks to every nth batch; the
+        # published `_debug_error` is read lock-free by the UI (atomic ref).
+        self._debug_settings = DebugSettings()
+        self._debug_counter = 0
+        self._debug_error: DebugError | None = None
 
     @property
     def schedule(self) -> Schedule:
@@ -745,6 +753,82 @@ class Session:
             self._cv.notify_all()
 
     @property
+    def debug_settings(self) -> DebugSettings:
+        """Current numerical-error debugger configuration (see `debugger`)."""
+        with self._cv:
+            return self._debug_settings
+
+    def set_debug_settings(
+        self,
+        *,
+        enabled: bool | None = None,
+        interval: int | None = None,
+        check_nan_inf: bool | None = None,
+        check_under_over: bool | None = None,
+        threshold: float | None = None,
+    ) -> None:
+        """Update the debugger settings (only the given fields change).
+
+        Resets the per-batch check counter so a changed interval takes effect
+        from the next batch rather than carrying a stale count.
+        """
+        with self._cv:
+            current = self._debug_settings
+            self._debug_settings = replace(
+                current,
+                enabled=current.enabled if enabled is None else bool(enabled),
+                interval=(
+                    current.interval if interval is None else max(1, int(interval))
+                ),
+                check_nan_inf=(
+                    current.check_nan_inf
+                    if check_nan_inf is None
+                    else bool(check_nan_inf)
+                ),
+                check_under_over=(
+                    current.check_under_over
+                    if check_under_over is None
+                    else bool(check_under_over)
+                ),
+                threshold=(
+                    current.threshold if threshold is None else float(threshold)
+                ),
+            )
+            self._debug_counter = 0
+            self._cv.notify_all()
+
+    @property
+    def debug_error(self) -> DebugError | None:
+        """The current detected numerical error, or `None`.
+
+        Read lock-free by the UI banner timer; assignment is a single atomic
+        attribute write (the record is a frozen dataclass).
+        """
+        return self._debug_error
+
+    def disable_debug_check(self, category: str) -> None:
+        """Turn off one check category and drop its part of the banner.
+
+        `category` is `"nan_inf"` or `"under_over"`. The matching reasons and
+        table columns are removed from any active error; the banner clears
+        entirely if nothing remains.
+        """
+        with self._cv:
+            if category == debugger.NAN_INF:
+                self._debug_settings = replace(
+                    self._debug_settings, check_nan_inf=False
+                )
+            elif category == debugger.UNDER_OVER:
+                self._debug_settings = replace(
+                    self._debug_settings, check_under_over=False
+                )
+            else:
+                return
+            error = self._debug_error
+        if error is not None:
+            self._debug_error = debugger.without_category(error, category)
+
+    @property
     def recording(self) -> RecordingManager:
         """The session's per-view video recording manager (lazily created)."""
         if self._recording_manager is None:
@@ -1032,6 +1116,11 @@ class Session:
         with self._cv:
             self._mode = mode
             if resume:
+                # Any "go" command (step/detach) dismisses the error banner;
+                # the next checked batch re-raises it if the problem persists.
+                # `stop()` resumes nothing (resume=False), so an error-stop
+                # keeps its banner up for inspection.
+                self._debug_error = None
                 self._resume_token += 1
                 self._cv.notify_all()
 
@@ -1077,6 +1166,64 @@ class Session:
             # can't be lost to a racing unlocked read-modify-write here.
             self._freq_counter += 1
             return self._freq_counter % freq.n == 0
+
+    def _should_debug_check(self, pos: BatchPosition) -> bool:
+        """Whether this batch runs the numerical-error checks (training thread).
+
+        Independent of capture/frequency: the debugger throttles itself with
+        its own `_debug_counter` so checks run every nth batch in *every*
+        mode, including detach and the run-until modes. Leader-only in
+        distributed runs (followers never publish or pause).
+        """
+        if not self.is_leader:
+            return False
+        with self._cv:
+            if self._closed:
+                return False
+            settings = self._debug_settings
+            if not settings.any_check():
+                return False
+            do_check = self._debug_counter % max(1, settings.interval) == 0
+            self._debug_counter += 1
+            return do_check
+
+    def _run_debug_checks(self, pos: BatchPosition) -> DebugError | None:
+        """Run the debugger over this batch's live tensors (training thread).
+
+        Called at `__exit__` while the captured activations (and their
+        retained `.grad`) are still resident, so it sees the same gradients
+        the snapshot will. On a hit it records the error and stops training
+        (STEP mode) so the batch pauses for inspection; the next checked batch
+        re-raises the banner if the problem persists.
+        """
+        with self._cv:
+            settings = self._debug_settings
+        activations = {
+            n: t for n, t in self._activations.items() if isinstance(t, Tensor)
+        }
+        activation_grads = {
+            n: t.grad for n, t in activations.items() if t.grad is not None
+        }
+        weight_grads = {
+            name: p.grad
+            for name, p in self.model.named_parameters()
+            if p.grad is not None
+        }
+        error = debugger.run_checks(
+            settings,
+            position=pos,
+            activations=activations,
+            activation_grads=activation_grads,
+            weight_grads=weight_grads,
+            layer_weights=self._layer_weights,
+        )
+        if error is not None:
+            self._debug_error = error
+            # Re-check the very next batch so a Step immediately re-evaluates,
+            # rather than waiting out the rest of the interval.
+            self._debug_counter = 0
+            self.stop()
+        return error
 
     def _record_frames(self) -> None:
         """Append one frame to every active recording (training thread).
@@ -1346,6 +1493,7 @@ class _BatchContext:
         self._snapshot_requested = False
         self._stats_only = False
         self._dist_reduce = False
+        self._debug_check = False
 
     @property
     def _publishes(self) -> bool:
@@ -1405,6 +1553,10 @@ class _BatchContext:
             # free-running mode shows the live model on demand. Consumed here
             # so exactly the next batch publishes.
             self._snapshot_requested = self._session._take_snapshot_request()
+            # The numerical-error debugger checks every nth batch, independent
+            # of mode — so it needs hooks installed here even on a plain
+            # (detach) batch to see the activation gradients at __exit__.
+            self._debug_check = self._session._should_debug_check(self._position)
         if dist_ctx is not None:
             # Per-batch control sync (every rank): the leader announces
             # whether this batch's watch stats get globally reduced at
@@ -1432,12 +1584,13 @@ class _BatchContext:
         self._stats_only = (
             not self._publishes and bool(self._session._watched_layers)
         )
-        # Publishing, frequency-update, and stats-only batches use the same
-        # hook installation: full fx interpreter (or full per-module hooks +
-        # root pre-hook in hook-mode). That way any name in `layer_names` —
-        # inputs, fx intermediates, modules — can be watched. The only
-        # difference is what happens at __exit__ (publish / pause / stats).
-        if self._publishes or self._stats_only:
+        # Publishing, frequency-update, stats-only, and debug-check batches use
+        # the same hook installation: full fx interpreter (or full per-module
+        # hooks + root pre-hook in hook-mode). That way any name in
+        # `layer_names` — inputs, fx intermediates, modules — can be watched or
+        # checked. The only difference is what happens at __exit__ (publish /
+        # pause / stats / numerical check).
+        if self._publishes or self._stats_only or self._debug_check:
             capture.install_hooks(self._session)
         return self
 
@@ -1449,7 +1602,7 @@ class _BatchContext:
     ) -> None:
         if self._position is None:
             return
-        if self._publishes or self._stats_only:
+        if self._publishes or self._stats_only or self._debug_check:
             # Hook removal MUST run once hooks were installed, even if the
             # watch-stats update raises — otherwise the fx-patched forward
             # leaks past this batch and the next install captures it as the
@@ -1470,9 +1623,20 @@ class _BatchContext:
                     # before the leader publishes (and possibly pauses), so
                     # the UI never shows a pause with stale global stats.
                     distributed.reduce_watch_stats(self._session)
+                # Numerical-error checks read the live activations and their
+                # retained gradients, so they run before the hooks come off. A
+                # detected error stops training and forces this batch to
+                # publish + pause (even in a free-running mode) so the UI can
+                # show the affected layers behind the banner.
+                debug_error = (
+                    self._session._run_debug_checks(self._position)
+                    if exc is None and self._debug_check
+                    else None
+                )
                 capture.remove_hooks(self._session)
                 if exc is None and not self._session.closed:
-                    if self._publishes:
+                    force = debug_error is not None
+                    if self._publishes or force:
                         self._session._publish_snapshot(self._position)
                         # The snapshot holds CPU clones of everything; drop the
                         # live GPU activations (and their retained grads) now so
@@ -1486,7 +1650,7 @@ class _BatchContext:
                         experiments.run_auto_experiments(self._session)
                     if self._freq_update:
                         self._session._record_frames()
-                    if self._captured:
+                    if self._captured or force:
                         self._session._wait_for_proceed()
             finally:
                 capture.remove_hooks(self._session)
