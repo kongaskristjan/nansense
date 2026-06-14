@@ -56,6 +56,20 @@ Available examples:
   training (see [Distributed training](#distributed-training-ddp)).
 - `examples/lightning/main.py` — a tiny convnet on MNIST trained with
   PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
+- `examples/game_of_life/main.py` — predict Conway's Game of Life `--steps`
+  K (default 1) steps ahead on synthetic random boards (no download): a
+  fully-convolutional residual net with circular (toroidal) padding, trained
+  with per-cell `BCEWithLogitsLoss` and the full wiring. The board-shaped
+  inputs, activations, and outputs make perturbation light-cones, deep-dream
+  motifs, and time travel especially legible.
+- `examples/audio_keywords/main.py` — classify eight spoken keywords (Google's
+  mini Speech Commands, ~180 MB on first run) from torch-native log-mel
+  spectrograms fed to a small 2D CNN as single-channel "images", trained with
+  AdamW + a cosine schedule and the full wiring.
+- `examples/depth_make3d/main.py` — monocular depth estimation on Make3D
+  (~1 GB on first run) by transfer learning: a pretrained ResNet encoder plus a
+  U-Net decoder predict per-pixel depth from one RGB image, with a
+  scale-invariant log loss and the δ<1.25 accuracy metric.
 
 ## Minimal example
 
