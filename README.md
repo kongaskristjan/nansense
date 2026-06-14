@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/logo_large.png" alt="nansense" width="320">
+  <img src="https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/logo_large.png" alt="nansense" width="220">
 </p>
 
 <h1 align="center">nansense</h1>
@@ -15,8 +15,10 @@
 Hook one `Session` into your PyTorch loop and a web UI opens onto the running
 model: activations, gradients, weights, and optimizer state — live. Pause,
 step batch-by-batch, and **time-travel** the loop back to any epoch and replay
-it deterministically. It works with raw PyTorch, PyTorch Lightning, and
-multi-GPU DDP, and turns off to a near-zero-overhead no-op for production runs.
+it deterministically. Find maximum activation patches for neurons,
+run deep dream experiments and measure the receptive field of layers.
+It works with raw PyTorch, PyTorch Lightning, and multi-GPU DDP, and turns
+off to a near-zero-overhead no-op for production runs.
 
 ## Install
 
