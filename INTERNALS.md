@@ -649,15 +649,19 @@ setting, and toggles Run/Cancel enablement (Run off while auto-run is on or
 a run is in flight; Cancel off while idle). Run replaces and Cancel aborts
 only this page's request, so tabs don't clobber each other.
 
-Results render as one row per sample (`render_result`): for deep dream the
-input start beside its dreamed result (`render_image`; non-image inputs fall
-back to a "not renderable" note); for Captum the input beside its
-attribution strip (`render_strip`, shared diverging colormap). A Captum-only
-**Overlay** toggle instead blends each attribution channel over the input
-(`render_attribution_overlay` → `blend_signed_heat`, the same signed
-red/blue alpha overlay the MIN/MAX patch grid uses) on a shared `±vmax`
-scale — a pure display toggle that re-renders the last result without a
-backend re-run.
+Results render as one card per sample (`render_result` → `_sample_card`, the
+same card look as the watch / weights pages) with captioned cells: for deep
+dream the input start beside its dreamed result (`render_image`; non-image
+inputs fall back to a "not renderable" note); for Captum the attribution
+strip *first*, then its input (`render_strip`, shared diverging colormap).
+A Captum-only **Overlay** toggle instead blends each attribution channel over
+the input (`render_attribution_overlay` → `blend_signed_heat`, the same
+signed red/blue alpha overlay the MIN/MAX patch grid uses) on a shared
+`±vmax` scale — a pure display toggle that re-renders the last result without
+a backend re-run. Both the attribution strips and the overlays are rendered
+with `tile_px=INPUT_IMAGE_SIZE` so each map (a coarse Grad-CAM map upscaled
+by the browser's nearest-neighbour, an input-resolution gradient map as-is)
+is shown at the same size as the input image beside it.
 
 **Auto experiments.** The experiment page's Run goes through
 `session.register_auto_experiment(key, ...)` rather than the plain
@@ -926,14 +930,17 @@ imports only those, never page modules.
   *native* resolution plus a legend image at display resolution.
   - For per-sample shape `[C, H, W]` every channel tile lands in a single
     image, downsampled server-side (`area`) only when larger than
-    `TILE_SIZE × TILE_SIZE`, with white separators between tiles
+    `tile_px × tile_px`, with white separators between tiles
     `max(1, tile_width // TILE_GAP_DIVISOR)` native pixels wide. The
     browser upscales the whole strip to `StripRender.width × height` via
     CSS sizing plus `image-rendering: pixelated` — equivalent to the old
     server-side nearest-neighbour interpolation, but an 8×8 feature map
     travels as 64 pixels instead of 16k; the separators scale together
     with the tiles (`_strip_html` in `nansense.ui.common` builds the
-    two-`<img>` row).
+    two-`<img>` row). `tile_px` is the CSS side each square tile is shown at
+    (and the height its legend renders at); it defaults to `TILE_SIZE` and
+    the experiment page bumps it to `INPUT_IMAGE_SIZE` so attribution maps
+    match the inputs beside them.
   - For `[F]` the data image is a single 1-px-tall heatmap row, downsampled
     to at most `LINEAR_MAX_BINS` bins when `F` is large, stretched
     client-side to `LINEAR_BIN_WIDTH` per bin × `LINEAR_TILE_HEIGHT`.
