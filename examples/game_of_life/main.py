@@ -36,8 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=512,
-        help="Batch size (default 512, ~3.9 GB peak GPU memory at the default board/depth).",
+        default=128,
+        help="Batch size (default 128, kept modest for low GPU memory).",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)

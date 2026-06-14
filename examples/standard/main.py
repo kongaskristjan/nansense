@@ -65,8 +65,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Batch size (default: 256 for cifar10/mnist, 64 for imagenette — "
-            "sized to keep peak GPU memory around ~4 GB)."
+            "Batch size (default: 128 for cifar10/mnist, 64 for imagenette's "
+            "larger 128x128 inputs — kept modest for low GPU memory)."
         ),
     )
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -115,13 +115,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def default_batch_size(dataset: str) -> int:
-    """Batch size that keeps peak GPU memory around ~4 GB across the models.
-
-    Imagenette's 128x128 images cost ~16x the activation memory of the 32x32
-    cifar10 / mnist crops, so it needs a much smaller batch (the ResNet
-    variants are the binding case at ~4 GB for 64; the small datasets peak at
-    ~3.3 GB for the ViT at 256)."""
-    return 64 if dataset == "imagenette" else 256
+    """Batch size kept modest for low GPU memory. Imagenette's 128x128 images
+    cost ~16x the activation memory of the 32x32 cifar10 / mnist crops, so it
+    drops to 64 where the smaller datasets use 128."""
+    return 64 if dataset == "imagenette" else 128
 
 
 def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> nn.Module:

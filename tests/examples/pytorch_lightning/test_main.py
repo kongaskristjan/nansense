@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import torch
 from lightning.pytorch import Trainer, seed_everything
 from torch.utils.data import DataLoader, TensorDataset
 
+from examples.pytorch_lightning import main as main_module
 from examples.pytorch_lightning.main import MNISTClassifier
 from nansense.lightning import NansenseCallback, fit_with_time_travel
 
@@ -18,6 +20,12 @@ def _synthetic_loader(*, shuffle: bool) -> DataLoader:
     x = torch.randn(8, 1, 28, 28)
     y = torch.randint(0, 10, (8,))
     return DataLoader(TensorDataset(x, y), batch_size=4, shuffle=shuffle)
+
+
+def test_default_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The documented default is kept modest for low GPU memory."""
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    assert main_module.parse_args().batch_size == 128
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])

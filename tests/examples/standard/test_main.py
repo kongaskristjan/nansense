@@ -68,11 +68,11 @@ def test_build_optimizer_and_scheduler() -> None:
 
 @pytest.mark.parametrize(
     ("dataset", "expected"),
-    [("cifar10", 256), ("mnist", 256), ("imagenette", 64)],
+    [("cifar10", 128), ("mnist", 128), ("imagenette", 64)],
 )
 def test_default_batch_size_is_dataset_dependent(dataset: str, expected: int) -> None:
     """Imagenette's 128x128 inputs get the smaller batch; the 32x32 datasets
-    share 256 — each chosen to keep peak GPU memory around ~4 GB."""
+    share 128 — all kept modest for low GPU memory."""
     assert dataset in DATASETS
     assert main_module.default_batch_size(dataset) == expected
 

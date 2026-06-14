@@ -107,8 +107,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=256,
-        help="Batch size (default 256; the tiny convnet stays well under 1 GB of GPU memory).",
+        default=128,
+        help="Batch size (default 128; the tiny convnet uses very little GPU memory).",
     )
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=2)

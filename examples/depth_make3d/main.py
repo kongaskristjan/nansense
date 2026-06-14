@@ -44,8 +44,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Batch size (default: 48 for resnet18, 32 for resnet34 — sized to "
-            "keep peak GPU memory around ~4 GB)."
+            "Batch size (default: 48 for resnet18, 32 for resnet34 — kept "
+            "modest for low GPU memory)."
         ),
     )
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -79,9 +79,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def default_batch_size(backbone: str) -> int:
-    """Batch size that keeps peak GPU memory around ~4 GB for the 192x256
-    inputs: the deeper resnet34 encoder needs a smaller batch (~3.4 GB at 32)
-    than resnet18 (~3.8 GB at 48)."""
+    """Batch size kept modest for low GPU memory on the 192x256 inputs: the
+    deeper resnet34 encoder uses a smaller batch (32) than resnet18 (48)."""
     return 32 if backbone == "resnet34" else 48
 
 

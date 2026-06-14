@@ -35,8 +35,8 @@ def test_build_optimizer_and_scheduler() -> None:
 
 @pytest.mark.parametrize(("backbone", "expected"), [("resnet18", 48), ("resnet34", 32)])
 def test_default_batch_size_is_backbone_dependent(backbone: str, expected: int) -> None:
-    """The deeper resnet34 encoder gets the smaller batch, keeping peak GPU
-    memory for the 192x256 inputs around ~4 GB for either backbone."""
+    """The deeper resnet34 encoder gets the smaller batch; both are kept
+    modest for low GPU memory on the 192x256 inputs."""
     assert main_module.default_batch_size(backbone) == expected
 
 
