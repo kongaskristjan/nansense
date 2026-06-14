@@ -856,13 +856,13 @@ class Session:
         without a restorer never writes checkpoints and never raises
         `TimeTravelJump`. On a disabled session the restorer is inert: the
         loop runs exactly once and nothing touches the disk.
+
+        Under DDP every rank wraps its epoch loop in a restorer the same way:
+        a UI-requested jump on the leader is broadcast to all ranks at the
+        next batch-start barrier, where every rank raises `TimeTravelJump` in
+        lockstep and restores from its own per-rank checkpoint (see
+        `nansense.distributed`).
         """
-        if self._dist is not None:
-            raise RuntimeError(
-                "Time travel is not supported with distributed training: a "
-                "jump would have to restore and rewind every rank in "
-                "lockstep. Run without a restorer (or on a single rank)."
-            )
         restorer = TrainingRestorer(self, cache_dir=cache_dir)
         self.attach_restorer(restorer)
         return restorer
@@ -897,6 +897,12 @@ class Session:
         (immediately, when paused), the restorer rolls the state back, and the
         session enters `STEP` mode so the first batch of `epoch` pauses for
         inspection.
+
+        Under DDP the armed jump is broadcast to every rank at the next
+        batch-start barrier (`sync_batch_control`), where all ranks raise
+        `TimeTravelJump` together — never mid-batch, so no collective is left
+        half-issued. The leader validates only its own (rank-0) checkpoint
+        here; the followers' replicated state is restored from their own files.
         """
         restorer = self._restorer
         if restorer is None:
@@ -1136,6 +1142,20 @@ class Session:
             self._pending_jump = None
             return jump
 
+    def _peek_pending_jump(self) -> int:
+        """The armed time-travel target without consuming it, -1 when none.
+
+        Used by the distributed path: the leader broadcasts this value to all
+        ranks at the batch-start barrier, and only *then* — once every rank
+        has agreed to jump — does it consume the request via `_take_pending_jump`
+        and raise. Peeking (rather than consuming) here keeps the leader's
+        consume atomic with the lockstep raise, so a follower can never be told
+        to jump while the leader's own request has already been cleared.
+        """
+        # GIL-atomic read; mirrors `_take_pending_jump`'s lock-free fast path.
+        jump = self._pending_jump
+        return jump if jump is not None else -1
+
     def _maybe_save_epoch_start(self, phase: str, epoch: int) -> None:
         """Checkpoint the epoch-start state, once per epoch attempt.
 
@@ -1284,12 +1304,21 @@ class _BatchContext:
         # tracks progress on every batch, even in modes that don't capture
         # snapshots here (step_epoch, step_until_position, step_run, detach).
         self._session._live_position = self._position
+        dist_ctx = self._session._dist
         # A jump that arrived while training was running (not paused) is
-        # consumed before this batch does any work. Raising from __enter__
+        # applied before this batch does any work. Raising from __enter__
         # skips __exit__, but nothing has been installed yet.
-        jump = self._session._take_pending_jump()
-        if jump is not None:
-            raise TimeTravelJump(jump)
+        #
+        # Single-process: consume the leader's pending jump and raise straight
+        # away (byte-identical to the pre-DDP path). Distributed: the jump
+        # can't be raised before `sync_batch_control`, or the followers — held
+        # in that broadcast at their next batch start — would deadlock. So the
+        # leader peeks its target and carries it through the control broadcast;
+        # every rank then raises together *after* the barrier (see below).
+        if dist_ctx is None:
+            jump = self._session._take_pending_jump()
+            if jump is not None:
+                raise TimeTravelJump(jump)
         # With a restorer attached, the first batch of each epoch checkpoints
         # the epoch-start state (model/optimizer/scheduler/RNG) to disk —
         # before any forward pass, so a later jump back to this epoch restores
@@ -1301,7 +1330,6 @@ class _BatchContext:
             self._session._maybe_save_epoch_start(
                 self._position.phase, self._epoch
             )
-        dist_ctx = self._session._dist
         if dist_ctx is None or dist_ctx.is_leader:
             self._captured = self._session._should_capture(self._position)
             # A frequency update publishes like a capture but never pauses;
@@ -1311,13 +1339,27 @@ class _BatchContext:
         if dist_ctx is not None:
             # Per-batch control sync (every rank): the leader announces
             # whether this batch's watch stats get globally reduced at
-            # __exit__ and shares watched-set changes; followers apply them
-            # (and never capture or publish themselves). This is also the
-            # pacing point — a leader paused in the UI holds every other
-            # rank right here, at its next batch start.
-            self._dist_reduce = distributed.sync_batch_control(
-                self._session, publish=self._captured or self._freq_update
+            # __exit__, shares watched-set changes, and broadcasts its armed
+            # time-travel target; followers apply them (and never capture or
+            # publish themselves). This is also the pacing point — a leader
+            # paused in the UI holds every other rank right here, at its next
+            # batch start.
+            self._dist_reduce, jump_epoch = distributed.sync_batch_control(
+                self._session,
+                publish=self._captured or self._freq_update,
+                jump_epoch=(
+                    self._session._peek_pending_jump() if dist_ctx.is_leader else -1
+                ),
             )
+            # All ranks raise at this identical point — after the barrier,
+            # before any forward/backward/collective — so no collective is
+            # left half-issued and the ranks unwind in lockstep. The leader
+            # now consumes its own request (atomically clearing it so the next
+            # batch doesn't re-broadcast a stale jump).
+            if jump_epoch >= 0:
+                if dist_ctx.is_leader:
+                    self._session._take_pending_jump()
+                raise TimeTravelJump(jump_epoch)
         self._stats_only = (
             not self._captured
             and not self._freq_update
@@ -1382,11 +1424,19 @@ class _BatchContext:
             finally:
                 capture.remove_hooks(self._session)
                 self._session._activations.clear()
-        # Every batch boundary — captured, stats-only, or plain (detach) —
-        # consumes an armed time-travel jump. `_wait_for_proceed` above
-        # returns immediately when a jump is pending, so a paused batch
-        # reacts to the request without a second UI command.
-        if exc is None:
+        # Single-process: every batch boundary — captured, stats-only, or
+        # plain (detach) — consumes an armed time-travel jump and raises here.
+        # `_wait_for_proceed` above returns immediately when a jump is pending,
+        # so a paused batch reacts to the request without a second UI command.
+        #
+        # Distributed: the jump is NOT raised here. The followers are held in
+        # the *next* batch's `sync_batch_control` broadcast, so a leader that
+        # raised at __exit__ would deadlock them. Instead `_pending_jump` stays
+        # armed; `_wait_for_proceed` woke the (possibly paused) leader, this
+        # __exit__ completes normally, and the jump is broadcast and applied in
+        # lockstep at the next __enter__ barrier — never mid-batch, so
+        # `reduce_watch_stats` runs on all-or-no ranks.
+        if exc is None and self._session._dist is None:
             jump = self._session._take_pending_jump()
             if jump is not None:
                 raise TimeTravelJump(jump)
@@ -1439,7 +1489,9 @@ def start(
     automatically). Rank 0 serves the UI and drives pausing/stepping;
     the other ranks skip the UI, follow rank 0's pace, and contribute
     their data shard to the watch page's statistics, which become global
-    across ranks. Time travel is not supported in distributed mode.
+    across ranks. Time travel is supported under DDP: wrap every rank's epoch
+    loop in a restorer (see `training_restorer`); a jump rewinds all ranks in
+    lockstep from their own per-rank checkpoints.
     """
     session = Session(
         model,

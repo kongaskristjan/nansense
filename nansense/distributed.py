@@ -13,13 +13,15 @@ model, but the ranks play different roles:
 Coordination happens at two points, both on the training thread:
 
 1. **Per-batch control broadcast** (`sync_batch_control`, at
-   `_BatchContext.__enter__`). A 2-int tensor from the leader: whether this
-   batch's stats get reduced at `__exit__`, and the watched-set version.
-   When the version changed since the last broadcast, a follow-up object
-   broadcast carries the watched-layer list — so steady-state batches pay
-   one tiny broadcast. This is also the pacing point: a leader paused in
-   the UI holds every follower at its next batch start, mirroring how DDP
-   itself would block them in the next gradient all-reduce.
+   `_BatchContext.__enter__`). A 3-int tensor from the leader: whether this
+   batch's stats get reduced at `__exit__`, the watched-set version, and the
+   leader's armed time-travel target (`jump_epoch`, -1 when none). When the
+   version changed since the last broadcast, a follow-up object broadcast
+   carries the watched-layer list — so steady-state batches pay one tiny
+   broadcast. This is also the pacing point: a leader paused in the UI holds
+   every follower at its next batch start, mirroring how DDP itself would
+   block them in the next gradient all-reduce. A `jump_epoch >= 0` tells
+   EVERY rank to raise `TimeTravelJump` at this barrier (see below).
 2. **Stats reduction** (`reduce_watch_stats`, at `__exit__` of every batch
    the leader publishes — mode captures and frequency updates). The leader
    broadcasts the ordered bucket list, every rank packs its local
@@ -35,9 +37,21 @@ rank-local (gathering image crops across ranks isn't worth the traffic);
 the min/max page shows the leader's shard.
 
 Ranks must drive the same batch structure (same `session.batch` calls in
-the same order), which DDP training loops do naturally. Time travel is
-not supported in distributed mode: a jump would have to restore and rewind
-every rank in lockstep.
+the same order), which DDP training loops do naturally.
+
+**Time travel under DDP.** A jump is applied in lockstep: the leader arms
+`_pending_jump` (UI thread), and at the next batch-start barrier the control
+broadcast carries the jump epoch to every rank. All ranks then raise
+`TimeTravelJump` at the *identical* point — right after `sync_batch_control`,
+before any forward/backward — so no collective is left half-issued. Each
+rank restores from its own epoch checkpoint (`epoch_<n>.pt` on rank 0,
+`epoch_<n>.rank<r>.pt` on followers): model/optimizer/scheduler are
+replicated by DDP and so identical across ranks, while the RNG snapshot is
+per-rank, making each rank's stochastic layers/augmentation replay
+deterministically. Shard order is governed by `DistributedSampler.set_epoch`
+(seeded `seed + epoch`), so it is reproduced across a jump independent of the
+RNG. This assumes the checkpoint directory is reachable from every rank (a
+shared filesystem on multi-node runs; trivially true single-node).
 """
 
 from __future__ import annotations
@@ -98,27 +112,39 @@ class DistContext:
         return self.rank == 0
 
     def broadcast_control(
-        self, *, publish: bool, version: int, watched: list[str]
+        self, *, publish: bool, version: int, watched: list[str], jump_epoch: int
     ) -> None:
-        """Leader side of the per-batch control sync."""
-        t = torch.tensor([int(publish), version], dtype=torch.int64, device=self.device)
+        """Leader side of the per-batch control sync.
+
+        `jump_epoch` carries the leader's armed time-travel target (-1 when
+        none): a `>= 0` value tells every rank to raise `TimeTravelJump` at
+        this same batch-start barrier, before any forward/backward.
+        """
+        t = torch.tensor(
+            [int(publish), version, jump_epoch], dtype=torch.int64, device=self.device
+        )
         dist.broadcast(t, src=0)
         if version != self._synced_version:
             dist.broadcast_object_list([watched], src=0, device=self.device)
             self._synced_version = version
 
-    def recv_control(self) -> tuple[bool, list[str] | None]:
-        """Follower side: returns (publish, watched-or-None-if-unchanged)."""
-        t = torch.zeros(2, dtype=torch.int64, device=self.device)
+    def recv_control(self) -> tuple[bool, list[str] | None, int]:
+        """Follower side: returns (publish, watched-or-None-if-unchanged, jump_epoch).
+
+        `jump_epoch` is the leader's armed time-travel target (-1 when none);
+        a `>= 0` value means this rank must raise `TimeTravelJump` at the same
+        barrier, in lockstep with every other rank.
+        """
+        t = torch.zeros(3, dtype=torch.int64, device=self.device)
         dist.broadcast(t, src=0)
-        publish, version = (int(v) for v in t.cpu().tolist())
+        publish, version, jump_epoch = (int(v) for v in t.cpu().tolist())
         watched: list[str] | None = None
         if version != self._synced_version:
             obj: list[object] = [None]
             dist.broadcast_object_list(obj, src=0, device=self.device)
             watched = cast(list[str], obj[0])
             self._synced_version = version
-        return bool(publish), watched
+        return bool(publish), watched, jump_epoch
 
 
 def context() -> DistContext | None:
@@ -134,14 +160,23 @@ def context() -> DistContext | None:
     return DistContext()
 
 
-def sync_batch_control(session: Session, *, publish: bool) -> bool:
+def sync_batch_control(
+    session: Session, *, publish: bool, jump_epoch: int
+) -> tuple[bool, int]:
     """Per-batch control sync (all ranks, training thread, at batch start).
 
     The leader announces whether this batch ends in a stats reduction
-    (`publish` and at least one layer watched) and shares watched-set
-    changes; followers apply them — including dropping the accumulator
-    buckets of layers that were unwatched, mirroring `Session.unwatch`.
-    Returns the reduction flag on every rank.
+    (`publish` and at least one layer watched), shares watched-set changes,
+    and broadcasts its armed time-travel target (`jump_epoch`, -1 when none);
+    followers apply them — including dropping the accumulator buckets of
+    layers that were unwatched, mirroring `Session.unwatch`.
+
+    Returns `(reduce_flag, jump_epoch)` on every rank. A `jump_epoch >= 0`
+    tells the caller that EVERY rank must raise `TimeTravelJump(jump_epoch)`
+    at this barrier — before any forward/backward — so no collective (DDP
+    gradient all-reduce, `reduce_watch_stats`) is left half-issued. The
+    leader passes its own pending jump in via `jump_epoch`; followers pass
+    -1 (their value is ignored, the leader's is authoritative).
     """
     ctx = session._dist
     assert ctx is not None
@@ -150,16 +185,18 @@ def sync_batch_control(session: Session, *, publish: bool) -> bool:
             version = session._watch_version
             watched = sorted(session._watched_layers)
         flag = publish and bool(watched)
-        ctx.broadcast_control(publish=flag, version=version, watched=watched)
-        return flag
-    flag, new_watched = ctx.recv_control()
+        ctx.broadcast_control(
+            publish=flag, version=version, watched=watched, jump_epoch=jump_epoch
+        )
+        return flag, jump_epoch
+    flag, new_watched, recv_jump = ctx.recv_control()
     if new_watched is not None:
         with session._cv:
             removed = session._watched_layers - set(new_watched)
             session._watched_layers = set(new_watched)
         for name in removed:
             session._watch_accumulator.forget_layer(name)
-    return flag
+    return flag, recv_jump
 
 
 def reduce_watch_stats(session: Session) -> None:

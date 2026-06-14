@@ -103,6 +103,7 @@ def test_reduce_channel_mismatch_drops_channel_hists() -> None:
 
 class _FakeFollowerContext:
     is_leader = False
+    rank = 1
 
 
 def _follower_session() -> nansense.Session:
@@ -117,10 +118,17 @@ def test_follower_serve_is_noop() -> None:
     assert serve(session) is None
 
 
-def test_distributed_time_travel_rejected(tmp_path: Path) -> None:
-    session = _follower_session()
-    with pytest.raises(RuntimeError, match="not supported with distributed"):
-        session.training_restorer(cache_dir=tmp_path)
+def test_distributed_time_travel_restorer_allowed(tmp_path: Path) -> None:
+    """The DDP guard is gone: a follower session can build a restorer.
+
+    The follower's cache tags its files with its rank so the ranks never
+    collide on disk (the real lockstep behaviour is covered end-to-end by
+    `test_two_rank_gloo_time_travel_deterministic`).
+    """
+    session = _follower_session()  # _FakeFollowerContext has rank == 1
+    restorer = session.training_restorer(cache_dir=tmp_path)
+    assert restorer.cache.rank == 1
+    assert restorer.cache.path_for(0).name == "epoch_0.rank1.pt"
 
 
 def test_unwrap_ddp_passes_plain_model_through() -> None:
@@ -190,3 +198,125 @@ def test_two_rank_gloo_end_to_end(tmp_path: Path) -> None:
     """Spawn a real 2-rank gloo group: watch-set sync + global reduction."""
     init_file = tmp_path / "ddp_init"
     mp.spawn(_ddp_worker, args=(2, str(init_file)), nprocs=2, join=True)
+
+
+def _stochastic_step(
+    ddp: DistributedDataParallel, optimizer: torch.optim.Optimizer, rank: int
+) -> None:
+    """One DDP train step on data drawn from this rank's RNG.
+
+    The input is `randn` (per-process RNG) so a deterministic replay depends
+    on the per-rank RNG snapshot being restored, not just on the replicated
+    model/optimizer state. DDP all-reduces the gradients, so the ranks stay
+    in sync regardless of seeing different data.
+    """
+    x = torch.randn(4, 4) + rank  # rank-distinguishable, RNG-driven
+    y = torch.randint(0, 3, (4,))
+    optimizer.zero_grad(set_to_none=True)
+    cross_entropy(ddp(x), y).backward()
+    optimizer.step()
+
+
+def _time_travel_worker(rank: int, world_size: int, init_file: str, cache_dir: str) -> None:
+    """One rank of the time-travel determinism run; assertions fail the spawn.
+
+    Every rank wraps a 3-epoch / 2-batch loop in a restorer. On the first
+    attempt the leader arms a jump back to epoch 1 as it enters epoch 2; the
+    jump is broadcast at the next batch-start barrier and EVERY rank raises
+    `TimeTravelJump` in lockstep, then restores from its own per-rank
+    checkpoint. The replayed epoch 1 must reproduce the original epoch 1's
+    end-of-epoch weights bit-for-bit (model/opt restored + per-rank RNG
+    restored => identical data => identical gradients). A hang would trip the
+    gloo timeout and fail the spawn.
+    """
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=world_size,
+        timeout=timedelta(seconds=120),
+    )
+    try:
+        # Identical initial weights on every rank (DDP would broadcast them
+        # anyway); seed the RNG per rank so the data streams differ.
+        torch.manual_seed(0)
+        model = TinyNet()
+        ddp = DistributedDataParallel(model)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+        torch.manual_seed(100 + rank)
+
+        epochs, batches = 3, 2
+        session = nansense.start(
+            ddp, epochs=epochs, phases={"train": batches}, optimizer=optimizer
+        )
+        if rank == 0:
+            session.detach()  # free-running; the jump is armed programmatically
+        restorer = session.training_restorer(cache_dir=Path(cache_dir))
+
+        # End-of-epoch fc1 weights, per attempt, keyed by epoch.
+        seen: list[tuple[int, int, torch.Tensor]] = []  # (attempt, epoch, weight)
+        attempt = -1
+        armed = False
+        while restorer.pending():
+            with restorer:
+                attempt += 1
+                # `request_time_travel` flips the leader to STEP mode; re-detach
+                # each attempt so the single-threaded worker never pauses with
+                # no UI to resume it (which would deadlock the followers).
+                if rank == 0:
+                    session.detach()
+                for epoch in restorer.epochs():
+                    # Arm the jump back to epoch 1 as we enter epoch 2 on the
+                    # first attempt — epoch 1's checkpoint already exists.
+                    if rank == 0 and attempt == 0 and epoch == 2 and not armed:
+                        session.request_time_travel(1)
+                        armed = True
+                    for _ in session.batches(
+                        range(batches), phase="train", epoch=epoch
+                    ):
+                        _stochastic_step(ddp, optimizer, rank)
+                    seen.append(
+                        (attempt, epoch, model.fc1.weight.detach().clone())
+                    )
+
+        # The leader armed a jump at epoch 2, so attempt 0 completed epochs
+        # 0 and 1 (epoch 2 raised at its first batch, before logging), and
+        # attempt 1 replayed epochs 1 and 2.
+        epochs_per_attempt = [
+            [e for a, e, _ in seen if a == att]
+            for att in range(max(a for a, _, _ in seen) + 1)
+        ]
+        assert epochs_per_attempt == [[0, 1], [1, 2]], epochs_per_attempt
+
+        # Determinism: the replayed epoch-1 weights match the original's on
+        # EVERY rank (per-rank RNG restored => same data => same update).
+        orig_ep1 = next(w for a, e, w in seen if a == 0 and e == 1)
+        replay_ep1 = next(w for a, e, w in seen if a == 1 and e == 1)
+        torch.testing.assert_close(replay_ep1, orig_ep1)
+        assert restorer.finished
+        session.close()
+    finally:
+        dist.destroy_process_group()
+
+
+def test_two_rank_gloo_time_travel_deterministic(tmp_path: Path) -> None:
+    """Spawn a real 2-rank gloo group and jump back an epoch in lockstep.
+
+    Exercises the full DDP time-travel path: the leader's armed jump is
+    broadcast through `sync_batch_control`, every rank raises at the same
+    barrier, each restores from its own per-rank checkpoint, and the replayed
+    epoch reproduces the original deterministically — with no deadlock (a hang
+    trips the 120s gloo timeout and fails the join).
+    """
+    init_file = tmp_path / "tt_init"
+    cache_dir = tmp_path / "tt_cache"
+    mp.spawn(
+        _time_travel_worker,
+        args=(2, str(init_file), str(cache_dir)),
+        nprocs=2,
+        join=True,
+    )
+    # Both ranks persisted their own epoch files (rank 0 canonical, rank 1
+    # tagged), proving the per-rank checkpoint scheme actually wrote to disk.
+    assert (cache_dir / "epoch_1.pt").exists()
+    assert (cache_dir / "epoch_1.rank1.pt").exists()
