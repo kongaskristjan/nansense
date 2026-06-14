@@ -8,6 +8,7 @@ import torch
 from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
+    _best_effort_ui_update,
     _current_position,
     _summarize_epoch_ranges,
     _time_travel_default_index,
@@ -201,3 +202,18 @@ def test_time_travel_default_index(
     cached: list[int], current_epoch: int | None, expected: int
 ) -> None:
     assert _time_travel_default_index(cached, current_epoch) == expected
+
+
+def test_best_effort_ui_update_runs_then_swallows_torn_down_client() -> None:
+    """The deferred post-finalize refresh runs normally, but a client torn
+    down during the await (NiceGUI raises RuntimeError) must not surface as an
+    unhandled exception."""
+    calls: list[str] = []
+    _best_effort_ui_update(lambda: calls.append("ran"))
+    assert calls == ["ran"]
+
+    def torn_down() -> None:
+        # NiceGUI's message when the element's slot/page no longer exists.
+        raise RuntimeError("The parent element this slot belongs to has been deleted.")
+
+    _best_effort_ui_update(torn_down)  # must not propagate
