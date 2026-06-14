@@ -21,6 +21,16 @@ class DatasetConfig:
     std: tuple[float, ...]
 
 
+# Crop-augmentation padding modes, mapped to torchvision's `padding_mode`.
+# `zero` is torchvision's default ("constant" with fill 0).
+PADDING_MODES: dict[str, str] = {
+    "zero": "constant",
+    "reflection": "reflect",
+    "edge": "edge",
+    "symmetric": "symmetric",
+}
+
+
 DATASETS: dict[str, DatasetConfig] = {
     # 28x28 grayscale digits, scaled up to the 32x32 the models train at.
     "mnist": DatasetConfig(
@@ -51,8 +61,11 @@ DATASETS: dict[str, DatasetConfig] = {
 }
 
 
-def build_transforms(config: DatasetConfig, train: bool) -> transforms.Compose:
+def build_transforms(
+    config: DatasetConfig, train: bool, padding: str = "zero"
+) -> transforms.Compose:
     normalize = [transforms.ToTensor(), transforms.Normalize(config.mean, config.std)]
+    padding_mode = PADDING_MODES[padding]
     size = config.image_size
     if config.name == "mnist":
         scale = [transforms.Resize((size, size))]
@@ -60,7 +73,7 @@ def build_transforms(config: DatasetConfig, train: bool) -> transforms.Compose:
             return transforms.Compose(
                 [
                     *scale,
-                    transforms.RandomCrop(size, padding=2),
+                    transforms.RandomCrop(size, padding=2, padding_mode=padding_mode),
                     transforms.RandomRotation(10),
                     *normalize,
                 ]
@@ -70,7 +83,7 @@ def build_transforms(config: DatasetConfig, train: bool) -> transforms.Compose:
         if train:
             return transforms.Compose(
                 [
-                    transforms.RandomCrop(size, padding=4),
+                    transforms.RandomCrop(size, padding=4, padding_mode=padding_mode),
                     transforms.RandomHorizontalFlip(),
                     *normalize,
                 ]
@@ -94,8 +107,10 @@ def build_transforms(config: DatasetConfig, train: bool) -> transforms.Compose:
     )
 
 
-def _build_dataset(config: DatasetConfig, data_dir: Path, train: bool, download: bool) -> Dataset:
-    transform = build_transforms(config, train=train)
+def _build_dataset(
+    config: DatasetConfig, data_dir: Path, train: bool, download: bool, padding: str = "zero"
+) -> Dataset:
+    transform = build_transforms(config, train=train, padding=padding)
     if config.name == "mnist":
         return datasets.MNIST(
             root=str(data_dir), train=train, download=download, transform=transform
@@ -119,9 +134,10 @@ def build_dataloaders(
     batch_size: int = 128,
     num_workers: int = 2,
     download: bool = True,
+    padding: str = "zero",
 ) -> tuple[DataLoader, DataLoader]:
-    train_set = _build_dataset(config, data_dir, train=True, download=download)
-    test_set = _build_dataset(config, data_dir, train=False, download=download)
+    train_set = _build_dataset(config, data_dir, train=True, download=download, padding=padding)
+    test_set = _build_dataset(config, data_dir, train=False, download=download, padding=padding)
 
     train_loader = DataLoader(
         train_set,
@@ -158,6 +174,7 @@ def build_distributed_dataloaders(
     batch_size: int = 128,
     num_workers: int = 2,
     download: bool = True,
+    padding: str = "zero",
 ) -> tuple[DataLoader, DataLoader, DistributedSampler]:
     """Per-rank loaders over `DistributedSampler` shards (returns the train
     sampler so the caller can `set_epoch` each epoch).
@@ -166,8 +183,8 @@ def build_distributed_dataloaders(
     number of batches per phase — distributed nansense sessions (like DDP
     itself) require the ranks to advance through batches in lockstep.
     """
-    train_set = _build_dataset(config, data_dir, train=True, download=download)
-    test_set = _build_dataset(config, data_dir, train=False, download=download)
+    train_set = _build_dataset(config, data_dir, train=True, download=download, padding=padding)
+    test_set = _build_dataset(config, data_dir, train=False, download=download, padding=padding)
 
     train_sampler = DistributedSampler(train_set, shuffle=True, drop_last=True)
     train_loader = DataLoader(

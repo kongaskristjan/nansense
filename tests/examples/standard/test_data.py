@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 from PIL import Image
+from torchvision import transforms
 
-from examples.standard.data import DATASETS, build_transforms
+from examples.standard.data import DATASETS, PADDING_MODES, build_transforms
 
 
 def test_known_datasets() -> None:
@@ -41,3 +42,32 @@ def test_transforms_output_shape(name: str, train: bool) -> None:
     out = transform(Image.new(mode, source_size))
 
     assert out.shape == (config.in_channels, config.image_size, config.image_size)
+
+
+@pytest.mark.parametrize("name", ["mnist", "cifar10"])
+@pytest.mark.parametrize("padding", sorted(PADDING_MODES))
+def test_padding_mode_threads_to_random_crop(name: str, padding: str) -> None:
+    """The `--padding` choice must reach the train-time `RandomCrop`; the
+    cropped datasets (mnist/cifar10) carry it on their `padding_mode`."""
+    transform = build_transforms(DATASETS[name], train=True, padding=padding)
+
+    crops = [t for t in transform.transforms if isinstance(t, transforms.RandomCrop)]
+    assert len(crops) == 1
+    assert crops[0].padding_mode == PADDING_MODES[padding]
+
+
+@pytest.mark.parametrize("padding", sorted(PADDING_MODES))
+def test_padding_modes_produce_valid_output(padding: str) -> None:
+    """Every padding mode yields a correctly shaped crop (e.g. `reflect`
+    rejects pads >= the image size, so the small pads here must stay legal)."""
+    config = DATASETS["cifar10"]
+    transform = build_transforms(config, train=True, padding=padding)
+
+    out = transform(Image.new("RGB", (config.image_size, config.image_size)))
+
+    assert out.shape == (config.in_channels, config.image_size, config.image_size)
+
+
+def test_unknown_padding_is_rejected() -> None:
+    with pytest.raises(KeyError):
+        build_transforms(DATASETS["cifar10"], train=True, padding="bogus")

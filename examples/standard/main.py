@@ -31,6 +31,7 @@ import nansense
 from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
 from examples.standard.data import (
     DATASETS,
+    PADDING_MODES,
     DatasetConfig,
     build_dataloaders,
     build_distributed_dataloaders,
@@ -48,6 +49,16 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(DATASETS),
         default="cifar10",
         help="Dataset to train on (default cifar10).",
+    )
+    parser.add_argument(
+        "--padding",
+        choices=sorted(PADDING_MODES),
+        default="zero",
+        help=(
+            "Crop-augmentation padding mode for mnist/cifar10 (default zero). "
+            "Zero padding leaks hard border seams into the hidden activations — "
+            "see for yourself in the nansense layer views, then try reflection."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -163,6 +174,7 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        padding=args.padding,
     )
 
     model = build_model(args.model, config, blocks_per_stage=args.blocks_per_stage).to(device)
@@ -298,6 +310,7 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         download=False,
+        padding=args.padding,
     )
 
     # nansense unwraps the DDP model itself and serves the UI from rank 0 only.
