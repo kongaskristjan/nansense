@@ -1,9 +1,11 @@
 """Consistency checks for the PyTorch variant dependency groups in pyproject.toml.
 
 PyTorch is installed through mutually exclusive dependency groups (cpu /
-cu126 / cu130 / cu132 / rocm7-2), each pinned to its PyTorch wheel index.
-Groups are never published, which keeps the PyPI package torch-free. These
-tests guard against the groups, conflict declaration, sources, and index
+cu126 / cu130 / cu132 / rocm7-2), each pinned to its PyTorch wheel index, so
+the user picks their own hardware build. nansense declares no direct torch
+dependency; the one torch-bearing standard dependency is captum (for the
+experiment page's attributions), which pulls torch transitively. These tests
+guard against the groups, conflict declaration, sources, and index
 definitions drifting apart when dependencies are edited.
 """
 
@@ -53,16 +55,21 @@ def test_torchaudio_in_every_group_except_cu132(group: str) -> None:
     assert has_torchaudio == (group in TORCHAUDIO_GROUPS)
 
 
-def test_published_metadata_is_torch_free() -> None:
-    """`pip install nansense` (with or without extras) must never pull torch.
+def test_published_metadata_declares_no_direct_torch() -> None:
+    """nansense never *declares* torch (or its example-only siblings) directly.
 
-    torch, torchvision, captum, and lightning (the latter two depend on
-    torch) are all delegated to the user: they may only appear in the
-    unpublished dependency groups, never in the published metadata.
+    The hardware-specific torch / torchvision / torchaudio builds are left to
+    the user (installed via the unpublished dependency groups) and lightning is
+    an optional integration, so none of them may appear in the published
+    metadata. captum is the one deliberate exception: a standard dependency
+    (for the experiment page's attribution methods) that pulls torch
+    transitively, which is why installing your own torch build first is advised.
     """
     data = _load_pyproject()
-    forbidden = {"torch", "torchvision", "torchaudio", "captum", "lightning"}
-    assert forbidden.isdisjoint(_requirement_names(data["project"]["dependencies"]))
+    deps = _requirement_names(data["project"]["dependencies"])
+    assert "captum" in deps  # intentionally a standard dependency
+    forbidden = {"torch", "torchvision", "torchaudio", "lightning"}
+    assert forbidden.isdisjoint(deps)
     for extra, requirements in data["project"].get("optional-dependencies", {}).items():
         assert forbidden.isdisjoint(_requirement_names(requirements)), extra
 

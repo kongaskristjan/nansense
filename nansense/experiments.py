@@ -45,13 +45,13 @@ they work on *any* captured layer.
 
 from __future__ import annotations
 
-import importlib.util
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from captum import attr as captum_attr
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -71,8 +71,6 @@ EXPERIMENT_KINDS: dict[str, str] = {
     "occlusion": "Occlusion (Captum)",
 }
 
-_CAPTUM_KINDS = frozenset(EXPERIMENT_KINDS) - {"deep_dream"}
-
 # Kinds whose Captum attribution targets the layer's `nn.Module` object
 # directly (Grad-CAM's localization layer, the neuron methods' layer). An fx
 # intermediate (relu/add/…) has no module to hand Captum, so these are
@@ -84,12 +82,10 @@ _MODULE_KINDS = frozenset({"gradcam", "neuron_gradient", "neuron_ig"})
 def available_experiment_kinds() -> dict[str, str]:
     """Experiment kinds the UI should offer.
 
-    captum is an optional dependency the user installs themselves; the
-    captum-based kinds are simply not offered when it is absent.
+    captum is a standard dependency, so every kind (deep dream and the four
+    Captum attributions) is always offered.
     """
-    if importlib.util.find_spec("captum") is not None:
-        return dict(EXPERIMENT_KINDS)
-    return {k: v for k, v in EXPERIMENT_KINDS.items() if k not in _CAPTUM_KINDS}
+    return dict(EXPERIMENT_KINDS)
 
 
 def layer_available(session: Session, layer: str, kind: str) -> bool:
@@ -673,12 +669,6 @@ def _run_captum(
     between batches) inside the isolation scope. Gradient-based methods use
     `torch.autograd.grad` internally, so parameter `.grad` survives.
     """
-    try:
-        from captum import attr as captum_attr
-    except ImportError:
-        yield _error(request, "captum is not installed (`pip install captum`)")
-        return
-
     p = request.params
     x0 = _captum_input(session, request)
     if isinstance(x0, ExperimentResult):

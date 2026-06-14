@@ -612,11 +612,10 @@ request-seeded generator), diffusion (blend with a 3×3 box blur), center
 zoom (a per-step multiplier, ≥ 1), and clamping to `_value_bounds` — the
 displayable `[0, 1]` range mapped through the input mean/std.
 
-**Captum** (`_run_captum`) imports lazily and runs the *unpatched* model
-inside the isolation scope (experiments only execute between batches).
-captum is an optional dependency the user installs themselves:
-`available_experiment_kinds()` hides the Captum kinds from the UI when it
-is absent, and `_run_captum` degrades to an error result as a safety net.
+**Captum** (`_run_captum`) runs the *unpatched* model inside the isolation
+scope (experiments only execute between batches). captum is a standard
+dependency, so `captum.attr` is imported at module load and
+`available_experiment_kinds()` always offers all four attribution methods.
 Like deep dream, the Captum methods run on a *batch* (`_captum_input`: the
 first `batch` samples of the live input) and publish one attribution per
 sample. Grad-CAM and the neuron methods need the layer's `nn.Module`; fx

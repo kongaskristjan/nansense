@@ -457,14 +457,5 @@ def test_zoom_in_keeps_shape(size: int, zoom: float, changes: bool) -> None:
     assert torch.equal(zoomed, x) != changes
 
 
-def test_available_kinds_with_captum_offers_everything() -> None:
+def test_available_kinds_offers_everything() -> None:
     assert available_experiment_kinds() == EXPERIMENT_KINDS
-
-
-def test_available_kinds_without_captum_hides_captum_kinds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "nansense.experiments.importlib.util.find_spec", lambda name: None
-    )
-    assert available_experiment_kinds() == {"deep_dream": "Deep Dream"}
