@@ -55,14 +55,14 @@ def _add_step_controls(
     """
     ui.button("Stop", on_click=session.stop, color="red").props(
         "dense size=md"
-    ).tooltip("Pause at the next batch boundary")
+    ).tooltip("Pause at next batch")
     with ui.dropdown_button(
         "Step Batch",
         on_click=session.step_batch,
         split=True,
         auto_close=True,
         color="orange",
-    ).props("dense size=md").tooltip("Advance one batch, then pause"):
+    ).props("dense size=md").tooltip("Advance one batch"):
         _step_menu_item(
             "Step epoch",
             "Run until the epoch changes, then pause",
@@ -222,7 +222,7 @@ def _add_time_travel_button(session: Session) -> None:
     # Quasar suppresses pointer events on disabled buttons, so the tooltip
     # (which must explain *why* the button is off) lives on a wrapper div.
     tooltip = (
-        "Jump training back to the start of a cached epoch"
+        "Jump to the start of a cached epoch"
         if status.available
         else (status.reason or "Time travel is unavailable.")
     )

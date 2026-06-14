@@ -717,6 +717,7 @@ class _HistPlot:
                 )
                 .props("dense outlined")
                 .classes("w-24")
+                .tooltip("Which channel to show")
             )
             self._channel_total = ui.label("").classes("text-xs text-slate-500")
         fig, (self._x_range, self._y_range) = _make_histogram_figure(

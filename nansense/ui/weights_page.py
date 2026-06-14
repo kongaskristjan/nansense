@@ -275,7 +275,10 @@ class _WeightPanel:
                                 on_change=lambda e, d=d: self._on_role(
                                     d, getattr(e, "value", None)
                                 ),
-                            ).props("dense outlined").classes("w-24")
+                            ).props("dense outlined").classes("w-24").tooltip(
+                                "How this dimension is laid out: X/Y image axes, "
+                                "Tile (side-by-side), or pin one Index"
+                            )
                             self._role_selects.append(select)
                             number = ui.number(
                                 value=0,
@@ -286,7 +289,9 @@ class _WeightPanel:
                                 on_change=lambda e, d=d: self._on_index(
                                     d, getattr(e, "value", None)
                                 ),
-                            ).props("dense outlined").classes("w-20")
+                            ).props("dense outlined").classes("w-20").tooltip(
+                                "Which index of this dimension to show"
+                            )
                             self._index_numbers[d] = number
             self._error = ui.label("").classes("text-amber-700 text-xs min-h-4")
             # Both strips share one horizontal scrollbar so they pan together,
