@@ -783,7 +783,7 @@ def _run_captum(
             ).attribute(
                 x,
                 neuron_selector=_neuron_selector(int_param(p, "channel", 0)),
-                n_steps=max(2, int_param(p, "steps", 32)),
+                n_steps=max(2, int_param(p, "ig_steps", 32)),
             )
         else:  # occlusion, retargeted to the selected layer-channel
             channels = int(x.shape[1])

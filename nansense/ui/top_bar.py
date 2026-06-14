@@ -252,7 +252,10 @@ def _add_settings_button(
     Returned so the page can right-align it (`ml-auto`) when it is the
     first element of the cluster.
 
-    The dialog hosts two sections. "Update frequency" configures
+    The dialog hosts three sections. "Experiments" carries the shared,
+    session-wide auto-run toggle (`Session.set_auto_run_experiments`): when on,
+    experiment pages run on open and on every parameter change instead of
+    waiting for a manual Run. "Update frequency" configures
     `Session.set_update_frequency`: visualizations refresh every nth epoch
     (the default, n=1) or every nth batch, optionally counting only one
     phase's batches. The setting is locked while recordings are active —
@@ -271,6 +274,20 @@ def _add_settings_button(
     phase_names = list(session.schedule.phases)
 
     with ui.dialog() as dialog, ui.card().classes("min-w-[30rem] p-6 gap-3"):
+        ui.label("Experiments").classes("text-lg font-bold")
+        auto_run_switch = (
+            ui.switch(
+                "Auto-run experiments",
+                on_change=lambda e: session.set_auto_run_experiments(bool(e.value)),
+            )
+            .props("dense")
+            .tooltip(
+                "Run experiments on the experiment page automatically — on "
+                "open and on every parameter change — instead of clicking Run "
+                "(Run is grayed out while on). Shared across all tabs."
+            )
+        )
+        ui.separator()
         ui.label("Update frequency").classes("text-lg font-bold")
         ui.label(
             "How often all visualizations refresh while training runs. "
@@ -493,6 +510,7 @@ def _add_settings_button(
     def open_dialog() -> None:
         nonlocal loading
         loading = True
+        auto_run_switch.value = session.auto_run_experiments
         freq = session.update_frequency
         unit_select.value = freq.unit
         n_input.value = freq.n
@@ -507,7 +525,7 @@ def _add_settings_button(
     button = ui.button(icon="settings", on_click=open_dialog, color="slate-500").props(
         "dense size=md"
     )
-    button.tooltip("Settings — update frequency and MP4 recording")
+    button.tooltip("Settings — auto-run, update frequency, and MP4 recording")
     with button:
         badge = ui.badge("").props("color=red floating")
 

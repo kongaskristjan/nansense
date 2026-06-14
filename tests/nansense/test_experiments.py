@@ -266,7 +266,7 @@ def test_deep_dream_works_on_vector_input() -> None:
     [
         ("gradcam", {"target": -1}, 1),  # Grad-CAM emits one heatmap channel
         ("neuron_gradient", {"channel": 0}, 3),
-        ("neuron_ig", {"channel": 0, "steps": 4}, 3),
+        ("neuron_ig", {"channel": 0, "ig_steps": 4}, 3),
         ("occlusion", {"channel": 0, "window": 2, "stride": 2}, 3),
     ],
 )
