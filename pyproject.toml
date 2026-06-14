@@ -19,9 +19,14 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# torch is deliberately NOT a dependency: installing it is left to the user
-# so their hardware-specific build (CUDA / ROCm / CPU) is preserved.
+# torch is not declared directly so the user's hardware-specific build
+# (CUDA / ROCm / CPU) is preserved — install it yourself first. The one
+# caveat is captum (a standard dependency, powering the experiment page's
+# attribution methods): it pulls torch transitively and needs torch >= 2.3,
+# so install your torch build *before* nansense to keep pip from fetching a
+# default CPU wheel.
 dependencies = [
+    "captum>=0.9.0",
     "fastapi>=0.110",
     "imageio>=2.37.3",
     "imageio-ffmpeg>=0.6.0",
@@ -41,11 +46,13 @@ Homepage = "https://github.com/kongaskristjan/nansense"
 Repository = "https://github.com/kongaskristjan/nansense"
 
 # The torch variants live in (unpublished) dependency groups rather than
-# extras, so the PyPI package never installs torch — not even optionally.
-# captum and lightning (which both pull in torch) are likewise left to the
-# user: the corresponding features are not offered when they are absent.
+# extras, so a plain install pulls torch only transitively (via captum) and
+# the matching hardware build is selected by syncing a group. lightning is
+# still left to the user (it also pulls torch): the Lightning integration is
+# simply unavailable when it is absent.
 # Floors are kept deliberately loose — nansense is a library and supports a
-# broad range of torch builds. The loose torchaudio floor (used only by the
+# broad range of torch builds (captum pins the effective floor to torch
+# >= 2.3). The loose torchaudio floor (used only by the
 # audio example) lets the resolver pick the newest wheel each index actually
 # ships, even when that pins torch slightly below its newest release. torchaudio
 # is omitted only from cu132 (the CUDA 13.2 index has no linux-x86_64 torchaudio
@@ -66,7 +73,6 @@ rocm7-2 = [
     "triton-rocm ; sys_platform == 'linux'",
 ]
 dev = [
-    "captum>=0.9.0",
     "lightning>=2.4",
     "pytest>=9.0.3",
     "scipy>=1.14",

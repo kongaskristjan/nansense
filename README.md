@@ -13,70 +13,25 @@
 </p>
 
 Hook one `Session` into your PyTorch loop and a web UI opens onto the running
-model: activations, gradients, weights, and optimizer state — live. Pause,
-step batch-by-batch, and **time-travel** the loop back to any epoch and replay
-it deterministically. Find maximum activation patches for neurons,
-run deep dream experiments and measure the receptive field of layers.
-It works with raw PyTorch, PyTorch Lightning, and multi-GPU DDP, and turns
-off to a near-zero-overhead no-op for production runs.
+model — activations, gradients, weights, and optimizer state, **live as it
+trains**. Pause, step batch-by-batch, and see exactly what every layer is doing.
 
-## Install
-
-```bash
-pip install nansense
-```
-
-nansense deliberately **does not depend on torch** — install PyTorch yourself
-(see [pytorch.org](https://pytorch.org/get-started/locally/)) so your CUDA /
-ROCm / CPU build is preserved. Optional extras light up on import: `pip install
-captum` adds attribution methods to the experiment page, `pip install
-lightning` enables `nansense.lightning`. Runs on Python 3.10–3.14.
-
-## Wire it into your loop
-
-It's a handful of lines either way — one `start()` and wrapping your loader.
-
-**Raw PyTorch**
-
-```diff
-  import torch
-+ import nansense
-
-  model = MyNet().to(device)
-  optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-
-+ # One call serves a live UI at http://localhost:8080.
-+ session = nansense.start(
-+     model,
-+     epochs=50,
-+     phases={"train": len(train_loader), "val": len(val_loader)},
-+     optimizer=optimizer,   # optional: weights page shows optimizer state + live LR
-+     port=8080,
-+ )
-
-  for epoch in range(50):
--     for inputs, targets in train_loader:
-+     for inputs, targets in session.batches(train_loader, phase="train", epoch=epoch):
-          optimizer.zero_grad()
-          loss = criterion(model(inputs), targets)
-          loss.backward()
-          optimizer.step()
-
-+ session.close()   # UI keeps serving the final snapshot
-```
-
-**PyTorch Lightning** — a stock `Trainer`, no changes to your training code:
-
-```diff
-  import lightning as L
-+ from nansense.lightning import NansenseCallback
-
-+ # `model=` is the attribute path to the network inside your LightningModule.
-+ callback = NansenseCallback(port=8080, model="net")
-- trainer = L.Trainer(max_epochs=50)
-+ trainer = L.Trainer(max_epochs=50, callbacks=[callback])
-  trainer.fit(module, datamodule)
-```
+- **Trace the receptive field** — paint a pixel onto the input and watch the
+  change ripple outward as per-layer activation diffs.
+- **Spot dead units and vanishing gradients** — per-layer activation and
+  gradient distributions with full stats, down to a single channel.
+- **See what each neuron learned** — the input patches that drove a channel's
+  most extreme activations.
+- **Ask a neuron what it wants to see** — deep-dream synthesis plus four Captum
+  attribution methods, both re-run as the weights evolve.
+- **Watch weights and optimizer state move** — weight and gradient strips, every
+  optimizer-state tensor, and the param group's live, scheduler-driven LR.
+- **Time-travel** the loop back to any epoch and replay it deterministically;
+  **record** any view to MP4 for a timelapse.
+- Works with **raw PyTorch, PyTorch Lightning, and multi-GPU DDP**, and turns
+  off to a near-zero-overhead no-op for production runs.
+- **[A few lines of code](#wire-it-into-your-loop)** wire it into your existing
+  training loop.
 
 ## What you get
 
@@ -111,7 +66,7 @@ activation heatmap overlaid.
 ### Ask a neuron what it wants to see
 
 Deep-dream gradient ascent synthesizes the input that maximally excites a
-channel, streaming live as it forms; with `captum` installed, four attribution
+channel, streaming live as it forms; alongside it four Captum attribution
 methods (Grad-CAM, Occlusion, Neuron Gradient / Integrated Gradients) explain
 real samples. Both re-run automatically as the weights evolve.
 
@@ -134,7 +89,113 @@ deterministically (model / optimizer / scheduler / RNG restored) — re-run a
 moment that looked off. **Record** any view to MP4, one frame per update, to
 keep a timelapse of training.
 
-## API in a nutshell
+## Run examples
+
+The examples run with [`uv`](https://docs.astral.sh/uv/), a fast Python package
+manager. Install it once with `curl -LsSf https://astral.sh/uv/install.sh | sh`
+(or see the [install docs](https://docs.astral.sh/uv/getting-started/installation/)).
+It builds an isolated, project-local environment for this repo and won't touch
+your system Python or any conda/venv you already use.
+
+Sync the dependency group that matches your hardware:
+
+```bash
+uv sync --group cpu        # CPU only
+uv sync --group cu126      # NVIDIA CUDA 12.6
+uv sync --group cu130      # NVIDIA CUDA 13.0
+uv sync --group cu132      # NVIDIA CUDA 13.2
+uv sync --group rocm7-2    # AMD ROCm 7.2
+```
+
+Then launch any example (each serves the UI on `--nansense-port`):
+
+```bash
+uv run examples/standard/main.py --nansense-port 8080
+uv run examples/pytorch_lightning/main.py --nansense-port 8080
+uv run examples/game_of_life/main.py --nansense-port 8080
+uv run examples/audio_keywords/main.py --nansense-port 8080
+uv run examples/depth_make3d/main.py --nansense-port 8080
+uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080  # multi-rank DDP
+```
+
+Each example is self-contained and downloads its dataset on first run. Open the
+printed URL; training pauses on the first batch — drive it from the top bar.
+
+If you hit out-of-memory, lower `--batch-size` (or add `--bf16` where supported).
+
+- **`standard`** — ResNet / ViT / LeNet on CIFAR-10 / MNIST / Imagenette with
+  the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
+  and launch under `torchrun` for multi-rank DDP.
+- **`pytorch_lightning`** — a tiny convnet on MNIST via `NansenseCallback` +
+  `fit_with_time_travel`.
+- **`game_of_life`** — predict Conway's Game of Life; board-shaped activations
+  make perturbation light-cones and deep-dream motifs especially legible.
+- **`audio_keywords`** — spoken-keyword CNN over log-mel spectrograms.
+- **`depth_make3d`** — monocular depth (pretrained ResNet encoder + U-Net
+  decoder) by transfer learning.
+
+## Use the library
+
+```bash
+pip install nansense
+```
+
+Install your PyTorch build first (see
+[pytorch.org](https://pytorch.org/get-started/locally/)) so your CUDA / ROCm /
+CPU choice is preserved: nansense bundles `captum` for the experiment page's
+attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch
+keeps `pip` from pulling a default CPU build. `pip install lightning`
+additionally enables `nansense.lightning`. Runs on Python 3.10–3.14.
+
+### Wire it into your loop
+
+It's a handful of lines either way — one `start()` and wrapping your loader.
+
+**Raw PyTorch**
+
+```diff
+  import torch
++ import nansense
+
+  model = MyNet().to(device)
+  optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
++ # One call serves a live UI at http://localhost:8080.
++ session = nansense.start(
++     model,
++     epochs=50,
++     phases={"train": len(train_loader), "val": len(val_loader)},
++     optimizer=optimizer,   # optional: weights page shows optimizer state + live LR
++     port=8080,
++ )
+
+  for epoch in range(50):
+-     for inputs, targets in train_loader:
++     for inputs, targets in session.batches(train_loader, phase="train", epoch=epoch):
+          optimizer.zero_grad()
+          loss = criterion(model(inputs), targets)
+          loss.backward()
+          optimizer.step()
+
++ session.close()   # UI keeps serving the final snapshot
+```
+
+**PyTorch Lightning** — your `LightningModule` is untouched; a callback drives
+the UI and `fit_with_time_travel` wraps a stock `Trainer` so the Time Travel
+button works (a factory, because each jump needs a fresh `Trainer`):
+
+```diff
+  import lightning as L
++ from nansense.lightning import NansenseCallback, fit_with_time_travel
+
++ # `model=` is the attribute path to the network inside your LightningModule.
++ callback = NansenseCallback(port=8080, model="net")
+- trainer = L.Trainer(max_epochs=50)
+- trainer.fit(module, datamodule)
++ fit_with_time_travel(lambda: L.Trainer(max_epochs=50), module, callback=callback, datamodule=datamodule)
+```
+
+The full `start()` surface:
 
 ```python
 session = nansense.start(
@@ -166,39 +227,4 @@ the DDP-wrapped model — it's unwrapped automatically). Rank 0 serves the UI an
 drives pausing; the other ranks fold their data shard into the watch-page
 statistics, and a time-travel jump rewinds every rank in lockstep.
 
-## Run the examples (this repo)
-
-```bash
-uv sync --group cu130        # NVIDIA CUDA 13 — or: cpu / cu126 / cu132 / rocm7-2
-uv run examples/standard/main.py --nansense-port 8080
-```
-
-Each example is self-contained and downloads its dataset on first run. Open the
-printed URL; training pauses on the first batch — drive it from the top bar.
-
-If you hit out-of-memory, lower `--batch-size` (or add `--bf16` where supported).
-
-- **`standard`** — ResNet / ViT / LeNet on CIFAR-10 / MNIST / Imagenette with
-  the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
-  and launch under `torchrun` for multi-rank DDP.
-- **`pytorch_lightning`** — a tiny convnet on MNIST via `NansenseCallback` +
-  `fit_with_time_travel`.
-- **`game_of_life`** — predict Conway's Game of Life; board-shaped activations
-  make perturbation light-cones and deep-dream motifs especially legible.
-- **`audio_keywords`** — spoken-keyword CNN over log-mel spectrograms.
-- **`depth_make3d`** — monocular depth (pretrained ResNet encoder + U-Net
-  decoder) by transfer learning.
-
-```bash
-# multi-rank DDP
-uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080
-```
-
-## Development
-
-```bash
-uv run pytest && uv run ty check
-```
-
-See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood and
-[`AGENTS.md`](AGENTS.md) for contributor guidelines.
+See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood.

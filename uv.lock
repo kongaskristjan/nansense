@@ -1751,6 +1751,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
+    { name = "captum" },
     { name = "fastapi" },
     { name = "imageio" },
     { name = "imageio-ffmpeg" },
@@ -1796,7 +1797,6 @@ cu132 = [
     { name = "torchvision", version = "0.27.0+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "(sys_platform == 'linux' and extra == 'group-8-nansense-cu132') or (sys_platform == 'win32' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu132' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu126') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-rocm7-2')" },
 ]
 dev = [
-    { name = "captum" },
     { name = "lightning" },
     { name = "pytest" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu126') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cpu' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu130') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu126' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-cu132') or (extra == 'group-8-nansense-cu130' and extra == 'group-8-nansense-rocm7-2') or (extra == 'group-8-nansense-cu132' and extra == 'group-8-nansense-rocm7-2')" },
@@ -1817,6 +1817,7 @@ rocm7-2 = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=17.1.0" },
+    { name = "captum", specifier = ">=0.9.0" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "imageio", specifier = ">=2.37.3" },
     { name = "imageio-ffmpeg", specifier = ">=0.6.0" },
@@ -1858,7 +1859,6 @@ cu132 = [
     { name = "torchvision", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = ">=0.17.0", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "nansense", group = "cu132" } },
 ]
 dev = [
-    { name = "captum", specifier = ">=0.9.0" },
     { name = "lightning", specifier = ">=2.4" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "scipy", specifier = ">=1.14" },
