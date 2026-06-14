@@ -33,6 +33,7 @@ dependencies = [
     "uvicorn>=0.30",
     # typing.Self landed in 3.11; on 3.10 we import it from typing_extensions.
     "typing-extensions>=4.6 ; python_version < '3.11'",
+    "av>=17.1.0",
 ]
 
 [project.urls]
