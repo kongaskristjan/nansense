@@ -680,16 +680,26 @@ connection and loses the in-flight click. Each `ViewRecorder` serialises
 just its short stream append/close sections with its own lock; a
 recording ended or deleted mid-render finishes the render and drops that
 frame (`_closed`). The dialog's end/delete actions additionally run via
-`asyncio.to_thread`, since ffmpeg finalization can take a moment. That
-finalization is bounded by `_FFMPEG_CLOSE_TIMEOUT`: each stream feeds an
-`imageio_ffmpeg.write_frames` generator (the only writer API exposing
-`ffmpeg_timeout`), so a stalled ffmpeg is killed rather than awaited
-forever — otherwise "Save & Finish" would hang indefinitely. The streams
-also pass `_X264_OUTPUT_PARAMS` (`ultrafast`, a thread cap): libx264's
-default lookahead defers most encoding to that flush, where ffmpeg's RSS
-roughly triples (a multi-GB spike at save time for large frames that can
-OOM the training process); encoding frames as they stream keeps it flat,
-trading some compression efficiency for a bounded, fast close.
+`asyncio.to_thread`, since finalizing the file can take a moment.
+
+Encoding is done **in-process with PyAV** (`av`, the ffmpeg *libraries* —
+no child process). Each `_VideoStream` opens an `av` container with one
+libx264 stream, converts each `rgb24` frame to `yuv420p`, and flushes the
+encoder on `close()`. This deliberately avoids an ffmpeg subprocess: a
+subprocess writer (the previous `imageio_ffmpeg` approach) communicated
+over pipes and `close()` *waited on a separate process to exit*, which
+could stall indefinitely (hanging "Save & Finish") or be OOM-killed — all
+outside our control. In-process, encode/flush are bounded calls that raise
+on error instead. The stream uses `_X264_PRESET = "ultrafast"` with a
+`_X264_THREADS` cap: libx264's default `medium` lookahead buffers ~40
+frames and defers most encoding to the flush, where its working set
+roughly triples (a multi-GB spike *at save time* for large frames that can
+OOM the training process); `ultrafast` encodes frames as they arrive so
+the footprint stays flat and the flush is near-instant. `_X264_CRF = 10`
+reproduces the previous visual quality; the cost is weaker compression
+(larger files), fine for short clips. Even so, the post-finalize UI
+refresh runs through `_best_effort_ui_update` (in `top_bar`) so a page
+closed during the await can't surface a teardown error.
 
 ## Time travel (`nansense.restore`)
 

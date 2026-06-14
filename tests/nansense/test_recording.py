@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import signal
 import threading
 from pathlib import Path
-from typing import Any
 
 import imageio.v2 as imageio
 import numpy as np
@@ -344,79 +341,28 @@ def test_close_finalizes_recordings(tmp_path: Path) -> None:
     assert _frame_count(path) == 1
 
 
-@pytest.mark.skipif(os.name != "posix", reason="SIGSTOP stall sim is POSIX-only")
-def test_close_does_not_hang_when_ffmpeg_stalls(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`_VideoStream.close()` must return even if ffmpeg never exits.
+def test_video_stream_encodes_readable_mp4_in_process(tmp_path: Path) -> None:
+    """`_VideoStream` encodes frames in-process (PyAV) into a readable MP4.
 
-    `imageio_ffmpeg`'s writer waits forever for ffmpeg to quit, so a stalled
-    encoder — here frozen with SIGSTOP, the same effect as starvation under
-    memory pressure — would otherwise hang "Save & Finish" indefinitely. With a
-    bounded `_FFMPEG_CLOSE_TIMEOUT` the subprocess is killed and close returns.
+    No ffmpeg subprocess means `close()` can't hang or be OOM-killed; the
+    stream is libx264 with the bounded-memory thread cap applied.
     """
-    monkeypatch.setattr(nansense.recording, "_FFMPEG_CLOSE_TIMEOUT", 1.0)
-    stream = _VideoStream(tmp_path / "stall.mp4", fps=10)
-    for _ in range(3):
-        stream.append(np.zeros((64, 96, 3), dtype=np.uint8))
-    assert stream._writer is not None
-    # The ffmpeg subprocess lives in the suspended generator's frame.
-    gen: Any = stream._writer
-    proc = gen.gi_frame.f_locals["p"]
-    proc.send_signal(signal.SIGSTOP)  # freeze: ffmpeg can no longer exit
-    try:
-        done = threading.Event()
-        error: list[BaseException] = []
-
-        def _close() -> None:
-            try:
-                stream.close()
-            except BaseException as e:  # noqa: BLE001 — surfaced via assert
-                error.append(e)
-            finally:
-                done.set()
-
-        threading.Thread(target=_close, daemon=True).start()
-        # Comfortably above the 1s timeout but far below "forever".
-        assert done.wait(timeout=10.0), "close() hung waiting for stalled ffmpeg"
-        assert not error, f"close() raised: {error[0]!r}"
-    finally:
-        if proc.poll() is None:
-            proc.kill()
+    stream = _VideoStream(tmp_path / "clip.mp4", fps=10)
+    for _ in range(5):
+        stream.append(np.random.randint(0, 255, (64, 96, 3), dtype=np.uint8))
+    assert stream._stream is not None
+    assert stream._stream.codec_context.name == "libx264"
+    assert stream._stream.thread_count == nansense.recording._X264_THREADS
+    stream.close()
+    assert _frame_count(tmp_path / "clip.mp4") == 5
 
 
-def test_writer_passes_memory_bounded_encoder_settings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The writer must request a bounded timeout and low-memory x264 settings.
-
-    x264's default lookahead defers most encoding to the close() flush, where
-    its RSS roughly triples — a save-time spike that can OOM training. The
-    `ultrafast`/thread-capped `output_params` keep it flat; this guards them
-    (and the close timeout) against regression without spawning real ffmpeg.
-    """
-    captured: dict[str, object] = {}
-
-    def fake_write_frames(path: str, size: tuple[int, int], **kwargs: object):
-        captured["path"] = path
-        captured["size"] = size
-        captured.update(kwargs)
-
-        def gen():  # type: ignore[no-untyped-def]
-            while True:
-                yield
-
-        return gen()
-
-    monkeypatch.setattr("imageio_ffmpeg.write_frames", fake_write_frames)
-    stream = _VideoStream(tmp_path / "x.mp4", fps=10)
-    stream.append(np.zeros((64, 96, 3), dtype=np.uint8))
-
-    assert captured["ffmpeg_timeout"] == nansense.recording._FFMPEG_CLOSE_TIMEOUT
-    output_params = captured["output_params"]
-    assert isinstance(output_params, list)
-    assert "ultrafast" in output_params  # lookahead off -> no close-time spike
-    assert "-threads" in output_params  # cap per-thread frame buffers
+def test_video_stream_close_without_frames_is_noop(tmp_path: Path) -> None:
+    """Closing/deleting a stream that never received a frame writes no file."""
+    stream = _VideoStream(tmp_path / "empty.mp4", fps=10)
+    stream.close()
+    assert not (tmp_path / "empty.mp4").exists()
+    stream.delete()  # must not raise
 
 
 def _block_renderer(

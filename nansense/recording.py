@@ -47,11 +47,11 @@ import io
 import re
 import threading
 import time
-from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import av
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -78,26 +78,19 @@ VIDEO_FPS: int = 10
 # cropped rather than producing GB-sized videos.
 MAX_FRAME_SIZE: int = 4096
 
-# Upper bound (seconds) on how long finalizing one MP4 may wait for its ffmpeg
-# subprocess to exit. `imageio_ffmpeg`'s writer otherwise waits *forever* for
-# ffmpeg to quit (its `ffmpeg_timeout` defaults to None), so a stalled ffmpeg —
-# e.g. starved while the machine is under heavy memory pressure — would hang
-# `RecordingManager.end` and, through it, the UI's "Save & Finish" button
-# indefinitely. With a timeout the subprocess is killed instead, so ending a
-# recording always returns (at worst with a slightly truncated tail).
-_FFMPEG_CLOSE_TIMEOUT: float = 30.0
-
-# x264 encoder settings that keep ffmpeg's *memory* bounded. libx264's default
-# `medium` preset buffers ~40 frames of rc-lookahead and defers most encoding
-# to the stdin-EOF flush in `close()`, where its working set roughly triples —
-# a multi-GB spike *at save time* (proportional to frame area) that, stacked on
-# the training process, can trip the OOM killer or stall the flush. `ultrafast`
-# drops the lookahead and B-frames so frames encode as they stream in, and a
-# small thread cap avoids per-thread frame-buffer duplication; together they
-# cut the close-time footprint ~10x and make the flush near-instant. The only
-# cost is weaker compression (larger files), which is fine for short clips;
-# visual quality still follows `quality` (the CRF). See INTERNALS.md.
-_X264_OUTPUT_PARAMS: list[str] = ["-preset", "ultrafast", "-threads", "2"]
+# libx264 settings (used in-process via PyAV — see `_VideoStream`). The default
+# `medium` preset buffers ~40 frames of rc-lookahead and defers most encoding to
+# the close() flush, where its working set roughly triples — a multi-GB spike
+# *at save time* (proportional to frame area) that, stacked on the training
+# process, can trip the OOM killer. `ultrafast` drops the lookahead and B-frames
+# so frames encode as they stream in, and a small thread cap avoids per-thread
+# frame-buffer duplication; together they keep the footprint flat (~10x lower)
+# and the flush near-instant. The cost is weaker compression (larger files),
+# fine for short clips. CRF 10 reproduces the previous visual quality (what
+# imageio's `quality=8` mapped to). See INTERNALS.md.
+_X264_PRESET: str = "ultrafast"
+_X264_THREADS: int = 2
+_X264_CRF: int = 10
 
 _SECTION_GAP: int = 10
 _FRAME_PAD: int = 10
@@ -141,19 +134,21 @@ class RecordingStatus:
 class _VideoStream:
     """One MP4 file, lazily opened and locked to its first frame's size.
 
-    Frames are pushed straight into an `imageio_ffmpeg.write_frames` generator
-    rather than through `imageio.get_writer`: the low-level API is the only one
-    that accepts `ffmpeg_timeout`, which bounds how long `close()` waits for
-    ffmpeg to finalize (see `_FFMPEG_CLOSE_TIMEOUT`) instead of waiting forever.
+    Frames are encoded in-process with PyAV (the ffmpeg *libraries*, not a
+    child process). That removes the failure modes of an ffmpeg subprocess:
+    there are no stdin/stdout pipes to deadlock and no separate process that can
+    stall the `close()` finalize (hanging the UI's "Save & Finish") or be
+    OOM-killed out from under us — encoding and the flush are bounded in-process
+    calls that raise on error instead.
     """
 
     def __init__(self, path: Path, fps: int) -> None:
         self.path = path
         self._fps = fps
-        # The `write_frames` generator: seeded with `send(None)` to spawn
-        # ffmpeg, then fed one `rgb24` frame per `send(bytes)`. Created lazily
-        # on the first frame so its size locks to that frame.
-        self._writer: Generator[None, bytes, None] | None = None
+        # PyAV output container and its single H.264 stream, opened lazily on
+        # the first frame so the stream size locks to that frame.
+        self._container: av.container.OutputContainer | None = None
+        self._stream: av.video.stream.VideoStream | None = None
         self._size: tuple[int, int] | None = None  # (height, width)
 
     def append(self, frame: np.ndarray) -> None:
@@ -162,39 +157,46 @@ class _VideoStream:
             h = min(MAX_FRAME_SIZE, frame.shape[0] + frame.shape[0] % 2)
             w = min(MAX_FRAME_SIZE, frame.shape[1] + frame.shape[1] % 2)
             self._size = (h, w)
-        writer = self._ensure_writer()
-        # `tobytes()` always emits C-order `rgb24` bytes, even if `_fit_frame`
-        # returned a non-contiguous crop.
-        writer.send(_fit_frame(frame, *self._size).tobytes())
+        stream = self._ensure_stream()
+        assert self._container is not None
+        # `from_ndarray` needs a C-contiguous rgb24 array; `_fit_frame` may
+        # return a non-contiguous crop. PyAV converts rgb24 -> yuv420p on encode.
+        fitted = np.ascontiguousarray(_fit_frame(frame, *self._size))
+        video_frame = av.VideoFrame.from_ndarray(fitted, format="rgb24")
+        for packet in stream.encode(video_frame):
+            self._container.mux(packet)
 
-    def _ensure_writer(self) -> Generator[None, bytes, None]:
-        if self._writer is not None:
-            return self._writer
-        import imageio_ffmpeg
-
+    def _ensure_stream(self) -> av.video.stream.VideoStream:
+        if self._stream is not None:
+            return self._stream
         assert self._size is not None  # `append` sets it before calling this
         height, width = self._size
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        writer = imageio_ffmpeg.write_frames(
-            str(self.path),
-            size=(width, height),
-            fps=self._fps,
-            codec="libx264",
-            quality=8,
-            pix_fmt_in="rgb24",
-            pix_fmt_out="yuv420p",
-            macro_block_size=1,
-            ffmpeg_timeout=_FFMPEG_CLOSE_TIMEOUT,
-            output_params=_X264_OUTPUT_PARAMS,
+        container = av.open(str(self.path), mode="w")
+        stream = container.add_stream(
+            "libx264",
+            rate=self._fps,
+            options={"preset": _X264_PRESET, "crf": str(_X264_CRF)},
         )
-        writer.send(None)  # seed: spawn the ffmpeg subprocess
-        self._writer = writer
-        return writer
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        stream.thread_count = _X264_THREADS
+        self._container = container
+        self._stream = stream
+        return stream
 
     def close(self) -> None:
-        if self._writer is not None:
-            self._writer.close()
-            self._writer = None
+        if self._container is None:
+            return  # nothing was ever written (no frames captured)
+        try:
+            if self._stream is not None:
+                for packet in self._stream.encode():  # flush the encoder
+                    self._container.mux(packet)
+        finally:
+            self._container.close()
+            self._container = None
+            self._stream = None
 
     def delete(self) -> None:
         self.close()
