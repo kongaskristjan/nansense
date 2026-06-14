@@ -708,8 +708,10 @@ def _draw_histogram_axes(
 ) -> None:
     """One subplot: the same bars/ranges the watch page draws with Plotly."""
     from nansense.ui.histograms import (
+        _OVERFLOW_MARKER_COLOR,
         BIN_CENTERS,
         BIN_WIDTHS,
+        _overflow_marks,
         axis_ranges,
         kind_stats,
         phase_color,
@@ -722,12 +724,13 @@ def _draw_histogram_axes(
     density = use_density(log_x)
     heights = trace_heights(tensor_stats.hist, density)
     color = phase_color(phase, 0)
+    x_values = list(range(N_BINS)) if log_x else list(BIN_CENTERS)
     if log_x:
-        ax.bar(range(N_BINS), heights, width=1.0, color=color)
+        ax.bar(x_values, heights, width=1.0, color=color)
         tick_vals, tick_text = x_tick_layout()
         ax.set_xticks(tick_vals, tick_text, fontsize=6)
     else:
-        ax.bar(BIN_CENTERS, heights, width=BIN_WIDTHS, color=color)
+        ax.bar(x_values, heights, width=BIN_WIDTHS, color=color)
     per_phase = {phase: stats}
     x_range, y_range = axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
     if x_range is not None:
@@ -736,6 +739,17 @@ def _draw_histogram_axes(
         ax.set_yscale("log")
     elif y_range is not None:
         ax.set_ylim((y_range[0], y_range[1]))
+        # Flag bars clipped by the cap so they don't read as ending at the top
+        # edge (mirrors the Plotly view's overflow markers).
+        (mark_xs, mark_ys), = _overflow_marks(
+            [(phase, tensor_stats.hist)], x_values, density, y_range[1]
+        )
+        if mark_xs:
+            ax.scatter(
+                mark_xs, mark_ys, marker="^", s=18,
+                color=_OVERFLOW_MARKER_COLOR, edgecolors="white",
+                linewidths=0.5, zorder=3, clip_on=False,
+            )
     title = (
         f"{layer} — {kind}s · {phase} (ep {stats.epoch}) · "
         f"n={tensor_stats.n:,} mean={tensor_stats.mean:.3g} "

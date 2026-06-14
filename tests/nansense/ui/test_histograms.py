@@ -21,6 +21,8 @@ from nansense.ui.histograms import (
     _log_x_range,
     _make_histogram_figure,
     _min_positive_height,
+    _OVERFLOW_MARKER_Y_FRAC,
+    _overflow_marks,
     _phase_hists,
     _phases_with_data,
     _probabilities,
@@ -61,9 +63,11 @@ def test_histogram_traces_match_phases_with_data() -> None:
     per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val", n=0)}
     fig, _ = _make_histogram_figure(per_phase, "activation", "activations")
     # Only phases with data get a trace, in order; all visible by default so a
-    # rebuild never silently hides a series.
-    assert [t.name for t in fig.data] == ["train (ep 0)"]
-    assert all(t.visible in (True, None) for t in fig.data)
+    # rebuild never silently hides a series. (Bar traces only — each row also
+    # carries an overflow-marker scatter trace.)
+    bars = [t for t in fig.data if t.type == "bar"]
+    assert [t.name for t in bars] == ["train (ep 0)"]
+    assert all(t.visible in (True, None) for t in bars)
 
 
 # --- Watching histogram: log/linear axis toggles (task 1) ------------------
@@ -519,6 +523,82 @@ def test_linear_y_range_none_when_empty() -> None:
     assert _linear_y_range([], density=True) is None
 
 
+# --- Watching histogram: overflow markers for bars clipped by the y-cap -----
+
+
+# A dominant zero-band spike (dropped from the y-scale) flanked by a few
+# ordinary bars: the spike towers far above the cap, the rest sit under it.
+_CLIPPED_SPIKE_HIST: dict[int, int] = {
+    ZERO_BIN: 10_000,
+    **{ZERO_BIN + 10 + i: 100 for i in range(4)},
+}
+
+
+def _clipped_spike_per_phase() -> dict[str, LayerStatsSnapshot]:
+    return {"train": _layer_snap("train", hist=_CLIPPED_SPIKE_HIST)}
+
+
+def test_overflow_marks_flag_only_bars_above_the_cap() -> None:
+    hists = _phase_hists(_clipped_spike_per_phase(), "activation")
+    y_range = _linear_y_range(hists, density=True)
+    assert y_range is not None
+    y_top = y_range[1]
+    (xs, ys), = _overflow_marks(hists, list(range(N_BINS)), True, y_top)
+    # Only the spike overflows the cap; the ordinary bars stay under it.
+    assert xs == [float(ZERO_BIN)]
+    # The marker sits just inside the top edge so the whole glyph is visible.
+    assert ys == [pytest.approx(y_top * _OVERFLOW_MARKER_Y_FRAC)]
+
+
+def test_overflow_marks_empty_without_a_cap() -> None:
+    # No cap (log-y autorange) → nothing is clipped, so no markers.
+    hists = _phase_hists(_clipped_spike_per_phase(), "activation")
+    assert _overflow_marks(hists, list(range(N_BINS)), True, None) == [([], [])]
+
+
+def test_overflow_marks_skip_blanked_off_view_bins() -> None:
+    # A clipped bin whose x is blanked (off-view, NaN) gets no marker — the
+    # marks inherit the linear axis's off-view blanking from `x_values`.
+    hists = _phase_hists(_clipped_spike_per_phase(), "activation")
+    y_range = _linear_y_range(hists, density=True)
+    assert y_range is not None
+    (xs, ys), = _overflow_marks(hists, [math.nan] * N_BINS, True, y_range[1])
+    assert xs == [] and ys == []
+
+
+def test_make_histogram_figure_adds_overflow_marker_trace() -> None:
+    fig, (_, y_range) = _make_histogram_figure(
+        _clipped_spike_per_phase(), "activation", "a"
+    )
+    # One bar trace plus one (always-present) overflow-marker trace per phase.
+    assert len(fig.data) == 2
+    marker = fig.data[1]
+    assert marker.mode == "markers"
+    assert marker.marker.symbol == "triangle-up"
+    assert len(marker.x) >= 1  # the spike is flagged
+    assert y_range is not None
+    assert all(
+        y == pytest.approx(y_range[1] * _OVERFLOW_MARKER_Y_FRAC)
+        for y in marker.y
+    )
+
+
+def test_make_histogram_figure_no_overflow_markers_on_log_y() -> None:
+    # Log y autoranges (nothing clipped), so the marker trace stays empty.
+    fig, _ = _make_histogram_figure(
+        _clipped_spike_per_phase(), "activation", "a", log_y=True
+    )
+    assert len(fig.data) == 2
+    assert len(fig.data[1].x) == 0
+
+
+def test_make_histogram_figure_no_markers_without_clipping() -> None:
+    # A compact distribution with no bar above the cap → empty marker trace.
+    per_phase = {"train": _layer_snap("train", hist={ZERO_BIN + 60: 100})}
+    fig, _ = _make_histogram_figure(per_phase, "activation", "a")
+    assert len(fig.data[1].x) == 0
+
+
 def test_histogram_density_mode_plots_probability_density_with_capped_axis() -> None:
     hist = {ZERO_BIN: 50, ZERO_BIN + 10: 7}
     per_phase = {"train": _layer_snap("train", hist=hist)}
@@ -590,12 +670,15 @@ def test_histogram_log_x_linear_y_excludes_dominant_probability_spike() -> None:
 def test_histogram_one_subplot_row_per_phase() -> None:
     per_phase = {"train": _layer_snap("train"), "val": _layer_snap("val", epoch=1)}
     fig, _ = _make_histogram_figure(per_phase, "activation", "activations")
-    assert [t.name for t in fig.data] == ["train (ep 0)", "val (ep 1)"]
+    # Bar traces only — each row also carries an overflow-marker scatter trace,
+    # added after all bars so the bars keep the leading indices.
+    bars = [t for t in fig.data if t.type == "bar"]
+    assert [t.name for t in bars] == ["train (ep 0)", "val (ep 1)"]
     # Each phase draws alone in its own stacked row: full opacity, no
     # overlay, separate y-axes.
-    assert [t.opacity for t in fig.data] == [0.85, 0.85]
-    assert fig.data[0].yaxis == "y"
-    assert fig.data[1].yaxis == "y2"
+    assert [t.opacity for t in bars] == [0.85, 0.85]
+    assert bars[0].yaxis == "y"
+    assert bars[1].yaxis == "y2"
     # Subplot titles carry phase + epoch, so the legend is dropped.
     assert [a.text for a in fig.layout.annotations] == ["train (ep 0)", "val (ep 1)"]
     assert fig.layout.showlegend is False

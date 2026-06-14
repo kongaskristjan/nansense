@@ -10,7 +10,7 @@ from __future__ import annotations
 import bisect
 import html
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -358,6 +358,47 @@ def _linear_y_range(
             break
         clipped += count
     return [0.0, cap * 1.05]
+
+
+# Overflow markers: a bar taller than the capped y-axis is drawn cut off flat
+# at the plot's top edge, which reads as if it ended there. A marker at the cap
+# flags every such bar as continuing above — its true height/count stays in the
+# bar's hover. Slate-900 so the glyph reads as an annotation against any bar
+# color; drawn just inside the top edge so the whole triangle stays visible.
+_OVERFLOW_MARKER_COLOR: str = "#0f172a"
+_OVERFLOW_MARKER_Y_FRAC: float = 0.97
+
+
+def _overflow_marks(
+    phase_hists: _PhaseHists,
+    x_values: Sequence[float],
+    density: bool,
+    y_top: float | None,
+) -> list[tuple[list[float], list[float]]]:
+    """Per-trace `(xs, ys)` overflow-marker positions for clipped bars.
+
+    For each drawn trace, the bins whose bar height exceeds `y_top` (the
+    capped axis top) get a marker just inside the top edge, so a clipped bar
+    reads as "continues above" instead of looking like it ends at the plot
+    boundary. `x_values` is the same x array the bars use (bin indices on the
+    signed-log axis, bin centres — off-view ones `NaN` — on the linear axis),
+    so the marks line up with their bars and inherit that blanking. Returns
+    empty `(xs, ys)` per trace when there's no cap (`y_top` is `None`, e.g. the
+    log-y autorange, where nothing is clipped) or nothing overflows it.
+    """
+    if y_top is None or y_top <= 0.0:
+        return [([], []) for _ in phase_hists]
+    mark_y = y_top * _OVERFLOW_MARKER_Y_FRAC
+    marks: list[tuple[list[float], list[float]]] = []
+    for _, hist in phase_hists:
+        heights = trace_heights(hist, density)
+        xs = [
+            float(x_values[i])
+            for i, h in enumerate(heights)
+            if h > y_top and not math.isnan(x_values[i])
+        ]
+        marks.append((xs, [mark_y] * len(xs)))
+    return marks
 
 
 def kind_stats(layer_snap: LayerStatsSnapshot, kind: str) -> TensorStatsSnapshot:
@@ -767,6 +808,31 @@ def _make_histogram_figure(
                 marker_color=phase_color(phase, i),
                 opacity=0.85,
                 hovertemplate=hover,
+            ),
+            row=i + 1,
+            col=1,
+        )
+    # One overflow-marker trace per row, drawn after every bar trace so the
+    # bars keep indices 0..n-1 (the restyle path and per-channel hover rely on
+    # that). `hoverinfo="skip"` keeps them out of the bar hover. Empty when
+    # nothing is clipped, but always present so the trace count stays 2n.
+    marker_y_top = y_range[1] if (y_range is not None and not log_y) else None
+    for i, (xs, ys) in enumerate(
+        _overflow_marks(phase_hists, x_values, density, marker_y_top)
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="markers",
+                marker=dict(
+                    symbol="triangle-up",
+                    size=9,
+                    color=_OVERFLOW_MARKER_COLOR,
+                    line=dict(width=1, color="white"),
+                ),
+                hoverinfo="skip",
+                showlegend=False,
             ),
             row=i + 1,
             col=1,

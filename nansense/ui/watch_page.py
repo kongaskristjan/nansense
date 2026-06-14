@@ -35,6 +35,7 @@ from nansense.ui.histograms import (
     _linear_bar_x,
     _make_histogram_figure,
     _min_positive_height,
+    _overflow_marks,
     phase_color,
     _phase_hists,
     _phases_with_data,
@@ -908,8 +909,24 @@ class _HistPlot:
                 # `_axis_ranges` returns no y-range on a log-y axis, so this
                 # is the linear cap when there is one and `None` otherwise.
                 self._capture_y_top(phase_hists, density, y_range)
+            n = len(phases)
+            _plotly_restyle(self.element, update, list(range(n)), layout)
+            # Refresh the overflow markers (trace n..2n-1) against the applied
+            # cap and x-positions, so clipped bars stay flagged as the data and
+            # ranges move. No cap on a log-y axis → no marks.
+            x_values = (
+                list(range(N_BINS)) if log_x else _linear_bar_x(self._x_range)
+            )
+            y_top = (
+                self._y_range[1]
+                if (self._y_range is not None and not log_y)
+                else None
+            )
+            marks = _overflow_marks(phase_hists, x_values, density, y_top)
             _plotly_restyle(
-                self.element, update, list(range(len(phases))), layout
+                self.element,
+                {"x": [m[0] for m in marks], "y": [m[1] for m in marks]},
+                list(range(n, 2 * n)),
             )
 
     def _capture_y_top(
