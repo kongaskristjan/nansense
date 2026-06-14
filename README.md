@@ -11,8 +11,9 @@ runs. See `INTERNALS.md` for how it works under the hood.
 pip install nansense
 ```
 
-nansense deliberately does not depend on torch: install PyTorch separately
-(see [pytorch.org](https://pytorch.org/get-started/locally/)) so your
+nansense runs on Python 3.10–3.14. It deliberately does not depend on torch:
+install PyTorch separately (see
+[pytorch.org](https://pytorch.org/get-started/locally/)) so your
 hardware-specific build — CUDA, ROCm, or CPU — is preserved. The same goes
 for the optional integrations: with `pip install captum` the experiment page
 offers the Captum attribution methods (they are hidden otherwise), and with
@@ -63,9 +64,10 @@ Available examples:
   inputs, activations, and outputs make perturbation light-cones, deep-dream
   motifs, and time travel especially legible.
 - `examples/audio_keywords/main.py` — classify eight spoken keywords (Google's
-  mini Speech Commands, ~180 MB on first run) from torch-native log-mel
+  mini Speech Commands, ~180 MB on first run) from `torchaudio` log-mel
   spectrograms fed to a small 2D CNN as single-channel "images", trained with
-  AdamW + a cosine schedule and the full wiring.
+  AdamW + a cosine schedule and the full wiring. (Needs `torchaudio`, so it is
+  unavailable on the ROCm build.)
 - `examples/depth_make3d/main.py` — monocular depth estimation on Make3D
   (~1 GB on first run) by transfer learning: a pretrained ResNet encoder plus a
   U-Net decoder predict per-pixel depth from one RGB image, with a
@@ -168,8 +170,13 @@ The ranks then play different roles:
 Per-rank views (snapshot strips, the input pane, extreme-input patches,
 histogram bar samples) show rank 0's shard. Every rank must run the same
 batch structure — `DistributedSampler` on each phase's loader gives equal
-per-rank batch counts. Time travel is not supported in distributed mode.
-The standard example doubles as the runnable version: pass `--distributed`
+per-rank batch counts. Time travel works in distributed mode too: a
+UI-requested jump is broadcast to every rank and applied in lockstep at the
+next batch boundary, each rank restoring from its own checkpoint
+(model/optimizer/scheduler are replicated, RNG is per-rank), so the replay is
+deterministic. Wrap every rank's epoch loop in the restorer, exactly like the
+single-process loop. The standard example doubles as the runnable version:
+pass `--distributed`
 and launch it under `torchrun` (it shards both phases with
 `DistributedSampler`, wraps the model in DDP, and falls back from NCCL to
 CPU/gloo when there are fewer GPUs than ranks, so it runs anywhere):

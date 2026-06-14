@@ -448,9 +448,19 @@ CPU otherwise) over the default group; orderings stay consistent because
 every rank issues the same sequence (control broadcast → forward/backward
 → optional reduction) per batch. That also defines the contract: every
 rank must drive the same `session.batch` structure, which
-`DistributedSampler`-sharded loaders give naturally. Time travel is
-unsupported (`training_restorer` raises) — a jump would have to restore
-and rewind every rank in lockstep. `close()` should run after the loop on
+`DistributedSampler`-sharded loaders give naturally. Time travel works in
+distributed mode: the per-batch control broadcast carries the leader's armed
+jump epoch (a third int, `-1` when none), so a UI-requested jump makes every
+rank raise `TimeTravelJump` at the same batch-start barrier — before any
+forward/backward or reduction, so no collective is left half-issued (a leader
+woken from a pause keeps the jump armed and applies it at the next barrier
+rather than mid-`__exit__`). Each rank then restores from its own checkpoint:
+model/optimizer/scheduler are replicated (loaded from the rank's
+self-sufficient file, `epoch_<n>.pt` on the leader and `epoch_<n>.rank<r>.pt`
+on followers), RNG is captured/restored per rank, and `DistributedSampler.set_epoch`
+reproduces shard order — so the replay is deterministic on every rank. Every
+rank wraps its epoch loop in the restorer (the leitmotif `while
+restorer.pending(): with restorer:`). `close()` should run after the loop on
 all ranks; a leader closed mid-loop stops broadcasting and would leave
 followers blocked at their next batch start until the collective timeout.
 
