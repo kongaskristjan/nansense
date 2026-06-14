@@ -10,13 +10,13 @@ import torch
 
 from examples.audio_keywords import main as main_module
 from examples.audio_keywords.data import AudioConfig
-from examples.audio_keywords.model import KeywordCNN
+from examples.audio_keywords.model import KeywordResNet
 
 
 def test_build_model_output_shape() -> None:
     config = AudioConfig()
     model = main_module.build_model(config)
-    assert isinstance(model, KeywordCNN)
+    assert isinstance(model, KeywordResNet)
     x = torch.randn(2, config.in_channels, config.n_mels, 101)
     assert model(x).shape == (2, config.num_classes)
 

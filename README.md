@@ -130,7 +130,7 @@ If you hit out-of-memory, lower `--batch-size` (or add `--bf16` where supported)
   `fit_with_time_travel`.
 - **`game_of_life`** — predict Conway's Game of Life; board-shaped activations
   make perturbation light-cones and deep-dream motifs especially legible.
-- **`audio_keywords`** — spoken-keyword CNN over log-mel spectrograms.
+- **`audio_keywords`** — spoken-keyword ResNet over log-mel spectrograms.
 - **`depth_make3d`** — monocular depth (pretrained ResNet encoder + U-Net
   decoder) by transfer learning.
 

@@ -1,10 +1,11 @@
 """Spoken keyword classification from log-mel spectrograms (8 keywords).
 
-Trains a small 2D CNN on Google's "mini Speech Commands" set (8 keywords:
-down, go, left, no, right, stop, up, yes) with the full nansense wiring
-(scheduler, time travel, checkpoints). Each ~1 s 16 kHz clip is turned into a
-`[1, n_mels, n_frames]` log-mel spectrogram in the dataset (via torchaudio's
-`MelSpectrogram` front end) and fed to the CNN as a single-channel image:
+Trains an ImageNet-style ResNet on Google's "mini Speech Commands" set (8
+keywords: down, go, left, no, right, stop, up, yes) with the full nansense
+wiring (scheduler, time travel, checkpoints). Each ~1 s 16 kHz clip is turned
+into a `[1, n_mels, n_frames]` log-mel spectrogram in the dataset (via
+torchaudio's `MelSpectrogram` front end) and fed to the ResNet as a
+single-channel image:
 
     uv run examples/audio_keywords/main.py --nansense-port 8080
 
@@ -22,7 +23,7 @@ from torch import nn
 
 import nansense
 from examples.audio_keywords.data import AudioConfig, build_dataloaders
-from examples.audio_keywords.model import KeywordCNN
+from examples.audio_keywords.model import KeywordResNet
 from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
 
 
@@ -34,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=128,
-        help="Batch size (default 128, kept modest for low GPU memory).",
+        help="Batch size (default 128; the ResNet-18 peaks well under 4 GB at this size).",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
@@ -69,7 +70,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_model(config: AudioConfig) -> nn.Module:
-    return KeywordCNN(num_classes=config.num_classes, in_channels=config.in_channels)
+    return KeywordResNet(num_classes=config.num_classes, in_channels=config.in_channels)
 
 
 def build_optimizer_and_scheduler(
