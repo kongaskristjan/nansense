@@ -81,6 +81,10 @@ class _WatchPageState:
     # Every card shows one phase at a time, picked by a header dropdown
     # shared by both views; defaults to the schedule's first phase.
     selected_phase: str = ""
+    # Which watched layer's cards to render: a layer name, or `_LAYER_ALL`
+    # for every watched layer at once. Defaults (via reconciliation) to the
+    # first watched layer so the page stays fast with many layers watched.
+    selected_layer: str = ""
     # Single-flight refresh flags (see `refresh` in `_build_watch_page`).
     refresh_running: bool = False
     refresh_dirty: bool = False
@@ -102,9 +106,12 @@ def _build_watch_page(
     """The deep-dive page for watched layers.
 
     The top bar carries the shared stepping controls, like the main page.
-    A left-sidebar dropdown switches every layer card between two views,
-    and a second dropdown picks which phase (train / val / …) the cards
-    show — one phase at a time, in both views:
+    Left-sidebar dropdowns switch every layer card between two views, pick
+    which phase (train / val / …) the cards show, and pick which watched
+    layer to render — one named layer (the default, which keeps the page
+    fast when many layers are watched) or, while fewer than `_ALL_LAYERS_MAX`
+    are watched, every watched layer at once. The view and phase apply in
+    both views, one at a time:
 
     - HISTOGRAM (the default) — one plotly figure per tensor kind for the
       selected phase's latest epoch, with the "Log x" / "Log y" axis
@@ -165,6 +172,15 @@ def _build_watch_page(
         state.selected_phase = str(value)
         await refresh()
 
+    async def set_layer(value: object) -> None:
+        new = str(value) if value is not None else ""
+        # Programmatic value writes from `sync_layer_select` re-enter here;
+        # bailing when nothing changed avoids a redundant refresh pass.
+        if new == state.selected_layer:
+            return
+        state.selected_layer = new
+        await refresh()
+
     async def set_grid(ptype: PatchType, value: bool) -> None:
         state.grid_on[ptype] = value
         await refresh()
@@ -176,7 +192,10 @@ def _build_watch_page(
     step_until_custom = _build_step_until_custom_dialog(session)
 
     def record_view() -> RecordedView | None:
-        watched = [n for n in layer_names if n in session.watched_layers]
+        # Record exactly the cards on screen — the selected layer, or every
+        # watched layer while "all" is showing.
+        ordered = _watched_in_order(layer_names, session.watched_layers)
+        watched = _visible_layers(state.selected_layer, ordered)
         if not watched:
             return None
         phase = state.selected_phase
@@ -247,6 +266,17 @@ def _build_watch_page(
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
                 ).tooltip("Which phase the cards show")
+                layer_select = ui.select(
+                    {},
+                    label="Layer",
+                    on_change=lambda e: set_layer(e.value),
+                ).props("dense outlined options-dense").classes(
+                    "w-full text-sm"
+                ).tooltip(
+                    "Which watched layer's cards to show — one keeps the page "
+                    f'fast; "all" is offered with fewer than {_ALL_LAYERS_MAX} '
+                    "layers watched"
+                )
                 hist_boxes: list[ui.checkbox] = []
                 minmax_boxes: list[ui.checkbox] = []
                 with ui.column().classes("w-full gap-1") as hist_controls:
@@ -311,16 +341,37 @@ def _build_watch_page(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             )
 
+    def sync_layer_select() -> None:
+        """Refresh the layer dropdown's options/value from the watched set.
+
+        Reconciles the selection (drops "all" once too many layers are
+        watched, replaces an unwatched layer), pushes the options/value to
+        the widget only when they actually changed (a no-op write would
+        re-enter `set_layer`), and disables the dropdown when nothing is
+        watched. Cheap enough to call every refresh tick.
+        """
+        ordered = _watched_in_order(layer_names, session.watched_layers)
+        state.selected_layer = _reconcile_selected_layer(
+            state.selected_layer, ordered
+        )
+        options = _layer_select_options(ordered)
+        if layer_select.options != options:
+            layer_select.set_options(options, value=state.selected_layer)
+        elif layer_select.value != state.selected_layer:
+            layer_select.set_value(state.selected_layer)
+        _set_controls_enabled([layer_select], bool(ordered))
+
     def rebuild_cards() -> None:
+        sync_layer_select()
         layer_panels.clear()
         # Drop the previous cards' hover routes; the rebuilt plots re-register
         # below. Without this the registry (and the dead plots it points at)
         # would grow on every rebuild.
         hover_registry.clear()
         body_container.clear()
-        watched = session.watched_layers
+        ordered = _watched_in_order(layer_names, session.watched_layers)
         with body_container:
-            if not watched:
+            if not ordered:
                 with ui.column().classes("items-center gap-2 py-12 w-full"):
                     ui.icon("visibility_off", size="lg").classes("text-slate-400")
                     ui.label("No layers selected.").classes("text-slate-600")
@@ -329,9 +380,7 @@ def _build_watch_page(
                         "to start watching."
                     ).classes("text-slate-500 text-sm")
                 return
-            for name in layer_names:
-                if name not in watched:
-                    continue
+            for name in _visible_layers(state.selected_layer, ordered):
                 layer_panels[name] = _WatchLayerPanel(
                     name=name,
                     session=session,
@@ -361,7 +410,10 @@ def _build_watch_page(
                 state.count_label.text = (
                     f"{n} layer{'' if n == 1 else 's'}"
                 )
-                if set(layer_panels) != set(watched):
+                sync_layer_select()
+                ordered = _watched_in_order(layer_names, watched)
+                desired = _visible_layers(state.selected_layer, ordered)
+                if list(layer_panels) != desired:
                     rebuild_cards()
                 panels = dict(layer_panels)
                 minmax = state.view_minmax
@@ -397,11 +449,17 @@ def _build_watch_page(
         if hist != state.frozen_hist or minmax != state.frozen_minmax:
             state.frozen_hist = hist
             state.frozen_minmax = minmax
-            # The phase applies to both views, so either recording locks it.
-            _set_controls_enabled([phase_select], not (hist or minmax))
+            # Phase and layer apply to both views and define the recorded
+            # frame set, so either recording locks them.
+            _set_controls_enabled(
+                [phase_select, layer_select], not (hist or minmax)
+            )
             _set_controls_enabled(hist_boxes, not hist)
             _set_controls_enabled(minmax_boxes, not minmax)
 
+    # Build the initial cards (or the empty-state notice) up front so the
+    # body isn't blank until the first refresh tick lands.
+    rebuild_cards()
     ui.timer(0.2, sync_frozen)
     ui.timer(0.0, refresh, once=True)
     ui.timer(2.0, refresh)
@@ -659,6 +717,7 @@ class _HistPlot:
                 )
                 .props("dense outlined")
                 .classes("w-24")
+                .tooltip("Which channel to show")
             )
             self._channel_total = ui.label("").classes("text-xs text-slate-500")
         fig, (self._x_range, self._y_range) = _make_histogram_figure(
@@ -1058,6 +1117,78 @@ def _filter_phase(
 
 _VIEW_HISTOGRAM: str = "HISTOGRAM"
 _VIEW_MINMAX: str = "MIN/MAX"
+
+# Layer dropdown: the sentinel value of the "all watched layers" entry (a NUL
+# prefix keeps it distinct from any real layer name) and its display label.
+_LAYER_ALL: str = "\x00all"
+_ALL_LAYERS_LABEL: str = "All watched layers"
+# Rendering every watched layer's cards at once is what makes the page slow,
+# so the "all" entry is only offered while fewer than this many layers are
+# watched; at or above it a single layer must be picked.
+_ALL_LAYERS_MAX: int = 10
+
+
+def _watched_in_order(
+    layer_names: list[str], watched: frozenset[str]
+) -> list[str]:
+    """Currently-watched layers in the page's stable graph order.
+
+    `watched` is an unordered set, so order comes from `layer_names` (the
+    architecture order the cards have always rendered in).
+    """
+    return [n for n in layer_names if n in watched]
+
+
+def _all_layers_available(watched_count: int) -> bool:
+    """Whether the "all watched layers" entry is offered for this count.
+
+    Gated below `_ALL_LAYERS_MAX` because rendering every card at once is the
+    slow path the layer dropdown exists to avoid.
+    """
+    return 0 < watched_count < _ALL_LAYERS_MAX
+
+
+def _layer_select_options(ordered: list[str]) -> dict[str, str]:
+    """The layer dropdown's value→label map for the watched layers.
+
+    Each watched layer maps to itself; the "all" entry is prepended only
+    while few enough layers are watched (see `_all_layers_available`).
+    """
+    options: dict[str, str] = {}
+    if _all_layers_available(len(ordered)):
+        options[_LAYER_ALL] = _ALL_LAYERS_LABEL
+    for name in ordered:
+        options[name] = name
+    return options
+
+
+def _reconcile_selected_layer(selected: str, ordered: list[str]) -> str:
+    """A valid dropdown selection given the watched layers.
+
+    Keeps `selected` when it's still offered ("all" while few enough layers
+    are watched, or a still-watched layer); otherwise falls back to the first
+    watched layer — never "all", which the spec reserves for an explicit pick
+    so the default shows a single fast card. Returns "" when nothing is
+    watched.
+    """
+    if selected == _LAYER_ALL and _all_layers_available(len(ordered)):
+        return selected
+    if selected in ordered:
+        return selected
+    return ordered[0] if ordered else ""
+
+
+def _visible_layers(selected: str, ordered: list[str]) -> list[str]:
+    """The watched layers whose cards should be rendered for `selected`.
+
+    "all" (while available) → every watched layer; a layer name → just that
+    layer; anything else (stale or empty) → the first watched layer, if any.
+    """
+    if selected == _LAYER_ALL and _all_layers_available(len(ordered)):
+        return ordered
+    if selected in ordered:
+        return [selected]
+    return ordered[:1]
 
 _PATCH_TYPE_LABELS: dict[PatchType, str] = {
     "max_pixel": "Max pixel",

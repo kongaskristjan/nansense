@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import threading
 from pathlib import Path
+from typing import Any
 
 import imageio.v2 as imageio
 import numpy as np
@@ -25,6 +28,7 @@ from nansense.recording import (
     _sanitize,
     _stamp_position,
     _strip_section,
+    _VideoStream,
 )
 from nansense.session import Session
 from nansense.ui.render import render_strip
@@ -338,6 +342,47 @@ def test_close_finalizes_recordings(tmp_path: Path) -> None:
     assert manager.count() == 0  # end_all ran
     (path,) = list((tmp_path / "rec").glob("*.mp4"))
     assert _frame_count(path) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGSTOP stall sim is POSIX-only")
+def test_close_does_not_hang_when_ffmpeg_stalls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_VideoStream.close()` must return even if ffmpeg never exits.
+
+    `imageio_ffmpeg`'s writer waits forever for ffmpeg to quit, so a stalled
+    encoder — here frozen with SIGSTOP, the same effect as starvation under
+    memory pressure — would otherwise hang "Save & Finish" indefinitely. With a
+    bounded `_FFMPEG_CLOSE_TIMEOUT` the subprocess is killed and close returns.
+    """
+    monkeypatch.setattr(nansense.recording, "_FFMPEG_CLOSE_TIMEOUT", 1.0)
+    stream = _VideoStream(tmp_path / "stall.mp4", fps=10)
+    for _ in range(3):
+        stream.append(np.zeros((64, 96, 3), dtype=np.uint8))
+    assert stream._writer is not None
+    # The ffmpeg subprocess lives in the suspended generator's frame.
+    gen: Any = stream._writer
+    proc = gen.gi_frame.f_locals["p"]
+    proc.send_signal(signal.SIGSTOP)  # freeze: ffmpeg can no longer exit
+    try:
+        done = threading.Event()
+        error: list[BaseException] = []
+
+        def _close() -> None:
+            try:
+                stream.close()
+            except BaseException as e:  # noqa: BLE001 — surfaced via assert
+                error.append(e)
+            finally:
+                done.set()
+
+        threading.Thread(target=_close, daemon=True).start()
+        # Comfortably above the 1s timeout but far below "forever".
+        assert done.wait(timeout=10.0), "close() hung waiting for stalled ffmpeg"
+        assert not error, f"close() raised: {error[0]!r}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
 
 
 def _block_renderer(

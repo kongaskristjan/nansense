@@ -280,7 +280,10 @@ width. Pane sizes are remembered for the rest of the browser session.
 ### Watch
 
 Layers watched on the main page (diagram clicks or the eye menu) also feed
-the deep-dive `/watch` page, which renders one card per watched layer.
+the deep-dive `/watch` page. A sidebar **Layer** dropdown picks which watched
+layer's card to render — a single layer by default (rendering every card at
+once gets slow with many layers watched), or "All watched layers" to show
+them together, which is offered only while fewer than ten layers are watched.
 
 The HISTOGRAM view (the default) shows activation and activation-gradient
 distributions over the most recent epoch as signed-log histograms with a
