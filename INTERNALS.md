@@ -674,7 +674,12 @@ frame (`_closed`). The dialog's end/delete actions additionally run via
 finalization is bounded by `_FFMPEG_CLOSE_TIMEOUT`: each stream feeds an
 `imageio_ffmpeg.write_frames` generator (the only writer API exposing
 `ffmpeg_timeout`), so a stalled ffmpeg is killed rather than awaited
-forever — otherwise "Save & Finish" would hang indefinitely.
+forever — otherwise "Save & Finish" would hang indefinitely. The streams
+also pass `_X264_OUTPUT_PARAMS` (`ultrafast`, a thread cap): libx264's
+default lookahead defers most encoding to that flush, where ffmpeg's RSS
+roughly triples (a multi-GB spike at save time for large frames that can
+OOM the training process); encoding frames as they stream keeps it flat,
+trading some compression efficiency for a bounded, fast close.
 
 ## Time travel (`nansense.restore`)
 
