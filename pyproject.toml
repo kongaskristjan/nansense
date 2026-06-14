@@ -6,13 +6,17 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Kristjan Kongas", email = "kongaskristjan@gmail.com" }]
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 keywords = ["pytorch", "visualization", "deep-learning", "training", "debugging"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # torch is deliberately NOT a dependency: installing it is left to the user
@@ -27,6 +31,9 @@ dependencies = [
     "pillow>=12.2.0",
     "plotly>=6.7.0",
     "uvicorn>=0.30",
+    # typing.Self landed in 3.11; on 3.10 we import it from typing_extensions.
+    "typing-extensions>=4.6 ; python_version < '3.11'",
+    "av>=17.1.0",
 ]
 
 [project.urls]
@@ -37,17 +44,25 @@ Repository = "https://github.com/kongaskristjan/nansense"
 # extras, so the PyPI package never installs torch — not even optionally.
 # captum and lightning (which both pull in torch) are likewise left to the
 # user: the corresponding features are not offered when they are absent.
+# Floors are kept deliberately loose — nansense is a library and supports a
+# broad range of torch builds. The loose torchaudio floor (used only by the
+# audio example) lets the resolver pick the newest wheel each index actually
+# ships, even when that pins torch slightly below its newest release. torchaudio
+# is omitted only from cu132 (the CUDA 13.2 index has no linux-x86_64 torchaudio
+# wheel yet), so the audio example is simply unavailable there.
 [dependency-groups]
-cpu = ["torch>=2.12.0", "torchvision>=0.27.0"]
-cu126 = ["torch>=2.12.0", "torchvision>=0.27.0"]
+cpu = ["torch>=2.2.0", "torchvision>=0.17.0", "torchaudio>=2.2.0"]
+cu126 = ["torch>=2.2.0", "torchvision>=0.17.0", "torchaudio>=2.2.0"]
 cu130 = [
-    "torch>=2.12.0",
-    "torchvision>=0.27.0",
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "torchaudio>=2.2.0",
 ]
-cu132 = ["torch>=2.12.0", "torchvision>=0.27.0"]
+cu132 = ["torch>=2.2.0", "torchvision>=0.17.0"]
 rocm7-2 = [
-    "torch>=2.12.0",
-    "torchvision>=0.27.0",
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "torchaudio>=2.2.0",
     "triton-rocm ; sys_platform == 'linux'",
 ]
 dev = [
@@ -55,6 +70,10 @@ dev = [
     "lightning>=2.4",
     "pytest>=9.0.3",
     "scipy>=1.14",
+    # tomllib landed in 3.11; the pyproject test falls back to tomli on 3.10.
+    # Unconditional (not markered) so the type checker can resolve it when it
+    # targets the 3.10 floor even while running on a newer interpreter.
+    "tomli",
     "ty>=0.0.38",
 ]
 
@@ -85,6 +104,14 @@ torchvision = [
     { index = "pytorch-cu126", group = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", group = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu132", group = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm7-2", group = "rocm7-2", marker = "sys_platform == 'linux'" },
+]
+# No cu132 entry: torchaudio is not in the cu132 group (see the comment above
+# the dependency groups), so it never resolves against the cu132 index.
+torchaudio = [
+    { index = "pytorch-cpu", group = "cpu" },
+    { index = "pytorch-cu126", group = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu130", group = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-rocm7-2", group = "rocm7-2", marker = "sys_platform == 'linux'" },
 ]
 

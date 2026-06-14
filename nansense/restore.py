@@ -52,6 +52,11 @@ def capture_rng() -> dict[str, Any]:
     time-travel replay reproduces DataLoader shuffling and dropout. The MPS
     state is captured on Apple Silicon so replays there are deterministic
     too, not just on CPU/CUDA.
+
+    This is the calling process's RNG. Under DDP each rank captures its own
+    (into its own `epoch_<n>.rank<r>.pt`), so a jump replays every rank's
+    stochastic layers/augmentation deterministically — independent of the
+    `DistributedSampler` shard order, which `set_epoch` reproduces on its own.
     """
     return {
         "torch": torch.get_rng_state(),
@@ -133,21 +138,36 @@ class EpochCache:
     torn checkpoint behind. An existing file for the same epoch is simply
     overwritten — retraining past an epoch replaces the older timeline's
     entry.
+
+    Under DDP each rank owns a separate file: rank 0 keeps the canonical
+    `epoch_<n>.pt` (so the UI's `cached_epochs` and single-process layout are
+    unchanged), while follower rank `r` writes `epoch_<n>.rank<r>.pt`. The
+    model/optimizer/scheduler state dicts are replicated across ranks (DDP
+    keeps them identical), so each rank's own file fully restores its state;
+    the RNG snapshot is per-rank, so each rank's stochastic layers replay
+    deterministically. `cached_epochs` only enumerates rank 0's files — the
+    leader is the only one that drives the UI.
     """
 
     # Checkpoint file extension; subclasses with a different on-disk format
     # (e.g. the Lightning cache's `.ckpt`) override just this.
     FILE_SUFFIX: str = ".pt"
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, rank: int = 0) -> None:
         # The directory is created lazily on first save, so merely creating
         # a restorer (e.g. on a disabled session) leaves the disk untouched.
         self.directory = directory
+        # 0 (the leader / single-process) writes the canonical filename;
+        # followers tag theirs with `.rank<r>` so the ranks never collide.
+        self.rank = rank
 
     def path_for(self, epoch: int) -> Path:
-        return self.directory / f"epoch_{epoch}{self.FILE_SUFFIX}"
+        suffix = "" if self.rank == 0 else f".rank{self.rank}"
+        return self.directory / f"epoch_{epoch}{suffix}{self.FILE_SUFFIX}"
 
     def cached_epochs(self) -> list[int]:
+        # Only rank 0's files are enumerated — the leader drives the UI, and
+        # every rank caches the same set of epochs in lockstep anyway.
         if not self.directory.is_dir():
             return []
         file_re = re.compile(rf"^epoch_(\d+){re.escape(self.FILE_SUFFIX)}$")
@@ -375,7 +395,12 @@ class TrainingRestorer:
         # exists (e.g. the Lightning integration, where the session is built
         # inside the first `trainer.fit`); `Session.attach_restorer` binds it.
         self._session = session
-        self.cache = EpochCache(Path(cache_dir))
+        # Each rank persists its own file (followers tag theirs `.rank<r>`),
+        # so a jump restores per-rank RNG while sharing the replicated
+        # model/optimizer/scheduler. Outside DDP the rank is 0 (canonical
+        # filename, single-process behaviour byte-identical).
+        rank = 0 if session is None or session._dist is None else session._dist.rank
+        self.cache = EpochCache(Path(cache_dir), rank=rank)
         self._start_epoch = 0
         self._finished = False
         self._jump_target: int | None = None

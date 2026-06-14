@@ -49,8 +49,9 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
+import av
 import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -76,6 +77,20 @@ VIDEO_FPS: int = 10
 # Hard cap on frame width/height; very wide layers (many channels) are
 # cropped rather than producing GB-sized videos.
 MAX_FRAME_SIZE: int = 4096
+
+# libx264 settings (used in-process via PyAV — see `_VideoStream`). The default
+# `medium` preset buffers ~40 frames of rc-lookahead and defers most encoding to
+# the close() flush, where its working set roughly triples — a multi-GB spike
+# *at save time* (proportional to frame area) that, stacked on the training
+# process, can trip the OOM killer. `ultrafast` drops the lookahead and B-frames
+# so frames encode as they stream in, and a small thread cap avoids per-thread
+# frame-buffer duplication; together they keep the footprint flat (~10x lower)
+# and the flush near-instant. The cost is weaker compression (larger files),
+# fine for short clips. CRF 10 reproduces the previous visual quality (what
+# imageio's `quality=8` mapped to). See INTERNALS.md.
+_X264_PRESET: str = "ultrafast"
+_X264_THREADS: int = 2
+_X264_CRF: int = 10
 
 _SECTION_GAP: int = 10
 _FRAME_PAD: int = 10
@@ -116,21 +131,24 @@ class RecordingStatus:
     paths: tuple[Path, ...]
 
 
-class _FrameWriter(Protocol):
-    """The slice of imageio's writer interface the streams use."""
-
-    def append_data(self, im: np.ndarray) -> None: ...
-
-    def close(self) -> None: ...
-
-
 class _VideoStream:
-    """One MP4 file, lazily opened and locked to its first frame's size."""
+    """One MP4 file, lazily opened and locked to its first frame's size.
+
+    Frames are encoded in-process with PyAV (the ffmpeg *libraries*, not a
+    child process). That removes the failure modes of an ffmpeg subprocess:
+    there are no stdin/stdout pipes to deadlock and no separate process that can
+    stall the `close()` finalize (hanging the UI's "Save & Finish") or be
+    OOM-killed out from under us — encoding and the flush are bounded in-process
+    calls that raise on error instead.
+    """
 
     def __init__(self, path: Path, fps: int) -> None:
         self.path = path
         self._fps = fps
-        self._writer: _FrameWriter | None = None
+        # PyAV output container and its single H.264 stream, opened lazily on
+        # the first frame so the stream size locks to that frame.
+        self._container: av.container.OutputContainer | None = None
+        self._stream: av.video.stream.VideoStream | None = None
         self._size: tuple[int, int] | None = None  # (height, width)
 
     def append(self, frame: np.ndarray) -> None:
@@ -139,29 +157,46 @@ class _VideoStream:
             h = min(MAX_FRAME_SIZE, frame.shape[0] + frame.shape[0] % 2)
             w = min(MAX_FRAME_SIZE, frame.shape[1] + frame.shape[1] % 2)
             self._size = (h, w)
-        writer = self._ensure_writer()
-        writer.append_data(_fit_frame(frame, *self._size))
+        stream = self._ensure_stream()
+        assert self._container is not None
+        # `from_ndarray` needs a C-contiguous rgb24 array; `_fit_frame` may
+        # return a non-contiguous crop. PyAV converts rgb24 -> yuv420p on encode.
+        fitted = np.ascontiguousarray(_fit_frame(frame, *self._size))
+        video_frame = av.VideoFrame.from_ndarray(fitted, format="rgb24")
+        for packet in stream.encode(video_frame):
+            self._container.mux(packet)
 
-    def _ensure_writer(self) -> _FrameWriter:
-        if self._writer is not None:
-            return self._writer
-        import imageio.v2 as imageio
-
+    def _ensure_stream(self) -> av.video.stream.VideoStream:
+        if self._stream is not None:
+            return self._stream
+        assert self._size is not None  # `append` sets it before calling this
+        height, width = self._size
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._writer = imageio.get_writer(
-            str(self.path),
-            fps=self._fps,
-            codec="libx264",
-            quality=8,
-            pixelformat="yuv420p",
-            macro_block_size=1,
+        container = av.open(str(self.path), mode="w")
+        stream = container.add_stream(
+            "libx264",
+            rate=self._fps,
+            options={"preset": _X264_PRESET, "crf": str(_X264_CRF)},
         )
-        return self._writer
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        stream.thread_count = _X264_THREADS
+        self._container = container
+        self._stream = stream
+        return stream
 
     def close(self) -> None:
-        if self._writer is not None:
-            self._writer.close()
-            self._writer = None
+        if self._container is None:
+            return  # nothing was ever written (no frames captured)
+        try:
+            if self._stream is not None:
+                for packet in self._stream.encode():  # flush the encoder
+                    self._container.mux(packet)
+        finally:
+            self._container.close()
+            self._container = None
+            self._stream = None
 
     def delete(self) -> None:
         self.close()

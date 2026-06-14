@@ -448,9 +448,19 @@ CPU otherwise) over the default group; orderings stay consistent because
 every rank issues the same sequence (control broadcast → forward/backward
 → optional reduction) per batch. That also defines the contract: every
 rank must drive the same `session.batch` structure, which
-`DistributedSampler`-sharded loaders give naturally. Time travel is
-unsupported (`training_restorer` raises) — a jump would have to restore
-and rewind every rank in lockstep. `close()` should run after the loop on
+`DistributedSampler`-sharded loaders give naturally. Time travel works in
+distributed mode: the per-batch control broadcast carries the leader's armed
+jump epoch (a third int, `-1` when none), so a UI-requested jump makes every
+rank raise `TimeTravelJump` at the same batch-start barrier — before any
+forward/backward or reduction, so no collective is left half-issued (a leader
+woken from a pause keeps the jump armed and applies it at the next barrier
+rather than mid-`__exit__`). Each rank then restores from its own checkpoint:
+model/optimizer/scheduler are replicated (loaded from the rank's
+self-sufficient file, `epoch_<n>.pt` on the leader and `epoch_<n>.rank<r>.pt`
+on followers), RNG is captured/restored per rank, and `DistributedSampler.set_epoch`
+reproduces shard order — so the replay is deterministic on every rank. Every
+rank wraps its epoch loop in the restorer (the leitmotif `while
+restorer.pending(): with restorer:`). `close()` should run after the loop on
 all ranks; a leader closed mid-loop stops broadcasting and would leave
 followers blocked at their next batch start until the collective timeout.
 
@@ -670,7 +680,26 @@ connection and loses the in-flight click. Each `ViewRecorder` serialises
 just its short stream append/close sections with its own lock; a
 recording ended or deleted mid-render finishes the render and drops that
 frame (`_closed`). The dialog's end/delete actions additionally run via
-`asyncio.to_thread`, since ffmpeg finalization can take a moment.
+`asyncio.to_thread`, since finalizing the file can take a moment.
+
+Encoding is done **in-process with PyAV** (`av`, the ffmpeg *libraries* —
+no child process). Each `_VideoStream` opens an `av` container with one
+libx264 stream, converts each `rgb24` frame to `yuv420p`, and flushes the
+encoder on `close()`. This deliberately avoids an ffmpeg subprocess: a
+subprocess writer (the previous `imageio_ffmpeg` approach) communicated
+over pipes and `close()` *waited on a separate process to exit*, which
+could stall indefinitely (hanging "Save & Finish") or be OOM-killed — all
+outside our control. In-process, encode/flush are bounded calls that raise
+on error instead. The stream uses `_X264_PRESET = "ultrafast"` with a
+`_X264_THREADS` cap: libx264's default `medium` lookahead buffers ~40
+frames and defers most encoding to the flush, where its working set
+roughly triples (a multi-GB spike *at save time* for large frames that can
+OOM the training process); `ultrafast` encodes frames as they arrive so
+the footprint stays flat and the flush is near-instant. `_X264_CRF = 10`
+reproduces the previous visual quality; the cost is weaker compression
+(larger files), fine for short clips. Even so, the post-finalize UI
+refresh runs through `_best_effort_ui_update` (in `top_bar`) so a page
+closed during the await can't surface a teardown error.
 
 ## Time travel (`nansense.restore`)
 

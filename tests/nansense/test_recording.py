@@ -25,6 +25,7 @@ from nansense.recording import (
     _sanitize,
     _stamp_position,
     _strip_section,
+    _VideoStream,
 )
 from nansense.session import Session
 from nansense.ui.render import render_strip
@@ -338,6 +339,30 @@ def test_close_finalizes_recordings(tmp_path: Path) -> None:
     assert manager.count() == 0  # end_all ran
     (path,) = list((tmp_path / "rec").glob("*.mp4"))
     assert _frame_count(path) == 1
+
+
+def test_video_stream_encodes_readable_mp4_in_process(tmp_path: Path) -> None:
+    """`_VideoStream` encodes frames in-process (PyAV) into a readable MP4.
+
+    No ffmpeg subprocess means `close()` can't hang or be OOM-killed; the
+    stream is libx264 with the bounded-memory thread cap applied.
+    """
+    stream = _VideoStream(tmp_path / "clip.mp4", fps=10)
+    for _ in range(5):
+        stream.append(np.random.randint(0, 255, (64, 96, 3), dtype=np.uint8))
+    assert stream._stream is not None
+    assert stream._stream.codec_context.name == "libx264"
+    assert stream._stream.thread_count == nansense.recording._X264_THREADS
+    stream.close()
+    assert _frame_count(tmp_path / "clip.mp4") == 5
+
+
+def test_video_stream_close_without_frames_is_noop(tmp_path: Path) -> None:
+    """Closing/deleting a stream that never received a frame writes no file."""
+    stream = _VideoStream(tmp_path / "empty.mp4", fps=10)
+    stream.close()
+    assert not (tmp_path / "empty.mp4").exists()
+    stream.delete()  # must not raise
 
 
 def _block_renderer(
