@@ -49,10 +49,13 @@ KEYWORDS: tuple[str, ...] = ("down", "go", "left", "no", "right", "stop", "up", 
 class AudioConfig:
     """Static description of the audio task and the log-mel front end.
 
-    `mean` / `std` are scalar normalization constants for the log-mel features,
-    passed to `nansense.start` as 1-tuples so the spectrogram renders
-    denormalized in the UI. They are deliberately approximate — the log-mel of
-    near-silent padding dominates and pulls the global mean low.
+    `mean` / `std` are the display window for the single-channel spectrogram,
+    passed to `nansense.start` as 1-tuples. nansense renders the input as
+    `value * std + mean` clamped to `[0, 1]`, so `std = 1 / 20` and
+    `mean = 0.5` map a log-mel value of `-10` to black and `+10` to white —
+    a fixed `[-10, +10]` window that comfortably brackets the raw log-mel
+    values the model sees (log of a power spectrogram, dominated by the
+    near-silent padding floor around `log(1e-6) ≈ -13.8`).
     """
 
     num_classes: int = len(KEYWORDS)
@@ -65,11 +68,10 @@ class AudioConfig:
     f_min: float = 20.0
     f_max: float = 8_000.0  # Nyquist at 16 kHz
     log_eps: float = 1e-6
-    # Approximate global log-mel statistics (see class docstring). Measured on
-    # a sample of the mini Speech Commands clips with the torchaudio front end
-    # below (~ -6.8 mean / 4.6 std over the log-mel grid).
-    mean: tuple[float, ...] = (-6.8,)
-    std: tuple[float, ...] = (4.6,)
+    # `[-10, +10]` display window for the log-mel spectrogram (see class
+    # docstring): mean + std map raw log-mel values to the UI's [0, 1] range.
+    mean: tuple[float, ...] = (0.5,)
+    std: tuple[float, ...] = (0.05,)
 
 
 class LogMelTransform:
