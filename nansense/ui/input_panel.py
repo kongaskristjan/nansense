@@ -89,6 +89,10 @@ class InputPanel:
         self._color = "#000000"
         self._spinner_max: int | None = None
         self._frozen = False
+        # Guards `_on_pin_change` while `refresh_status` writes the switch to
+        # mirror shared session state (a pin from another tab) — otherwise the
+        # programmatic write would re-fire pin/unpin.
+        self._syncing_pin = False
         self._build()
 
     def _build(self) -> None:
@@ -256,7 +260,18 @@ class InputPanel:
             self._on_change()
 
     def refresh_status(self) -> None:
-        """Cheap per-tick text/visibility updates (no-op writes are skipped)."""
+        """Cheap per-tick text/visibility updates (no-op writes are skipped).
+
+        Also mirrors shared session state into this connection's controls so
+        a pin / perturbation made in another tab shows up here immediately:
+        the pin switch follows `is_pinned`, and the perturbation count / clear
+        row / compare note follow `perturbations` (the perturbed image itself
+        rides along on the shared probe result the page tick re-renders).
+        """
+        if self._pin_switch.value != self._session.is_pinned:
+            self._syncing_pin = True
+            self._pin_switch.set_value(self._session.is_pinned)
+            self._syncing_pin = False
         pos = self._session.pinned_position
         self._pinned_caption.text = (
             f"pinned at epoch {pos.epoch} | {pos.phase} batch {pos.batch_idx}"
@@ -298,6 +313,8 @@ class InputPanel:
         self._on_change()
 
     def _on_pin_change(self, e: object) -> None:
+        if self._syncing_pin:
+            return  # programmatic mirror of another tab's pin, not a click
         if getattr(e, "value", False):
             if not self._session.pin_current_batch():
                 ui.notify(

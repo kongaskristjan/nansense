@@ -1,402 +1,200 @@
-# Complete nansense!
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/logo_large.png" alt="nansense" width="320">
+</p>
 
-A visualization library for deep learning experiments: hook a `Session` into
-your PyTorch training loop and inspect activations, gradients, weights, and
-more from a web UI — pausing, stepping, and time-traveling the loop as it
-runs. See `INTERNALS.md` for how it works under the hood.
+<h1 align="center">nansense</h1>
 
-## Installation
+<p align="center"><em>See inside your neural net while it trains.</em></p>
+
+<!-- TODO: replace with a real showcase GIF (assets/showcase.gif): perturb a pixel,
+     watch the diff ripple through the layers, then time-travel back an epoch. -->
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/showcase.gif" alt="nansense showcase" width="720">
+</p>
+
+Hook one `Session` into your PyTorch loop and a web UI opens onto the running
+model: activations, gradients, weights, and optimizer state — live. Pause,
+step batch-by-batch, and **time-travel** the loop back to any epoch and replay
+it deterministically. It works with raw PyTorch, PyTorch Lightning, and
+multi-GPU DDP, and turns off to a near-zero-overhead no-op for production runs.
+
+## Install
 
 ```bash
 pip install nansense
 ```
 
-nansense runs on Python 3.10–3.14. It deliberately does not depend on torch:
-install PyTorch separately (see
-[pytorch.org](https://pytorch.org/get-started/locally/)) so your
-hardware-specific build — CUDA, ROCm, or CPU — is preserved. The same goes
-for the optional integrations: with `pip install captum` the experiment page
-offers the Captum attribution methods (they are hidden otherwise), and with
-`pip install lightning` the `nansense.lightning` module becomes importable.
+nansense deliberately **does not depend on torch** — install PyTorch yourself
+(see [pytorch.org](https://pytorch.org/get-started/locally/)) so your CUDA /
+ROCm / CPU build is preserved. Optional extras light up on import: `pip install
+captum` adds attribution methods to the experiment page, `pip install
+lightning` enables `nansense.lightning`. Runs on Python 3.10–3.14.
 
-## Running the examples (this repository)
+## Wire it into your loop
 
-```bash
-uv sync --group cpu    # CPU-only machines (smallest download)
-uv sync --group cu130  # NVIDIA GPU with CUDA 13
+It's a handful of lines either way — one `start()` and wrapping your loader.
 
-uv run examples/standard/main.py --nansense-port 8080
+**Raw PyTorch**
+
+```diff
+  import torch
++ import nansense
+
+  model = MyNet().to(device)
+  optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
++ # One call serves a live UI at http://localhost:8080.
++ session = nansense.start(
++     model,
++     epochs=50,
++     phases={"train": len(train_loader), "val": len(val_loader)},
++     optimizer=optimizer,   # optional: weights page shows optimizer state + live LR
++     port=8080,
++ )
+
+  for epoch in range(50):
+-     for inputs, targets in train_loader:
++     for inputs, targets in session.batches(train_loader, phase="train", epoch=epoch):
+          optimizer.zero_grad()
+          loss = criterion(model(inputs), targets)
+          loss.backward()
+          optimizer.step()
+
++ session.close()   # UI keeps serving the final snapshot
 ```
 
-Each example is self-contained and downloads its dataset on first run, so
-`uv run examples/<name>/main.py` is all you need.
+**PyTorch Lightning** — a stock `Trainer`, no changes to your training code:
 
-PyTorch is installed through one of several mutually exclusive dependency
-groups, so pick the one matching your hardware: `cpu` (works everywhere),
-`cu126` / `cu130` / `cu132` (NVIDIA CUDA, Linux/Windows), or `rocm7-2`
-(AMD ROCm, Linux). Groups are local to this repository and never published,
-which is what keeps the PyPI package torch-free.
+```diff
+  import lightning as L
++ from nansense.lightning import NansenseCallback
 
-Always pass a group — a plain `uv sync` installs torch only transitively
-(via captum/lightning in the dev group) from the default PyPI wheels. All
-variants are pinned in the same `uv.lock`, so switching groups is
-reproducible and doesn't re-lock.
-
-Open `http://localhost:8080`. Training pauses on the first batch; drive it
-from the top bar (stop, the Step button, time travel).
-
-Each example's default `--batch-size` is sized to keep peak GPU memory around
-~4 GB (some lighter ones use less); a few defaults depend on the dataset or
-backbone — see `--help`. Override `--batch-size` to trade memory for speed.
-
-Available examples:
-
-- `examples/standard/main.py` — a small pre-activation ResNet (default), a
-  deeper five-stage variant (`--model resnet_deep`), a simple ViT
-  (`--model vit`), or LeNet-5 (`--model lenet`) on CIFAR10 (default),
-  MNIST (`--dataset mnist`, scaled to 32x32), or Imagenette
-  (`--dataset imagenette`), trained with AdamW + a cosine schedule and
-  the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
-  and launch under `torchrun` for multi-rank DistributedDataParallel
-  training (see [Distributed training](#distributed-training-ddp)).
-- `examples/pytorch_lightning/main.py` — a tiny convnet on MNIST trained with
-  PyTorch Lightning: `NansenseCallback` + `fit_with_time_travel`.
-- `examples/game_of_life/main.py` — predict Conway's Game of Life `--steps`
-  K (default 1) steps ahead on synthetic random boards (no download): a
-  fully-convolutional residual net with circular (toroidal) padding, trained
-  with per-cell `BCEWithLogitsLoss` and the full wiring. The board-shaped
-  inputs, activations, and outputs make perturbation light-cones, deep-dream
-  motifs, and time travel especially legible.
-- `examples/audio_keywords/main.py` — classify eight spoken keywords (Google's
-  mini Speech Commands, ~180 MB on first run) from `torchaudio` log-mel
-  spectrograms fed to a small 2D CNN as single-channel "images", trained with
-  AdamW + a cosine schedule and the full wiring. (Needs `torchaudio`, so it is
-  unavailable on the ROCm build.)
-- `examples/depth_make3d/main.py` — monocular depth estimation on Make3D
-  (~1 GB on first run) by transfer learning: a pretrained ResNet encoder plus a
-  U-Net decoder predict per-pixel depth from one RGB image, with a
-  scale-invariant log loss and the δ<1.25 accuracy metric.
-
-## Minimal example
-
-```python
-import nansense
-
-session = nansense.start(
-    model,
-    epochs=10,
-    phases={"train": len(train_loader)},
-    port=8080,
-)
-
-for epoch in range(10):
-    for batch in session.batches(train_loader, phase="train", epoch=epoch):
-        ...  # forward / backward / optimizer step
-
-session.close()  # UI keeps serving the last snapshot
++ # `model=` is the attribute path to the network inside your LightningModule.
++ callback = NansenseCallback(port=8080, model="net")
+- trainer = L.Trainer(max_epochs=50)
++ trainer = L.Trainer(max_epochs=50, callbacks=[callback])
+  trainer.fit(module, datamodule)
 ```
 
-## Full example
+## What you get
 
-With an optimizer (weights page shows optimizer state and the live learning
-rate), a scheduler (time-travel jumps restore the LR schedule), input
-denormalization for display, and time travel:
+### Trace the receptive field
+
+Paint a pixel onto the input and every layer's strip switches to the **diff**
+against the original — watch the change ripple outward layer by layer and see
+exactly how far each neuron actually looks. Pin a batch to attribute drift to
+training rather than to a changing input.
+
+<!-- TODO: value-focused screenshot — input perturbation + per-layer activation diffs -->
+![Trace the receptive field](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-main.png)
+
+### Spot dead units and vanishing gradients
+
+Per-layer activation and gradient distributions over the most recent epoch, as
+signed-log histograms with full stats — drill into a single channel to find the
+dying ReLU or the gradient that's quietly collapsing.
+
+<!-- TODO: value-focused screenshot — activation/gradient histograms -->
+![Spot dead units and vanishing gradients](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
+
+### See what each neuron learned to detect
+
+For any channel, the input patches that drove its most extreme activations —
+the strongest evidence of what a feature has specialized in, with an optional
+activation heatmap overlaid.
+
+<!-- TODO: value-focused screenshot — top input patches per channel -->
+![See what each neuron learned to detect](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-minmax.png)
+
+### Ask a neuron what it wants to see
+
+Deep-dream gradient ascent synthesizes the input that maximally excites a
+channel, streaming live as it forms; with `captum` installed, four attribution
+methods (Grad-CAM, Occlusion, Neuron Gradient / Integrated Gradients) explain
+real samples. Both re-run automatically as the weights evolve.
+
+<!-- TODO: value-focused screenshot — deep dream / attribution -->
+![Ask a neuron what it wants to see](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-experiment.png)
+
+### Watch weights and optimizer state move
+
+Per parameter: the weight strip, its gradient, every optimizer-state tensor
+(momentum, Adam moments), and the param group's live, scheduler-driven
+hyperparameters.
+
+<!-- TODO: value-focused screenshot — weights + optimizer state strips -->
+![Watch weights and optimizer state move](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-weights.png)
+
+### Rewind, and keep a record
+
+**Time travel** jumps the loop back to any checkpointed epoch and replays it
+deterministically (model / optimizer / scheduler / RNG restored) — re-run a
+moment that looked off. **Record** any view to MP4, one frame per update, to
+keep a timelapse of training.
+
+## API in a nutshell
 
 ```python
-from pathlib import Path
-
-import nansense
-
 session = nansense.start(
     model,
-    epochs=50,
-    phases={"train": len(train_loader), "val": len(val_loader)},
-    optimizer=optimizer,
-    scheduler=scheduler,
-    port=8080,
-    input_mean=(0.4914, 0.4822, 0.4465),
-    input_std=(0.2470, 0.2435, 0.2616),
+    epochs=50, phases={"train": N, "val": M},  # phases: {name: batch_count}
+    optimizer=None, scheduler=None, # optional: optimizer-state view; scheduler restored on time travel
+    input_mean=None, input_std=None,# optional: denormalize inputs for display
+    port=8080,                      # serve the UI here (None = build session, don't serve)
+    enabled=True,                   # enabled=False → near-zero-overhead no-op
 )
 
-# Time travel: every epoch start is checkpointed to cache_dir. A jump from
-# the UI re-enters the loop at the chosen epoch with model / optimizer /
-# scheduler / RNG state restored, so the replay is deterministic.
-restorer = session.training_restorer(cache_dir=Path("models/latest"))
-while restorer.pending():
-    with restorer:
-        best_acc = 0.0  # history-dependent state goes inside: a jump resets it
-        for epoch in restorer.epochs():
-            for batch in session.batches(train_loader, phase="train", epoch=epoch):
-                optimizer.zero_grad()
-                loss = criterion(model(batch[0]), batch[1])
-                loss.backward()
-                optimizer.step()
-            for batch in session.batches(val_loader, phase="val", epoch=epoch):
-                ...  # evaluation
-            scheduler.step()
-
+for batch in session.batches(loader, phase="train", epoch=epoch): ...
 session.close()
 ```
 
-`enabled=False` on `nansense.start()` turns the whole thing into a
-near-zero-overhead no-op, so the wiring can stay in place for plain training
-runs. The runnable version of this loop is `examples/standard/main.py`.
-
-## Distributed training (DDP)
-
-Multi-rank `DistributedDataParallel` runs need no special wiring: call
-`nansense.start()` on every rank — passing the DDP-wrapped model is fine,
-it is unwrapped automatically — and wrap batches as usual:
+**Time travel** is opt-in: wrap the epoch loop in a restorer and the UI's
+jump button comes alive.
 
 ```python
-model = DistributedDataParallel(build_model().to(device))
-session = nansense.start(
-    model,
-    epochs=10,
-    phases={"train": len(train_loader)},  # per-rank batch counts
-    port=8080,
-)
+restorer = session.training_restorer(cache_dir="models/latest")
+while restorer.pending():
+    with restorer:                      # a UI jump unwinds here and replays
+        for epoch in restorer.epochs():
+            train_one_epoch(...); validate(...); scheduler.step()
 ```
 
-The ranks then play different roles:
+**DDP** needs no special wiring: call `nansense.start()` on every rank (pass
+the DDP-wrapped model — it's unwrapped automatically). Rank 0 serves the UI and
+drives pausing; the other ranks fold their data shard into the watch-page
+statistics, and a time-travel jump rewinds every rank in lockstep.
 
-- **Rank 0** serves the UI and behaves like a single-process session:
-  snapshots, pausing/stepping, probes, experiments, recordings. Pausing
-  pauses the whole run — the other ranks block at their next batch start
-  until rank 0 resumes. (Pause longer than the process group's collective
-  timeout — 10–30 min by default — and the other ranks time out; raise
-  `init_process_group(timeout=...)` for long interactive sessions.)
-- **Every other rank** skips the UI and never pauses on its own, but
-  follows rank 0's watched-layer set and folds its data shard into the
-  watch page's statistics at every visualization update — histograms and
-  the stats table cover the global batch, not just rank 0's shard.
-
-Per-rank views (snapshot strips, the input pane, extreme-input patches,
-histogram bar samples) show rank 0's shard. Every rank must run the same
-batch structure — `DistributedSampler` on each phase's loader gives equal
-per-rank batch counts. Time travel works in distributed mode too: a
-UI-requested jump is broadcast to every rank and applied in lockstep at the
-next batch boundary, each rank restoring from its own checkpoint
-(model/optimizer/scheduler are replicated, RNG is per-rank), so the replay is
-deterministic. Wrap every rank's epoch loop in the restorer, exactly like the
-single-process loop. The standard example doubles as the runnable version:
-pass `--distributed`
-and launch it under `torchrun` (it shards both phases with
-`DistributedSampler`, wraps the model in DDP, and falls back from NCCL to
-CPU/gloo when there are fewer GPUs than ranks, so it runs anywhere):
+## Run the examples (this repo)
 
 ```bash
+uv sync --group cu130        # NVIDIA CUDA 13 — or: cpu / cu126 / cu132 / rocm7-2
+uv run examples/standard/main.py --nansense-port 8080
+```
+
+Each example is self-contained and downloads its dataset on first run. Open the
+printed URL; training pauses on the first batch — drive it from the top bar.
+
+- **`standard`** — ResNet / ViT / LeNet on CIFAR-10 / MNIST / Imagenette with
+  the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
+  and launch under `torchrun` for multi-rank DDP.
+- **`pytorch_lightning`** — a tiny convnet on MNIST via `NansenseCallback` +
+  `fit_with_time_travel`.
+- **`game_of_life`** — predict Conway's Game of Life; board-shaped activations
+  make perturbation light-cones and deep-dream motifs especially legible.
+- **`audio_keywords`** — spoken-keyword CNN over log-mel spectrograms.
+- **`depth_make3d`** — monocular depth (pretrained ResNet encoder + U-Net
+  decoder) by transfer learning.
+
+```bash
+# multi-rank DDP
 uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080
 ```
 
-## PyTorch Lightning
-
-With the `lightning` package installed (`pip install lightning`), a stock
-`Trainer` gets the full experience through a callback — no changes to the
-training code:
-
-```python
-import lightning as L
-
-from nansense.lightning import NansenseCallback
-
-callback = NansenseCallback(
-    port=8080,
-    model="net",  # attribute path to the network inside the LightningModule
-    input_mean=(0.4914, 0.4822, 0.4465),
-    input_std=(0.2470, 0.2435, 0.2616),
-)
-trainer = L.Trainer(max_epochs=50, callbacks=[callback])
-trainer.fit(module, datamodule)
-
-callback.session  # the live Session (None until fit starts)
-```
-
-`model=` is recommended whenever the LightningModule wraps its layers in a
-submodule: nansense then traces and probes the actual network instead of
-the module wrapper. `enabled=False` is the same zero-overhead off switch as
-on `nansense.start()`.
-
-For time travel, the retry loop around `trainer.fit` must live outside the
-callback, so it ships as a wrapper. Pass a trainer *factory* — each jump
-re-resumes from a Lightning checkpoint on a fresh trainer:
-
-```python
-from nansense.lightning import fit_with_time_travel
-
-fit_with_time_travel(
-    lambda: L.Trainer(max_epochs=50),
-    module,
-    callback=callback,
-    datamodule=datamodule,
-    cache_dir=Path("models/latest"),
-)
-```
-
-Epoch boundaries are checkpointed via `trainer.save_checkpoint` (with RNG
-states stashed alongside), and a jump re-invokes
-`trainer.fit(ckpt_path=...)`, so the replay is exactly as deterministic as
-the hand-written loop's. The runnable version of this wiring is
-`examples/pytorch_lightning/main.py`. Supported: automatic optimization and
-epoch-boundary validation, including `check_val_every_n_epoch > 1`.
-Rejected with a clear error: mid-epoch validation
-(`val_check_interval < 1.0` or step-driven) and unsized dataloaders — the
-schedule is declared up-front. Metric loggers cannot time-travel: after a
-jump they see the replayed epochs again.
-
-## Views
-
-### Main view
-
-The landing page. The top bar drives the training loop: stop, a split Step
-Batch button (clicking it steps one batch; its dropdown offers step epoch,
-step until end, and step custom — pick a phase/epoch/batch to pause at),
-and time travel (jump back to any checkpointed epoch); on the left, beside
-the architecture-pane toggle, a Refresh button asks the next training batch
-to publish, so the strips catch up to the live model in `detach` / `step_run`
-where they would otherwise freeze between cadence updates; on the bar's right
-side, a gear button opens the settings dialog (update frequency and MP4
-recording — see below). The left pane shows the architecture as a diagram;
-clicking a node toggles that layer's card in the center pane — visible is
-synonymous with watched, so each shown card carries activation and gradient
-strips for the selected sample plus an "Unwatch" button that hides it
-again. The center pane starts empty and only visible layers are rendered
-and sent to the browser, which keeps large models responsive. Hovering a
-diagram node or a card header shows the layer's hyperparameters in a
-tooltip — `Conv2d(3, 64, kernel_size=(3, 3), stride=(2, 2), ...)` — built
-from each module's `extra_repr()` (custom modules can override it to
-surface their own knobs) or, for functional ops, the call's literal
-arguments. The top-bar eye menu jumps to watched layers, watches all
-layers at once (behind a performance warning), or clears every watch.
-
-The right "Input Selection" pane shows the input image and sample picker.
-"Pin batch" freezes the current batch as a probe input that is re-run on
-every pause, so activation changes are attributable to training rather than
-to the batch changing. "Click to perturb" paints pixels onto the input; as
-soon as at least one pixel is perturbed, the layer strips switch to per-layer
-activation diffs against the original input (a note below the controls says
-so), tracing how far the edit propagates (the receptive field).
-
-The side panes — architecture and input here, the controls panes on the
-watch and experiment pages — are resizable: drag the thin handle between a
-pane and the center content, or double-click it to restore the default
-width. Pane sizes are remembered for the rest of the browser session.
-
-![Main view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-main.png)
-
-### Watch
-
-Layers watched on the main page (diagram clicks or the eye menu) also feed
-the deep-dive `/watch` page. A sidebar **Layer** dropdown picks which watched
-layer's card to render — a single layer by default (rendering every card at
-once gets slow with many layers watched), or "All watched layers" to show
-them together, which is offered only while fewer than ten layers are watched.
-
-The HISTOGRAM view (the default) shows activation and activation-gradient
-distributions over the most recent epoch as signed-log histograms with a
-stats table (`n`, `mean`, `std`, `median`, `min`/`max`); a phase dropdown
-switches between train/val, and Log x / Log y checkboxes handle
-distributions spanning many decades. A "Retain axes" checkbox keeps the
-current axis ranges when toggling Log x / Log y or switching phase (instead
-of auto-fitting to the data) — handy for comparing phases or scales on a
-fixed frame. Each histogram has a "Per channel"
-switch that narrows it to a single channel (stepped with an index spinner);
-while per-channel, hovering a bar shows a few random input samples whose
-values fell in that bar — drawn from the last captured batch only, since
-the running histogram's source values are discarded every batch (the strip
-names the batch it sampled from).
-
-![Watch page, histogram view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
-
-The MIN/MAX view shows the input patches that drove the layer's most
-extreme activations: per channel, the top input crops around the
-largest/smallest spatial activation and whole inputs ranked by spatial
-mean, with an optional activation-heatmap overlay. Only the "Max pixel"
-grid starts enabled; the other three have their own checkboxes.
-
-![Watch page, min/max view](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-minmax.png)
-
-### Weights
-
-Each parameterized layer card has a "Weights" button opening
-`/weights?layer=...`. It renders one panel per parameter: the weight strip
-with its gradient strip below, plus — when an `optimizer=` was passed to
-`start()` — one strip per tensor-valued optimizer state entry (momentum
-buffer, Adam moments, …) and the param group's live hyperparameters.
-Per-dimension selects remap which tensor axes become X, Y, and tiling (a 4D
-conv weight defaults to kernel tiles); the same top-bar Refresh button asks
-the next training batch to publish, so the strips catch up to the live model
-mid-training in `detach` / `step_run`.
-
-![Weights page](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-weights.png)
-
-### Experiment
-
-Each layer card's "Experiment" button opens `/experiment?layer=...`, which
-runs per-layer experiments on the paused training thread without side
-effects on training or time-travel determinism. Deep Dream runs gradient
-ascent on a channel's mean activation over a batch of inputs — by default
-fresh noise shaped like the network's real input, different on every Run —
-with configurable regularizers, streaming the evolving images live. Four
-Captum attribution methods — Grad-CAM, Neuron Gradient, Neuron Integrated
-Gradients, and Occlusion — render attributions next to the input sample
-they explain.
-
-Run also registers the experiment for automatic re-runs: while the page
-stays open (or its view is being recorded), the experiment re-executes at
-every visualization update with the *same* random seed, so the result
-tracks the evolving weights instead of the changing noise.
-
-![Experiment page](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-experiment.png)
-
-### Update frequency
-
-The "Update frequency" section of the settings dialog (the gear button in
-every page's top bar) sets how often
-all visualizations refresh while training runs freely: every nth epoch (the
-default, n=1) or every nth batch, optionally counting only one phase's
-batches. A frequency update publishes a fresh snapshot, re-runs the probe
-(pinned batch / perturbations) and any registered experiments — without
-pausing training, in every mode including detach. Stopping or stepping
-still refreshes everything, exactly as before.
-
-### Recording
-
-The "Recording" section of the settings dialog (the gear button in every
-page's top bar; a red badge on the gear carries the count of active
-recordings) records visualizations to MP4 — one file per view, one frame
-per visualization update (the frequency above, not per user step), written
-to `nansense_recordings/<timestamp>/` in the training process's working
-directory at 10 fps. Each frame carries a banner with the training
-position it was captured at (e.g. `epoch 0 | train batch 0`).
-
-The section offers a red "Record" button for the page you're on and the
-list of currently recording views — each can be saved & finished (finalize
-the MP4) or deleted (discard it) individually; the page's own view, once
-recording, appears only in that list (marked "this view"). Recordable
-views:
-
-- **Main view** — the input image plus every watched layer's activation and
-  gradient strips packed into a single video; a pinned batch and
-  perturbations are respected exactly like on the page.
-- **Weights** — one video per recorded layer: weight, gradient, and
-  optimizer-state strips under the page's current axis layout.
-- **Watch · histograms** — server-side matplotlib re-renders of the
-  activation/gradient histograms for the selected phase.
-- **Watch · MIN/MAX** — the enabled patch grids; pixel (crop) and average
-  (whole input) grids have different image sizes, so they record into
-  separate `*_pixel.mp4` / `*_average.mp4` files.
-- **Experiment** — the page's experiment result, re-run automatically at
-  every update with a fixed random seed.
-
-A view's parameters are frozen while it records: the matching page controls
-are disabled (and unwatching layers is refused while a watch view records),
-so the video stays consistent from the first frame to the last. The update
-frequency itself is likewise locked while any recording is active.
-
-## Tests
+## Development
 
 ```bash
-uv run pytest
-uv run ty check
+uv run pytest && uv run ty check
 ```
+
+See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood and
+[`AGENTS.md`](AGENTS.md) for contributor guidelines.

@@ -283,6 +283,10 @@ class Session:
         # Experiments re-run on every update, keyed by the registering
         # client (a UI page or a recording). Mutated under `_cv`.
         self._auto_experiments: dict[str, _AutoExperiment] = {}
+        # Session-wide "auto-run experiments" preference (shared across tabs):
+        # when set, experiment pages re-run on init and on every parameter
+        # change instead of waiting for a manual Run. Default on.
+        self._auto_run_experiments = True
         # Per-view video recording (see `nansense.recording`); created
         # lazily on first UI access so headless sessions never import the
         # rendering stack.
@@ -721,6 +725,24 @@ class Session:
         with self._cv:
             self._update_frequency = UpdateFrequency(unit=unit, n=n, phase=phase)
             self._freq_counter = 0
+
+    @property
+    def auto_run_experiments(self) -> bool:
+        """Whether experiment pages re-run automatically on every change.
+
+        A session-wide preference shared across browser tabs (toggled from
+        the settings dialog). When set, an experiment page runs on init and
+        on any parameter change without a manual Run; when clear, only Run
+        arms an experiment. Default `True`.
+        """
+        with self._cv:
+            return self._auto_run_experiments
+
+    def set_auto_run_experiments(self, enabled: bool) -> None:
+        """Set the shared auto-run-experiments preference (see the getter)."""
+        with self._cv:
+            self._auto_run_experiments = bool(enabled)
+            self._cv.notify_all()
 
     @property
     def recording(self) -> RecordingManager:

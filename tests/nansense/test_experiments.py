@@ -262,21 +262,19 @@ def test_deep_dream_works_on_vector_input() -> None:
 
 
 @pytest.mark.parametrize(
-    "kind, params, expected_shape",
+    "kind, params, channels",
     [
-        ("gradcam", {"target": -1, "sample": 0}, (1, 1, 4, 4)),
-        ("neuron_gradient", {"channel": 0, "sample": 0}, (1, 3, 4, 4)),
-        ("neuron_ig", {"channel": 0, "steps": 4, "sample": 0}, (1, 3, 4, 4)),
-        (
-            "occlusion",
-            {"target": -1, "window": 2, "stride": 2, "sample": 0},
-            (1, 3, 4, 4),
-        ),
+        ("gradcam", {"target": -1}, 1),  # Grad-CAM emits one heatmap channel
+        ("neuron_gradient", {"channel": 0}, 3),
+        ("neuron_ig", {"channel": 0, "ig_steps": 4}, 3),
+        ("occlusion", {"channel": 0, "window": 2, "stride": 2}, 3),
     ],
 )
 def test_captum_methods_publish_attributions(
-    kind: str, params: dict[str, object], expected_shape: tuple[int, ...]
+    kind: str, params: dict[str, object], channels: int
 ) -> None:
+    # Captum runs on a batch now (like deep dream): the whole current batch
+    # (two samples here), not a single example.
     with _paused_session() as (session, _):
         session.request_experiment(kind=kind, layer="conv", params=params)
         assert session.wait_for_experiment(timeout=15)
@@ -285,20 +283,127 @@ def test_captum_methods_publish_attributions(
         assert result.error is None
         assert result.done
         assert result.attribution is not None
-        assert tuple(result.attribution.shape) == expected_shape
+        assert tuple(result.attribution.shape) == (2, channels, 4, 4)
         assert result.attribution.device.type == "cpu"
-        assert result.reference is not None
+        assert not result.is_diff
+        assert result.reference is not None and result.reference.shape[0] == 2
 
 
-def test_captum_on_fx_intermediate_publishes_module_hint() -> None:
-    with _paused_session() as (session, _):
+def test_captum_batch_param_caps_samples() -> None:
+    with _paused_session(batch_size=4) as (session, _):
         session.request_experiment(
-            kind="gradcam", layer="relu", params={"target": -1, "sample": 0}
+            kind="neuron_gradient", layer="conv", params={"channel": 0, "batch": 2}
         )
+        assert session.wait_for_experiment(timeout=15)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        assert result.attribution is not None and result.attribution.shape[0] == 2
+
+
+def test_occlusion_runs_on_fx_intermediate_layer() -> None:
+    # Occlusion is retargeted to a layer-channel's activation, so it reads the
+    # value through the fx interpreter and no longer needs an nn.Module.
+    with _paused_session() as (session, _):
+        assert "relu" in session.layer_names
+        session.request_experiment(
+            kind="occlusion",
+            layer="relu",
+            params={"channel": 0, "window": 2, "stride": 2},
+        )
+        assert session.wait_for_experiment(timeout=15)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        assert result.attribution is not None
+        assert tuple(result.attribution.shape) == (2, 3, 4, 4)
+
+
+@pytest.mark.parametrize(
+    "kind", ["gradcam", "neuron_gradient", "neuron_ig"]
+)
+def test_captum_module_kinds_on_fx_intermediate_publish_module_hint(
+    kind: str,
+) -> None:
+    with _paused_session() as (session, _):
+        session.request_experiment(kind=kind, layer="relu", params={})
         assert session.wait_for_experiment(timeout=10)
         result = session.experiment_result
         assert result is not None and result.error is not None
         assert "nn.Module" in result.error
+
+
+def test_use_viewed_sample_runs_single_sample() -> None:
+    with _paused_session(batch_size=4) as (session, _):
+        session.request_experiment(
+            kind="neuron_gradient",
+            layer="conv",
+            params={"channel": 0, "use_viewed": True, "sample": 1},
+        )
+        assert session.wait_for_experiment(timeout=15)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        assert result.attribution is not None
+        assert tuple(result.attribution.shape) == (1, 3, 4, 4)
+        assert not result.is_diff
+
+
+def test_use_viewed_sample_with_perturbation_yields_diff() -> None:
+    with _paused_session(batch_size=4) as (session, _):
+        # Perturb a pixel of the viewed sample, then run with use_viewed: the
+        # result is the diff of the two attribution maps.
+        session.add_perturbation(sample=1, y=0, x=0, values=(0.0, 0.0, 0.0))
+        session.request_experiment(
+            kind="neuron_gradient",
+            layer="conv",
+            params={"channel": 0, "use_viewed": True, "sample": 1},
+        )
+        assert session.wait_for_experiment(timeout=15)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        assert result.is_diff
+        assert result.attribution is not None
+        assert tuple(result.attribution.shape) == (1, 3, 4, 4)
+        assert result.reference is not None and result.reference.shape == (1, 3, 4, 4)
+
+
+@pytest.mark.parametrize(
+    "layer, kind, available",
+    [
+        ("conv", "gradcam", True),
+        ("relu", "gradcam", False),
+        ("relu", "neuron_gradient", False),
+        ("relu", "neuron_ig", False),
+        ("relu", "deep_dream", True),
+        ("relu", "occlusion", True),
+    ],
+)
+def test_layer_available_by_kind(layer: str, kind: str, available: bool) -> None:
+    from nansense.experiments import layer_available
+
+    with _paused_session() as (session, _):
+        assert layer in session.layer_names
+        assert layer_available(session, layer, kind) is available
+
+
+def test_register_auto_experiment_supersedes_queued_request() -> None:
+    # No training loop runs, so requests stay queued; re-registering the same
+    # key drops the superseded request so the pause loop never runs the stale
+    # one — only the latest queued request for the key executes.
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    first = session.register_auto_experiment(
+        "page", kind="deep_dream", layer="conv", params={}
+    )
+    second = session.register_auto_experiment(
+        "page", kind="deep_dream", layer="conv", params={}
+    )
+    queued = [r.seq for r in session._experiment_queue]
+    assert queued == [second] and first not in queued
+
+
+def test_auto_run_experiments_setting_defaults_on() -> None:
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    assert session.auto_run_experiments is True
+    session.set_auto_run_experiments(False)
+    assert session.auto_run_experiments is False
 
 
 def test_queued_experiments_publish_per_seq_results() -> None:

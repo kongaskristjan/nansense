@@ -31,11 +31,18 @@ Captum method selection (deliberately small):
 - **Neuron Integrated Gradients** (`NeuronIntegratedGradients`) — the
   higher-quality path-integrated version of the same.
 - **Occlusion** (`Occlusion`) — perturbation-based: slide a patch over the
-  input and measure the class-score drop.
+  input and measure the drop in the selected layer-channel's mean activation
+  (a thin wrapper exposes that channel as the model output to attribute).
 
-Layer-targeted Captum methods need an `nn.Module`; fx intermediates
+The Captum methods run on a *batch* of inputs (like deep dream), or — with
+"use viewed sample" — on the single sample the input pane is viewing, taken
+from the pinned/perturbed probe input; a perturbed sample yields the diff of
+its attribution maps (perturbed − original) instead of the raw map.
+
+Grad-CAM and the neuron methods need an `nn.Module`; fx intermediates
 (`relu`, `add`, …) are rejected with a pointer to the producing module.
-Deep dream works on *any* captured layer via the fx interpreter.
+Deep dream and occlusion read the activation through the fx interpreter, so
+they work on *any* captured layer.
 """
 
 from __future__ import annotations
@@ -53,7 +60,7 @@ from torch.nn import functional as F
 
 from nansense.capture import _CaptureInterpreter
 from nansense.params import bool_param, float_param, float_tuple, int_param
-from nansense.probe import isolated_model
+from nansense.probe import apply_perturbations, isolated_model
 
 if TYPE_CHECKING:
     from nansense.session import Session
@@ -68,6 +75,13 @@ EXPERIMENT_KINDS: dict[str, str] = {
 
 _CAPTUM_KINDS = frozenset(EXPERIMENT_KINDS) - {"deep_dream"}
 
+# Kinds whose Captum attribution targets the layer's `nn.Module` object
+# directly (Grad-CAM's localization layer, the neuron methods' layer). An fx
+# intermediate (relu/add/…) has no module to hand Captum, so these are
+# unavailable there. Deep dream and the retargeted occlusion read the
+# activation through the fx interpreter, so they accept any captured layer.
+_MODULE_KINDS = frozenset({"gradcam", "neuron_gradient", "neuron_ig"})
+
 
 def available_experiment_kinds() -> dict[str, str]:
     """Experiment kinds the UI should offer.
@@ -78,6 +92,20 @@ def available_experiment_kinds() -> dict[str, str]:
     if importlib.util.find_spec("captum") is not None:
         return dict(EXPERIMENT_KINDS)
     return {k: v for k, v in EXPERIMENT_KINDS.items() if k not in _CAPTUM_KINDS}
+
+
+def layer_available(session: Session, layer: str, kind: str) -> bool:
+    """Whether experiment `kind` can run on `layer` (UI grays out the rest).
+
+    Grad-CAM and the neuron methods need the layer's `nn.Module` object, so
+    an fx intermediate is off-limits. Deep dream and occlusion read the
+    activation through the fx interpreter and accept any captured layer — but
+    in the hook fallback (no fx graph) the only thing to hook is a named
+    module, so there every kind needs one.
+    """
+    if kind in _MODULE_KINDS or not session.fx_traced:
+        return layer in dict(session.model.named_modules())
+    return True
 
 # How many intermediate publishes a deep-dream run spreads over its steps.
 _PUBLISH_COUNT: int = 20
@@ -110,7 +138,8 @@ class ExperimentResult:
     which case `step < total_steps`. Exactly one of `image` (input-space,
     shown denormalized) or `attribution` (signed, shown with the diverging
     colormap) is set on success; `reference` carries the input batch the
-    experiment started from.
+    experiment started from. `is_diff` marks an attribution that is the
+    difference of two runs (a perturbed viewed sample minus its original).
     """
 
     seq: int
@@ -124,6 +153,7 @@ class ExperimentResult:
     attribution: Tensor | None = None
     reference: Tensor | None = None
     objective: float | None = None
+    is_diff: bool = False
 
 
 def run(
@@ -216,6 +246,18 @@ def register_auto_experiment(
             f"expected one of {list(EXPERIMENT_KINDS)}"
         )
     with session._cv:
+        # A re-registration (e.g. auto-run on a parameter change) supersedes
+        # this key's previous request: drop the old one if it is still queued
+        # so a burst of edits never floods the pause loop with stale runs —
+        # only the latest queued request for the key ever executes. A request
+        # already mid-flight stays running (it cannot be un-run), but the
+        # superseding one is queued behind it, so the view still ends on the
+        # up-to-date parameters.
+        prev = session._auto_experiments.get(key)
+        if prev is not None:
+            session._experiment_queue = deque(
+                r for r in session._experiment_queue if r.seq != prev.request.seq
+            )
         session._experiment_seq += 1
         request = ExperimentRequest(
             kind=kind, layer=layer, params=dict(params), seq=session._experiment_seq
@@ -349,10 +391,65 @@ def _error(request: ExperimentRequest, message: str) -> ExperimentResult:
     )
 
 
-def _sample_input(
+def _experiment_base(session: Session) -> Tensor | None:
+    """The probe base the "use viewed sample" mode draws from.
+
+    Mirrors the probe input (`nansense.probe`): the pinned batch when one is
+    pinned, otherwise the live snapshot input. Returned detached and float,
+    or `None` when no input exists yet.
+    """
+    with session._cv:
+        pinned = session._pinned_input
+    base = pinned if pinned is not None else session._snapshot_input()
+    return None if base is None else base.detach().float()
+
+
+def _viewed_sample(
     session: Session, request: ExperimentRequest
-) -> Tensor | ExperimentResult:
-    """The `[1, C, H, W]` input sample the experiment works on, or an error."""
+) -> tuple[Tensor, Tensor | None] | ExperimentResult:
+    """The single viewed sample `[1, ...]` and its perturbed copy (or `None`).
+
+    The sample the input pane is viewing (`sample` param) taken from the
+    probe base (pinned batch or live input). When that sample carries pixel
+    perturbations, the second tensor is the edited copy so the caller can
+    diff the two runs; otherwise it is `None`.
+    """
+    base = _experiment_base(session)
+    if base is None:
+        return _error(
+            request, "no input available yet — run at least one batch first"
+        )
+    if base.ndim < 2:
+        return _error(request, "experiments need a batched input [B, ...]")
+    sample = min(max(0, int_param(request.params, "sample", 0)), int(base.shape[0]) - 1)
+    with session._cv:
+        sample_perturbs = {
+            k: v for k, v in session._perturbations.items() if k[0] == sample
+        }
+    x = base[sample : sample + 1].clone()
+    perturbed_full = apply_perturbations(base, sample_perturbs)
+    perturbed = (
+        None if perturbed_full is None else perturbed_full[sample : sample + 1].clone()
+    )
+    return x, perturbed
+
+
+def _captum_input(
+    session: Session, request: ExperimentRequest
+) -> tuple[Tensor, Tensor | None] | ExperimentResult:
+    """`(input_batch, perturbed_or_None)` a Captum run attributes.
+
+    With "use viewed sample" on, the single viewed sample (plus its perturbed
+    copy for the diff); otherwise the first `batch` samples of the live
+    snapshot input, so the page shows the whole batch like deep dream.
+    """
+    if bool_param(request.params, "use_viewed", False):
+        prepared = _viewed_sample(session, request)
+        if isinstance(prepared, ExperimentResult):
+            return prepared
+        if prepared[0].ndim != 4:
+            return _error(request, "experiments need an image input [B, C, H, W]")
+        return prepared
     base = session._snapshot_input()
     if base is None:
         return _error(
@@ -360,8 +457,9 @@ def _sample_input(
         )
     if base.ndim != 4:
         return _error(request, "experiments need an image input [B, C, H, W]")
-    sample = min(max(0, int_param(request.params, "sample", 0)), int(base.shape[0]) - 1)
-    return base[sample : sample + 1].detach().clone().float()
+    batch = max(1, int_param(request.params, "batch", _DEFAULT_DREAM_BATCH))
+    count = min(batch, int(base.shape[0]))
+    return base[:count].detach().clone().float(), None
 
 
 def _dream_start(
@@ -369,14 +467,22 @@ def _dream_start(
 ) -> Tensor | ExperimentResult:
     """The `[batch, ...]` starting batch for deep dream, or an error.
 
-    Built from the network's *real* input (the snapshot's input-node
-    tensor), so non-image inputs work too. `start="noise"` draws `batch`
-    fresh samples matching the real input's per-sample shape and overall
-    mean/std from `rng` — seeded per request, so successive runs explore
-    different noise; `start="sample"` takes the first `batch` samples of
-    the real input batch. `batch` defaults to the real batch size, capped
-    at `_DEFAULT_DREAM_BATCH`.
+    With "use viewed sample" on, the start is the single sample the input
+    pane is viewing (pinned/perturbed), ignoring `batch` and `start`.
+    Otherwise it is built from the network's *real* input (the snapshot's
+    input-node tensor), so non-image inputs work too: `start="noise"` draws
+    `batch` fresh samples matching the real input's per-sample shape and
+    overall mean/std from `rng` — seeded per request, so successive runs
+    explore different noise; `start="sample"` takes the first `batch`
+    samples of the real input batch. `batch` defaults to the real batch
+    size, capped at `_DEFAULT_DREAM_BATCH`.
     """
+    if bool_param(request.params, "use_viewed", False):
+        prepared = _viewed_sample(session, request)
+        if isinstance(prepared, ExperimentResult):
+            return prepared
+        x, perturbed = prepared
+        return perturbed if perturbed is not None else x
     base = session._snapshot_input()
     if base is None:
         return _error(
@@ -561,8 +667,14 @@ def _run_deep_dream(
         yield partial(x, step_done, objective_value, done=True)
 
 
-def _resolve_target(model: nn.Module, x: Tensor, params: dict[str, object]) -> int:
-    """The class index for output-targeted methods (-1 means the argmax)."""
+def _resolve_target(
+    model: nn.Module, x: Tensor, params: dict[str, object]
+) -> int | list[int]:
+    """The Grad-CAM target class (-1 means each sample's own argmax).
+
+    An explicit class applies to the whole batch; the argmax default resolves
+    per sample (a length-`batch` list), since the batch may span predictions.
+    """
     target = int_param(params, "target", -1)
     if target >= 0:
         return target
@@ -573,7 +685,7 @@ def _resolve_target(model: nn.Module, x: Tensor, params: dict[str, object]) -> i
             "target-based methods need a [batch, classes] model output; "
             "set an explicit target class for other output shapes"
         )
-    return int(out.argmax(dim=1).item())
+    return out.argmax(dim=1).tolist()
 
 
 def _neuron_selector(channel: int) -> Callable[[Tensor], Tensor]:
@@ -592,16 +704,39 @@ def _neuron_selector(channel: int) -> Callable[[Tensor], Tensor]:
     return selector
 
 
+class _LayerChannelModel(nn.Module):
+    """Exposes one layer-channel's per-sample mean activation as the output.
+
+    Lets Occlusion attribute input regions against an *intermediate* channel
+    (instead of an output class), so it respects the layer + channel
+    selection like the neuron methods. The output is `[B, 1]`, so Captum
+    takes target 0; forwards go through `_target_activation`, which handles
+    fx intermediates and the hook fallback alike.
+    """
+
+    def __init__(self, session: Session, layer: str, channel: int) -> None:
+        super().__init__()
+        self._session = session
+        self._layer = layer
+        self._channel = channel
+
+    def forward(self, x: Tensor) -> Tensor:
+        act = _target_activation(self._session, x, self._layer)
+        return _neuron_selector(self._channel)(act).reshape(-1, 1)
+
+
 def _run_captum(
     session: Session,
     request: ExperimentRequest,
     should_abort: Callable[[], bool],
 ) -> Iterator[ExperimentResult]:
-    """One-shot Captum attribution on the selected sample.
+    """Captum attribution over a batch (or a single perturbed-diff sample).
 
     All methods run the *unpatched* model (probes/experiments only execute
     between batches) inside the isolation scope. Gradient-based methods use
-    `torch.autograd.grad` internally, so parameter `.grad` survives.
+    `torch.autograd.grad` internally, so parameter `.grad` survives. With a
+    perturbed viewed sample the attribution is run twice and the diff
+    (perturbed − original) is published instead of the raw map.
     """
     try:
         from captum import attr as captum_attr
@@ -610,14 +745,13 @@ def _run_captum(
         return
 
     p = request.params
-    x0 = _sample_input(session, request)
-    if isinstance(x0, ExperimentResult):
-        yield x0
+    prepared = _captum_input(session, request)
+    if isinstance(prepared, ExperimentResult):
+        yield prepared
         return
-    module: nn.Module | None = dict(session.model.named_modules()).get(
-        request.layer
-    )
-    if request.kind in ("gradcam", "neuron_gradient", "neuron_ig") and module is None:
+    x0, perturbed0 = prepared
+    module: nn.Module | None = dict(session.model.named_modules()).get(request.layer)
+    if request.kind in _MODULE_KINDS and module is None:
         yield _error(
             request,
             f"{EXPERIMENT_KINDS[request.kind]} needs an nn.Module layer; "
@@ -629,43 +763,54 @@ def _run_captum(
         yield _error(request, "cancelled")
         return
 
-    with isolated_model(session, "eval") as device:
-        x = x0.to(device)
-        if request.kind == "gradcam":
+    def attribute(x: Tensor) -> Tensor:
+        kind = request.kind
+        if kind == "gradcam":
             assert module is not None  # checked above
             target = _resolve_target(session.model, x, p)
-            attribution = captum_attr.LayerGradCam(session.model, module).attribute(
+            out = captum_attr.LayerGradCam(session.model, module).attribute(
                 x, target=target
             )
-        elif request.kind == "neuron_gradient":
+        elif kind == "neuron_gradient":
             assert module is not None  # checked above
-            attribution = captum_attr.NeuronGradient(
-                session.model, module
-            ).attribute(x, neuron_selector=_neuron_selector(int_param(p, "channel", 0)))
-        elif request.kind == "neuron_ig":
+            out = captum_attr.NeuronGradient(session.model, module).attribute(
+                x, neuron_selector=_neuron_selector(int_param(p, "channel", 0))
+            )
+        elif kind == "neuron_ig":
             assert module is not None  # checked above
-            attribution = captum_attr.NeuronIntegratedGradients(
+            out = captum_attr.NeuronIntegratedGradients(
                 session.model, module
             ).attribute(
                 x,
                 neuron_selector=_neuron_selector(int_param(p, "channel", 0)),
-                n_steps=max(2, int_param(p, "steps", 32)),
+                n_steps=max(2, int_param(p, "ig_steps", 32)),
             )
-        else:  # occlusion
-            target = _resolve_target(session.model, x, p)
+        else:  # occlusion, retargeted to the selected layer-channel
             channels = int(x.shape[1])
             window = max(1, int_param(p, "window", 4))
             stride = max(1, int_param(p, "stride", 2))
-            attribution = captum_attr.Occlusion(session.model).attribute(
+            target_model = _LayerChannelModel(
+                session, request.layer, int_param(p, "channel", 0)
+            )
+            out = captum_attr.Occlusion(target_model).attribute(
                 x,
-                target=target,
+                target=0,
                 sliding_window_shapes=(channels, window, window),
                 strides=(channels, stride, stride),
                 baselines=0.0,
                 perturbations_per_eval=8,
             )
+        assert isinstance(out, Tensor)
+        return out
 
-    assert isinstance(attribution, Tensor)
+    with isolated_model(session, "eval") as device:
+        attribution = attribute(x0.to(device))
+        is_diff = perturbed0 is not None
+        reference = x0
+        if perturbed0 is not None:
+            attribution = attribute(perturbed0.to(device)) - attribution
+            reference = perturbed0
+
     yield ExperimentResult(
         seq=request.seq,
         kind=request.kind,
@@ -674,5 +819,6 @@ def _run_captum(
         total_steps=1,
         done=True,
         attribution=attribution.detach().cpu().float(),
-        reference=x0,
+        reference=reference,
+        is_diff=is_diff,
     )
