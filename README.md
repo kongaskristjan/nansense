@@ -352,10 +352,11 @@ to `nansense_recordings/<timestamp>/` in the training process's working
 directory at 10 fps. Each frame carries a banner with the training
 position it was captured at (e.g. `epoch 0 | train batch 0`).
 
-The section offers a red "Record this view" button for the page you're on,
-the list of currently recorded views — each can be ended (finalize the
-MP4) or deleted (discard it) individually — and end-all / delete-all
-buttons. Recordable views:
+The section offers a red "Record" button for the page you're on and the
+list of currently recording views — each can be saved & finished (finalize
+the MP4) or deleted (discard it) individually; the page's own view, once
+recording, appears only in that list (marked "this view"). Recordable
+views:
 
 - **Main view** — the input image plus every watched layer's activation and
   gradient strips packed into a single video; a pinned batch and

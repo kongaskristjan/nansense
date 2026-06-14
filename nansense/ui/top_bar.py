@@ -259,12 +259,14 @@ def _add_settings_button(
     recording frames advance at this frequency, so changing it
     mid-recording would change the videos' time base.
 
-    "Recording" offers "Add this view to recording" for the page's own view
-    (built by `record_view` with the page's *current* parameters, frozen
-    for the recording's lifetime; None when the page's current state can't
-    be recorded yet) plus the list of all active recordings, each endable
-    (finalize the MP4) or deletable (discard it), and end/delete-all
-    buttons. A red badge on the gear carries the active-recording count.
+    "Recording" offers a "Record" button for the page's own view (built by
+    `record_view` with the page's *current* parameters, frozen for the
+    recording's lifetime; None when the page's current state can't be
+    recorded yet) plus the list of all active recordings, each one
+    save-&-finishable (finalize the MP4) or deletable (discard it). The
+    current page's view, while it records, appears only in that list (marked
+    "this view") rather than twice. A red badge on the gear carries the
+    active-recording count.
     """
     phase_names = list(session.schedule.phases)
 
@@ -298,9 +300,10 @@ def _add_settings_button(
             "The frequency is locked while recordings are active — frames "
             "are recorded at this cadence."
         ).classes("text-xs text-amber-700")
-        apply_button = ui.button("Apply", on_click=lambda: apply(), color="purple").props(
-            "dense size=md"
-        )
+        with ui.row().classes("w-full justify-end"):
+            apply_button = ui.button(
+                "Apply", on_click=lambda: apply(), color="purple"
+            ).props("dense size=md")
         ui.separator()
         ui.label("Recording").classes("text-lg font-bold")
         ui.label(
@@ -308,8 +311,9 @@ def _add_settings_button(
             "visualization update."
         ).classes("text-sm text-slate-600")
         recording_section = ui.column().classes("w-full gap-3")
+        ui.separator()
         with ui.row().classes("w-full justify-end"):
-            ui.button("Close", on_click=dialog.close)
+            ui.button("Close", on_click=dialog.close).props("flat")
 
     def sync_phase_visibility() -> None:
         phase_select.set_visibility(unit_select.value == "batch")
@@ -373,63 +377,50 @@ def _add_settings_button(
         refresh_recording_lock()
         rebuild()
 
-    async def end_all() -> None:
-        for status in session.recording.statuses():
-            unpin(status.view)
-        paths = await asyncio.to_thread(session.recording.end_all)
-        if paths:
-            ui.notify("Saved " + ", ".join(str(p) for p in paths))
-        refresh_recording_lock()
-        rebuild()
-
-    async def delete_all() -> None:
-        for status in session.recording.statuses():
-            unpin(status.view)
-        await asyncio.to_thread(session.recording.delete_all)
-        refresh_recording_lock()
-        rebuild()
-
     def rebuild() -> None:
         recording_section.clear()
         statuses = session.recording.statuses()
         current = record_view() if record_view is not None else None
+        # The current page's view shows up either as the "Record" button (not
+        # yet recording) or — once recording — as a "this view" entry in the
+        # list below, never both.
+        current_recording = (
+            current is not None and session.recording.is_recording(current.key)
+        )
         with recording_section:
-            ui.label("This view").classes(
-                "text-xs uppercase tracking-wider text-slate-400"
-            )
             if current is None:
                 ui.label(
                     "Nothing recordable on this page yet — watch a layer or "
                     "run an experiment first."
                 ).classes("text-sm text-slate-500 italic")
-            else:
+            elif not current_recording:
                 with ui.row().classes("w-full items-center gap-2 no-wrap"):
-                    with ui.column().classes("grow min-w-0 gap-0"):
-                        ui.label(current.label).classes(
-                            "text-sm font-medium truncate"
-                        )
-                        if session.recording.is_recording(current.key):
-                            ui.label("recording — parameters frozen").classes(
-                                "text-xs text-red-600"
-                            )
-                    if not session.recording.is_recording(current.key):
-                        ui.button(
-                            "Record",
-                            icon="fiber_manual_record",
-                            on_click=add_view,
-                            color="red",
-                        ).props("dense size=sm no-caps").tooltip(
-                            "Add this view to recording — one frame per "
-                            "visualization update"
-                        )
+                    ui.label(current.label).classes(
+                        "text-sm font-medium truncate grow min-w-0"
+                    )
+                    ui.button(
+                        "Record",
+                        icon="fiber_manual_record",
+                        on_click=add_view,
+                        color="red",
+                    ).props("dense size=sm no-caps").tooltip(
+                        "Add this view to recording — one frame per "
+                        "visualization update"
+                    )
             if statuses:
                 ui.label("Currently recording").classes(
                     "text-xs uppercase tracking-wider text-slate-400"
                 )
                 for status in statuses:
+                    is_current = (
+                        current is not None and status.view.key == current.key
+                    )
                     with ui.row().classes("w-full items-center gap-2 no-wrap"):
                         with ui.column().classes("grow min-w-0 gap-0"):
-                            ui.label(status.view.label).classes(
+                            label = status.view.label + (
+                                "  (this view)" if is_current else ""
+                            )
+                            ui.label(label).classes(
                                 "text-sm font-medium truncate"
                             )
                             note = f"{status.frames} frame" + (
@@ -446,7 +437,7 @@ def _add_settings_button(
                                 )
                             )
                         ui.button(
-                            "End",
+                            "Save & Finish",
                             on_click=lambda s=status: end_view(s.view.key, s.view),
                             color="grey-8",
                         ).props("dense size=sm no-caps").tooltip(
@@ -461,13 +452,6 @@ def _add_settings_button(
                         ).props("dense size=sm no-caps flat").tooltip(
                             "Discard this view's recording"
                         )
-                with ui.row().classes("w-full gap-2"):
-                    ui.button(
-                        "End all", on_click=end_all, color="grey-8"
-                    ).props("dense size=sm no-caps")
-                    ui.button(
-                        "Delete all", on_click=delete_all, color="red"
-                    ).props("dense size=sm no-caps flat")
                 ui.label(f"Files: {session.recording.directory}/").classes(
                     "text-xs text-slate-500 font-mono"
                 )
