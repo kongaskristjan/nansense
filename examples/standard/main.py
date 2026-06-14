@@ -38,6 +38,7 @@ from examples.standard.data import (
     ensure_downloaded,
 )
 from examples.standard.lenet import LeNet
+from examples.standard.losses import LOSSES, build_criterion
 from examples.standard.resnet import PreActResNet
 from examples.standard.vit import SimpleViT
 
@@ -67,6 +68,17 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Architecture: the small pre-activation ResNet, its five-stage "
             "variant, the simple ViT, or LeNet-5 (default resnet)."
+        ),
+    )
+    parser.add_argument(
+        "--loss",
+        choices=list(LOSSES),
+        default="cross_entropy",
+        help=(
+            "Training loss (default cross_entropy). mse/mae/mae_30 instead "
+            "regress softmax probabilities onto the one-hot label; mae_30 is a "
+            "balanced (asymmetric) absolute error penalising under-prediction "
+            "more — compare their effect in the nansense views."
         ),
     )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
@@ -178,7 +190,7 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     )
 
     model = build_model(args.model, config, blocks_per_stage=args.blocks_per_stage).to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = build_criterion(args.loss, config.num_classes)
     optimizer, scheduler = build_optimizer_and_scheduler(model, args)
 
     # Always create the session; `enabled=False` makes it a near-zero-overhead
@@ -317,7 +329,7 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
     model = DistributedDataParallel(
         build_model(args.model, config, blocks_per_stage=args.blocks_per_stage).to(device)
     )
-    criterion = nn.CrossEntropyLoss()
+    criterion = build_criterion(args.loss, config.num_classes)
     optimizer, scheduler = build_optimizer_and_scheduler(model, args)
 
     session = nansense.start(
