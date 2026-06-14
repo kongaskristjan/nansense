@@ -375,22 +375,35 @@ def _add_settings_button(
     # End/delete run via `asyncio.to_thread`: finalizing the MP4 writers
     # (ffmpeg) takes a moment and may briefly wait for an in-flight frame
     # append — blocking the event loop here would starve the websocket
-    # keepalive and drop the connection.
+    # keepalive and drop the connection. The post-finalize UI refresh is
+    # wrapped in `_best_effort_ui_update`: by the time the await returns the
+    # recording is already saved/deleted, but the user may have closed the
+    # dialog or navigated away, deleting this client's elements.
     async def end_view(key: str, view: RecordedView) -> None:
         paths = await asyncio.to_thread(session.recording.end, key)
         unpin(view)
-        if paths:
-            ui.notify("Saved " + ", ".join(str(p) for p in paths))
-        else:
-            ui.notify("Recording ended before any frame was captured")
-        refresh_recording_lock()
-        rebuild()
+        message = (
+            "Saved " + ", ".join(str(p) for p in paths)
+            if paths
+            else "Recording ended before any frame was captured"
+        )
+
+        def apply() -> None:
+            ui.notify(message)
+            refresh_recording_lock()
+            rebuild()
+
+        _best_effort_ui_update(apply)
 
     async def delete_view(key: str, view: RecordedView) -> None:
         await asyncio.to_thread(session.recording.delete, key)
         unpin(view)
-        refresh_recording_lock()
-        rebuild()
+
+        def apply() -> None:
+            refresh_recording_lock()
+            rebuild()
+
+        _best_effort_ui_update(apply)
 
     def rebuild() -> None:
         recording_section.clear()
@@ -506,6 +519,23 @@ def _add_settings_button(
     refresh_badge()
     ui.timer(0.5, refresh_badge)
     return button
+
+
+def _best_effort_ui_update(update: Callable[[], None]) -> None:
+    """Run a deferred UI update, tolerating a client torn down mid-`await`.
+
+    `end_view` / `delete_view` await ffmpeg finalization off-thread; if the
+    settings dialog's page is closed or navigated away during that wait, this
+    client's elements are gone and NiceGUI raises `RuntimeError` the moment the
+    update touches them (`ui.notify`, the controls, the recording list). The
+    recording is already saved/deleted by then, so the toast and refresh are
+    moot — swallow that teardown error rather than surface it as an unhandled
+    background-task exception (which then also trips NiceGUI's own handler).
+    """
+    try:
+        update()
+    except RuntimeError:
+        pass
 
 
 def _summarize_epoch_ranges(epochs: list[int]) -> str:
