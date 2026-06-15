@@ -34,8 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=128,
-        help="Batch size (default 128; the ResNet-18 peaks well under 4 GB at this size).",
+        default=64,
+        help="Batch size (default 64; the ResNet-18 peaks well under 4 GB at this size).",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)

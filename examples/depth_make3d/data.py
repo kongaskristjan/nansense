@@ -218,7 +218,7 @@ class Make3DDataset(Dataset):
 def build_dataloaders(
     config: DatasetConfig,
     data_dir: Path,
-    batch_size: int = 16,
+    batch_size: int = 8,
     num_workers: int = 2,
     download: bool = True,
 ) -> tuple[DataLoader, DataLoader]:

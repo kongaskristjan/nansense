@@ -25,7 +25,7 @@ def _synthetic_loader(*, shuffle: bool) -> DataLoader:
 def test_default_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
     """The documented default is kept modest for low GPU memory."""
     monkeypatch.setattr(sys, "argv", ["main.py"])
-    assert main_module.parse_args().batch_size == 128
+    assert main_module.parse_args().batch_size == 64
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])

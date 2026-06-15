@@ -74,7 +74,7 @@ class MNISTClassifier(LightningModule):
 
 def build_dataloaders(
     data_dir: Path,
-    batch_size: int = 256,
+    batch_size: int = 128,
     num_workers: int = 2,
     download: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
@@ -107,8 +107,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=128,
-        help="Batch size (default 128; the tiny convnet uses very little GPU memory).",
+        default=64,
+        help="Batch size (default 64; the tiny convnet uses very little GPU memory).",
     )
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=2)

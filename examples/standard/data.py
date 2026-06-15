@@ -131,7 +131,7 @@ def _build_dataset(
 def build_dataloaders(
     config: DatasetConfig,
     data_dir: Path,
-    batch_size: int = 128,
+    batch_size: int = 64,
     num_workers: int = 2,
     download: bool = True,
     padding: str = "zero",
@@ -171,7 +171,7 @@ def ensure_downloaded(config: DatasetConfig, data_dir: Path) -> None:
 def build_distributed_dataloaders(
     config: DatasetConfig,
     data_dir: Path,
-    batch_size: int = 128,
+    batch_size: int = 64,
     num_workers: int = 2,
     download: bool = True,
     padding: str = "zero",

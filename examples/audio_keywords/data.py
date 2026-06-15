@@ -199,7 +199,7 @@ def ensure_downloaded(data_dir: Path, download: bool = True) -> Path:
 def build_dataloaders(
     config: AudioConfig,
     data_dir: Path,
-    batch_size: int = 128,
+    batch_size: int = 64,
     num_workers: int = 2,
     val_fraction: float = 0.15,
     download: bool = True,

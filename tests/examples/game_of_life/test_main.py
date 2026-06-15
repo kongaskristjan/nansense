@@ -77,7 +77,7 @@ def test_build_model_shape_and_fx_traceable(board_size: int, steps: int) -> None
 def test_default_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
     """The documented default is kept modest for low GPU memory."""
     monkeypatch.setattr(sys, "argv", ["main.py"])
-    assert main_module.parse_args().batch_size == 128
+    assert main_module.parse_args().batch_size == 64
 
 
 def test_training_reduces_bce_loss() -> None:
