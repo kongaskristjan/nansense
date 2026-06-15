@@ -1,7 +1,7 @@
 """Per-channel extreme-activation input patches for watched layers.
 
 For each watched layer we keep, per `(phase, epoch)` and per activation
-channel, the `N_PER_CHANNEL` input samples that produced the most extreme
+channel, the `n_per_channel` input samples that produced the most extreme
 activations, under four rankings:
 
 - ``max_pixel`` / ``min_pixel`` — the channel's single largest / smallest
@@ -38,7 +38,11 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-N_PER_CHANNEL: int = 5
+# Default number of extreme samples kept per channel per ranking. The live
+# value is a per-accumulator setting (`PatchAccumulator(n_per_channel=...)`),
+# driven by the "Performance" settings section — both it and the channel limit
+# scale GPU VRAM, so they are user-tunable.
+DEFAULT_SAMPLES_PER_CHANNEL: int = 5
 # Crop side ≈ PATCH_FACTOR × the activation→input downsampling ratio,
 # floored at MIN_PATCH input pixels and capped at the image side.
 PATCH_FACTOR: int = 4
@@ -69,7 +73,7 @@ def crop_side(act_side: int, input_side: int) -> int:
 
 @dataclass(frozen=True)
 class TypePatches:
-    """CPU view of one grid: per-channel top-`N_PER_CHANNEL` entries.
+    """CPU view of one grid: per-channel top-`n_per_channel` entries.
 
     Rows along dim 1 are sorted best-first (descending for max types,
     ascending for min types). Slots never filled hold non-finite `values`;
@@ -128,6 +132,10 @@ class PatchAccumulator:
     def __init__(self) -> None:
         self._config: _Config | None = None
         self._buffers: dict[PatchType, _TypeBuffer] = {}
+        # Samples kept per channel per ranking; frozen on first update (the
+        # buffers are flushed when the setting changes, so it never varies
+        # within one accumulator's lifetime).
+        self._n_per_channel: int = DEFAULT_SAMPLES_PER_CHANNEL
 
     def clear(self) -> None:
         """Drop all GPU buffers (e.g. when a newer epoch supersedes this one)."""
@@ -138,13 +146,27 @@ class PatchAccumulator:
     def empty(self) -> bool:
         return self._config is None
 
-    def update(self, *, act: Tensor, x: Tensor) -> None:
+    def update(
+        self,
+        *,
+        act: Tensor,
+        x: Tensor,
+        channel_limit: int | None = None,
+        n_per_channel: int = DEFAULT_SAMPLES_PER_CHANNEL,
+    ) -> None:
         """Fold one batch's activations into the running per-channel top-N.
 
         `act` is the watched layer's output `(B, C, H, W)` or `(B, F)`;
         `x` is the model's image input `(B, Cin, Hin, Win)`, `Cin in (1, 3)`.
         Silently skips unsupported shapes so exotic layers just leave the
         galleries empty instead of breaking training.
+
+        `channel_limit` caps the work (and buffer size) to the first that many
+        channels — the per-channel image patches are the dominant GPU cost, so
+        this is the main VRAM knob; `None` keeps every channel. `n_per_channel`
+        sets how many extreme samples are kept per channel per ranking. Both
+        are frozen for the buffers' lifetime; callers flush the accumulator
+        when either changes.
         """
         if act.ndim not in (2, 4) or not act.is_floating_point():
             return
@@ -152,6 +174,10 @@ class PatchAccumulator:
             return
         if act.shape[0] != x.shape[0] or act.shape[0] == 0:
             return
+        # dim 1 is the channel axis for both (B, C, H, W) and (B, F).
+        if channel_limit is not None and act.shape[1] > channel_limit:
+            act = act[:, :channel_limit]
+        self._n_per_channel = n_per_channel
         config = self._make_config(act, x)
         if self._config is None:
             self._config = config
@@ -207,7 +233,7 @@ class PatchAccumulator:
     def _init_buffers(self, device: torch.device) -> None:
         config = self._config
         assert config is not None
-        c, n = config.channels, N_PER_CHANNEL
+        c, n = config.channels, self._n_per_channel
         cin = config.in_channels
         hh, wh = config.act_hw
         for ptype in PATCH_TYPES:
@@ -281,7 +307,7 @@ class PatchAccumulator:
         """
         guard = float("-inf") if largest else float("inf")
         per_channel = scores.transpose(0, 1).nan_to_num(nan=guard)  # (C, B)
-        k = min(N_PER_CHANNEL, per_channel.shape[1])
+        k = min(self._n_per_channel, per_channel.shape[1])
         vals, samples = per_channel.topk(k, dim=1, largest=largest)
         return vals, samples
 
@@ -348,7 +374,7 @@ class PatchAccumulator:
         left: Tensor,
     ) -> None:
         """Keep the per-channel best N of buffer ∪ candidates (sorted)."""
-        n = N_PER_CHANNEL
+        n = self._n_per_channel
         all_vals = torch.cat([buf.vals, cand_vals], dim=1)
         buf.vals, sel = all_vals.topk(n, dim=1, largest=buf.largest)
         c = sel.shape[0]

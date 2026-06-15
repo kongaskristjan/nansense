@@ -319,16 +319,20 @@ Inside `TensorAccumulator.update(x)`:
    hundred unit-magnitude samples; fp32 keeps the running sum precise
    for typical epoch sizes.
 2. Reductions stay on the input's device: `sum()`, `square().sum()`,
-   `min()`, `max()`, plus one fused `torch.bincount` over
+   `min()`, `max()`, plus a `torch.bincount` over
    `channel * N_BINS + _bin_indices(x)` that yields a `(C, 211)`
-   per-channel signed-log histogram in one pass — the universal 211-bin
-   histogram is its channel sum, so per-channel tracking adds only a
-   cheap reduction and the channel-index expansion to what the universal
-   histogram already paid. Channels are dim 1 of the batch-first tensor
-   (features act as channels for 2D activations, matching the patch
-   accumulator); 1D tensors and accumulators whose dim-1 size changes
-   mid-stream (variable token counts) fall back to a plain universal
-   bincount for good (`collapse_channels`).
+   per-channel signed-log histogram. With no channel cap this is one
+   fused pass and the universal 211-bin histogram is its channel sum, so
+   per-channel tracking adds only a cheap reduction over what the
+   universal histogram already paid. Under a `channel_limit` (see
+   *Performance settings* below) only the first N channels keep
+   per-channel rows; the universal histogram and the scalar reductions
+   then run over *all* channels separately, so the layer-wide view stays
+   accurate regardless of the cap. Channels are dim 1 of the batch-first
+   tensor (features act as channels for 2D activations, matching the patch
+   accumulator); 1D tensors and accumulators whose (capped) dim-1 size
+   changes mid-stream (variable token counts) fall back to a plain
+   universal bincount for good (`collapse_channels`).
 3. All running state — `_n`, `_sum`, `_sum_sq`, `_min`, `_max`,
    `_hist`, `_channel_hist` — lives on that same device. No GPU→CPU sync
    happens during training.
@@ -370,7 +374,7 @@ pause behaviour are unaffected on non-watching sessions.
 
 Alongside the histogram stats, each watch bucket owns a
 `PatchAccumulator` that keeps, per activation channel, the
-`N_PER_CHANNEL` input samples producing the most extreme activations
+`n_per_channel` input samples producing the most extreme activations
 under four rankings:
 
 - `max_pixel` / `min_pixel` — the channel's single largest/smallest
@@ -396,20 +400,43 @@ Like `TensorAccumulator`, everything stays on the training device with
 no syncs and no data-dependent branching: per batch and per type, one
 reduction over the activation produces per-sample-per-channel scores
 `(B, C)`, a per-channel `topk` over the batch axis picks
-`min(N_PER_CHANNEL, B)` candidates, one vectorised fancy-index gathers
+`min(n_per_channel, B)` candidates, one vectorised fancy-index gathers
 their patches, and a `cat`+`topk` merge folds them into the `(C, N)`
-running buffers. Ranking per channel over the batch axis doubles as
+running buffers. `act` is sliced to the first `channel_limit` channels
+on entry, so `C` here is the capped count. Ranking per channel over the
+batch axis doubles as
 deduplication — a sample appears in one batch per epoch, so a channel
 row can never hold the same image twice. NaN scores are demoted to the
 placeholder `∓inf` so diverged batches never enter the buffers.
 
 One memory caveat drives the eviction rule in `update_patches`:
 histogram buckets are ~2 KB and live forever, but a patch bucket holds
-`4 × C × N` image crops on the GPU. When a newer epoch starts for the
-same `(layer, phase)`, older epochs' patch buffers are released — the
-`/watch` page only renders the latest epoch per phase, so nothing
-visible is lost. `forget_layer` / `forget_epochs_from` (unwatch, time
-travel) drop patches together with the rest of the bucket.
+`4 × C × N` image crops on the GPU — and the average-type patches store
+a *whole input image per channel*, so the cost scales with `C` and the
+input resolution (a 512-channel layer at 192×256 is multiple GB). When
+a newer epoch starts for the same `(layer, phase)`, older epochs' patch
+buffers are released — the `/watch` page only renders the latest epoch
+per phase, so nothing visible is lost. `forget_layer` /
+`forget_epochs_from` (unwatch, time travel) drop patches together with
+the rest of the bucket.
+
+#### Performance settings (`Session.set_watch_performance`)
+
+Because the per-channel patches dominate GPU VRAM, two caps are
+user-tunable from the settings dialog's "Performance" section and held on
+the `WatchAccumulator`:
+
+- `channel_limit` — keep per-channel data (both the per-channel
+  histograms and the patch galleries) for only the first N channels of
+  each watched layer (default 16, toggleable off for "all channels").
+- `samples_per_channel` — how many extreme samples each ranking keeps per
+  channel (the `N` in the `(C, N)` buffers; default 5).
+
+Both fix the per-channel buffer shapes, so `WatchAccumulator.configure`
+drops every bucket when either changes (the next update rebuilds under the
+new caps) — the UI warns that statistics are flushed. The accumulator
+reads the caps under its own lock during `update`/`update_patches`, so a
+flush can never interleave with a half-built bucket.
 
 `PatchAccumulator.snapshot()` copies the buffers to CPU as a frozen
 `PatchSnapshot → TypePatches` tree carried on

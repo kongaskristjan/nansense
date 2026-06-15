@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from nansense.patches import (
-    N_PER_CHANNEL,
+    DEFAULT_SAMPLES_PER_CHANNEL,
     PATCH_TYPES,
     PatchAccumulator,
     PatchType,
@@ -260,8 +260,42 @@ def test_buffer_shapes() -> None:
     snap = acc.snapshot()
     assert snap is not None
     pixel = snap.by_type["max_pixel"]
-    assert pixel.patches.shape == (3, N_PER_CHANNEL, 3, 16, 16)  # ceil(4)*4
-    assert pixel.heat.shape == (3, N_PER_CHANNEL, 8, 8)
+    n = DEFAULT_SAMPLES_PER_CHANNEL
+    assert pixel.patches.shape == (3, n, 3, 16, 16)  # ceil(4)*4
+    assert pixel.heat.shape == (3, n, 8, 8)
     avg = snap.by_type["min_average"]
-    assert avg.patches.shape == (3, N_PER_CHANNEL, 3, 32, 32)
+    assert avg.patches.shape == (3, n, 3, 32, 32)
     assert avg.input_hw == (32, 32)
+
+
+def test_channel_limit_caps_recorded_channels() -> None:
+    """`channel_limit` keeps only the first that-many channels' patches."""
+    acc = PatchAccumulator()
+    x = _image_batch(2, side=8)
+    acc.update(act=torch.randn(2, 8, 4, 4), x=x, channel_limit=3)
+    snap = acc.snapshot()
+    assert snap is not None
+    for ptype in PATCH_TYPES:
+        assert snap.by_type[ptype].patches.shape[0] == 3
+
+
+def test_channel_limit_above_count_keeps_all() -> None:
+    acc = PatchAccumulator()
+    acc.update(act=torch.randn(2, 4, 4, 4), x=_image_batch(2, side=8), channel_limit=16)
+    snap = acc.snapshot()
+    assert snap is not None
+    assert snap.by_type["max_pixel"].patches.shape[0] == 4
+
+
+def test_samples_per_channel_sets_buffer_depth() -> None:
+    acc = PatchAccumulator()
+    acc.update(
+        act=_flat_act([float(i) for i in range(6)]),
+        x=_image_batch(6),
+        n_per_channel=2,
+    )
+    snap = acc.snapshot()
+    assert snap is not None
+    tp = snap.by_type["max_average"]
+    assert tp.values.shape[1] == 2
+    assert tp.values[0].tolist() == [5.0, 4.0]  # only the top 2 kept

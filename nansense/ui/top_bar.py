@@ -10,10 +10,12 @@ from nicegui import ui
 
 from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
+from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL
 from nansense.recording import RecordedView
 from nansense.restore import TimeTravelError
 from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.session import BatchSnapshot, Session
+from nansense.watch import DEFAULT_CHANNEL_LIMIT
 
 
 _TOP_BAR_CLASSES: str = (
@@ -302,15 +304,22 @@ def _add_settings_button(
     Returned so the page can right-align it (`ml-auto`) when it is the
     first element of the cluster.
 
-    The dialog hosts three sections. "Experiments" carries the shared,
-    session-wide auto-run toggle (`Session.set_auto_run_experiments`): when on,
-    experiment pages run on open and on every parameter change instead of
-    waiting for a manual Run. "Update frequency" configures
-    `Session.set_update_frequency`: visualizations refresh every nth epoch
-    (the default, n=1) or every nth batch, optionally counting only one
-    phase's batches. The setting is locked while recordings are active —
-    recording frames advance at this frequency, so changing it
-    mid-recording would change the videos' time base.
+    "Experiments" carries the shared, session-wide auto-run toggle
+    (`Session.set_auto_run_experiments`): when on, experiment pages run on open
+    and on every parameter change instead of waiting for a manual Run.
+
+    "Performance" groups the knobs that trade visualization detail for GPU
+    VRAM and overhead. The watched-layer caps (`Session.set_watch_performance`)
+    bound per-channel memory: a channel limit (the per-channel histograms and
+    extreme-input patch galleries are kept only for the first N channels) and
+    the samples-per-channel kept by the patch galleries — changing either
+    flushes all collected watch statistics, since the buffer shapes change.
+    "Update frequency" (`Session.set_update_frequency`) sets how often all
+    visualizations recompute: every nth epoch (the default, n=1) or every nth
+    batch, optionally counting only one phase's batches. The frequency is
+    locked while recordings are active — recording frames advance at this
+    frequency, so changing it mid-recording would change the videos' time
+    base.
 
     "Recording" offers a "Record" button for the page's own view (built by
     `record_view` with the page's *current* parameters, frozen for the
@@ -338,11 +347,56 @@ def _add_settings_button(
             )
         )
         ui.separator()
-        ui.label("Update frequency").classes("text-lg font-bold")
+        ui.label("Performance").classes("text-lg font-bold")
+        ui.label(
+            "How much nansense computes and stores while training runs — "
+            "these trade visualization detail for GPU VRAM and overhead."
+        ).classes("text-sm text-slate-600")
+        ui.label("Watched-layer memory").classes("text-sm font-medium mt-1")
+        ui.label(
+            "Watched layers keep, per channel, a histogram and a gallery of "
+            "extreme input patches. The patches store an input image per "
+            "channel, so this is the dominant GPU VRAM cost; the layer-wide "
+            "histogram always covers every channel."
+        ).classes("text-xs text-slate-500")
+        channel_limit_switch = ui.switch(
+            "Limit recorded channels",
+            on_change=lambda: apply_watch_performance(),
+        ).props("dense").tooltip(
+            "Keep per-channel data for only the first N channels of each "
+            "watched layer. Turn off to record every channel (highest VRAM)."
+        )
+        with ui.row().classes("w-full gap-2 no-wrap items-start"):
+            channel_limit_input = ui.number(
+                label="Channels",
+                value=DEFAULT_CHANNEL_LIMIT,
+                min=1,
+                step=1,
+                format="%d",
+                on_change=lambda: apply_watch_performance(),
+            ).props("dense outlined").classes("flex-1").tooltip(
+                "Per-channel histograms and patch galleries are kept for "
+                "this many channels"
+            )
+            samples_input = ui.number(
+                label="Samples per channel",
+                value=DEFAULT_SAMPLES_PER_CHANNEL,
+                min=1,
+                step=1,
+                format="%d",
+                on_change=lambda: apply_watch_performance(),
+            ).props("dense outlined").classes("flex-1").tooltip(
+                "Extreme input samples kept per channel, per ranking"
+            )
+        ui.label(
+            "Changing the channel limit or samples per channel flushes all "
+            "collected statistics."
+        ).classes("text-xs text-red-500")
+        ui.label("Update frequency").classes("text-sm font-medium mt-1")
         ui.label(
             "How often all visualizations refresh while training runs. "
             "They additionally refresh whenever training stops."
-        ).classes("text-sm text-slate-600")
+        ).classes("text-xs text-slate-500")
         with ui.row().classes("w-full gap-2 no-wrap items-start"):
             unit_select = ui.select(
                 _FREQUENCY_UNIT_OPTIONS,
@@ -457,6 +511,34 @@ def _add_settings_button(
         # re-applying so a stale phase doesn't leak into an epoch-unit setting.
         sync_phase_visibility()
         apply_frequency()
+
+    def apply_watch_performance() -> None:
+        """Push the per-channel watch caps to the session (auto-applied)."""
+        if loading:
+            return
+        enabled = bool(channel_limit_switch.value)
+        # The channel count is moot when the cap is off.
+        channel_limit_input.set_enabled(enabled)
+        try:
+            limit = (
+                int(channel_limit_input.value)
+                if channel_limit_input.value is not None
+                else DEFAULT_CHANNEL_LIMIT
+            )
+            samples = (
+                int(samples_input.value)
+                if samples_input.value is not None
+                else DEFAULT_SAMPLES_PER_CHANNEL
+            )
+        except (TypeError, ValueError):
+            return
+        flushed = session.set_watch_performance(
+            channel_limit_enabled=enabled,
+            channel_limit=limit,
+            samples_per_channel=samples,
+        )
+        if flushed:
+            ui.notify("Watch statistics flushed", type="info")
 
     def apply_debug() -> None:
         """Push the error-check controls to the session (auto-applied)."""
@@ -626,6 +708,11 @@ def _add_settings_button(
         nonlocal loading
         loading = True
         auto_run_switch.value = session.auto_run_experiments
+        perf = session.watch_performance
+        channel_limit_switch.value = perf.channel_limit_enabled
+        channel_limit_input.value = perf.channel_limit
+        channel_limit_input.set_enabled(perf.channel_limit_enabled)
+        samples_input.value = perf.samples_per_channel
         freq = session.update_frequency
         unit_select.value = freq.unit
         n_input.value = freq.n
@@ -646,7 +733,7 @@ def _add_settings_button(
     button = ui.button(icon="settings", on_click=open_dialog, color="slate-500").props(
         "dense size=md"
     )
-    button.tooltip("Settings — auto-run, update frequency, and MP4 recording")
+    button.tooltip("Settings — auto-run, performance, error checks, recording")
     with button:
         badge = ui.badge("").props("color=red floating")
 

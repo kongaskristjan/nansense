@@ -79,7 +79,12 @@ from nansense.restore import (
     validate_scheduler_state,
 )
 from nansense.schedule import BatchPosition, Schedule
-from nansense.watch import WatchAccumulator, WatchSnapshot
+from nansense.watch import (
+    DEFAULT_CHANNEL_LIMIT,
+    DEFAULT_SAMPLES_PER_CHANNEL,
+    WatchAccumulator,
+    WatchSnapshot,
+)
 
 if TYPE_CHECKING:
     from nansense.recording import RecordingManager
@@ -134,6 +139,24 @@ class UpdateFrequency:
     unit: str = "epoch"
     n: int = 1
     phase: str | None = None
+
+
+@dataclass(frozen=True)
+class WatchPerformance:
+    """Per-channel watch caps that bound GPU VRAM use (see `nansense.watch`).
+
+    Watched layers keep, per channel, a histogram and a gallery of extreme
+    input patches; the patches store a per-channel input image, so their cost
+    scales with the channel count. `channel_limit_enabled` caps per-channel
+    data to the first `channel_limit` channels (the layer-wide histogram and
+    scalars always cover all channels); `samples_per_channel` is how many
+    extreme samples are kept per channel per ranking. Changing any field
+    flushes all watch statistics, since the buffer shapes change.
+    """
+
+    channel_limit_enabled: bool = True
+    channel_limit: int = DEFAULT_CHANNEL_LIMIT
+    samples_per_channel: int = DEFAULT_SAMPLES_PER_CHANNEL
 
 
 @dataclass(frozen=True)
@@ -251,6 +274,9 @@ class Session:
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
         self._watch_accumulator = WatchAccumulator()
+        # Per-channel watch caps (GPU VRAM); the accumulator defaults already
+        # match, so no initial `configure` flush is needed.
+        self._watch_performance = WatchPerformance()
         # Probe state (see nansense.probe). Config fields are mutated by the
         # UI thread under `_cv`; `_probe_result` is published by the training
         # thread (also under `_cv`, so a stale in-flight run can be detected
@@ -796,6 +822,57 @@ class Session:
             )
             self._debug_counter = 0
             self._cv.notify_all()
+
+    @property
+    def watch_performance(self) -> WatchPerformance:
+        """Current per-channel watch caps (see `WatchPerformance`)."""
+        with self._cv:
+            return self._watch_performance
+
+    def set_watch_performance(
+        self,
+        *,
+        channel_limit_enabled: bool | None = None,
+        channel_limit: int | None = None,
+        samples_per_channel: int | None = None,
+    ) -> bool:
+        """Update the per-channel watch caps (only the given fields change).
+
+        Returns whether the change flushed the watch statistics: the channel
+        limit and samples-per-channel fix the per-channel buffer shapes, so any
+        change to them drops every bucket and rebuilds it under the new config
+        (the UI warns about this). `channel_limit` must be ≥ 1 and
+        `samples_per_channel` ≥ 1.
+        """
+        with self._cv:
+            current = self._watch_performance
+            updated = replace(
+                current,
+                channel_limit_enabled=(
+                    current.channel_limit_enabled
+                    if channel_limit_enabled is None
+                    else bool(channel_limit_enabled)
+                ),
+                channel_limit=(
+                    current.channel_limit
+                    if channel_limit is None
+                    else max(1, int(channel_limit))
+                ),
+                samples_per_channel=(
+                    current.samples_per_channel
+                    if samples_per_channel is None
+                    else max(1, int(samples_per_channel))
+                ),
+            )
+            self._watch_performance = updated
+        # Push to the accumulator outside `_cv` (it takes its own lock); it
+        # flushes iff the effective caps changed and reports that back.
+        return self._watch_accumulator.configure(
+            channel_limit=(
+                updated.channel_limit if updated.channel_limit_enabled else None
+            ),
+            samples_per_channel=updated.samples_per_channel,
+        )
 
     @property
     def debug_error(self) -> DebugError | None:

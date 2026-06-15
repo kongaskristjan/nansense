@@ -29,6 +29,12 @@ Per-channel binning also turns off permanently for an accumulator whose
 dim-1 size changes mid-stream (e.g. variable token counts) or whose
 tensors are 1D.
 
+Per-channel data — both these histograms and the patch galleries — is
+capped to the first `channel_limit` channels (the patches store a
+per-channel input image, so this is the dominant GPU VRAM cost). The
+universal histogram and the scalar reductions always cover *all* channels,
+so the layer-wide view stays accurate regardless of the cap.
+
 All running stats live on the device of the first tensor seen for that
 accumulator (typically the model's training device). Inputs are cast to
 fp32 before reduction so bf16/fp16 training doesn't lose precision in
@@ -48,7 +54,17 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from nansense.patches import PatchAccumulator, PatchSnapshot
+from nansense.patches import (
+    DEFAULT_SAMPLES_PER_CHANNEL,
+    PatchAccumulator,
+    PatchSnapshot,
+)
+
+# Default cap on how many of a watched layer's channels keep per-channel data
+# (per-channel histograms and the extreme-input patch galleries). The patches
+# store a per-channel input image, so this is the dominant GPU VRAM knob; the
+# live value is a user-tunable "Performance" setting and can be disabled.
+DEFAULT_CHANNEL_LIMIT: int = 16
 
 BINS_PER_DECADE: int = 7
 LOG10_MIN: int = -9
@@ -270,7 +286,7 @@ class TensorAccumulator:
         self._channel_hist: Tensor | None = None
         self._channels_off = False
 
-    def update(self, x: Tensor) -> None:
+    def update(self, x: Tensor, *, channel_limit: int | None = None) -> None:
         if x.numel() == 0:
             return
         if self._stats is None:
@@ -292,42 +308,61 @@ class TensorAccumulator:
             stats.min = torch.minimum(stats.min, finite.min())
             stats.max = torch.maximum(stats.max, finite.max())
         idx = _bin_indices(flat)
-        channels = self._usable_channels(x)
+        channels = self._usable_channels(x, channel_limit)
         if channels is None:
             stats.hist += torch.bincount(idx, minlength=N_BINS)
             return
-        # One fused bincount over `channel * N_BINS + bin` gives the
-        # per-channel counts; the universal histogram is their sum, so the
-        # per-channel path costs one cheap reduction over what the universal
-        # one already paid.
-        view = [1, channels] + [1] * (x.ndim - 2)
+        if channels == x.shape[1]:
+            # No effective cap: one fused bincount over `channel * N_BINS +
+            # bin` gives the per-channel counts and the universal histogram is
+            # their sum, so the per-channel path costs one cheap reduction over
+            # what the universal one already paid.
+            counts = self._channel_counts(x, idx, channels)
+            assert self._channel_hist is not None
+            self._channel_hist += counts
+            stats.hist += counts.sum(dim=0)
+            return
+        # Channel-capped: the universal histogram and scalars still cover every
+        # channel (so the layer-wide view stays accurate), but per-channel rows
+        # are kept only for the first `channels` of them.
+        stats.hist += torch.bincount(idx, minlength=N_BINS)
+        limited = x[:, :channels]
+        lim_idx = _bin_indices(limited.detach().to(torch.float32).reshape(-1))
+        counts = self._channel_counts(limited, lim_idx, channels)
+        assert self._channel_hist is not None
+        self._channel_hist += counts
+
+    @staticmethod
+    def _channel_counts(x: Tensor, idx: Tensor, channels: int) -> Tensor:
+        """Per-channel `(channels, N_BINS)` counts for `x`'s flat bin `idx`."""
         ch_idx = (
             torch.arange(channels, device=x.device)
-            .view(view)
+            .view([1, channels] + [1] * (x.ndim - 2))
             .expand(x.shape)
             .reshape(-1)
         )
-        counts = torch.bincount(
+        return torch.bincount(
             ch_idx * N_BINS + idx, minlength=channels * N_BINS
         ).reshape(channels, N_BINS)
-        assert self._channel_hist is not None
-        self._channel_hist += counts
-        stats.hist += counts.sum(dim=0)
 
-    def _usable_channels(self, x: Tensor) -> int | None:
-        """Channel count to bin `x` under, managing the per-channel buffer.
+    def _usable_channels(self, x: Tensor, channel_limit: int | None) -> int | None:
+        """Channel count to keep per-channel rows for, managing the buffer.
 
-        Returns `None` when per-channel tracking is off: 1D tensors have no
-        channel axis, and a dim-1 size change mid-stream (variable token
-        counts) makes per-channel rows meaningless, so either turns the
-        tracking off for good and falls back to the universal histogram.
+        Caps the count to the first `channel_limit` channels (`None` keeps
+        every channel). Returns `None` when per-channel tracking is off: 1D
+        tensors have no channel axis, and a change in the (capped) row count
+        mid-stream (variable token counts) makes per-channel rows meaningless,
+        so either turns the tracking off for good and falls back to the
+        universal histogram.
         """
         if self._channels_off:
             return None
         if x.ndim < 2:
             self.collapse_channels()
             return None
-        channels = x.shape[1]
+        channels = int(x.shape[1])
+        if channel_limit is not None:
+            channels = min(channels, channel_limit)
         if self._channel_hist is None:
             self._channel_hist = torch.zeros(
                 channels, N_BINS, dtype=torch.int64, device=x.device
@@ -474,6 +509,33 @@ class WatchAccumulator:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._stats: dict[tuple[str, str, int], _LayerStats] = {}
+        # Performance config, applied to every accumulation. `channel_limit`
+        # is `None` when the cap is disabled. Held under `_lock` so the read in
+        # `update`/`update_patches` and a `configure` flush can't interleave —
+        # a bucket can never be built under one config and fed under another.
+        self._channel_limit: int | None = DEFAULT_CHANNEL_LIMIT
+        self._samples_per_channel: int = DEFAULT_SAMPLES_PER_CHANNEL
+
+    def configure(
+        self, *, channel_limit: int | None, samples_per_channel: int
+    ) -> bool:
+        """Set the per-channel caps, flushing all buckets if they changed.
+
+        The channel limit and samples-per-channel fix the per-channel buffer
+        shapes, so a change can't be folded into existing buckets — every
+        bucket is dropped and rebuilt under the new config on the next update.
+        Returns whether anything changed (and was flushed).
+        """
+        with self._lock:
+            if (
+                channel_limit == self._channel_limit
+                and samples_per_channel == self._samples_per_channel
+            ):
+                return False
+            self._channel_limit = channel_limit
+            self._samples_per_channel = samples_per_channel
+            self._stats.clear()
+            return True
 
     def update(
         self,
@@ -488,7 +550,8 @@ class WatchAccumulator:
         with self._lock:
             stats = self._bucket_locked(key)
             acc = stats.activations if kind == "activation" else stats.gradients
-        acc.update(x)
+            channel_limit = self._channel_limit
+        acc.update(x, channel_limit=channel_limit)
 
     def update_patches(
         self,
@@ -501,13 +564,13 @@ class WatchAccumulator:
     ) -> None:
         """Fold one batch into `layer`'s extreme-patch buffers.
 
-        Histogram stats are small enough to keep for every epoch, but a
-        patch bucket holds `4 × channels × N_PER_CHANNEL` image crops on
-        the GPU — so the first patch update of a newer (layer, phase)
-        epoch releases the older epochs' patch buffers. The UI only shows
-        the latest epoch per phase, so nothing visible is lost. (Keyed off
-        `patches_started` rather than bucket creation: `update` usually
-        creates the bucket first, which must not skip the patch eviction.)
+        Histogram stats are small enough to keep for every epoch, but a patch
+        bucket holds `4 × channels × n_per_channel` image crops on the GPU — so
+        the first patch update of a newer (layer, phase) epoch releases the
+        older epochs' patch buffers. The UI only shows the latest epoch per
+        phase, so nothing visible is lost. (Keyed off `patches_started` rather
+        than bucket creation: `update` usually creates the bucket first, which
+        must not skip the patch eviction.)
         """
         key = (layer, phase, epoch)
         with self._lock:
@@ -516,7 +579,11 @@ class WatchAccumulator:
                 stats.patches_started = True
                 self._evict_older_locked(key, _evict_patches)
             acc = stats.patches
-        acc.update(act=act, x=x)
+            channel_limit = self._channel_limit
+            samples = self._samples_per_channel
+        acc.update(
+            act=act, x=x, channel_limit=channel_limit, n_per_channel=samples
+        )
 
     def _bucket_locked(self, key: tuple[str, str, int]) -> _LayerStats:
         """Get-or-create the (layer, phase, epoch) bucket (lock held).

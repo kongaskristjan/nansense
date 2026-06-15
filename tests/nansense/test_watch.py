@@ -269,6 +269,58 @@ def test_watch_accumulator_diverged_activation_lands_in_overflow_bins() -> None:
     assert tuple(act.channel_hists[0]) == act.hist
 
 
+def test_channel_limit_caps_per_channel_rows_but_not_universal() -> None:
+    """The cap keeps per-channel rows for the first N channels only, while the
+    universal histogram and scalars still cover every channel."""
+    acc = TensorAccumulator()
+    # (B=1, C=4, H=1, W=1): one distinct value per channel.
+    x = torch.tensor([1.0, 2.0, 3.0, 4.0]).reshape(1, 4, 1, 1)
+    acc.update(x, channel_limit=2)
+    snap = acc.snapshot()
+    # Per-channel rows: only the first 2 channels.
+    assert snap.channel_hists is not None
+    assert len(snap.channel_hists) == 2
+    # Universal histogram + scalars cover all 4 channels.
+    assert snap.n == 4
+    assert sum(snap.hist) == 4
+    assert snap.max == pytest.approx(4.0)
+
+
+def test_channel_limit_none_keeps_all_channels() -> None:
+    acc = TensorAccumulator()
+    x = torch.arange(4.0).reshape(1, 4, 1, 1)
+    acc.update(x, channel_limit=None)
+    snap = acc.snapshot()
+    assert snap.channel_hists is not None
+    assert len(snap.channel_hists) == 4
+
+
+def test_configure_flushes_only_on_change() -> None:
+    acc = WatchAccumulator()
+    acc.update(layer="a", phase="train", epoch=0, kind="activation", x=torch.tensor([1.0]))
+    # Same values as the defaults -> no change, no flush.
+    from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL
+    from nansense.watch import DEFAULT_CHANNEL_LIMIT
+
+    assert not acc.configure(
+        channel_limit=DEFAULT_CHANNEL_LIMIT,
+        samples_per_channel=DEFAULT_SAMPLES_PER_CHANNEL,
+    )
+    assert ("a", "train", 0) in acc.snapshot().stats
+    # A real change flushes every bucket.
+    assert acc.configure(channel_limit=8, samples_per_channel=3)
+    assert acc.snapshot().stats == {}
+
+
+def test_configure_channel_limit_applies_to_new_buckets() -> None:
+    acc = WatchAccumulator()
+    acc.configure(channel_limit=2, samples_per_channel=5)
+    x = torch.arange(4.0).reshape(1, 4, 1, 1)
+    acc.update(layer="a", phase="train", epoch=0, kind="activation", x=x)
+    rows = acc.snapshot().stats[("a", "train", 0)].activations.channel_hists
+    assert rows is not None and len(rows) == 2
+
+
 def test_watch_accumulator_separates_layers_and_phases_and_epochs() -> None:
     acc = WatchAccumulator()
     acc.update(layer="a", phase="train", epoch=0, kind="activation", x=torch.tensor([1.0]))
