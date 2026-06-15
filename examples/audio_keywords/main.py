@@ -24,7 +24,14 @@ from torch import nn
 import nansense
 from examples.audio_keywords.data import AudioConfig, build_dataloaders
 from examples.audio_keywords.model import KeywordResNet
-from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
+from examples.common import (
+    add_dtype_arg,
+    amp_dtype_from_name,
+    enable_line_buffering,
+    evaluate,
+    select_device,
+    train_one_epoch,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
+    add_dtype_arg(parser)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--n-mels", type=int, default=40, help="Mel bands in the log-mel front end (default 40)."
@@ -83,7 +91,8 @@ def build_optimizer_and_scheduler(
 
 def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.device) -> None:
     """Single-process training with the full nansense wiring and time travel."""
-    print(f"Using device: {device}")
+    amp_dtype = amp_dtype_from_name(args.dtype)
+    print(f"Using device: {device} (dtype={args.dtype})")
 
     train_loader, val_loader = build_dataloaders(
         config,
@@ -127,11 +136,11 @@ def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.devi
                 epoch_start = time.time()
                 train_stats = train_one_epoch(
                     model, train_loader, optimizer, criterion, device,
-                    session=session, epoch=epoch,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch,
                 )
                 val_stats = evaluate(
                     model, val_loader, criterion, device,
-                    session=session, epoch=epoch,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch,
                 )
                 scheduler.step()
 

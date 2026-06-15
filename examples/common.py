@@ -7,6 +7,7 @@ scripts would otherwise duplicate verbatim.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import sys
@@ -36,8 +37,49 @@ def _accuracy(output: Tensor, targets: Tensor) -> float:
     return (preds == targets).float().mean().item()
 
 
+# --dtype CLI choice -> the autocast compute dtype (None disables autocast, i.e.
+# plain fp32). Model weights always stay fp32; this only sets the forward/loss
+# compute dtype under `torch.autocast`.
+_AMP_DTYPES: dict[str, torch.dtype | None] = {
+    "fp32": None,
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+}
+
+# Kept as a help-text constant so every example's --dtype flag reads identically
+# and the "no GradScaler" caveat below stays in one place.
+DTYPE_HELP = (
+    "Compute dtype for the autocast forward/loss (default fp32). fp16/bf16 keep "
+    "the model weights in fp32 and only cast the forward pass via torch.autocast. "
+    "No GradScaler is used: fp16 gradients are deliberately left unscaled, so this "
+    "is a way to watch gradient underflow happen in the nansense views."
+)
+
+
+def add_dtype_arg(parser: argparse.ArgumentParser) -> None:
+    """Register the shared `--dtype {fp32,fp16,bf16}` flag (default fp32).
+
+    See `DTYPE_HELP`: the flag picks the autocast compute dtype only — weights
+    stay fp32 and no GradScaler is used (an intentional choice so fp16 underflow
+    is observable rather than hidden). Pair with `amp_dtype_from_name`."""
+    parser.add_argument(
+        "--dtype",
+        choices=list(_AMP_DTYPES),
+        default="fp32",
+        help=DTYPE_HELP,
+    )
+
+
+def amp_dtype_from_name(name: str) -> torch.dtype | None:
+    """Map a `--dtype` choice to its autocast dtype; fp32 -> None (no autocast)."""
+    return _AMP_DTYPES[name]
+
+
 @contextlib.contextmanager
-def _autocast(device: torch.device, amp_dtype: torch.dtype | None) -> Iterator[None]:
+def autocast(device: torch.device, amp_dtype: torch.dtype | None) -> Iterator[None]:
+    """Autocast the enclosed forward/loss to `amp_dtype`, or run unchanged when
+    it is None (fp32). No GradScaler is paired with this on purpose — see
+    `DTYPE_HELP`."""
     if amp_dtype is None:
         yield
         return
@@ -74,7 +116,7 @@ def train_one_epoch(
         targets = targets.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
-        with _autocast(device, amp_dtype):
+        with autocast(device, amp_dtype):
             output = model(inputs)
             loss = criterion(output, targets)
         loss.backward()
@@ -109,7 +151,7 @@ def evaluate(
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
-        with _autocast(device, amp_dtype):
+        with autocast(device, amp_dtype):
             output = model(inputs)
             loss = criterion(output, targets)
 

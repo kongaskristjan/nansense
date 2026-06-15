@@ -24,7 +24,14 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
 import nansense
-from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
+from examples.common import (
+    add_dtype_arg,
+    amp_dtype_from_name,
+    enable_line_buffering,
+    evaluate,
+    select_device,
+    train_one_epoch,
+)
 from examples.game_of_life.life import GameOfLifeDataset
 from examples.game_of_life.model import LifeNet
 
@@ -70,6 +77,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
+    add_dtype_arg(parser)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--nansense-port",
@@ -159,7 +167,8 @@ def per_cell_accuracy(output: Tensor, targets: Tensor) -> float:
 
 def run(args: argparse.Namespace, device: torch.device) -> None:
     """Single-process training with the full nansense wiring and time travel."""
-    print(f"Using device: {device}")
+    amp_dtype = amp_dtype_from_name(args.dtype)
+    print(f"Using device: {device} (dtype={args.dtype})")
 
     train_loader, val_loader = build_dataloaders(args)
 
@@ -198,11 +207,11 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
                 epoch_start = time.time()
                 train_stats = train_one_epoch(
                     model, train_loader, optimizer, criterion, device,
-                    session=session, epoch=epoch, metric_fn=per_cell_accuracy,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch, metric_fn=per_cell_accuracy,
                 )
                 val_stats = evaluate(
                     model, val_loader, criterion, device,
-                    session=session, epoch=epoch, metric_fn=per_cell_accuracy,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch, metric_fn=per_cell_accuracy,
                 )
                 scheduler.step()
 

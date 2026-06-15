@@ -28,7 +28,14 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
 import nansense
-from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
+from examples.common import (
+    add_dtype_arg,
+    amp_dtype_from_name,
+    enable_line_buffering,
+    evaluate,
+    select_device,
+    train_one_epoch,
+)
 from examples.standard.data import (
     DATASETS,
     PADDING_MODES,
@@ -102,11 +109,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
-    parser.add_argument(
-        "--bf16",
-        action="store_true",
-        help="Use torch.autocast with bfloat16 for forward/loss (no GradScaler needed)",
-    )
+    add_dtype_arg(parser)
     parser.add_argument(
         "--distributed",
         action="store_true",
@@ -178,8 +181,8 @@ def build_optimizer_and_scheduler(
 
 def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.device) -> None:
     """Single-process training with the full nansense wiring and time travel."""
-    amp_dtype = torch.bfloat16 if args.bf16 else None
-    print(f"Using device: {device} (amp_dtype={amp_dtype})")
+    amp_dtype = amp_dtype_from_name(args.dtype)
+    print(f"Using device: {device} (dtype={args.dtype})")
 
     train_loader, test_loader = build_dataloaders(
         config,
@@ -308,9 +311,9 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
     sampler shards deterministically, so a replayed epoch sees the same shards.
     """
     device, rank, world_size = init_distributed()
-    amp_dtype = torch.bfloat16 if args.bf16 else None
+    amp_dtype = amp_dtype_from_name(args.dtype)
     if rank == 0:
-        print(f"Distributed run: world_size={world_size}, device={device} (amp_dtype={amp_dtype})")
+        print(f"Distributed run: world_size={world_size}, device={device} (dtype={args.dtype})")
 
     # Avoid a concurrent first-run download race: rank 0 fetches, others wait.
     if rank == 0:

@@ -105,7 +105,7 @@ def test_training_step_reduces_loss() -> None:
     assert_training_reduces_loss(model, x, y, optimizer=optimizer)
 
 
-@pytest.mark.parametrize("amp_dtype", [None, torch.bfloat16])
+@pytest.mark.parametrize("amp_dtype", [None, torch.float16, torch.bfloat16])
 def test_train_and_eval_loops_run(amp_dtype: torch.dtype | None) -> None:
     torch.manual_seed(0)
     model = PreActResNet(num_classes=10, blocks_per_stage=1)

@@ -23,7 +23,14 @@ import torch
 from torch import nn
 
 import nansense
-from examples.common import enable_line_buffering, evaluate, select_device, train_one_epoch
+from examples.common import (
+    add_dtype_arg,
+    amp_dtype_from_name,
+    enable_line_buffering,
+    evaluate,
+    select_device,
+    train_one_epoch,
+)
 from examples.depth_make3d.data import DatasetConfig, build_dataloaders
 from examples.depth_make3d.losses import ScaleInvariantLogLoss, delta_accuracy
 from examples.depth_make3d.model import build_model
@@ -52,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=0.05)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
+    add_dtype_arg(parser)
     parser.add_argument(
         "--freeze-encoder",
         action="store_true",
@@ -97,7 +105,8 @@ def build_optimizer_and_scheduler(
 
 def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.device) -> None:
     """Single-process training with the full nansense wiring and time travel."""
-    print(f"Using device: {device}")
+    amp_dtype = amp_dtype_from_name(args.dtype)
+    print(f"Using device: {device} (dtype={args.dtype})")
 
     train_loader, test_loader = build_dataloaders(
         config,
@@ -145,11 +154,11 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
                 epoch_start = time.time()
                 train_stats = train_one_epoch(
                     model, train_loader, optimizer, criterion, device,
-                    session=session, epoch=epoch, metric_fn=delta_accuracy,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch, metric_fn=delta_accuracy,
                 )
                 test_stats = evaluate(
                     model, test_loader, criterion, device,
-                    session=session, epoch=epoch, metric_fn=delta_accuracy,
+                    amp_dtype=amp_dtype, session=session, epoch=epoch, metric_fn=delta_accuracy,
                 )
                 scheduler.step()
 

@@ -35,6 +35,24 @@ def test_forward_shape(batch_size: int) -> None:
     assert module(x).shape == (batch_size, 10)
 
 
+@pytest.mark.parametrize("amp_dtype", [None, torch.float16, torch.bfloat16])
+def test_training_step_autocasts_but_keeps_weights_fp32(amp_dtype: torch.dtype | None) -> None:
+    """The step autocasts its forward/loss to `amp_dtype` while the weights
+    stay fp32 — the same fp32-weight, no-grad-scaler contract as `--dtype`."""
+    torch.manual_seed(0)
+    module = MNISTClassifier(amp_dtype=amp_dtype)
+    batch = (torch.randn(4, 1, 28, 28), torch.randint(0, 10, (4,)))
+
+    loss = module.training_step(batch, batch_idx=0)
+
+    assert loss.requires_grad and torch.isfinite(loss)
+    # cross_entropy stays fp32 under autocast; the conv weights must too.
+    assert module.net.conv1.weight.dtype == torch.float32
+    loss.backward()
+    grad = module.net.conv1.weight.grad
+    assert grad is not None and grad.dtype == torch.float32
+
+
 def test_net_is_fx_traceable() -> None:
     """The callback's `model="net"` path needs a traceable submodule."""
     torch.fx.symbolic_trace(MNISTClassifier().net)

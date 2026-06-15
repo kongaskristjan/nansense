@@ -19,7 +19,7 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-from examples.common import enable_line_buffering
+from examples.common import add_dtype_arg, amp_dtype_from_name, autocast, enable_line_buffering
 from nansense.lightning import NansenseCallback, fit_with_time_travel
 
 MNIST_MEAN: tuple[float, ...] = (0.1307,)
@@ -45,26 +45,35 @@ class TinyConvNet(nn.Module):
 
 class MNISTClassifier(LightningModule):
     """The network lives in `self.net` so the callback's `model="net"` can
-    trace and probe the actual convnet instead of this wrapper."""
+    trace and probe the actual convnet instead of this wrapper.
 
-    def __init__(self, lr: float = 0.05) -> None:
+    `amp_dtype` mirrors the other examples' `--dtype`: the step methods autocast
+    their forward/loss to it while the Trainer stays at fp32 precision, so the
+    weights remain fp32 and Lightning installs no GradScaler. fp16 gradients are
+    therefore left unscaled on purpose — an underflow demo, not a bug."""
+
+    def __init__(self, lr: float = 0.05, amp_dtype: torch.dtype | None = None) -> None:
         super().__init__()
         self.net = TinyConvNet()
         self.lr = lr
+        self.amp_dtype = amp_dtype
 
     def forward(self, x: Tensor) -> Tensor:
         return self.net(x)
 
     def training_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
         x, y = batch
-        return nn.functional.cross_entropy(self(x), y)
+        with autocast(self.device, self.amp_dtype):
+            return nn.functional.cross_entropy(self(x), y)
 
     def validation_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
         x, y = batch
-        logits = self(x)
+        with autocast(self.device, self.amp_dtype):
+            logits = self(x)
+            loss = nn.functional.cross_entropy(logits, y)
         acc = (logits.argmax(dim=1) == y).float().mean()
         self.log("val_acc", acc, prog_bar=True, logger=False)
-        return nn.functional.cross_entropy(logits, y)
+        return loss
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         optimizer = torch.optim.SGD(self.parameters(), lr=self.lr, momentum=0.9)
@@ -111,6 +120,7 @@ def parse_args() -> argparse.Namespace:
         help="Batch size (default 64; the tiny convnet uses very little GPU memory).",
     )
     parser.add_argument("--lr", type=float, default=0.05)
+    add_dtype_arg(parser)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument(
         "--cache-dir",
@@ -141,7 +151,7 @@ def main() -> None:
     train_loader, val_loader = build_dataloaders(
         args.data_dir, batch_size=args.batch_size, num_workers=args.num_workers
     )
-    module = MNISTClassifier(lr=args.lr)
+    module = MNISTClassifier(lr=args.lr, amp_dtype=amp_dtype_from_name(args.dtype))
     callback = NansenseCallback(
         port=args.nansense_port,
         model="net",

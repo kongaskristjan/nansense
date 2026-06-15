@@ -121,7 +121,9 @@ uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nan
 Each example is self-contained and downloads its dataset on first run. Open the
 printed URL; training pauses on the first batch — drive it from the top bar.
 
-If you hit out-of-memory, lower `--batch-size` (or add `--bf16` where supported).
+If you hit out-of-memory, lower `--batch-size` (or pass `--dtype bf16`; every
+example also takes `--dtype fp16`, which autocasts in fp32-weight mode with no
+grad scaling so you can watch underflow happen — see the flag's `--help`).
 
 - **`standard`** — ResNet / ViT / LeNet on CIFAR-10 / MNIST / Imagenette with
   the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
