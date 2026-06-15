@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/logo_large.png" alt="nansense" width="220">
+  <img src="assets/logo_large.png" alt="nansense" width="220">
 </p>
 
 <h1 align="center">nansense</h1>
@@ -9,7 +9,7 @@
 <!-- TODO: replace with a real showcase GIF (assets/showcase.gif): perturb a pixel,
      watch the diff ripple through the layers, then time-travel back an epoch. -->
 <p align="center">
-  <img src="https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/showcase.gif" alt="nansense showcase" width="720">
+  <img src="assets/showcase.gif" alt="nansense showcase" width="720">
 </p>
 
 Hook one `Session` into your PyTorch loop and a web UI opens onto the running
@@ -43,7 +43,7 @@ exactly how far each neuron actually looks. Pin a batch to attribute drift to
 training rather than to a changing input.
 
 <!-- TODO: value-focused screenshot — input perturbation + per-layer activation diffs -->
-![Trace the receptive field](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-main.png)
+![Trace the receptive field](assets/view-main.png)
 
 ### Spot dead units and vanishing gradients
 
@@ -52,7 +52,7 @@ signed-log histograms with full stats — drill into a single channel to find th
 dying ReLU or the gradient that's quietly collapsing.
 
 <!-- TODO: value-focused screenshot — activation/gradient histograms -->
-![Spot dead units and vanishing gradients](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-histogram.png)
+![Spot dead units and vanishing gradients](assets/view-watch-histogram.png)
 
 ### See what each neuron learned to detect
 
@@ -61,7 +61,7 @@ the strongest evidence of what a feature has specialized in, with an optional
 activation heatmap overlaid.
 
 <!-- TODO: value-focused screenshot — top input patches per channel -->
-![See what each neuron learned to detect](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-watch-minmax.png)
+![See what each neuron learned to detect](assets/view-watch-minmax.png)
 
 ### Ask a neuron what it wants to see
 
@@ -71,7 +71,7 @@ methods (Grad-CAM, Occlusion, Neuron Gradient / Integrated Gradients) explain
 real samples. Both re-run automatically as the weights evolve.
 
 <!-- TODO: value-focused screenshot — deep dream / attribution -->
-![Ask a neuron what it wants to see](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-experiment.png)
+![Ask a neuron what it wants to see](assets/view-experiment.png)
 
 ### Watch weights and optimizer state move
 
@@ -80,7 +80,7 @@ Per parameter: the weight strip, its gradient, every optimizer-state tensor
 hyperparameters.
 
 <!-- TODO: value-focused screenshot — weights + optimizer state strips -->
-![Watch weights and optimizer state move](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/view-weights.png)
+![Watch weights and optimizer state move](assets/view-weights.png)
 
 ### Rewind, and keep a record
 
@@ -161,13 +161,13 @@ epoch loop in a restorer to opt into time travel.
 
 **Raw PyTorch**
 
-![Raw PyTorch — wiring nansense (and time travel) into a training loop](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/code-examples/pytorch_raw.svg)
+![Raw PyTorch — wiring nansense (and time travel) into a training loop](assets/code-examples/pytorch_raw.svg)
 
 **PyTorch Lightning** — your `LightningModule` is untouched; a callback drives
 the UI and `fit_with_time_travel` wraps a stock `Trainer` so the Time Travel
 button works (a factory, because each jump needs a fresh `Trainer`):
 
-![PyTorch Lightning — wiring nansense via NansenseCallback and fit_with_time_travel](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/code-examples/pytorch_lightning.svg)
+![PyTorch Lightning — wiring nansense via NansenseCallback and fit_with_time_travel](assets/code-examples/pytorch_lightning.svg)
 
 The full `start()` surface:
 
