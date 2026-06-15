@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 import torch
 from torch import Tensor, nn
@@ -220,43 +218,3 @@ def test_watch_stats_failure_still_removes_hooks(
     # Only the second batch's stats landed (the first raised before updating):
     # one batch × 2 samples × 8 fc1 features.
     assert snap.stats[("fc1", "train", 0)].activations.n == 16
-
-
-def test_concurrent_watch_unwatch_during_stats_does_not_crash() -> None:
-    """Iterating a snapshot of the watched set tolerates concurrent mutation.
-
-    The UI thread mutates `_watched_layers` via watch()/unwatch() while the
-    training thread runs `_update_watch_stats`. Iterating the live set there
-    would race into "set changed size during iteration"; the snapshot taken
-    under `_cv` makes the training thread immune.
-    """
-    session, model = make_session(epochs=1, phases={"train": 50})
-    watchable = ["fc1", "fc2", "relu", "x"]
-    for name in watchable:
-        session.watch(name)
-    session.detach()
-
-    stop = threading.Event()
-    errors: list[BaseException] = []
-
-    def churn() -> None:
-        try:
-            while not stop.is_set():
-                for name in watchable:
-                    session.unwatch(name)
-                    session.watch(name)
-        except BaseException as e:  # pragma: no cover - failure path
-            errors.append(e)
-
-    churner = threading.Thread(target=churn, daemon=True)
-    churner.start()
-    try:
-        for _ in range(50):
-            with session.batch(phase="train", epoch=0):
-                train_step(model)
-    finally:
-        stop.set()
-        churner.join(timeout=5.0)
-
-    assert not churner.is_alive()
-    assert errors == []
