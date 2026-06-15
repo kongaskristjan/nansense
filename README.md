@@ -228,30 +228,3 @@ drives pausing; the other ranks fold their data shard into the watch-page
 statistics, and a time-travel jump rewinds every rank in lockstep.
 
 See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood.
-
-
-
-
-
-
-<table>
-<tr><th>Before</th><th>After</th></tr>
-<tr>
-<td>
-
-```diff
-- def add(a, b=2):
-      return a + b
-```
-
-</td>
-<td>
-
-```diff
-+ def add(a, b, c=0):
-      return a + b + c
-```
-
-</td>
-</tr>
-</table>
