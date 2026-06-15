@@ -1,3 +1,4 @@
 import lightning as L
 
-L.Trainer(max_epochs=50).fit(module, datamodule)
+trainer = L.Trainer(max_epochs=50)
+trainer.fit(module, datamodule=datamodule)
