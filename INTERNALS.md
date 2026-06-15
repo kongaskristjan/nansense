@@ -938,383 +938,120 @@ DataLoader shuffling exact. (Lightning's sanity check runs under
 
 ## UI layer
 
-`nansense.ui` is a thin NiceGUI app that reads `Session.snapshot` and
-drives `Session` via the five control methods plus `detach` and `close`.
-It does not touch tensors directly until they need to be rendered.
+`nansense.ui` is a thin NiceGUI app that reads `Session.snapshot` (plus
+`probe_result`, watch, and debug state) and drives the session through its
+control methods. It never touches tensors except to render them, and never
+touches the model — that invariant belongs to the training thread.
 
-The app is split into one module per page plus shared support modules:
-`app.py` (just `serve` and the page routes), `main_page.py` (the main
-page: `_build_page`, `_LayerView`, `_compute_frame` / `_compute_probe_frame`,
-`_RenderCache`, `_RENDER_POOL`), `watch_page.py` (`_build_watch_page`,
-`_WatchLayerPanel`, `_HistPlot`, patch-grid/bin-samples HTML),
-`weights_page.py` (`_build_weights_page`, `_WeightPanel`, role helpers),
-`experiment_page.py` (`_build_experiment_page`, `_EXPERIMENT_PARAMS`),
+One module per page plus shared support: `app.py` (`serve` + page routes),
+`main_page.py`, `watch_page.py`, `weights_page.py`, `experiment_page.py`,
 `top_bar.py` (the shared top-bar/step controls and the time-travel,
-settings/recording, and step-until dialogs), `histograms.py` (pure
-histogram math + Plotly figure construction), `common.py` (small
-cross-page helpers like `_strip_html` / `_strip_marker` /
-`_set_controls_enabled`), and `static.py` (the static CSS/JS blobs). The
-page modules import from `top_bar` / `common` / `histograms` / `static`;
-`app.py` imports the page modules — the graph is acyclic.
+settings/recording, and step-until dialogs), `input_panel.py` (the main
+page's right sidebar), `render.py` + `histograms.py` (pure render/plot
+math), `graph.py` (the Mermaid architecture graph), `bin_samples.py`,
+`common.py` (small cross-page helpers), and `static.py` (the CSS/JS blobs).
+Page modules import from the shared modules; `app.py` imports the pages —
+the graph is acyclic.
 
-Side panes (the main page's architecture/input panes, the watch and
-experiment control panes) are resizable: `_resize_handle` (`common.py`)
-places a 6 px drag strip between the pane and the center content, and the
-resize blob in `static.py` (`_PANEL_RESIZE_JS`) sets an inline width —
-clamped to [150 px, 60 vw] — on the pane marked with the matching
-`data-resize-pane` key, so the pane's Tailwind width class stays the
-default. Widths are saved to `sessionStorage` on release and re-applied on
-page load via a MutationObserver (Vue mounts the elements after the script
-runs): a size set on one page survives navigation but lasts only for the
-browser session. Double-clicking a handle restores the default width.
+**Render contract shared with recording.** `nansense.recording` renders the
+same content the pages show, so the render model lives in the pure modules:
+recording imports only the public names of `render.py` (`render_strip`,
+`render_image`, `render_weight`, `render_patch_grid`, `probe_act_tensor`, …)
+and `histograms.py`, never page modules. Those signatures are the contract
+between the UI and recording — keep them stable.
 
-Frame recording (`nansense.recording`) renders the same content the pages
-show, so the shared render model lives in the pure modules: the public
-names of `render.py` (`render_strip`, `probe_act_tensor`, `tensor_hw`,
-`dims_from_roles`, …) and `histograms.py` are that contract — recording
-imports only those, never page modules.
+Render conventions worth knowing before editing `render.py`:
 
-- `nansense.ui.graph.build_mermaid(model)` produces the Mermaid TD source
-  for the architecture view. It tries `torch.fx.symbolic_trace(model)`
-  first, which yields a real data-flow graph — vertical chains, with
-  branches and merges at residual blocks. For models that aren't
-  fx-traceable (dynamic control flow, custom ops), it falls back to a
-  static module-hierarchy tree rooted at a synthetic `root` node. Nodes
-  use different Mermaid shapes per fx op (rectangles for `call_module`,
-  ovals/stadiums for `call_function` / `call_method`, circles for
-  `placeholder` / `output`). Hovering a node (or a layer card's header)
-  shows the layer's `Session.layer_info` hyperparameter string in a
-  cursor-following tooltip (the layer-info block in `static.py`, fed by
-  the slug-keyed map `_layer_info_script` publishes).
-- `nansense.ui.render.render_strip(tensor, sample_idx)` turns per-layer
-  CPU tensors into a `StripRender`: one data image at the tensor's
-  *native* resolution plus a legend image at display resolution.
-  - For per-sample shape `[C, H, W]` every channel tile lands in a single
-    image, downsampled server-side (`area`) only when larger than
-    `tile_px × tile_px`, with white separators between tiles
-    `max(1, tile_width // TILE_GAP_DIVISOR)` native pixels wide. The
-    browser upscales the whole strip to `StripRender.width × height` via
-    CSS sizing plus `image-rendering: pixelated` — equivalent to the old
-    server-side nearest-neighbour interpolation, but an 8×8 feature map
-    travels as 64 pixels instead of 16k; the separators scale together
-    with the tiles (`_strip_html` in `nansense.ui.common` builds the
-    two-`<img>` row). `tile_px` is the CSS side each square tile is shown at
-    (and the height its legend renders at); it defaults to `TILE_SIZE` and
-    the experiment page bumps it to `INPUT_IMAGE_SIZE` so attribution maps
-    match the inputs beside them.
-  - For `[F]` the data image is a single 1-px-tall heatmap row, downsampled
-    to at most `LINEAR_MAX_BINS` bins when `F` is large, stretched
-    client-side to `LINEAR_BIN_WIDTH` per bin × `LINEAR_TILE_HEIGHT`.
-  - A 2D per-sample shape (flattened transformer tokens, `[tokens, dim]`)
-    is unflattened back onto the model input's patch grid when the caller
-    passes `input_hw` — the input's spatial size, threaded in by
-    `_compute_frame` / `_compute_probe_frame` and the experiment page's
-    attribution strip. `_token_grid` accepts an axis as the token axis
-    when an integer patch stride `s` yields `(H/s)·(W/s)` tokens
-    (preserving the input's aspect ratio) after skipping 0, 1 (CLS),
-    2 (CLS + distillation), or 4 (registers) leading special tokens,
-    which are dropped from the strip. Token order is assumed row-major
-    (the standard ViT raster flatten — a permuted order like Swin's
-    window partitioning would render scrambled); tokens-first wins when
-    both axes fit, matching `batch_first` slicing. The matched sample
-    renders through `_render_chw` as one `h × w` tile per embedding dim —
-    the same view conv channels get. With no fit (or no `input_hw`) the
-    sample renders as a single 2D heatmap tile, so no activation card is
-    left imageless for being token-shaped.
-  - The legend (vertical colorbar with `+x` / `0` / `-x` labels) is the
-    exception to native-resolution encoding: it is rendered at display
-    resolution into its own image so its text stays crisp.
-  - Every strip — activations, gradients, and weights alike — uses the
-    same diverging blue-white-red colormap; strips are told apart by a
-    labelled colored marker bar on each one's left edge (emerald
-    ACTIVATIONS / violet GRADIENTS on the layer cards, sky WEIGHT /
-    violet GRADIENT on the weights page). Images are encoded per
-    `STRIP_FORMAT`: the default `BMP` is essentially a memcpy (30–60×
-    faster to encode than PNG) at ~2× the payload — the right trade for a
-    localhost WebSocket. Flip to `PNG` (`compress_level=1`) when bytes
-    matter more than encode time, e.g. an SSH-port-forwarded UI.
-  - Per-sample shapes of 4D and beyond return `None`; the UI hides those
-    images.
-- `nansense.ui.render.render_image(tensor, sample_idx, mean=..., std=...)`
-  renders the model input as a natural RGB or grayscale image at the
-  sample's native resolution; the UI scales it to its pane's width with
-  CSS nearest-neighbour. Channels are assumed to lie
-  in `[0, 1]` unless both `mean` and `std` are passed, in which case the
-  sample is denormalized (`x * std + mean`) before being clamped and
-  scaled to 8-bit. Anything other than `C == 1` or `C == 3` returns
-  `None`.
-- `nansense.ui.render.render_weight(tensor, x_dim=, y_dim=, tile_dim=,
-  fixed=)` renders an arbitrary-rank weight under a chosen axis layout.
-  Unlike `render_strip`, a weight has no batch axis, so instead of slicing
-  a sample it pins every axis not assigned to X/Y/tile to a single index
-  (`fixed`, clamped into range), permutes the survivors into
-  `[tile, y, x]`, then funnels through the same `_render_chw` /
-  `_render_1d` tile machinery and shared diverging colormap.
-  `default_weight_dims(ndim)` gives the default assignment —
-  last axis X, second-to-last Y, third-to-last the tile axis, the rest
-  fixed — which renders 4D conv weights as kernels, 2D as one image, 1D as
-  one row. Duplicate or out-of-range axes return `None`.
-- The top-bar control row is shared via `nansense.ui.top_bar`:
-  `_top_bar_row()` (the row container), `_back_button()` (the subpages'
-  back-to-main button), and `_add_step_controls(session, dialog)` (the
-  stepping buttons + a live-position label, kept current through
-  `format_position` by a timer registered alongside). The main page, `/watch`,
-  `/weights`, and `/experiment` all build their bars from these, differing
-  only in the leading/trailing widgets they add around the shared controls.
-- `nansense.ui.app.serve(session, port=..., host=...)` runs the NiceGUI
-  app on a background thread, wiring the four page routes to their
-  page-builder modules. NiceGUI is mounted onto a bare FastAPI
-  app via `ui.run_with`, which is then served by `uvicorn.Server` from
-  the thread. `install_signal_handlers` is patched to a no-op because
-  uvicorn would otherwise try to register SIGINT/SIGTERM handlers from
-  a non-main thread. The thread is non-daemon, so the UI stays alive
-  even after the training script's main thread returns — the user
-  closes the browser / Ctrl-Cs when they're done browsing post-mortem.
-- The page handler creates one `_LayerView` per layer (a card with
-  two strips inside a shared horizontal scroll container, each flanked by
-  a sticky marker bar with a vertical label — emerald ACTIVATIONS, violet
-  GRADIENTS), but a card is only *visible* while its layer is watched —
-  visible is synonymous with watched (`session.watch`), so the center
-  pane starts empty (a hint points at the diagram) and each shown card
-  carries a permanent "Unwatch" button. Clicking a Mermaid node emits a
-  `nansense_toggle_layer` event (JS `emitEvent` → `ui.on`) whose handler
-  toggles the watched state; `sync_watch_ui` then diffs the watched set
-  against the connection's last-known one (`_PageState.last_watched`) and
-  pushes only the changes: card visibility, the diagram's amber classes,
-  the chip menu, and the empty-pane hint. The tick runs the same diff, so
-  watch changes from other tabs propagate. The top-bar eye menu carries
-  "Watch all layers…" — gated behind a performance-warning dialog, since
-  watching everything re-enables full rendering and per-batch stats for
-  every layer — and "Clear all watches". A `ui.timer`, every 200 ms,
-  compares `session.snapshot` and `session.probe_result` against the last
-  rendered pair by identity. When either changed (or the watched set
-  did), the *watched* layer views re-render, slicing each tensor at the
-  current `sample_idx`; unwatched layers are never rendered or shipped to
-  the browser, which is what keeps large models responsive. A probe
-  result (pinned batch) takes precedence over the snapshot as the render
-  source; its gradient strips show a placeholder note (probes are
-  forward-only). The `_RenderCache` is keyed by render-source identity —
-  snapshot or probe result — so both share one cache, and a card
-  re-shown under an unchanged source is a cache hit.
-- The right sidebar is `nansense.ui.input_panel.InputPanel`, laid out
-  top-down as: the input image (what every control below acts on), the
-  "Viewing sample" `ui.number` (moved out of the top bar), a "Probe"
-  section — the "Pin batch" switch, the probe-mode toggle (unchanged /
-  eval / train, shown only while pinned via `bind_visibility_from`,
-  `spread` so it fills the pane width) and a pinned-position caption —
-  and a "Perturb" section: the "Click to perturb" switch with a compact
-  color-swatch button beside it (the button's background *is* the current
-  color; clicking opens a nested `ui.color_picker`, forced to
-  `format-model=hex` since `normalized_color` expects `#rrggbb`), and a
-  perturbed-pixel count with a "Clear" button on its right, followed by a
-  "Comparing with original" note. Comparing is not a user toggle:
-  `panel.compare` (threaded into `_compute_frame`) derives from the
-  session's perturbation map, so the diff view is active exactly while at
-  least one pixel is perturbed — the all-zero (white-strip) no-edit diff
-  is unreachable from the UI. The count/clear row and the compare note
-  show only when perturbations exist (`refresh_status` keeps them in
-  sync). Switching "Click to perturb" off clears all perturbations —
-  leaving editing mode discards the edits and, with them, the diff view.
-  Pin / mode / perturbation changes call straight
-  into the session; the session reacts by publishing a new `ProbeResult`,
-  which the tick loop picks up like a new snapshot — both forwards are
-  already in the result, so adding or clearing edits just re-renders. A
-  failed pin (no snapshot yet) reverts the switch with the usual
-  one-tick-deferred value write.
-- The input image is a `ui.interactive_image` sized by CSS to the input
-  pane's width with `image-rendering: pixelated` (the per-frame payload
-  is the native-resolution data URI from `_input_img_src`), so it scales
-  with the resizable pane.
-  NiceGUI delivers click coordinates in the image's *native* pixel space,
-  so the handler clamps `image_x`/`image_y` into the input's `H × W`,
-  converts the picked color with `normalized_color` (grayscale inputs use
-  the RGB mean; `mean`/`std` back-transform into normalized space), and
-  calls `session.add_perturbation` for the viewed sample. The "Click to
-  perturb" switch only gates clicking (and toggles a crosshair cursor);
-  recorded edits persist until cleared.
-- A separate 200 ms timer, registered by `_add_step_controls` on every
-  page, refreshes the top-bar position label from `session.live_position`
-  — the position recorded on *every* batch's `__enter__`, independent of
-  capture. This is what keeps the displayed epoch/batch advancing during
-  `step_epoch`, `step_until_position`, `step_run`, and `detach`, where
-  `snapshot.position` would otherwise stay frozen until the next boundary
-  capture (or never, under `detach`). It is a single label write per tick,
-  decoupled from the strip rendering; the 200 ms timer is the natural
-  throttle for the rapid batch advances those modes produce.
-- Rendering is intentionally eager when a new snapshot lands — and during
-  `RUN` / `DETACH` modes no snapshots are produced so the UI is idle.
-  Per-layer renders are independent, so a frame fans out over a shared
-  `ThreadPoolExecutor` (`_RENDER_POOL`); the heavy parts (torch
-  interpolate, numpy colormap, PIL image encode) release the GIL, so
-  layers render in parallel across cores. Rendered strip HTML is cached
-  in a `_RenderCache` shared by every
-  connection: entries are keyed `(name, kind, sample_idx)` and the whole
-  cache is invalidated by snapshot identity (snapshots are frozen; every
-  pause publishes a new object). Flipping the sample spinner back to a
-  value already seen, or a second browser tab on the same session, is a
-  dict lookup instead of a re-render. For larger models, viewport-aware
-  lazy rendering is the natural next step, but the current code path
-  keeps the wiring simple.
-- The `/watch` page is its own NiceGUI page handler keyed to the same
-  `Session`. Its top bar carries the shared stepping controls; a left
-  sidebar (headed by the "Watching" title and layer count) holds a
-  dropdown that switches every layer card between the
-  HISTOGRAM view (the default) and the MIN/MAX extreme-patch view; each
-  view's checkbox group (**Log x** / **Log y** vs. the four grid toggles +
-  **Heatmap**, of which only **Max pixel** starts checked) is only visible
-  while its view is selected. The page
-  builds one `_WatchLayerPanel` per watched module; each holds both
-  views and refreshes only the visible one. The histogram view holds
-  two `_HistPlot`s (activations and gradients) and a stats table
-  above each. A 2-second `ui.timer` calls
-  `session.watch_snapshot()` and hands the per-phase stats to every
-  `_HistPlot.update`. Routine ticks only change the bar counts (and the
-  epoch label), so the plot **restyles the existing figure in place** —
-  `Plotly.update(getHtmlElement(id), {y, name}, layout, indices)` run via
-  `ui.run_javascript` — rather than replacing it. Restyle leaves the rest
-  of the client-side state alone, so any zoom/pan survives the refresh
-  for free. The figure is only rebuilt
-  (`plot.update_figure(_figure_payload(new_fig))`) when the *structure* changes —
-  a phase appears/disappears, or a **Log x** / **Log y** checkbox flips
-  an axis scale — which `_HistPlot` detects by comparing the current
-  `(phases, axis)` signature against the last render. Each `_HistPlot`
-  carries a **Per channel** switch with an index spinner: the plot then
-  swaps each phase's `hist` for the selected row of
-  `TensorStatsSnapshot.channel_hists` (a `dataclasses.replace` view —
-  channel and mode changes reuse the restyle path, and the spinner's max
-  follows the channel count), falling back to the universal histogram
-  where rows are absent (1D layers, collapsed older epochs). While
-  per-channel, hovering a bar samples that `(channel, bin)` cell from the
-  **last captured batch** — the running histogram's source values are
-  discarded every batch, so `session.snapshot` is the only population
-  available, and the strip's caption names it (`phase ep N, batch M`)
-  to make the narrower population explicit. The wiring: Plotly events
-  fire on the graph div's own emitter (not as DOM events), so
-  `_hover_attach_js` attaches a `gd.on('plotly_hover')` handler — with
-  retries until Plotly has drawn, idempotent per div, throttled to one
-  event per 200 ms — that `emitEvent`s the bar's bin index back to a
-  per-element `ui.on` handler; the handler runs
-  `_bin_samples_html` in a worker thread: `sample_bin`
-  (`nansense.ui.bin_samples`) re-uses `_bin_indices` for exact bin
-  membership, picks up to 4 uniformly random matching elements, and crops
-  the snapshot input around each element's ratio-mapped location (the
-  same receptive-field approximation as the patch grids; whole images for
-  2D activations, value-only chips for non-image inputs). Each figure is a
-  `make_subplots` column with one stacked row per phase (no overlay), so
-  one phase never obscures another: the rows share the x-axis, each row
-  is `_PLOT_HEIGHT` tall, and the subplot titles — phase + epoch, tinted
-  with the trace color — double as the legend (refreshed via
-  `annotations[i].text` relayouts on every tick). Both axes default to
-  linear (the **Log x** / **Log y** checkboxes start unchecked): bars
-  sit at their true linear bin centres (`_BIN_CENTERS`) with per-bin
-  widths (`_BIN_WIDTHS`). The x-axis zooms to the trimmed bin span
-  (`_trimmed_bin_bounds`): pooled across traces, the outermost bins are
-  dropped greedily — lighter end first — while the dropped bins together
-  hold under the clip budget's share of the points, so a lone outlier
-  value can't stretch the axis; `_linear_x_range` maps the span to value
-  space (the full ±1e6 span is mostly empty) and `_log_x_range` to
-  bin-index space for the signed-log view. The y-axis is always
-  normalized per phase so train and val are comparable regardless of
-  sample counts: with a linear value axis (`_use_density`, governed by
-  **Log x** alone), bar heights are probability densities
-  (`count / (n * bin width)`, `_probability_densities`) so bar area is
-  the share of values; checking **Log x** redraws the bars at evenly
-  spaced bin indices (signed-log tick positions computed once by
-  `_x_tick_layout`, powers of 10 labelled) with plain per-bin
-  probabilities (`count / n`, `_probabilities`). On a linear y-axis the
-  range is capped by `_linear_y_range`, with the same range applied to
-  every row so the subplots stay comparable. Two clipping rules keep
-  freak spikes from flattening the rest of the distribution: per phase,
-  a single drastically dominant bar — more than `_DOMINANCE_RATIO` (5x)
-  taller than the runner-up, e.g. ReLU's exact zeros piling into the
-  2e-9-wide zero band — never anchors the scale (`_scale_bars`); among
-  the rest, bars clip tallest-first only while the clipped ones together
-  hold under the clip budget's share of the pooled data points. Both
-  axes draw their budget from `_axis_ranges`: it starts at
-  `_BASE_CLIP_SHARE` (0.5%) and, while the bars would cover less than
-  `_MIN_FILL_FRACTION` (5%) of the plot area (`_fill_fraction` — bar
-  area over x-span x y-top, averaged across rows), raises the share in
-  `_CLIP_SHARE_STEP` increments up to `_MAX_CLIP_SHARE` (5%), so a tall
-  near-zero peak next to a long thin tail can't leave the plot nearly
-  empty. The **Log x** checkbox alone decides the x-mode: multi-decade
-  distributions (real gradients spread mass across ~6 decades) render
-  on the linear axis as trimmed as the budget allows until the user
-  checks it. Refresh ticks
-  restyle `y` + `customdata` (the raw counts shown on
-  hover) and push per-row `yaxis{n}.range` (plus a single matched
-  `xaxis.range`) relayouts only when a cap actually moved. Checking
-  **Log y** swaps the y-axis `type` to log so distribution tails stay
-  visible (dropping the y-cap in favour of autorange — a linear-space
-  range would be misread as log10 units) without changing what the bars
-  measure. Every figure ships with `_PLOTLY_CONFIG` (via
-  `_figure_payload`): the "Autoscale" modebar button is removed because
-  it would autorange onto the clipped spikes — a different scale than
-  the initial render — and double-click is set to `reset`, restoring
-  the built ranges. The scalar stats above each figure render as an
-  HTML table (`_stats_table_html`) in a light framed box: one column per
-  phase with data (header tinted with the trace color), one row per stat
-  (`n`, `mean`, `std`, `median`, `min`, `max`).
-- The `/watch` MIN/MAX view renders each enabled patch type as one
-  composite image per phase (`render_patch_grid`): channels as columns,
-  the per-channel top samples as rows (best first), denormalized with
-  the session's `input_mean` / `input_std` like the input pane, encoded
-  at native patch resolution and CSS-upscaled to `PATCH_CELL_SIZE` per
-  cell with `image-rendering: pixelated` (`max-width:none` opts out of
-  the preflight clamp so wide grids scroll horizontally). The
-  **Heatmap** checkbox blends each cell's stored activation map over
-  the patch — transparent at zero, opacifying toward red/blue at
-  `HEAT_MAX_ALPHA` for the grid-wide absolute extreme, with crop
-  windows ratio-mapped back onto the activation map. Never-filled
-  slots render flat gray. Grids re-render only when a cheap signature
-  (enabled toggles + heatmap flag + the stored extreme values) changes
-  (`_patch_grids_signature`), so routine 2-second ticks cost nothing
-  once an epoch's buffers settle. The page's refresh is single-flight:
-  snapshotting and grid rendering run in a worker thread
-  (`asyncio.to_thread`) so the event loop keeps serving websocket
-  traffic, and a toggle landing mid-render marks the pass dirty —
-  rapid Heatmap clicks coalesce into one follow-up render instead of
-  queueing one per click. Two further guards against websocket
-  overload: grids are always PNG (`PATCH_GRID_FORMAT`) because a wide
-  layer's BMP grids reach multiple MB per message — enough to pause
-  the transport, where concurrent drains trip a known
-  `websockets`-legacy keepalive assertion that kills the connection —
-  and `watch_snapshot(include_patches=False)` skips the patch GPU→CPU
-  copies entirely while the HISTOGRAM view is selected.
-- The `/weights` page (one `?layer=` query param) is the per-layer weight
-  viewer. It reuses the shared stepping controls (no sample spinner) and
-  builds one `_WeightPanel` per name in `session.layer_weights[layer]`,
-  reading the parameter shape from `model.named_parameters()` so the
-  controls exist before any snapshot has been captured. Each panel holds a
-  per-dimension role select (X / Y / Tile / Index, scaled to the weight's
-  rank) plus an index spinner per axis; picking a role auto-demotes
-  whichever other axis held it, keeping X/Y/Tile unique, then re-renders
-  against the last snapshot via `render_weight`. Each panel stacks its
-  strips in one horizontal scroll container, each flanked by a labelled
-  marker bar (`_strip_marker`) — the weight (sky WEIGHT), then its
-  gradient (violet GRADIENT; same shape, so the same axis layout applies;
-  sourced from `snapshot.weight_gradients`, a placeholder note before the
-  first backward), then one amber-marked strip per tensor-valued
-  optimizer state entry when the session has an optimizer (labelled with
-  the state key). State entries matching the weight's
-  shape reuse the panel's axis controls; differently-shaped ones (e.g.
-  factored second moments) fall back to their own rank's defaults.
-  0-dim entries (Adam's `step`) join the group hyperparameters on a
-  scalar line below the strips. Without an optimizer the container and
-  line stay empty, leaving the page exactly as before. New snapshots
-  re-render
-  through the page's `ui.timer` (`maybe_render`). Because NiceGUI
-  suppresses `.value` writes made from inside a value-change handler, the
-  select/visibility sync after a demotion is deferred one event-loop tick
-  with `ui.timer(0.0, …, once=True)` — the same workaround the main page's
-  sample spinner uses. The top-bar Refresh button (the shared `_refresh_button`
-  in `top_bar`, also on the main page, placed second in the left cluster) does
-  not render anything itself: it calls `session.request_snapshot()`, which arms
-  a one-shot flag so the next batch publishes a snapshot (see *On-demand
-  refresh* under *Modes and capture decisions*). The page's existing `ui.timer`
-  then renders that snapshot
-  like any other, so the strips update mid-training even in `detach` /
-  `step_run` where the frequency cadence alone would leave them frozen — with
-  no separate live-read path to keep consistent with `_publish_snapshot`.
+- Data images are encoded at the tensor's **native** resolution and upscaled
+  client-side with `image-rendering: pixelated` — an 8×8 feature map ships as
+  64 px, not a server-upscaled blob. Legends are the exception (rendered at
+  display resolution so their text stays crisp).
+- Every strip (activations, gradients, weights) uses one diverging
+  blue-white-red colormap; strips are told apart by a labelled colored marker
+  bar, never by palette.
+- `render_strip` handles `[C,H,W]`, `[F]`, and 2D token shapes
+  (`[tokens, dim]`, unflattened onto the input patch grid when `input_hw` is
+  threaded in, assuming row-major ViT token order); 4D-and-beyond per-sample
+  shapes return `None` and the UI hides them.
+- `render_weight` has no batch axis: it pins every axis not assigned to
+  X/Y/tile, then funnels through the same tile machinery; `default_weight_dims`
+  gives the conv-kernel / matrix / row defaults.
+- Image encoding is governed by `STRIP_FORMAT` — BMP by default (near-memcpy,
+  the right trade for a localhost socket; flip to PNG for an SSH-forwarded UI).
+
+`serve(session, port=, host=)` mounts NiceGUI onto a bare FastAPI app and runs
+uvicorn on a **non-daemon background thread**, so the UI outlives the training
+script's main thread for post-mortem browsing. `install_signal_handlers` is
+patched to a no-op because uvicorn can't register signal handlers off the main
+thread. `serve()` no-ops on non-leader ranks and on a disabled session.
+
+**Main page.** One `_LayerView` card per layer, but a card is visible **iff its
+layer is watched** — visible ≡ watched (`session.watch`), so the center pane
+starts empty and points at the diagram. The diagram is `graph.build_mermaid`,
+which tries `torch.fx.symbolic_trace` for a real data-flow graph and falls back
+to a static module-hierarchy tree when the model isn't traceable. Clicking a
+node toggles the watched state; `sync_watch_ui` diffs the watched set against
+the connection's last-known set and pushes only the changes, so toggles
+propagate across tabs. A 200 ms timer re-renders watched views when
+`session.snapshot` or `session.probe_result` changes by identity (a probe
+result takes precedence as the render source; its gradient strips are
+placeholders, since probes are forward-only). Unwatched layers are never
+rendered or shipped — that is what keeps large models responsive. Renders fan
+out over a shared `ThreadPoolExecutor` (the torch/numpy/PIL work releases the
+GIL) into a `_RenderCache` keyed `(name, kind, sample_idx)` and invalidated by
+render-source identity, so re-showing a card or a second tab is a dict hit.
+
+The right sidebar (`InputPanel`) shows the input image plus the Pin /
+probe-mode / Perturb controls. Two non-obvious points: NiceGUI delivers click
+coordinates in the image's **native** pixel space (the handler clamps into
+`H×W` and back-transforms the picked color through `mean`/`std`), and
+"Comparing with original" is **not** a user toggle — `panel.compare` derives
+from whether any pixel is perturbed, so the diff view is active exactly while
+perturbations exist and the all-zero no-edit diff is unreachable. Pin / mode /
+perturb changes call into the session, which republishes a `ProbeResult` the
+tick loop picks up like a new snapshot.
+
+The top-bar position label has its own 200 ms timer reading
+`session.live_position` (recorded on every batch `__enter__`, independent of
+capture), so the epoch/batch counter advances during `step_run` / `detach`
+where `snapshot.position` would stay frozen.
+
+**`/watch` page.** One `_WatchLayerPanel` per watched layer, switchable between
+a HISTOGRAM and a MIN/MAX extreme-patch view; a 2 s timer feeds
+`session.watch_snapshot()` to the visible view. The constraint shaping this
+page is the **websocket keepalive budget** (~6 s): snapshotting and rendering
+run in a worker thread (`asyncio.to_thread`) so the event loop keeps answering
+pings, refreshes are single-flight (a toggle landing mid-render marks the pass
+dirty rather than queueing one render per click), patch grids are always PNG (a
+wide layer's BMP grid is multi-MB and stalls the transport), and
+`watch_snapshot(include_patches=False)` skips the patch GPU→CPU copy while the
+histogram view is showing.
+
+The histogram view's one load-bearing design choice: routine ticks **restyle
+the Plotly figure in place** (`Plotly.update`) — only bar counts change, and an
+in-place restyle preserves client-side zoom/pan for free — and the figure is
+rebuilt only when the *structure* changes (a phase appears/disappears, or a
+log-axis toggle flips). A **Per channel** switch swaps each phase's universal
+histogram for one channel row, falling back to the universal histogram where
+rows are absent (1D layers, collapsed older epochs); hovering a bar while
+per-channel samples that `(channel, bin)` cell from the **last captured
+snapshot** — the running histogram discards its source values each batch, so
+the snapshot is the only population available. The axis-scaling and
+bar-clipping heuristics live in `histograms.py`; their tunables are constants at
+the top of that module.
+
+**`/weights` page** (`?layer=`). One `_WeightPanel` per name in
+`session.layer_weights[layer]`, reading shapes from `model.named_parameters()`
+so the controls exist before any snapshot. Each panel renders the weight, its
+gradient (same shape → same axis layout), and one strip per tensor-valued
+optimizer-state entry when the session has an optimizer (shape-matched entries
+reuse the panel's axis controls; 0-dim entries like Adam's `step` join a scalar
+line below). Per-axis role selects (X/Y/Tile/Index) auto-demote whichever axis
+previously held a role, keeping X/Y/Tile unique. The shared top-bar **Refresh**
+button renders nothing itself: it calls `session.request_snapshot()` to arm the
+one-shot publish flag (see *On-demand refresh*), and the page's existing timer
+renders the resulting snapshot — so there is no separate live-read path to keep
+consistent with `_publish_snapshot`.
 
 ## Enabled flag (zero-overhead off switch)
 
