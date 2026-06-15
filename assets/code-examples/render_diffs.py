@@ -50,6 +50,7 @@ class Side:
 
     lineno: int | None  # None when this side has no line here
     text: str
+    tint: str = ""  # "" (none/context), "del", or "add"
     spans: tuple[Span, ...] = ()  # char ranges to highlight (modifications only)
 
 
@@ -57,7 +58,34 @@ class Side:
 class Row:
     left: Side
     right: Side
-    kind: str  # "equal" | "del" | "add" | "change"
+
+
+def _code_part(line: str) -> str:
+    """The line with any trailing comment removed. Crude (splits on the first
+    `#`), but these placeholder snippets never put `#` inside a string."""
+    return line.split("#", 1)[0]
+
+
+def _significant(line: str) -> str:
+    """Code content with comments and all whitespace removed. Two lines with
+    equal significant content differ only in whitespace and/or comments — which
+    we deliberately do not color."""
+    return "".join(_code_part(line).split())
+
+
+def _filter_spans(text: str, spans: tuple[Span, ...]) -> tuple[Span, ...]:
+    """Restrict highlight spans to meaningful code: drop whitespace-only spans
+    and anything in the trailing comment, so re-indentation and comment edits on
+    an otherwise-changed line aren't emphasized."""
+    code_end = text.find("#")
+    if code_end == -1:
+        code_end = len(text)
+    out: list[Span] = []
+    for s, e in spans:
+        e = min(e, code_end)
+        if e > s and text[s:e].strip():
+            out.append((s, e))
+    return tuple(out)
 
 
 def _char_spans(a: str, b: str) -> tuple[tuple[Span, ...], tuple[Span, ...]]:
@@ -121,6 +149,12 @@ def _align_replace(left: list[str], right: list[str]) -> list[tuple[str, int, in
     return ops
 
 
+def _tinted(lineno: int, text: str, tint: str) -> Side:
+    """A one-sided line, tinted unless it is only whitespace/comment (a blank or
+    pure-comment line carries no significant code, so it is shown uncolored)."""
+    return Side(lineno, text, tint if _significant(text) else "")
+
+
 @dataclass
 class _Pending:
     """Buffers unmatched removals/additions so a run of them can be laid out as
@@ -133,16 +167,18 @@ class _Pending:
         for k in range(max(len(self.dels), len(self.adds))):
             left = self.dels[k] if k < len(self.dels) else Side(None, "")
             right = self.adds[k] if k < len(self.adds) else Side(None, "")
-            kind = "change" if k < len(self.dels) and k < len(self.adds) else (
-                "del" if k < len(self.dels) else "add"
-            )
-            out.append(Row(left, right, kind))
+            out.append(Row(left, right))
         self.dels.clear()
         self.adds.clear()
 
 
 def build_rows(before: list[str], after: list[str]) -> list[Row]:
-    """Side-by-side rows aligning `before` against `after`."""
+    """Side-by-side rows aligning `before` against `after`.
+
+    Coloring marks meaningful code changes only: a matched pair that is equal
+    once whitespace and comments are stripped is shown as uncolored context, and
+    blank / pure-comment additions and removals are shown uncolored too.
+    """
     rows: list[Row] = []
     pending = _Pending()
     ln_l = ln_r = 0
@@ -152,32 +188,40 @@ def build_rows(before: list[str], after: list[str]) -> list[Row]:
             for k in range(i2 - i1):
                 ln_l += 1
                 ln_r += 1
-                rows.append(Row(Side(ln_l, before[i1 + k]), Side(ln_r, after[j1 + k]), "equal"))
+                rows.append(Row(Side(ln_l, before[i1 + k]), Side(ln_r, after[j1 + k])))
         elif tag == "delete":
-            pending.flush(rows)
             for k in range(i1, i2):
                 ln_l += 1
-                rows.append(Row(Side(ln_l, before[k]), Side(None, ""), "del"))
+                pending.dels.append(_tinted(ln_l, before[k], "del"))
         elif tag == "insert":
-            pending.flush(rows)
             for k in range(j1, j2):
                 ln_r += 1
-                rows.append(Row(Side(None, ""), Side(ln_r, after[k]), "add"))
+                pending.adds.append(_tinted(ln_r, after[k], "add"))
         else:  # replace: align by similarity, char-diffing only matched pairs
+            pending.flush(rows)
             for move, i, j in _align_replace(before[i1:i2], after[j1:j2]):
                 if move == "del":
                     ln_l += 1
-                    pending.dels.append(Side(ln_l, before[i1 + i]))
+                    pending.dels.append(_tinted(ln_l, before[i1 + i], "del"))
                 elif move == "add":
                     ln_r += 1
-                    pending.adds.append(Side(ln_r, after[j1 + j]))
-                else:
+                    pending.adds.append(_tinted(ln_r, after[j1 + j], "add"))
+                else:  # match
                     pending.flush(rows)
                     ln_l += 1
                     ln_r += 1
                     a, b = before[i1 + i], after[j1 + j]
-                    lspans, rspans = _char_spans(a, b)
-                    rows.append(Row(Side(ln_l, a, lspans), Side(ln_r, b, rspans), "change"))
+                    if _significant(a) == _significant(b):
+                        # Only whitespace/comments differ: show as context.
+                        rows.append(Row(Side(ln_l, a), Side(ln_r, b)))
+                    else:
+                        lspans, rspans = _char_spans(a, b)
+                        rows.append(
+                            Row(
+                                Side(ln_l, a, "del", _filter_spans(a, lspans)),
+                                Side(ln_r, b, "add", _filter_spans(b, rspans)),
+                            )
+                        )
     pending.flush(rows)
     return rows
 
@@ -211,7 +255,9 @@ def render_svg(rows: list[Row], left_title: str, right_title: str) -> str:
     bg_rects: list[str] = []  # line/char tints (drawn under text)
     fg: list[str] = []  # gutters, signs, code, headers (drawn over tints)
 
-    def emit_side(side: Side, origin: float, tint: str, sign: str) -> None:
+    signs = {"del": "-", "add": "+"}
+
+    def emit_side(side: Side, origin: float) -> None:
         if side.lineno is None:
             # No line on this side: a faint "absent" band spanning the column.
             bg_rects.append(
@@ -219,33 +265,33 @@ def render_svg(rows: list[Row], left_title: str, right_title: str) -> str:
                 f'height="{LINE_H:.1f}" class="empty"/>'
             )
             return
-        if tint:
+        if side.tint:  # uncolored (context / whitespace-only / comment) lines have no tint
             bg_rects.append(
                 f'<rect x="{origin:.1f}" y="{y:.2f}" width="{col_w:.1f}" '
-                f'height="{LINE_H:.1f}" class="{tint}-line"/>'
+                f'height="{LINE_H:.1f}" class="{side.tint}-line"/>'
             )
-        for s0, s1 in side.spans:
-            bg_rects.append(
-                f'<rect x="{origin + code_x + s0 * CHAR_W:.1f}" y="{y:.2f}" '
-                f'width="{(s1 - s0) * CHAR_W:.1f}" height="{LINE_H:.1f}" class="{tint}-char"/>'
-            )
+            for s0, s1 in side.spans:
+                bg_rects.append(
+                    f'<rect x="{origin + code_x + s0 * CHAR_W:.1f}" y="{y:.2f}" '
+                    f'width="{(s1 - s0) * CHAR_W:.1f}" height="{LINE_H:.1f}" '
+                    f'class="{side.tint}-char"/>'
+                )
         fg.append(
             f'<text x="{origin + sign_x - GUTTER_GAP:.1f}" y="{ty:.2f}" '
             f'class="gutter" text-anchor="end">{side.lineno}</text>'
         )
-        if sign:
+        if side.tint:
             fg.append(
-                f'<text x="{origin + sign_x:.1f}" y="{ty:.2f}" class="sign-{tint}">{sign}</text>'
+                f'<text x="{origin + sign_x:.1f}" y="{ty:.2f}" '
+                f'class="sign-{side.tint}">{signs[side.tint]}</text>'
             )
         fg.append(_svg_text(origin + code_x, ty, side.text, "code"))
 
     for idx, row in enumerate(rows):
         y = HEADER_H + BODY_PAD_Y + idx * LINE_H
         ty = y + LINE_H * 0.72  # text baseline within the row
-        left_tint = "del" if row.kind in ("del", "change") else ""
-        right_tint = "add" if row.kind in ("add", "change") else ""
-        emit_side(row.left, 0.0, left_tint, "-" if left_tint else "")
-        emit_side(row.right, col_w, right_tint, "+" if right_tint else "")
+        emit_side(row.left, 0.0)
+        emit_side(row.right, col_w)
 
     # Header band + column titles + dividers.
     hdr_baseline = HEADER_H * 0.66
