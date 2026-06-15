@@ -149,51 +149,23 @@ additionally enables `nansense.lightning`. Runs on Python 3.10–3.14.
 
 ### Wire it into your loop
 
-It's a handful of lines either way — one `start()` and wrapping your loader.
+It's a handful of lines either way — `start()`, wrap your loader, and wrap the
+epoch loop in a restorer to opt into time travel.
+
+<!-- These diff images are generated from the snippets in assets/code-examples/
+     by `uv run assets/code-examples/render_diffs.py`. They are theme-aware SVGs
+     (a single file adapts to light/dark); regenerate them after editing the
+     snippets. -->
 
 **Raw PyTorch**
 
-```diff
-  import torch
-+ import nansense
-
-  model = MyNet().to(device)
-  optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-
-+ # One call serves a live UI at http://localhost:8080.
-+ session = nansense.start(
-+     model,
-+     epochs=50,
-+     phases={"train": len(train_loader), "val": len(val_loader)},
-+     optimizer=optimizer,   # optional: weights page shows optimizer state + live LR
-+     port=8080,
-+ )
-
-  for epoch in range(50):
--     for inputs, targets in train_loader:
-+     for inputs, targets in session.batches(train_loader, phase="train", epoch=epoch):
-          optimizer.zero_grad()
-          loss = criterion(model(inputs), targets)
-          loss.backward()
-          optimizer.step()
-
-+ session.close()   # UI keeps serving the final snapshot
-```
+![Raw PyTorch — wiring nansense (and time travel) into a training loop](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/code-examples/pytorch_raw.svg)
 
 **PyTorch Lightning** — your `LightningModule` is untouched; a callback drives
 the UI and `fit_with_time_travel` wraps a stock `Trainer` so the Time Travel
 button works (a factory, because each jump needs a fresh `Trainer`):
 
-```diff
-  import lightning as L
-+ from nansense.lightning import NansenseCallback, fit_with_time_travel
-
-+ # `model=` is the attribute path to the network inside your LightningModule.
-+ callback = NansenseCallback(port=8080, model="net")
-- trainer = L.Trainer(max_epochs=50)
-- trainer.fit(module, datamodule)
-+ fit_with_time_travel(lambda: L.Trainer(max_epochs=50), module, callback=callback, datamodule=datamodule)
-```
+![PyTorch Lightning — wiring nansense via NansenseCallback and fit_with_time_travel](https://raw.githubusercontent.com/kongaskristjan/nansense/main/assets/code-examples/pytorch_lightning.svg)
 
 The full `start()` surface:
 

@@ -155,3 +155,14 @@ packages = ["nansense"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ty.src]
+# The README wiring snippets under assets/code-examples are illustrative
+# fragments — placeholder names (MyNet, train_loader, module, ...), no
+# surrounding program — fed to render_diffs.py to produce the side-by-side diff
+# images. They are intentionally not importable/runnable, so exclude them from
+# type checking. render_diffs.py itself stays checked.
+exclude = [
+    "assets/code-examples/*_before.py",
+    "assets/code-examples/*_after.py",
+]
