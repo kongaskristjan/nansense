@@ -4,7 +4,7 @@
 
 <h1 align="center">nansense</h1>
 
-<p align="center"><em>See inside your neural net while it trains.</em></p>
+<p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
 
 <!-- TODO: replace with a real showcase GIF (assets/showcase.gif): perturb a pixel,
      watch the diff ripple through the layers, then time-travel back an epoch. -->
@@ -13,128 +13,45 @@
 </p>
 
 Hook one `Session` into your PyTorch loop and a web UI opens onto the running
-model — activations, gradients, weights, and optimizer state, **live as it
-trains**. Pause, step batch-by-batch, and see exactly what every layer is doing.
+model — activations, gradients, weights, and optimizer state, live as it
+trains. **Pause, step batch-by-batch, and time-travel to a different epoch**, and see exactly what every layer is doing. Here's what you can do:
 
-- **Trace the receptive field** — paint a pixel onto the input and watch the
-  change ripple outward as per-layer activation diffs.
-- **Spot dead units and vanishing gradients** — per-layer activation and
-  gradient distributions with full stats, down to a single channel.
-- **See what each neuron learned** — the input patches that drove a channel's
-  most extreme activations.
-- **Ask a neuron what it wants to see** — deep-dream synthesis plus four Captum
-  attribution methods, both re-run as the weights evolve.
-- **Watch weights and optimizer state move** — weight and gradient strips, every
-  optimizer-state tensor, and the param group's live, scheduler-driven LR.
-- **Time-travel** the loop back to any epoch and replay it deterministically;
-  **record** any view to MP4 for a timelapse.
-- Works with **raw PyTorch, PyTorch Lightning, and multi-GPU DDP**, and turns
-  off to a near-zero-overhead no-op for production runs.
-- **[A few lines of code](#wire-it-into-your-loop)** wire it into your existing
-  training loop.
+- **Deepen your intuition** — [investigate activations and gradients](), [find min/max activation patches]() and [simulate what a neuron is searching for]()
+- **Spot optimization bottlenecks** — [discover insufficient receptive fields](), [measure neuron death]() and [fix augmentation ripple effects]()
+- **Investigate failure modes** — [spot and investigate gradient underflow](), [record weight and optimizer dynamics to understand training instability]()
+
+[Try out the pre-made examples]() or wire it into your own training loop. You're just a `pip install nansense` and a few lines of code away in [raw PyTorch]() or in [Lightning]().
 
 ## What you get
 
-### Trace the receptive field
-
-Paint a pixel onto the input and every layer's strip switches to the **diff**
-against the original — watch the change ripple outward layer by layer and see
-exactly how far each neuron actually looks. Pin a batch to attribute drift to
-training rather than to a changing input.
-
-<!-- TODO: value-focused screenshot — input perturbation + per-layer activation diffs -->
-![Trace the receptive field](assets/view-main.png)
-
-### Spot dead units and vanishing gradients
-
-Per-layer activation and gradient distributions over the most recent epoch, as
-signed-log histograms with full stats — drill into a single channel to find the
-dying ReLU or the gradient that's quietly collapsing.
-
-<!-- TODO: value-focused screenshot — activation/gradient histograms -->
-![Spot dead units and vanishing gradients](assets/view-watch-histogram.png)
-
-### See what each neuron learned to detect
-
-For any channel, the input patches that drove its most extreme activations —
-the strongest evidence of what a feature has specialized in, with an optional
-activation heatmap overlaid.
-
-<!-- TODO: value-focused screenshot — top input patches per channel -->
-![See what each neuron learned to detect](assets/view-watch-minmax.png)
-
-### Ask a neuron what it wants to see
-
-Deep-dream gradient ascent synthesizes the input that maximally excites a
-channel, streaming live as it forms; alongside it four Captum attribution
-methods (Grad-CAM, Occlusion, Neuron Gradient / Integrated Gradients) explain
-real samples. Both re-run automatically as the weights evolve.
-
-<!-- TODO: value-focused screenshot — deep dream / attribution -->
-![Ask a neuron what it wants to see](assets/view-experiment.png)
-
-### Watch weights and optimizer state move
-
-Per parameter: the weight strip, its gradient, every optimizer-state tensor
-(momentum, Adam moments), and the param group's live, scheduler-driven
-hyperparameters.
-
-<!-- TODO: value-focused screenshot — weights + optimizer state strips -->
-![Watch weights and optimizer state move](assets/view-weights.png)
-
-### Rewind, and keep a record
-
-**Time travel** jumps the loop back to any checkpointed epoch and replays it
-deterministically (model / optimizer / scheduler / RNG restored) — re-run a
-moment that looked off. **Record** any view to MP4, one frame per update, to
-keep a timelapse of training.
+<!-- TBD -->
 
 ## Run examples
 
-The examples run with [`uv`](https://docs.astral.sh/uv/), a fast Python package
-manager. Install it once with `curl -LsSf https://astral.sh/uv/install.sh | sh`
-(or see the [install docs](https://docs.astral.sh/uv/getting-started/installation/)).
-It builds an isolated, project-local environment for this repo and won't touch
-your system Python or any conda/venv you already use.
+The examples run with [uv](https://docs.astral.sh/uv/getting-started/installation), a fast Python package manager. `uv` does not pollute your other Python environments, and automatically installs the necessary packages when running a script.
 
 Sync the dependency group that matches your hardware:
 
 ```bash
-uv sync --group cpu        # CPU only
-uv sync --group cu126      # NVIDIA CUDA 12.6
-uv sync --group cu130      # NVIDIA CUDA 13.0
-uv sync --group cu132      # NVIDIA CUDA 13.2
-uv sync --group rocm7-2    # AMD ROCm 7.2
+# Install uv:
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then launch any example (each serves the UI on `--nansense-port`):
+Then launch any example. The requirements, datasets and any pretrained networks are downloaded automatically. UI servs on `--nansense-port`.
 
 ```bash
+# The `examples/standard/main.py` script is a good starting point for mnist, cifar10 and imagenette. Use `--dataset` and `--model` for different combinations.
 uv run examples/standard/main.py --nansense-port 8080
-uv run examples/pytorch_lightning/main.py --nansense-port 8080
+
+# More exotic, but harder to interpret tasks:
 uv run examples/game_of_life/main.py --nansense-port 8080
 uv run examples/audio_keywords/main.py --nansense-port 8080
 uv run examples/depth_make3d/main.py --nansense-port 8080
-uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080  # multi-rank DDP
 ```
 
-Each example is self-contained and downloads its dataset on first run. Open the
-printed URL; training pauses on the first batch — drive it from the top bar.
+Open the printed URL; training pauses on the first batch. Drive it from the top bar.
 
-If you hit out-of-memory, lower `--batch-size` (or pass `--dtype bf16`; every
-example also takes `--dtype fp16`, which autocasts in fp32-weight mode with no
-grad scaling so you can watch underflow happen — see the flag's `--help`).
-
-- **`standard`** — ResNet / ViT / LeNet on CIFAR-10 / MNIST / Imagenette with
-  the full wiring (scheduler, time travel, checkpoints). Add `--distributed`
-  and launch under `torchrun` for multi-rank DDP.
-- **`pytorch_lightning`** — a tiny convnet on MNIST via `NansenseCallback` +
-  `fit_with_time_travel`.
-- **`game_of_life`** — predict Conway's Game of Life; board-shaped activations
-  make perturbation light-cones and deep-dream motifs especially legible.
-- **`audio_keywords`** — spoken-keyword ResNet over log-mel spectrograms.
-- **`depth_make3d`** — monocular depth (pretrained ResNet encoder + U-Net
-  decoder) by transfer learning.
+If you hit out-of-memory errors, lower `--batch-size` (or pass `--dtype bf16`).
 
 ## Use the library
 
