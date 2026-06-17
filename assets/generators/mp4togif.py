@@ -23,7 +23,7 @@ MODES = {
 }
 
 
-def build_filter(fps, width, stats_mode, dither):
+def build_filter(fps: int, width: int | None, stats_mode: str, dither: str) -> str:
     steps = [f"fps={fps}"]
     if width is not None:
         steps.append(f"scale={width}:-2:flags=lanczos")  # else keep original resolution
@@ -35,7 +35,7 @@ def build_filter(fps, width, stats_mode, dither):
     )
 
 
-def main():
+def main() -> int:
     p = argparse.ArgumentParser(description="Convert a video to an optimized GIF.")
     p.add_argument("input", help="input video file")
     p.add_argument("output", help="output .gif file")
