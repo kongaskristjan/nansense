@@ -115,17 +115,19 @@ a histogram of its activation and gradient values over the epoch (down to a
 single channel), and a gallery of the input patches that drove each channel to
 its most extreme responses.
 
-### Perturbing and pinning inputs
+### Select visualization inputs
 
-The right sidebar shows the current input image. Turn on **Perturb** and click
-pixels to edit them; nansense re-runs the model and the layer cards switch to
-showing the diff, so you can watch a single changed pixel ripple through the
-network.
+The right sidebar controls which input the layer views are computed from.
+**Select sample in batch** picks which sample of the current batch to show. The
+views follow the live training batch by default; **Pin** freezes the current
+batch as a fixed input that nansense re-runs at every update, so you can watch
+one input's activations evolve as training proceeds and across time travel, and
+**Forward mode** (Unchanged / Eval / Train) sets how BatchNorm and dropout
+behave on those re-runs.
 
-By default the views follow the live training batch, which changes every step.
-Turn on **Pin** to freeze the current batch as a fixed input that nansense
-re-runs at every update — so you can watch one input's activations evolve as
-training proceeds, and across time travel.
+**Perturb** lets you click pixels to edit the input; nansense re-runs the model
+and the layer cards switch to the diff, so you can trace a single changed pixel
+through the network.
 
 ### Running experiments
 
