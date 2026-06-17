@@ -1232,13 +1232,13 @@ _NO_PATCHES_HTML: str = (
 )
 
 # Shown in a layer card (both views) until the layer has accumulated any
-# stats for the selected phase. Stresses that stats accumulate across
-# batches — stepping more keeps growing the running aggregate rather than
-# overwriting it with the last batch.
+# stats for the selected phase. Stresses that only batches stepped after
+# the layer is watched feed the running aggregate (it grows rather than
+# overwriting with the last batch).
 _NO_STATS_MESSAGE: str = (
     "No stats collected for this layer yet — step at least one batch to "
-    "start collecting. Each batch you step adds to the running statistics "
-    "(it doesn't overwrite them with just the last batch)."
+    "start collecting. Each batch you step after watching the layer adds "
+    "to the running statistics."
 )
 
 
