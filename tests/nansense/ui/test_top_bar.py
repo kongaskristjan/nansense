@@ -275,7 +275,8 @@ def test_debug_banner_summary_lists_reasons_and_position() -> None:
     # Reframed as a warning: "Numerical issue detected", not "error".
     assert summary.startswith("Numerical issue detected")
     assert "NaN" in summary
-    assert "underflow" in summary
+    # The "underflow" reason is displayed as "subnormal".
+    assert "subnormal" in summary
     assert "epoch 2" in summary
     assert "val batch 7" in summary
 
@@ -304,10 +305,11 @@ def test_under_over_band_lines_name_dtype_and_magnitudes() -> None:
     lines = _under_over_band_lines(error)
     assert len(lines) == 1
     assert "float16" in lines[0]
-    assert "underflow" in lines[0] and "overflow" in lines[0]
-    # The real band magnitudes are spelled out.
+    assert "subnormal" in lines[0] and "overflow" in lines[0]
+    # The real band magnitudes are spelled out: the subnormal edge (tiny) and
+    # the early-warning overflow edge (max / headroom).
     assert f"{finfo.tiny:.2e}" in lines[0]
-    assert f"{finfo.max:.2e}" in lines[0]
+    assert f"{finfo.max / debugger.OVERFLOW_HEADROOM:.2e}" in lines[0]
 
 
 def test_under_over_band_lines_one_per_distinct_dtype() -> None:

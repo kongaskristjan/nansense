@@ -32,21 +32,23 @@ _DEBUG_DESCRIPTION: str = (
     "further issues into this warning. Click for the affected layers."
 )
 _DEBUG_UNDER_OVER_INTRO: str = (
-    "Underflow / overflow is dtype-aware and measured on gradients: a value "
-    "counts as underflow when its magnitude is nonzero but below the dtype's "
-    "smallest normal value — the subnormal range, still representable but with "
-    "fewer and fewer significant bits as it shrinks toward zero (and which "
-    "some hardware flushes straight to zero) — and as overflow when its "
-    "magnitude reaches the dtype's largest finite value. A layer trips when "
-    "that band holds at least the threshold share of its summed |gradient|."
+    "Subnormal / overflow is dtype-aware and measured on gradients. A value "
+    "counts as subnormal when its magnitude is nonzero but below the dtype's "
+    "smallest normal value — still representable, but with fewer and fewer "
+    "significant bits as it shrinks toward zero (and which some hardware "
+    "flushes straight to zero). It counts as overflow when its magnitude "
+    "climbs to within a small factor of the dtype's largest finite value — "
+    "close enough to be about to saturate to ±inf (actual saturation itself "
+    "shows up under ±Inf). A layer trips when that band holds at least the "
+    "threshold share of its summed |gradient|."
 )
 _DEBUG_UNDER_OVER_TIP: str = (
-    "Tip: fp16 gradients underflow easily. Keep them in range with loss "
-    "scaling (torch.amp.GradScaler), or switch to bfloat16 "
-    "(torch.autocast(device_type, dtype=torch.bfloat16)) — it shares fp32's "
-    "exponent range, so it rarely under/overflows (trading a little "
-    "precision). For overflow, lower the loss scale or clip gradients "
-    "(torch.nn.utils.clip_grad_norm_)."
+    "Tip: fp16 gradients slip into the subnormal range (and then to zero) "
+    "easily. Keep them in range with loss scaling (torch.amp.GradScaler), or "
+    "switch to bfloat16 (torch.autocast(device_type, dtype=torch.bfloat16)) — "
+    "it shares fp32's exponent range, so it rarely goes subnormal or overflows "
+    "(trading a little precision). For overflow, lower the loss scale or clip "
+    "gradients (torch.nn.utils.clip_grad_norm_)."
 )
 _DEBUG_WATCH_NOTE: str = (
     "A layer's gradient histogram only becomes available once it has been "
@@ -64,12 +66,12 @@ def _debug_banner_summary(error: DebugError) -> str:
 
 
 def _under_over_band_lines(error: DebugError) -> list[str]:
-    """Per-dtype underflow/overflow band magnitudes for the affected layers.
+    """Per-dtype subnormal/overflow band magnitudes for the affected layers.
 
     One line per distinct gradient dtype seen across the error's layers,
-    spelling out the exact magnitudes counted as underflow (subnormal) and
-    overflow (saturation) for that dtype — so the dialog states the band in
-    real numbers rather than abstractly.
+    spelling out the exact magnitudes counted as subnormal and (near-)overflow
+    for that dtype — so the dialog states the band in real numbers rather than
+    abstractly.
     """
     dtypes: list[torch.dtype] = []
     for report in error.layers:
@@ -80,7 +82,7 @@ def _under_over_band_lines(error: DebugError) -> list[str]:
         tiny, maxv = debugger.dtype_band(dtype)
         name = str(dtype).removeprefix("torch.")
         lines.append(
-            f"{name}: underflow when 0 < |grad| < {tiny:.2e}; "
+            f"{name}: subnormal when 0 < |grad| < {tiny:.2e}; "
             f"overflow when |grad| ≥ {maxv:.2e}"
         )
     return lines
@@ -1023,7 +1025,7 @@ def _debug_action_button(
     them). An already-watched layer just gets a Stats link. An unwatched layer
     gets both: Watch (start collecting and stay in the dialog) and Stats (start
     collecting *and* jump to the stats view). The stats page pre-checks its
-    "Show underflow/overflow" band from the active issue itself
+    "Show subnormal/overflow" band from the active issue itself
     (`stats_page._should_show_bands`), so either route opens with the band
     marked; the histogram fills in once a few batches have stepped.
     """

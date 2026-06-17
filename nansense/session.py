@@ -1343,7 +1343,7 @@ class Session:
             f"nansense: numerical issue detected ({debugger.reasons_text(error)}) "
             f"at {format_position(error.position)} — training paused. See the "
             "UI banner for affected layers and fixes (e.g. loss scaling or "
-            "bfloat16 for fp16 underflow).",
+            "bfloat16 for fp16 subnormal gradients).",
             flush=True,
         )
         # Re-check the very next batch so a Step immediately re-evaluates,

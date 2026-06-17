@@ -458,16 +458,20 @@ nothing.
 - **NaN / ±Inf** — trips if a single non-finite value appears in any checked
   tensor (forward activations, activation gradients, and weight gradients).
   One bad value poisons the run, so there is no fraction threshold.
-- **Underflow / overflow** — trips when a layer's *gradient* magnitude
-  collapses into a precision-losing band. The band is **dtype-aware**:
-  underflow is the subnormal range (nonzero `|x|` below `finfo.tiny`, where
-  the mantissa encodes scale rather than precision), overflow is `|x| >=
-  finfo.max`. A layer trips when the summed `|x|` inside the band is at least
-  `threshold` (default 0.1) of the layer's total summed `|x|`; non-finite
-  values are excluded from those sums (they belong to the NaN/Inf check). The
-  summed-`|x|` metric makes underflow detection deliberately conservative — a
-  handful of subnormals next to normal-magnitude values barely moves the
-  ratio; it fires when the gradient has *broadly* collapsed.
+- **Subnormal / overflow** — trips when a layer's *gradient* magnitude
+  collapses or saturates into a precision-losing band. The band is
+  **dtype-aware**: the subnormal edge is nonzero `|x|` below `finfo.tiny`
+  (precision degrading toward zero); the overflow edge is `|x| >= finfo.max /
+  OVERFLOW_HEADROOM` — an early warning a factor below the ceiling, because a
+  value that genuinely overflows rounds to `±inf` (caught by the NaN/Inf
+  check), so flagging only the exact max would almost never fire. A layer
+  trips when the summed `|x|` inside the band is at least `threshold` (default
+  0.1) of the layer's total summed `|x|`; non-finite values are excluded from
+  those sums (they belong to the NaN/Inf check). The summed-`|x|` metric makes
+  detection deliberately conservative — a handful of subnormals next to
+  normal-magnitude values barely moves the ratio; it fires when the gradient
+  has *broadly* collapsed. The internal reason key stays `"underflow"` but the
+  UI labels it **"subnormal"** (`REASON_LABELS`), its precise meaning.
 
 **Everything runs on the compute device.** `debugger.run_checks` builds one
 `[nan_count, inf_count, total_count, underflow_abssum, overflow_abssum,
@@ -476,8 +480,9 @@ finite_abssum]` vector per layer (weight gradients are mapped to layers via
 the whole batch's counters to the CPU in a single transfer. It returns a
 frozen `DebugError` (the tripped `reasons`, the `checks_used` categories, and
 a `LayerReport` per affected layer) or `None`. Each `LayerReport` also carries
-the scanned gradient's `dtype`, so the UI can name the band edges
-(`finfo.tiny` / `finfo.max`, via `debugger.dtype_band`) in real magnitudes.
+the scanned gradient's `dtype`, so the UI can name the band edges (the
+subnormal `finfo.tiny` and the overflow `finfo.max / OVERFLOW_HEADROOM`, via
+`debugger.dtype_band`) in real magnitudes.
 
 **Lifecycle integration.** `_should_debug_check(pos)` mirrors
 `_should_freq_update`: a training-thread `_debug_counter` throttles checks to
@@ -1103,15 +1108,16 @@ values each batch, so the snapshot is the only population available. The
 axis-scaling and bar-clipping heuristics live in `histograms.py`; their
 tunables are constants at the top of that module.
 
-A **Show underflow/overflow** checkbox marks the dtype-aware band edges
-(`±finfo.tiny`, `±finfo.max`) as dotted vertical lines spanning every phase row
+A **Show subnormal/overflow** checkbox marks the dtype-aware band edges
+(`±finfo.tiny` and `±finfo.max / OVERFLOW_HEADROOM`, matching `debugger`'s
+detection) as dotted vertical lines spanning every phase row
 (`histograms.under_over_line_positions` / `_add_under_over_lines`). The band is
 per-stream: each `TensorStatsSnapshot` carries the source `dtype` (recorded by
 `TensorAccumulator` before its fp32 reduction cast, preserved across the
 distributed reduce overlay), and the activation/gradient histograms each use
 their own. Only edges within the histogram's `1e-9 .. 1e6` span are drawn — so
 fp32's bands, which sit off both ends, draw nothing (correctly reading as "no
-under/overflow risk at this scale"), while fp16's land in view. The lines are
+subnormal/overflow risk at this scale"), while fp16's land in view. The lines are
 layout shapes, so a toggle (or the dtype first becoming known) forces a figure
 rebuild rather than a restyle. The box is pre-checked whenever the page opens
 while an under/overflow issue is active (`_should_show_bands` reads

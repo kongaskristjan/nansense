@@ -716,7 +716,7 @@ def test_under_over_line_positions_fp16_linear_uses_values() -> None:
     assert values == [tiny, -tiny, maxv, -maxv]
     # Only the positive edges carry a text label (the symmetric pair would
     # otherwise double it).
-    assert {label for _, label in pos if label} == {"underflow", "overflow"}
+    assert {label for _, label in pos if label} == {"subnormal", "overflow"}
 
 
 def test_under_over_line_positions_fp32_out_of_range() -> None:
@@ -730,9 +730,9 @@ def test_under_over_line_positions_log_uses_bin_coords() -> None:
     pos = under_over_line_positions(_fp16_band(), log_x=True)
     by_label = {label: x for x, label in pos if label}
     # Signed-log axis: x is the continuous bin coordinate — positive edges sit
-    # right of the zero band, overflow further out than underflow.
-    assert by_label["underflow"] > ZERO_BIN
-    assert by_label["overflow"] > by_label["underflow"]
+    # right of the zero band, overflow further out than subnormal.
+    assert by_label["subnormal"] > ZERO_BIN
+    assert by_label["overflow"] > by_label["subnormal"]
     assert all(0.0 <= x <= N_BINS for x, _ in pos)
 
 
@@ -746,7 +746,7 @@ def test_make_histogram_figure_draws_band_lines() -> None:
     assert len(lines) == 4
     assert all(s.line.dash == "dot" for s in lines)
     texts = {a.text for a in fig.layout.annotations}
-    assert "underflow" in texts and "overflow" in texts
+    assert "subnormal" in texts and "overflow" in texts
 
 
 def test_make_histogram_figure_no_band_lines_without_band() -> None:

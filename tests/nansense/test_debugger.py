@@ -118,6 +118,23 @@ def test_saturating_fp16_gradients_trip_overflow() -> None:
     assert error.layers[0].overflow == 1.0
 
 
+def test_large_fp16_gradients_trip_overflow_before_inf() -> None:
+    # Within the early-warning headroom of the max but still finite (a true
+    # overflow would round to ±inf, which the NaN/Inf check catches instead).
+    finfo = torch.finfo(torch.float16)
+    grad = torch.full((100,), finfo.max / 8, dtype=torch.float16)
+    error = _check(activation_grads={"l": grad}, layer_weights={"l": []})
+    assert error is not None
+    assert error.reasons == ("overflow",)
+
+
+def test_moderate_fp16_gradients_do_not_trip_overflow() -> None:
+    # ~1e3 in fp16: large but comfortably below the headroom edge (~4e3).
+    finfo = torch.finfo(torch.float16)
+    grad = torch.full((100,), finfo.max / 64, dtype=torch.float16)
+    assert _check(activation_grads={"l": grad}, layer_weights={"l": []}) is None
+
+
 def test_underflow_metric_is_summed_absolute_value() -> None:
     """Sum-of-|value|: a handful of subnormals next to normal-magnitude values
     contribute almost nothing to the sum, so underflow stays well under the
@@ -178,7 +195,11 @@ def test_report_records_grad_dtype() -> None:
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.bfloat16])
 def test_dtype_band_matches_finfo(dtype: torch.dtype) -> None:
     finfo = torch.finfo(dtype)
-    assert dtype_band(dtype) == (finfo.tiny, finfo.max)
+    # Subnormal edge is tiny; overflow edge is the early-warning headroom.
+    assert dtype_band(dtype) == (
+        finfo.tiny,
+        finfo.max / debugger.OVERFLOW_HEADROOM,
+    )
 
 
 # --- merged: accumulate later detections into the standing banner ----------

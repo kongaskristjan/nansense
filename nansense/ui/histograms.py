@@ -731,20 +731,20 @@ _HIST_MAX_MAGNITUDE: float = 10.0**LOG10_MAX
 def under_over_line_positions(
     band: tuple[float, float], log_x: bool
 ) -> list[tuple[float, str]]:
-    """In-range band-edge `(x, label)` lines for the under/overflow regions.
+    """In-range band-edge `(x, label)` lines for the subnormal/overflow regions.
 
-    `band` is `(tiny, max)` (from `debugger.dtype_band`). Lines are placed at
-    `±tiny` (the underflow/subnormal edge) and `±max` (the overflow/saturation
-    edge), but only when the edge magnitude lies strictly within the
-    histogram's `1e-9 .. 1e6` span. The x-coordinate matches the figure's axis:
-    a continuous bin-index coordinate on the signed-log axis, the plain value
-    on the linear axis. Only the positive-side edge carries the text label, to
-    keep the symmetric pair from doubling it.
+    `band` is `(tiny, overflow_edge)` (from `debugger.dtype_band`). Lines are
+    placed at `±tiny` (the subnormal edge) and `±overflow_edge` (the
+    near-saturation edge), but only when the edge magnitude lies strictly within
+    the histogram's `1e-9 .. 1e6` span. The x-coordinate matches the figure's
+    axis: a continuous bin-index coordinate on the signed-log axis, the plain
+    value on the linear axis. Only the positive-side edge carries the text
+    label, to keep the symmetric pair from doubling it.
     """
     tiny, maxv = band
     out: list[tuple[float, str]] = []
     for value, label in (
-        (tiny, "underflow"),
+        (tiny, "subnormal"),
         (-tiny, ""),
         (maxv, "overflow"),
         (-maxv, ""),
@@ -837,11 +837,11 @@ def _make_histogram_figure(
     across a rebuild. The off-view bar blanking still tracks the applied
     x-range, so hovering stays correct.
 
-    `under_over_band` is the `(tiny, max)` dtype band (from
+    `under_over_band` is the `(tiny, overflow_edge)` dtype band (from
     `debugger.dtype_band`) for this stream's dtype. When given, dotted vertical
     lines mark the band edges that fall within the histogram's representable
     magnitude range, so the gradient distribution can be read against the
-    dtype's underflow (subnormal) and overflow (saturation) thresholds.
+    dtype's subnormal and overflow thresholds.
     """
     phase_hists = _phase_hists(per_phase, kind)
     if override_ranges is not None:

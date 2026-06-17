@@ -1,22 +1,25 @@
-"""Automatic numerical-error detection: NaN/Inf and gradient under/overflow.
+"""Automatic numerical-error detection: NaN/Inf and gradient subnormal/overflow.
 
 The neural-network debugger runs a small set of checks every *n*th batch
 (configurable, default 10) and, when it finds trouble, records a
-`DebugError`, stops training, and the UI raises a red banner. Two checks:
+`DebugError`, stops training, and the UI raises a warning banner. Two checks:
 
 - **NaN / ±Inf** — trips if a single non-finite value appears anywhere in a
   checked tensor (forward activations, activation gradients, weight
   gradients). One bad value poisons the rest of the run, so there is no
-  fraction threshold here.
-- **Underflow / overflow** — trips when a layer's *gradient* magnitude
-  collapses into a precision-losing band. The band is dtype-aware:
-  underflow is the subnormal range (nonzero ``|x|`` below the dtype's
-  smallest *normal* value — where the mantissa starts encoding scale rather
-  than precision), overflow is ``|x|`` at or above the dtype's largest
-  finite value. A layer trips when the summed ``|x|`` inside the band is at
+  fraction threshold here. (True magnitude overflow rounds to ``±inf``, so it
+  surfaces here rather than under the "overflow" reason below.)
+- **Subnormal / overflow** — trips when a layer's *gradient* magnitude
+  collapses or saturates into a precision-losing band. The band is
+  dtype-aware: the *subnormal* edge is nonzero ``|x|`` below the dtype's
+  smallest normal value (`finfo.tiny`), where precision degrades toward zero;
+  the *overflow* edge is ``|x|`` within `OVERFLOW_HEADROOM` of the dtype's
+  largest finite value (`finfo.max`) — an early warning, since a value that
+  actually saturates rounds to ``±inf`` (caught above) rather than landing on
+  `finfo.max`. A layer trips when the summed ``|x|`` inside the band is at
   least `threshold` (default 0.1) of the layer's total summed ``|x|``;
   non-finite values are excluded from those sums (they are the NaN/Inf
-  check's concern).
+  check's concern). The UI labels the subnormal reason "subnormal".
 
 Everything runs *on the computing device*: per-layer reductions are stacked
 into one tensor and pulled to the CPU in a single transfer, so the per-batch
@@ -38,13 +41,15 @@ from torch import Tensor
 
 from nansense.schedule import BatchPosition
 
-# A check "category" groups the reasons that a single settings toggle (and a
-# single banner DISABLE button) controls.
+# A check "category" groups the reasons that a single settings toggle (and the
+# banner's "Silence warning" button) controls.
 NAN_INF = "nan_inf"
 UNDER_OVER = "under_over"
 
 # Reasons, in display order. `nan`/`inf` belong to the NAN_INF category;
-# `underflow`/`overflow` to UNDER_OVER.
+# `underflow`/`overflow` to UNDER_OVER. The "underflow" reason is *displayed*
+# as "subnormal" (its precise meaning) via `REASON_LABELS`; the internal key
+# stays "underflow" so the `LayerReport.underflow` field lines up with it.
 REASONS: tuple[str, ...] = ("nan", "inf", "underflow", "overflow")
 _CATEGORY_REASONS: dict[str, tuple[str, ...]] = {
     NAN_INF: ("nan", "inf"),
@@ -60,13 +65,15 @@ REASON_OF_CATEGORY: dict[str, str] = {
 REASON_LABELS: dict[str, str] = {
     "nan": "NaN",
     "inf": "±Inf",
-    "underflow": "underflow",
+    "underflow": "subnormal",
     "overflow": "overflow",
 }
-CATEGORY_LABELS: dict[str, str] = {
-    NAN_INF: "NaN/Inf",
-    UNDER_OVER: "underflow/overflow",
-}
+
+# Overflow is flagged within this factor of the dtype's largest finite value
+# (`finfo.max`), as an early warning: a value that genuinely overflows rounds
+# to ``±inf`` (caught by the NaN/Inf check), so flagging only the exact maximum
+# would almost never fire. The same band edge drives the histogram marker.
+OVERFLOW_HEADROOM: float = 16.0
 
 
 @dataclass(frozen=True)
@@ -173,7 +180,7 @@ def _layer_metrics(
         absf = torch.where(finite, absx.to(torch.float64), zero)
         finite_sum = finite_sum + absf.sum()
         underflow = finite & (absx > 0) & (absx < finfo.tiny)
-        overflow = finite & (absx >= finfo.max)
+        overflow = finite & (absx >= finfo.max / OVERFLOW_HEADROOM)
         under_sum = under_sum + torch.where(underflow, absf, zero).sum()
         over_sum = over_sum + torch.where(overflow, absf, zero).sum()
 
@@ -342,16 +349,17 @@ def merged(existing: DebugError, new: DebugError) -> DebugError:
 
 
 def dtype_band(dtype: torch.dtype) -> tuple[float, float]:
-    """The `(underflow_below, overflow_at_or_above)` magnitude band for `dtype`.
+    """The `(subnormal_below, overflow_at_or_above)` magnitude band for `dtype`.
 
-    Underflow is nonzero ``|x|`` below the smallest *normal* value
-    (`finfo.tiny`, where the mantissa starts encoding scale rather than
-    precision); overflow is ``|x|`` at or above the largest finite value
-    (`finfo.max`). These are exactly the edges `run_checks` flags, and the UI
-    shows them next to the gradient histogram and in the details dialog.
+    The subnormal edge is nonzero ``|x|`` below the smallest normal value
+    (`finfo.tiny`); the overflow edge is ``|x|`` within `OVERFLOW_HEADROOM` of
+    the largest finite value (`finfo.max / OVERFLOW_HEADROOM`), an early warning
+    before saturation to ``±inf``. These are exactly the edges `run_checks`
+    flags, and the UI shows them next to the gradient histogram and in the
+    details dialog.
     """
     finfo = torch.finfo(dtype)
-    return finfo.tiny, finfo.max
+    return finfo.tiny, finfo.max / OVERFLOW_HEADROOM
 
 
 def without_category(error: DebugError, category: str) -> DebugError | None:

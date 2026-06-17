@@ -75,10 +75,10 @@ class _WatchPageState:
     # (re-expressed for the new scale) instead of auto-fitting to the data —
     # see `_HistPlot`. Lives with the histogram-view controls.
     retain_axes: bool = False
-    # Whether to mark the dtype-aware underflow/overflow band edges on each
-    # histogram (the "Show underflow/overflow" checkbox). Seeded on via the
-    # `bands=1` query param the debug dialog's Stats link adds when an
-    # under/overflow issue is active.
+    # Whether to mark the dtype-aware subnormal/overflow band edges on each
+    # histogram (the "Show subnormal/overflow" checkbox). Seeded on by
+    # `_should_show_bands` when the page opens with an active subnormal/overflow
+    # issue, regardless of how the page was reached.
     show_bands: bool = False
     # MIN/MAX view state: which one of the four grids is shown (a radio
     # group defaulting to "Max pixel") and whether the activation heatmap
@@ -192,7 +192,7 @@ def _build_stats_page(
         await refresh()
 
     async def set_show_bands(value: bool) -> None:
-        # Toggles the dtype-aware underflow/overflow band lines on every
+        # Toggles the dtype-aware subnormal/overflow band lines on every
         # histogram; each plot rebuilds to add/remove its layout shapes.
         state.show_bands = value
         await refresh()
@@ -345,13 +345,13 @@ def _build_stats_page(
                     )
                     hist_boxes.append(
                         ui.checkbox(
-                            "Show underflow/overflow",
+                            "Show subnormal/overflow",
                             value=state.show_bands,
                             on_change=lambda e: set_show_bands(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
-                            "Mark the dtype's underflow (subnormal) and overflow "
-                            "(saturation) magnitude bands with dotted lines — "
-                            "in-range edges only (fp32's sit off the axis)"
+                            "Mark the dtype's subnormal and overflow "
+                            "(near-saturation) magnitude bands with dotted lines "
+                            "— in-range edges only (fp32's sit off the axis)"
                         )
                     )
                 with ui.column().classes("w-full gap-1") as minmax_controls:
@@ -728,9 +728,9 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
-        # The under/overflow band currently drawn (band-edge lines are layout
-        # shapes that only a rebuild can add/remove/move), so a toggle of the
-        # "Show underflow/overflow" checkbox — or the dtype first becoming
+        # The subnormal/overflow band currently drawn (band-edge lines are
+        # layout shapes that only a rebuild can add/remove/move), so a toggle of
+        # the "Show subnormal/overflow" checkbox — or the dtype first becoming
         # known — forces a rebuild.
         self._band: tuple[float, float] | None = None
         # Last axis ranges applied (set by every figure build, including the
