@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-import imageio.v2 as imageio
+import av
 import numpy as np
 import pytest
 import torch
@@ -70,7 +70,8 @@ def _run_epochs(
 
 
 def _frame_count(path: Path) -> int:
-    return len(imageio.mimread(str(path)))
+    with av.open(str(path)) as container:
+        return sum(1 for _ in container.decode(video=0))
 
 
 def _main_view(layers: tuple[str, ...] = ("conv",)) -> RecordedView:
