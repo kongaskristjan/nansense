@@ -42,7 +42,7 @@ def test_display_url(host: str, expected: str) -> None:
 
 
 def test_format_box_frames_every_line() -> None:
-    box = _format_box(["nansense UI is running at:", "http://127.0.0.1:8080"])
+    box = _format_box(["nansense UI is running at:", "http://127.0.0.1:8080"], 100)
     lines = box.splitlines()
     # Top/bottom borders plus one row per input line.
     assert len(lines) == 4
@@ -51,6 +51,20 @@ def test_format_box_frames_every_line() -> None:
     # The URL is framed, and every framed row shares the box width.
     assert "http://127.0.0.1:8080" in box
     assert len({len(line) for line in lines}) == 1
+
+
+def test_format_box_spans_requested_width() -> None:
+    box = _format_box(["short"], 100)
+    assert all(len(line) == 100 for line in box.splitlines())
+
+
+def test_format_box_never_shrinks_below_content() -> None:
+    """A width narrower than the text keeps the box readable rather than
+    clipping the line."""
+    long_line = "x" * 60
+    box = _format_box([long_line], 10)
+    assert all(len(line) == len(long_line) + 4 for line in box.splitlines())
+    assert long_line in box
 
 
 def test_announce_prints_boxed_url(capsys: pytest.CaptureFixture[str]) -> None:
