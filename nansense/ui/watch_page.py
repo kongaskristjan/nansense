@@ -1285,8 +1285,9 @@ def _patch_grids_html(
 def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) -> str:
     """One labeled grid: channels as columns, top samples as rows.
 
-    The axes are labeled explicitly: a "N channels" caption runs along
-    the grid's top edge and a rotated "top samples (best first)" caption
+    The axes are labeled explicitly: a "N channels (one channel per
+    column)" caption runs along the grid's top edge and a rotated "top
+    samples (best first)" caption
     down its left edge, aligned by a CSS grid whose first row holds only
     the caption. With the heatmap enabled the second row also starts with
     the crisp display-resolution colorbar (the overlay's `±vmax` scale),
@@ -1310,7 +1311,8 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) ->
         'grid-template-columns:auto auto minmax(0,1fr); '
         'align-items:start;">'
         "<div></div><div></div>"
-        f'<div class="{axis_cls}">{channels} channels &rarr;</div>'
+        f'<div class="{axis_cls}">{channels} channels '
+        "(one channel per column) &rarr;</div>"
         f"{legend}"
         f'<div class="{axis_cls}" '
         'style="writing-mode:vertical-rl; padding-right:3px;">'

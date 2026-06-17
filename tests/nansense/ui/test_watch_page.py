@@ -117,7 +117,7 @@ def test_patch_grids_html_labels_axes() -> None:
     html = _patch_grids_html(
         per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
     )
-    assert "2 channels &rarr;" in html
+    assert "2 channels (one channel per column) &rarr;" in html
     assert "top samples (best first) &rarr;" in html
     assert "writing-mode:vertical-rl" in html
     assert "text-[15px] font-mono text-slate-600" in html
