@@ -753,8 +753,8 @@ def _build_experiment_page(
         if result is None:
             if state.last_result is None:
                 status_label.text = (
-                    "queued — waiting for the training thread to pause or for "
-                    "earlier experiments (use Stop / Step Batch above)"
+                    "queued — waiting for training to pause, or for earlier "
+                    "experiments to finish (use Stop / Step Batch above)"
                 )
             return
         status_label.text = _experiment_status(result)

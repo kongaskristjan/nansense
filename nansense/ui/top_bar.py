@@ -146,7 +146,7 @@ def _add_step_controls(
         "dense size=md"
     ).tooltip("Pause at next batch")
     _add_time_travel_button(session)
-    position_label = ui.label("(waiting for first snapshot)").classes(
+    position_label = ui.label("(waiting for first batch)").classes(
         "ml-3 font-mono text-sm"
     )
 
