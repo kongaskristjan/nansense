@@ -4,13 +4,12 @@
 
 - Python 3.13
 - Package manager: `uv`
-- Dependencies: `uv sync --group cuda`, `uv add <package>` etc.
-  - PyTorch is installed via mutually exclusive dependency groups (`cpu`, `cuda-legacy`, `cuda`, `rocm`), each pinned to the matching PyTorch wheel index in `pyproject.toml`, so the user picks their own build. The groups are named by hardware intent: `cuda-legacy` is CUDA 12.6 (the last build with Maxwell/Pascal/Volta support) and `cuda` is CUDA 13.0 (Turing through Blackwell). Groups are never published and nansense declares no direct torch dependency; note that the standard `captum` dependency (experiment-page attributions) does pull torch transitively. Always sync with a group; agents should use `--group cuda`.
+  - Always use `cuda` group: `uv sync --group cuda`, `uv run --group cuda examples/...`.
 - Directory structure:
   - 'nansense/' - Nansense visualization library (no training)
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)
   - `tests/` - Tests for both examples and the nansense library
-  - `assets/` - Assets. `assets/generators/` should contain Python generator scripts for assets that are deterministically generated.
+  - `assets/` - Assets. `assets/generators/` should contain Python generator scripts for assets that are deterministically generated (eg. crop image). Note that Playwright MCP may still be used for initial capture: `--help` should explain how to reproduce.
   - `README.md` - How to run examples and the nansense library API usage
   - `INTERNALS.md` - High level overview of nansense library internals
 
