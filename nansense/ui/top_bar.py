@@ -40,6 +40,14 @@ _DEBUG_UNDER_OVER_INTRO: str = (
     "magnitude reaches the dtype's largest finite value. A layer trips when "
     "that band holds at least the threshold share of its summed |gradient|."
 )
+_DEBUG_UNDER_OVER_TIP: str = (
+    "Tip: fp16 gradients underflow easily. Keep them in range with loss "
+    "scaling (torch.amp.GradScaler), or switch to bfloat16 "
+    "(torch.autocast(device_type, dtype=torch.bfloat16)) — it shares fp32's "
+    "exponent range, so it rarely under/overflows (trading a little "
+    "precision). For overflow, lower the loss scale or clip gradients "
+    "(torch.nn.utils.clip_grad_norm_)."
+)
 _DEBUG_WATCH_NOTE: str = (
     "A layer's gradient histogram only becomes available once it has been "
     "watched for a few batches — click Watch, let training step a few times, "
@@ -953,6 +961,9 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
                 )
                 for line in _under_over_band_lines(error):
                     ui.label(line).classes("text-xs font-mono text-amber-800")
+                ui.label(_DEBUG_UNDER_OVER_TIP).classes(
+                    "text-xs text-slate-700 font-medium mt-1"
+                )
 
         with ui.element("div").classes(
             "w-full overflow-auto max-h-[24rem] border rounded"
@@ -966,7 +977,7 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
                     ui.label(debugger.REASON_LABELS[col]).classes(
                         "w-24 text-right"
                     )
-                ui.label("").classes("w-28 shrink-0")
+                ui.label("").classes("w-40 shrink-0")
             for report in error.layers:
                 with ui.row().classes(
                     "w-full items-center gap-x-6 px-3 py-1 no-wrap border-t"
@@ -979,7 +990,7 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
                             "w-24 text-right font-mono text-sm"
                         )
                     with ui.element("div").classes(
-                        "w-28 shrink-0 flex justify-end"
+                        "w-40 shrink-0 flex justify-end"
                     ):
                         _debug_action_button(session, dialog, error, report, watched)
 
@@ -1006,35 +1017,46 @@ def _debug_action_button(
     report: LayerReport,
     watched: frozenset[str],
 ) -> None:
-    """Per-row Watch button, or a Stats link when already watched.
+    """Per-row actions: a Stats link, plus a Watch button when not yet watched.
 
     The stats histograms need a watched layer (the watch accumulators feed
-    them), so an unwatched layer first gets watched; the dialog reopens to
-    surface the Stats link once the watched set includes it. The stats page
-    pre-checks its "Show underflow/overflow" band from the active issue itself
-    (`stats_page._should_show_bands`), so any route to it — this link or a
-    layer card's Stats button — opens with the band marked.
+    them). An already-watched layer just gets a Stats link. An unwatched layer
+    gets both: Watch (start collecting and stay in the dialog) and Stats (start
+    collecting *and* jump to the stats view). The stats page pre-checks its
+    "Show underflow/overflow" band from the active issue itself
+    (`stats_page._should_show_bands`), so either route opens with the band
+    marked; the histogram fills in once a few batches have stepped.
     """
-    if report.layer in watched:
-        ui.button("Stats").props(
-            f'href="/stats?layer={quote(report.layer)}" '
-            "dense size=sm flat no-caps color=primary"
-        ).tooltip("Open this layer's stats view (gradient histograms)")
-        return
+    href = f"/stats?layer={quote(report.layer)}"
+    with ui.row().classes("gap-1 no-wrap items-center"):
+        if report.layer not in watched:
 
-    def watch_layer() -> None:
-        session.watch(report.layer)
-        ui.notify(
-            f"Watching {report.layer} — let training step a few batches, then "
-            "open the stats view.",
-            type="positive",
-        )
-        dialog.close()
-        _open_debug_dialog(session, error)
+            def watch_layer() -> None:
+                session.watch(report.layer)
+                ui.notify(
+                    f"Watching {report.layer} — let training step a few "
+                    "batches, then open the stats view.",
+                    type="positive",
+                )
+                dialog.close()
+                _open_debug_dialog(session, error)
 
-    ui.button("Watch", on_click=watch_layer).props(
-        "dense size=sm flat no-caps color=primary"
-    ).tooltip("Collect this layer's gradient stats for the stats view")
+            ui.button("Watch", on_click=watch_layer).props(
+                "dense size=sm flat no-caps color=primary"
+            ).tooltip("Collect this layer's gradient stats (stay here)")
+
+            def watch_and_open() -> None:
+                session.watch(report.layer)
+                dialog.close()
+                ui.navigate.to(href)
+
+            ui.button("Stats", on_click=watch_and_open).props(
+                "dense size=sm flat no-caps color=primary"
+            ).tooltip("Watch this layer and open its stats view")
+        else:
+            ui.button("Stats").props(
+                f'href="{href}" dense size=sm flat no-caps color=primary'
+            ).tooltip("Open this layer's stats view (gradient histograms)")
 
 
 def _best_effort_ui_update(update: Callable[[], None]) -> None:

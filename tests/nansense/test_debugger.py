@@ -431,6 +431,43 @@ def test_resume_after_error_runs_on_without_re_stopping() -> None:
         thread.join(timeout=5.0)
 
 
+def test_first_detection_prints_once_to_console(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The episode's onset prints one console line (for headless runs); later
+    merges stay quiet."""
+    model = _NanNet()
+    session = nansense.start(model, epochs=1, phases={"train": 3})
+    session.set_debug_settings(interval=1)
+
+    def loop() -> None:
+        for _ in range(3):
+            with session.batch(phase="train", epoch=0):
+                train_step(model)
+
+    thread = run_in_thread(loop)
+    try:
+        assert session.wait_until_paused(timeout=5.0)
+        # Resume: batches 2-3 still NaN, but they merge — no second print.
+        session.detach()
+        thread.join(timeout=5.0)
+        assert not thread.is_alive()
+    finally:
+        session.set_debug_settings(enabled=False)
+        session.detach()
+        thread.join(timeout=5.0)
+    out = capsys.readouterr().out
+    assert out.count("nansense: numerical issue detected") == 1
+    assert "nan" in out.lower()
+
+
+def test_rewind_prints_to_console(capsys: pytest.CaptureFixture[str]) -> None:
+    model = nn.Linear(4, 3)
+    session = nansense.start(model, epochs=3, phases={"train": 2})
+    session._rewind_to_epoch(2)
+    assert "time-traveled to the start of epoch 2" in capsys.readouterr().out
+
+
 def test_disable_debug_check_toggles_setting_and_trims_banner() -> None:
     model = nn.Linear(4, 3)
     session = nansense.start(model, epochs=1, phases={"train": 2})

@@ -495,6 +495,9 @@ hits **merge** into it (`debugger.merged`: union the reasons/`checks_used`,
 keep the *first* error's position, keep each layer's worst observed fraction)
 and return `False` — so a user who chose to proceed past the first issue keeps
 running while the warning accumulates rather than stopping every *n*th batch.
+The onset also prints one console line (so a headless run with no browser still
+sees it); merges stay quiet. A time-travel rewind prints its own line
+(`_rewind_to_epoch`, covering both the plain-loop and Lightning restorers).
 
 `Session.debug_error` is published as an atomic reference and read lock-free
 by the UI. Resuming no longer clears it (`_set_mode(resume=True)` leaves it
@@ -515,13 +518,15 @@ clears. The banner shows "Numerical issue detected", the reasons, and the
 and a single **Silence warning** button (turns off the active checks and
 dismisses the warning). The details dialog explains the problem, spells out the
 dtype-aware under/overflow band in real magnitudes when that check ran
-(`_under_over_band_lines`), and lists the affected layers in a table — one
+(`_under_over_band_lines`) followed by a remediation tip (loss scaling /
+bfloat16 / gradient clipping), and lists the affected layers in a table — one
 column per reason whose check *ran* (so under/overflow columns show even when
-only NaN tripped), percentages per layer, and a per-row **Watch** button (or a
-**Stats** link to `/stats` once the layer is watched, since the gradient
-histogram needs a few watched batches first). The gear settings dialog's
-"Error checks" section edits the `DebugSettings` (enable, interval, per-check
-toggles, threshold %) via `Session.set_debug_settings`.
+only NaN tripped), percentages per layer, and per-row actions: a **Stats** link
+to `/stats` when the layer is already watched, else a **Watch** button (start
+collecting, stay) plus a **Stats** button (watch *and* jump to the view). The
+gradient histogram fills in once a few watched batches have stepped. The gear
+settings dialog's "Error checks" section edits the `DebugSettings` (enable,
+interval, per-check toggles, threshold %) via `Session.set_debug_settings`.
 
 ## Distributed training (`nansense.distributed`)
 

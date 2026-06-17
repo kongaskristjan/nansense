@@ -78,7 +78,7 @@ from nansense.restore import (
     validate_optimizer_state,
     validate_scheduler_state,
 )
-from nansense.schedule import BatchPosition, Schedule
+from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.watch import (
     DEFAULT_CHANNEL_LIMIT,
     DEFAULT_SAMPLES_PER_CHANNEL,
@@ -1336,6 +1336,16 @@ class Session:
             self._debug_error = debugger.merged(existing, error)
             return False
         self._debug_error = error
+        # Surface the first detection on the console too, so a headless run
+        # (no browser) still sees it. Later merges stay quiet — only the
+        # episode's onset prints.
+        print(
+            f"nansense: numerical issue detected ({debugger.reasons_text(error)}) "
+            f"at {format_position(error.position)} — training paused. See the "
+            "UI banner for affected layers and fixes (e.g. loss scaling or "
+            "bfloat16 for fp16 underflow).",
+            flush=True,
+        )
         # Re-check the very next batch so a Step immediately re-evaluates,
         # rather than waiting out the rest of the interval.
         self._debug_counter = 0
@@ -1513,6 +1523,11 @@ class Session:
         # the "already saved" marker — otherwise the re-run's pre-iter save in
         # `batches()` would be skipped and the replay would reuse stale state.
         self._epoch_start_saved_for = None
+        # Note the jump on the console too (covers both the plain-loop and
+        # Lightning restorers, which funnel through here).
+        print(
+            f"nansense: time-traveled to the start of epoch {epoch}.", flush=True
+        )
 
     def _wait_for_proceed(self) -> None:
         # A pending time-travel jump also ends the wait: its request already

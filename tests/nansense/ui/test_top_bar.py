@@ -10,6 +10,7 @@ from nansense.debugger import DebugError, LayerReport
 from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
+    _DEBUG_UNDER_OVER_TIP,
     _at_last_batch,
     _best_effort_ui_update,
     _current_position,
@@ -277,6 +278,12 @@ def test_debug_banner_summary_lists_reasons_and_position() -> None:
     assert "underflow" in summary
     assert "epoch 2" in summary
     assert "val batch 7" in summary
+
+
+def test_under_over_tip_names_modern_remedies() -> None:
+    # The dialog's second paragraph points at modern PyTorch fixes.
+    assert "GradScaler" in _DEBUG_UNDER_OVER_TIP
+    assert "bfloat16" in _DEBUG_UNDER_OVER_TIP
 
 
 def test_under_over_band_lines_name_dtype_and_magnitudes() -> None:
