@@ -1010,7 +1010,12 @@ Render conventions worth knowing before editing `render.py`:
 uvicorn on a **non-daemon background thread**, so the UI outlives the training
 script's main thread for post-mortem browsing. `install_signal_handlers` is
 patched to a no-op because uvicorn can't register signal handlers off the main
-thread. `serve()` no-ops on non-leader ranks and on a disabled session.
+thread. `serve()` no-ops on non-leader ranks and on a disabled session. Once the
+thread is launched it prints the address in a Unicode box (so it stands out in
+the training log) and, unless `open_browser=False`, a second daemon thread waits
+for `server.started` and opens it in a focused new browser tab (`new=2`,
+`autoraise=True`) — a no-op on a headless box, where `webbrowser.open` just
+returns `False`. `0.0.0.0`/`::` are shown and opened as loopback.
 
 **Main page.** One `_LayerView` card per layer, but a card is visible **iff its
 layer is watched** — visible ≡ watched (`session.watch`), so the center pane

@@ -191,8 +191,6 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
         input_mean=(0.0,),
         input_std=(1.0,),
     )
-    if session.enabled:
-        print(f"nansense UI at http://127.0.0.1:{args.nansense_port}")
 
     # Opting into time travel: each epoch start is checkpointed to
     # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and

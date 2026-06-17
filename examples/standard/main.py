@@ -213,8 +213,6 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
         input_mean=config.mean,
         input_std=config.std,
     )
-    if session.enabled:
-        print(f"nansense UI at http://127.0.0.1:{args.nansense_port}")
 
     # Opting into time travel: each epoch start is checkpointed to
     # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and
@@ -346,8 +344,6 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
         input_mean=config.mean,
         input_std=config.std,
     )
-    if rank == 0 and session.enabled:
-        print(f"nansense UI at http://127.0.0.1:{args.nansense_port}")
 
     # Opting into time travel under DDP: every rank wraps the same epoch loop
     # in a restorer. Each rank checkpoints its own state per epoch (rank 0 to

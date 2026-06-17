@@ -79,7 +79,7 @@ uv run examples/audio_keywords/main.py --nansense-port 8080
 uv run examples/depth_make3d/main.py --nansense-port 8080
 ```
 
-Open the printed URL; training pauses on the first batch. Drive it from the top bar. See [UI Tutorial]() for more info.
+A browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar. See [UI Tutorial]() for more info.
 
 If you hit out-of-memory errors, lower `--batch-size` (or pass `--dtype bf16`).
 

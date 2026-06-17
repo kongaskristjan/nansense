@@ -159,8 +159,6 @@ def main() -> None:
         input_std=MNIST_STD,
         enabled=not args.disable_nansense,
     )
-    if not args.disable_nansense:
-        print(f"nansense UI at http://127.0.0.1:{args.nansense_port}")
 
     # Each time-travel jump consumes the running fit, so the trainer comes
     # from a factory. `logger=False` because metric loggers cannot

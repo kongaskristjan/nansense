@@ -120,8 +120,6 @@ def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.devi
         input_mean=config.mean,
         input_std=config.std,
     )
-    if session.enabled:
-        print(f"nansense UI at http://127.0.0.1:{args.nansense_port}")
 
     # Opting into time travel: each epoch start is checkpointed to
     # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and

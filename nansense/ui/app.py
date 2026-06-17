@@ -35,7 +35,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+import webbrowser
 from pathlib import Path
+from typing import Protocol
 
 import uvicorn
 from fastapi import FastAPI
@@ -62,12 +65,67 @@ class _DropListenerRerenderWarning(logging.Filter):
 logging.getLogger("nicegui").addFilter(_DropListenerRerenderWarning())
 
 
+def _display_url(host: str, port: int) -> str:
+    """The address to show a user (and to open in their browser).
+
+    `0.0.0.0` / `::` mean "bind every interface"; they are not routable from
+    a browser, so loopback is shown instead.
+    """
+    shown_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    return f"http://{shown_host}:{port}"
+
+
+def _format_box(lines: list[str]) -> str:
+    """Frame `lines` in a Unicode box so the address stands out in the busy
+    training log it is printed amongst."""
+    width = max(len(line) for line in lines)
+    top = "┌" + "─" * (width + 2) + "┐"
+    bottom = "└" + "─" * (width + 2) + "┘"
+    body = [f"│ {line.ljust(width)} │" for line in lines]
+    return "\n".join([top, *body, bottom])
+
+
+def _announce(url: str) -> None:
+    """Print the UI address inside a box, padded by blank lines so it is easy
+    to spot between training-log lines."""
+    box = _format_box(["nansense UI is running at:", url])
+    print(f"\n{box}\n", flush=True)
+
+
+class _Startable(Protocol):
+    """The slice of `uvicorn.Server` the browser opener depends on — its
+    `started` flag, flipped once startup completes."""
+
+    started: bool
+
+
+def _open_browser_when_ready(server: _Startable, url: str) -> None:
+    """Open `url` in a browser tab once uvicorn has finished starting up.
+
+    Runs on a daemon thread so it never blocks training. Waiting for
+    `server.started` keeps the opened tab from racing the port bind (which
+    would otherwise show a connection error). `new=2` asks for a new tab and
+    `autoraise=True` brings the window to the front (focused) where the
+    platform supports it. On a headless box there is no browser:
+    `webbrowser.open` just returns `False` there, and any backend error is
+    swallowed so a missing display never disrupts the run.
+    """
+    deadline = time.monotonic() + 10.0
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        webbrowser.open(url, new=2, autoraise=True)
+    except Exception:
+        pass
+
+
 def serve(
     session: Session,
     *,
     port: int = 8080,
     host: str = "127.0.0.1",
     log_level: str = "warning",
+    open_browser: bool = True,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> threading.Thread | None:
@@ -83,6 +141,11 @@ def serve(
     then served by uvicorn from a non-main thread, with signal handlers
     disabled so uvicorn doesn't try to wire SIGINT/SIGTERM from a thread
     that isn't the main one.
+
+    Once the server thread is launched the UI address is printed inside a
+    box (so it stands out in the training log) and, unless `open_browser` is
+    `False`, opened in a browser tab — on a headless machine the open is a
+    harmless no-op.
 
     `input_mean` / `input_std` are passed to the input-image pane so the
     sample is denormalized (`x * std + mean`) before display. When either
@@ -149,4 +212,14 @@ def serve(
 
     thread = threading.Thread(target=server.run, name="nansense-ui", daemon=False)
     thread.start()
+
+    url = _display_url(host, port)
+    _announce(url)
+    if open_browser:
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(server, url),
+            name="nansense-open-browser",
+            daemon=True,
+        ).start()
     return thread
