@@ -777,6 +777,18 @@ class _LayerView:
                     ).tooltip(
                         "Run deep dream / Captum experiments on this layer"
                     )
+                with ui.element("div").props("data-card-action"):
+                    ui.button(
+                        "Stats",
+                        icon="bar_chart",
+                        color="teal",
+                    ).props(
+                        f'dense no-caps href="/stats?layer={quote(name)}"'
+                    ).style(
+                        "min-height: 0; padding: 1px 6px; font-size: 11px"
+                    ).tooltip(
+                        "Open this layer's stats view (histograms & min/max)"
+                    )
                 # Visible is synonymous with watched: this card only shows
                 # while the layer is watched, so the button is always the
                 # "off" direction.
