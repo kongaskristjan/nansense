@@ -16,11 +16,11 @@ Hook a `Session` into your PyTorch loop and a web UI opens onto the running
 model with activations, gradients, weights, and optimizer state, live as it
 trains. **Pause, step batch-by-batch, and time-travel to a different epoch**, and see exactly what every layer is doing. Here's what you can do:
 
-- **Deepen your intuition** — [investigate activations and gradients](), [find min/max activation patches]() and [simulate what each neuron is searching for]()
-- **Spot optimization bottlenecks** — [discover insufficient receptive fields](), [measure neuron death]() and [fix augmentation padding artifacts]()
-- **Investigate failure modes** — [spot gradient underflow]() and [record weight and optimizer dynamics to understand training instability]()
+- **Deepen your intuition** — [investigate activations and gradients](#activations-and-gradients-throughout-training), [find min/max activation patches](#minmax-activation-patches) and [simulate what each neuron is searching for](#simulate-what-a-neuron-is-searching-for-deep-dream)
+- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [fix augmentation padding artifacts](#augmentation-padding-artifacts)
+- **Investigate failure modes** — [spot gradient underflow](#gradient-underflow) and [record weight and optimizer dynamics to understand training instability](#training-instability)
 
-[Try out the pre-made examples]() or wire it into your own training loop. You're just a `pip install nansense` and a few lines of code away. Here's an example integration in [raw PyTorch]() and in [Lightning]().
+[Try out the pre-made examples](#run-examples) or wire it into your own training loop. You're just a `pip install nansense` and a few lines of code away. Here's an example integration in [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and in [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
 ## Showcase
 
@@ -86,29 +86,60 @@ uv run --group [group] examples/audio_keywords/main.py --nansense-port 8080
 uv run --group [group] examples/depth_make3d/main.py --nansense-port 8080
 ```
 
-A browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar. See [UI Tutorial]() for more info.
+A browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar. See the [UI tutorial](#ui-tutorial) for more info.
 
 If you hit out-of-memory errors, lower `--batch-size` (or pass `--dtype bf16`).
 
 ## UI tutorial
 
-TBD intro (1 paragraph)
+When a session starts, nansense serves a web page and pauses on the first batch.
+You drive the run from the top bar: **Step Batch** advances one batch, **Run**
+runs to the end and then pauses, and **Stop** pauses a free-running session. The
+dropdown next to Step Batch steps a whole epoch or up to a custom point.
+
+**Time Travel** jumps back to the start of any cached epoch. It is enabled once
+the training loop is wrapped in a [restorer](#wire-it-into-your-loop-raw-pytorch),
+which checkpoints each epoch start to disk.
 
 ### Watching layers and viewing stats
 
-TBD paragraph explaining watching layers and how it's related to collecting stats. A mention about update frequency. One paragraph for looking at histograms and max patches.
+The main page shows the model as a clickable architecture graph. Click a node to
+**watch** that layer: its activations and gradients appear as a card, and from
+that point on every batch feeds them into running statistics. Watched views
+refresh on every pause and, while training runs, on the cadence set under
+*Update frequency* in the settings.
+
+Watching runs the model at capture speed, so watch a few layers at a time rather
+than the whole network. Open a watched layer's **stats view** for the deep dive:
+a histogram of its activation and gradient values over the epoch (down to a
+single channel), and a gallery of the input patches that drove each channel to
+its most extreme responses.
 
 ### Perturbing and pinning inputs
 
-One short paragraph for perturbing inputs (1 pixel changed means diff is shown). One paragraph for pinning inputs.
+The right sidebar shows the current input image. Turn on **Perturb** and click
+pixels to edit them; nansense re-runs the model and the layer cards switch to
+showing the diff, so you can watch a single changed pixel ripple through the
+network.
+
+By default the views follow the live training batch, which changes every step.
+Turn on **Pin** to freeze the current batch as a fixed input that nansense
+re-runs at every update — so you can watch one input's activations evolve as
+training proceeds, and across time travel.
 
 ### Running experiments
 
-One short paragraph how to open and configure experiments.
+Each layer card has an **Experiment** button. On the experiment page, pick a
+method — deep dream, or a Captum attribution (Grad-CAM, Neuron Gradient, Neuron
+Integrated Gradients, Occlusion) — set its parameters, and run it on the layer.
+Experiments run between batches, so training must be paused; results show one
+card per input sample.
 
 ### Recording videos
 
-One paragraph on recording videos.
+The settings dialog records any view to an MP4 — one frame per visualization
+update, written under `nansense_recordings/`. Start a recording with a layer
+watched or an experiment open, then save or discard it from the same dialog.
 
 ## Use the library
 
@@ -129,9 +160,10 @@ additionally enables `nansense.lightning`. Runs on Python 3.10–3.14.
 import torch
 import nansense
 
-# Init model, optimizer, dataloaders
+# Init model, optimizer, criterion, dataloaders
 model = ...
 optimizer = ...
+criterion = ...
 train_dl, val_dl = ...
 
 # Nansense needs to know the total number of batches in each phase
@@ -140,25 +172,27 @@ phases = {"train": len(train_dl), "val": len(val_dl)}
 # Setup UI
 session = nansense.start(model, epochs=50, phases=phases, optimizer=optimizer, port=8080, enabled=True)
 
-# Restorer while/with loop: wrap the epoch loop so the UI can back off and restart training at a different epoch for time-travel
+# Time-travel needs an epoch cache: the restorer wraps the epoch loop so a
+# UI-requested jump can unwind it and re-enter at a different epoch. Without it,
+# training runs once through and the Time Travel button is disabled.
 restorer = session.training_restorer(cache_dir="models/latest")
 while restorer.pending():
     with restorer:
-        # time-travel aware epochs iteration: use just like `for epoch in range(50)`
+        # Time-travel aware epoch iteration: use just like `for epoch in range(50)`
         for epoch in restorer.epochs():
-            # Training batch iteration (matched phase="train")
-            for input, targets in session.batches(train_dl, phase="train", epoch=epoch):
+            # Training batch iteration (matches phase="train")
+            for inputs, targets in session.batches(train_dl, phase="train", epoch=epoch):
                 optimizer.zero_grad()
                 loss = criterion(model(inputs), targets)
                 loss.backward()
                 optimizer.step()
-            # Validation batch iteration ...
+            # Validation batch iteration (matches phase="val") ...
 
-# Close the UI
+# Close the UI (the served page stays up for post-mortem browsing)
 session.close()
 ```
 
-See [Python API]() for more information.
+See the [Python API](#python-api) for more information.
 
 ### Wire it into your loop: PyTorch Lightning
 
@@ -166,28 +200,55 @@ See [Python API]() for more information.
 import lightning as L
 from nansense.lightning import NansenseCallback, fit_with_time_travel
 
-# Pytorch Lightning modules
+# PyTorch Lightning modules
 module = ...
 datamodule = ...
 
-# `model="net"` is the attribute path to the attribute path to the network inside your LightningModule. Eg. module.net
+# `model="net"` is the attribute path to the network inside your LightningModule, e.g. module.net
 callback = NansenseCallback(port=8080, model="net", enabled=True)
 
-# Time-travel: trainer factor enables restarting the training at different epochs
-trainer_factor = lambda: L.Trainer(max_epochs=50)
+# Time travel consumes the running fit, so the trainer comes from a factory:
+# fit_with_time_travel builds a fresh Trainer for each jump-and-replay attempt.
+trainer_factory = lambda: L.Trainer(max_epochs=50)
 fit_with_time_travel(trainer_factory, module, datamodule=datamodule, callback=callback)
 ```
 
-See [Python API]() for more information.
+See the [Python API](#python-api) for more information.
 
 ### Python API
 
-TBD. Fill it in, especially the `start`, `training_restorer` and `NansenseCallback`
+`nansense.start(model, *, epochs, phases, ...)` creates the `Session` and, when
+`port=` is given, serves the UI. The arguments worth knowing:
 
-The full `start()` surface, NansenseCallback, etc: TBD.
+- `epochs` / `phases` — the run's shape. `phases` maps each phase name to its
+  batch count, e.g. `{"train": len(train_dl), "val": len(val_dl)}` (order
+  matters — the last entry is each epoch's final phase). Declaring it up front is
+  what lets nansense pause exactly on epoch and run boundaries.
+- `optimizer` (optional) — adds per-parameter optimizer state and live
+  hyperparameters to the weights page.
+- `scheduler` (optional) — lets time-travel checkpoints restore the LR schedule.
+- `enabled` — `False` makes the session a near-zero-overhead no-op, so you can
+  leave the wiring in place and switch the UI off with one flag.
+- `port` / `host` / `open_browser` — serve the UI immediately; omit `port` and
+  call `nansense.serve(session, port=...)` separately for finer control.
+- `input_mean` / `input_std` — the input normalization, so images display in
+  their original colors.
 
-**DDP** needs no special wiring: call `nansense.start()` on every rank (pass
-the DDP-wrapped model — it's unwrapped automatically). Rank 0 serves the UI and
-drives pausing, everything else should just work. DDP support is currently experimental.
+Iterate each phase with `session.batches(loader, phase=..., epoch=...)`, and call
+`session.close()` when training finishes (the served page stays up for
+post-mortem browsing). For time travel, create a restorer with
+`session.training_restorer(cache_dir=...)` (default `models/latest`) and wrap the
+epoch loop in `while restorer.pending(): with restorer:` as shown above.
+
+For **PyTorch Lightning**, attach a `NansenseCallback(model="<attr path to the
+network>", ...)` to your trainer and run the fit through `fit_with_time_travel`,
+which owns the jump-and-replay loop. Both accept the same `port` / `host` /
+`enabled` / `input_mean` / `input_std` arguments as `start`.
+
+**Distributed (DDP)** needs no special wiring: call `nansense.start()` on every
+rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and
+drives pausing and stepping; the other ranks follow its pace and fold their data
+shard into the watch-page statistics. Time travel works too — wrap every rank's
+epoch loop in a restorer. See `examples/standard/main.py --distributed`.
 
 See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood (it's long).
