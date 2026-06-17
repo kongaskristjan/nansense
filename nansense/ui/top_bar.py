@@ -122,8 +122,10 @@ def _add_step_controls(
         else:
             session.step_batch()
 
-    ui.button("Run", on_click=run, color="green").props("dense size=md").tooltip(
-        "Run to the last batch of training, then pause"
+    run_button = (
+        ui.button("Run", on_click=run, color="green")
+        .props("dense size=md")
+        .tooltip("Run to the last batch of training, then pause")
     )
     with ui.dropdown_button(
         "Step Batch",
@@ -142,20 +144,32 @@ def _add_step_controls(
             "Pick a phase/epoch/batch to pause at",
             step_until_custom.open,
         )
-    ui.button("Stop", on_click=session.stop, color="red").props(
-        "dense size=md"
-    ).tooltip("Pause at next batch")
+    stop_button = (
+        ui.button("Stop", on_click=session.stop, color="red")
+        .props("dense size=md")
+        .tooltip("Pause at next batch")
+    )
     _add_time_travel_button(session)
     position_label = ui.label("(waiting for first batch)").classes(
         "ml-3 font-mono text-sm"
     )
+    # Run is grayed while training advances (started by Run or any Step), Stop
+    # while it sits paused — the same 0.2s timer that tracks the live position
+    # toggles both off `session.is_running`. `None` forces the first apply.
+    last_running: bool | None = None
 
-    def refresh_position() -> None:
+    def refresh() -> None:
+        nonlocal last_running
         live = session.live_position
         if live is not None:
             position_label.text = format_position(live)
+        running = session.is_running
+        if running != last_running:
+            last_running = running
+            run_button.set_enabled(not running)
+            stop_button.set_enabled(running)
 
-    ui.timer(0.2, refresh_position)
+    ui.timer(0.2, refresh)
 
 
 def _step_menu_item(

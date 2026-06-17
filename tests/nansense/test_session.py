@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 
 import pytest
@@ -295,6 +296,41 @@ def test_stop_then_step_pauses_at_next_batch() -> None:
     thread.join(timeout=5)
     assert not thread.is_alive()
     assert sum(captured) >= 1
+
+
+def test_is_running_false_while_paused_and_after_each_step() -> None:
+    """`is_running` is False whenever the worker sits paused at a captured
+    batch — including after a Step resumes it onto the next one. The top bar
+    grays Stop from this (and Run from its negation)."""
+    with paused_session(TinyNet(), phases={"train": 3}) as session:
+        assert session.is_running is False
+        session.step_batch()
+        assert session.wait_until_paused(after_pauses=1, timeout=5)
+        assert session.is_running is False
+
+
+def test_is_running_true_while_worker_advances_a_batch() -> None:
+    """While the worker is actively inside a batch (here under detach, which
+    never pauses), `is_running` is True — what grays out Run mid-run."""
+    session, model = make_session(epochs=1, phases={"train": 1})
+    session.detach()
+    in_batch = threading.Event()
+    release = threading.Event()
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            in_batch.set()
+            assert release.wait(timeout=5)
+            train_step(model)
+
+    thread = run_in_thread(loop)
+    try:
+        assert in_batch.wait(timeout=5)
+        assert session.is_running is True
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
 
 
 def test_set_schedule_mid_run() -> None:

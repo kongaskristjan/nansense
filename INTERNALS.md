@@ -19,6 +19,9 @@ Synchronization is a single `threading.Condition` (`Session._cv`) protecting:
 - `_resume_token` — monotonic counter; bumped by every "go" command.
 - `_pause_count` — monotonic counter; bumped each time the training thread
   enters `_wait_for_proceed`.
+- `_paused` — True while the training thread sits in `_wait_for_proceed`,
+  False while it advances batches; surfaced point-in-time as the `is_running`
+  property the top bar grays Run/Stop from.
 - `_closed` — flips once on `close()`.
 - `_schedule` — mutated by `set_schedule()` and time-travel rewinds.
 - `_pending_jump` — armed by `request_time_travel()`, consumed at batch
@@ -254,7 +257,9 @@ pause began.
 `_pause_count` is the symmetric counter for the UI side:
 `wait_until_paused(after_pauses=N, timeout=...)` blocks until the worker
 has paused more than `N` times. Tests and the UI use this to synchronize
-without polling.
+without polling. The `is_running` property (`not _paused and not _closed`)
+is the point-in-time companion the top bar polls to gray out Run while
+training advances and Stop while it is paused.
 
 ## Snapshot lifecycle
 

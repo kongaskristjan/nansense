@@ -239,6 +239,11 @@ class Session:
         self._cv = threading.Condition()
         self._resume_token = 0
         self._pause_count = 0
+        # True while the training thread sits in `_wait_for_proceed` (paused at
+        # a batch), False while it is actively advancing batches. The top bar
+        # reads it through `is_running` to gray out Run while running and Stop
+        # while stopped.
+        self._paused = False
         self._closed = False
         self._activations: dict[str, Tensor] = {}
         self._hook_handles: list[RemovableHandle] = []
@@ -460,6 +465,17 @@ class Session:
     def pause_count(self) -> int:
         with self._cv:
             return self._pause_count
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the training thread is actively advancing batches.
+
+        False while paused at a batch (waiting for a UI Step/Run/Stop command)
+        or once the session has closed; True while a step/run/detach is in
+        flight. The top bar grays out Run while running and Stop while stopped.
+        """
+        with self._cv:
+            return not self._paused and not self._closed
 
     def batch(self, *, phase: str, epoch: int) -> _BatchContext:
         return _BatchContext(self, phase=phase, epoch=epoch)
@@ -1481,6 +1497,7 @@ class Session:
         with self._cv:
             seen = self._resume_token
             self._pause_count += 1
+            self._paused = True
             self._cv.notify_all()
         # An unserved enabled session has no UI to resume a pause. A separate
         # driver thread (e.g. the test harness) still works — it resumes within
@@ -1516,6 +1533,8 @@ class Session:
                     or self._closed
                     or self._pending_jump is not None
                 )
+                if done:
+                    self._paused = False
                 run_probe = False
                 experiment: ExperimentRequest | None = None
                 if not done:
