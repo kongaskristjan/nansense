@@ -97,30 +97,33 @@ class InputPanel:
 
     def _build(self) -> None:
         # One compact column: the image first (it is what everything below
-        # acts on), then its sample selector, then the "Probe" and "Perturb"
-        # control sections.
+        # acts on), then its sample selector, then the "Pin", "Forward mode"
+        # and "Perturb" control sections.
         with ui.column().classes("w-full items-center gap-2"):
-            ui.label("Input Selection").classes("font-mono text-sm self-start")
             # Full pane width, so the image scales with the (resizable)
             # pane; clicks stay in native pixel space regardless of CSS size.
             self._image = ui.interactive_image(
                 on_mouse=self._on_image_click, events=["mousedown"]
             ).style("width:100%; image-rendering:pixelated")
             with ui.row().classes("w-full items-center justify-between no-wrap"):
-                ui.label("Viewing sample:").classes("text-sm")
+                # The batch size is filled in once known (see
+                # `sync_spinner_max`); the sample index itself is 0-based.
+                self._sample_label = ui.label("Select sample in batch:").classes(
+                    "text-sm"
+                )
                 self._sample_input = ui.number(
                     value=0,
                     min=0,
                     step=1,
                     format="%d",
                     on_change=self._on_sample_change,
-                ).classes("w-20").props("dense")
+                ).classes("w-16").props("dense")
             self._error_label = ui.label("").classes(
                 "text-xs text-red-600 self-start"
             )
 
             ui.separator()
-            self._section_label("Probe")
+            self._section_label("Pin")
             self._pin_switch = ui.switch(
                 "Pin batch",
                 value=self._session.is_pinned,
@@ -129,6 +132,14 @@ class InputPanel:
                 "Re-run the model on this fixed batch at every pause (a probe "
                 "run), instead of showing the changing training batch"
             )
+            self._pinned_caption = ui.label("").classes(
+                "text-xs text-slate-500 font-mono self-start"
+            )
+
+            ui.separator()
+            self._section_label("Forward mode")
+            # Shown regardless of the pin switch so the mode can be chosen up
+            # front; it only takes effect on probe forwards (which need a pin).
             self._mode_toggle = ui.toggle(
                 _PROBE_MODE_OPTIONS,
                 value=self._session.probe_mode,
@@ -138,11 +149,6 @@ class InputPanel:
                 "BatchNorm running stats and disables dropout; Unchanged runs "
                 "with whatever modes training left; Train uses batch stats and "
                 "dropout. All modes restore the model's state afterwards."
-            )
-            # Probe mode only applies to probe runs, which need a pinned batch.
-            self._mode_toggle.bind_visibility_from(self._pin_switch, "value")
-            self._pinned_caption = ui.label("").classes(
-                "text-xs text-slate-500 font-mono self-start"
             )
 
             ui.separator()
@@ -254,6 +260,7 @@ class InputPanel:
             return
         self._spinner_max = new_max
         self._sample_input.max = new_max
+        self._sample_label.text = f"Select sample in batch ({batch_size}):"
         if self.sample_idx > new_max:
             self.sample_idx = new_max
             self._sample_input.value = new_max
