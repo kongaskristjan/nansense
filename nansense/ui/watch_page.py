@@ -10,9 +10,10 @@ from dataclasses import dataclass, field, replace
 
 import plotly.graph_objects as go
 from nicegui import ui
+from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 
-from nansense.patches import PATCH_TYPES, PatchType
+from nansense.patches import PatchType
 from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.bin_samples import sample_bin
@@ -72,13 +73,11 @@ class _WatchPageState:
     # (re-expressed for the new scale) instead of auto-fitting to the data —
     # see `_HistPlot`. Lives with the histogram-view controls.
     retain_axes: bool = False
-    # MIN/MAX view state: which of the four grids are shown (only "Max
-    # pixel" starts checked) and whether the activation heatmap is blended
-    # over the patches. HISTOGRAM is the default view.
+    # MIN/MAX view state: which one of the four grids is shown (a radio
+    # group defaulting to "Max pixel") and whether the activation heatmap
+    # is blended over the patches. HISTOGRAM is the default view.
     view_minmax: bool = False
-    grid_on: dict[PatchType, bool] = field(
-        default_factory=lambda: {t: t == "max_pixel" for t in PATCH_TYPES}
-    )
+    grid_type: PatchType = "max_pixel"
     heat_on: bool = False
     # Every card shows one phase at a time, picked by a header dropdown
     # shared by both views; defaults to the schedule's first phase.
@@ -120,10 +119,10 @@ def _build_watch_page(
       checkboxes and a per-histogram "Per channel" switch.
     - MIN/MAX — the extreme-activation patch grids
       (channels across, per-channel top samples down), one per patch
-      type, each toggleable by its own checkbox (only "Max pixel" starts
-      checked), plus a heatmap checkbox
+      type, picked one at a time by a radio group (defaulting to "Max
+      pixel"), plus a heatmap checkbox
       that blends the stored activation maps over the patches.
-    Each checkbox group is only visible while its view is selected. A
+    Each control group is only visible while its view is selected. A
     `ui.timer` polls `session.watch_snapshot()` and refreshes the visible
     view in place. Layers can also be unwatched directly from the card
     header here, which drops the corresponding accumulator entry — the
@@ -183,8 +182,8 @@ def _build_watch_page(
         state.selected_layer = new
         await refresh()
 
-    async def set_grid(ptype: PatchType, value: bool) -> None:
-        state.grid_on[ptype] = value
+    async def set_grid(ptype: PatchType) -> None:
+        state.grid_type = ptype
         await refresh()
 
     async def set_heat(value: bool) -> None:
@@ -202,9 +201,6 @@ def _build_watch_page(
             return None
         phase = state.selected_phase
         if state.view_minmax:
-            grids = tuple(t for t in PATCH_TYPES if state.grid_on[t])
-            if not grids:
-                return None
             return RecordedView(
                 key="watch_minmax",
                 page="watch_minmax",
@@ -212,7 +208,7 @@ def _build_watch_page(
                 params={
                     "layers": tuple(watched),
                     "phase": phase,
-                    "grids": grids,
+                    "grids": (state.grid_type,),
                     "heatmap": state.heat_on,
                     "input_mean": input_mean,
                     "input_std": input_std,
@@ -282,7 +278,7 @@ def _build_watch_page(
                     "layers watched"
                 )
                 hist_boxes: list[ui.checkbox] = []
-                minmax_boxes: list[ui.checkbox] = []
+                minmax_boxes: list[DisableableElement] = []
                 with ui.column().classes("w-full gap-1") as hist_controls:
                     hist_boxes.append(
                         ui.checkbox(
@@ -314,19 +310,15 @@ def _build_watch_page(
                         )
                     )
                 with ui.column().classes("w-full gap-1") as minmax_controls:
-                    for ptype in PATCH_TYPES:
-                        minmax_boxes.append(
-                            ui.checkbox(
-                                _PATCH_TYPE_LABELS[ptype],
-                                value=state.grid_on[ptype],
-                                on_change=lambda e, p=ptype: set_grid(
-                                    p, bool(e.value)
-                                ),
-                            ).props("dense").classes("text-sm").tooltip(
-                                f"Show the {_PATCH_TYPE_LABELS[ptype].lower()} "
-                                "grid"
-                            )
+                    minmax_boxes.append(
+                        ui.radio(
+                            _PATCH_TYPE_LABELS,
+                            value=state.grid_type,
+                            on_change=lambda e: set_grid(e.value),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Which extreme-activation patch grid to show"
                         )
+                    )
                     minmax_boxes.append(
                         ui.checkbox(
                             "Enable heatmap",
@@ -1113,7 +1105,7 @@ class _WatchLayerPanel:
         the current content is already up to date.
         """
         per_phase = self._phase_view(snap)
-        enabled = [t for t in PATCH_TYPES if self._state.grid_on[t]]
+        enabled = [self._state.grid_type]
         heatmap = self._state.heat_on
         sig = _patch_grids_signature(per_phase, enabled, heatmap)
         if sig == self._grid_sig:
