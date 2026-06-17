@@ -1,4 +1,4 @@
-"""Histogram math and Plotly figure construction for the watch views.
+"""Histogram math and Plotly figure construction for the stats views.
 
 Pure functions over plotly + snapshot types — no UI state. The public
 (non-underscore) names are also the contract `nansense.recording` renders

@@ -1,4 +1,4 @@
-"""Tests for patch grids, bin-sample strips, and figure payloads in nansense.ui.watch_page."""
+"""Tests for patch grids, bin-sample strips, and figure payloads in nansense.ui.stats_page."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import torch
 from nansense.patches import PATCH_TYPES, PatchAccumulator
 from nansense.session import BatchSnapshot
 from nansense.ui.histograms import _make_histogram_figure
-from nansense.ui.watch_page import (
+from nansense.ui.stats_page import (
     _ALL_LAYERS_MAX,
     _HOVER_EVENT,
     _LAYER_ALL,

@@ -278,7 +278,7 @@ renders free.
 
 Independently of the snapshot path, the session can collect running
 statistics for any subset of layer names — driven by the eye-icon
-toggle on the main page, surfaced on the `/watch` deep-dive page.
+toggle on the main page, surfaced on the `/stats` deep-dive page.
 
 `Session.watch(name)` / `unwatch(name)` mutate the `_watched_layers`
 set under `_cv`. The `Session.watched_layers` snapshot is a
@@ -415,7 +415,7 @@ histogram buckets are ~2 KB and live forever, but a patch bucket holds
 a *whole input image per channel*, so the cost scales with `C` and the
 input resolution (a 512-channel layer at 192×256 is multiple GB). When
 a newer epoch starts for the same `(layer, phase)`, older epochs' patch
-buffers are released — the `/watch` page only renders the latest epoch
+buffers are released — the `/stats` page only renders the latest epoch
 per phase, so nothing visible is lost. `forget_layer` /
 `forget_epochs_from` (unwatch, time travel) drop patches together with
 the rest of the bucket.
@@ -499,8 +499,8 @@ advances under stepping/time travel), a hover description, a Details button,
 and one DISABLE button per present category. The details dialog explains the
 problem and lists the affected layers in a table — one column per reason whose
 check *ran* (so under/overflow columns show even when only NaN tripped),
-percentages per layer, and a per-row **Watch** button (or a **Histogram** link
-to `/watch` once the layer is watched, since the gradient histogram needs a
+percentages per layer, and a per-row **Watch** button (or a **Stats** link
+to `/stats` once the layer is watched, since the gradient histogram needs a
 few watched batches first). The gear settings dialog's "Error checks" section
 edits the `DebugSettings` (enable, interval, per-check toggles, threshold %)
 via `Session.set_debug_settings`.
@@ -971,7 +971,7 @@ control methods. It never touches tensors except to render them, and never
 touches the model — that invariant belongs to the training thread.
 
 One module per page plus shared support: `app.py` (`serve` + page routes),
-`main_page.py`, `watch_page.py`, `weights_page.py`, `experiment_page.py`,
+`main_page.py`, `stats_page.py`, `weights_page.py`, `experiment_page.py`,
 `top_bar.py` (the shared top-bar/step controls and the time-travel,
 settings/recording, and step-until dialogs), `input_panel.py` (the main
 page's right sidebar), `render.py` + `histograms.py` (pure render/plot
@@ -1049,7 +1049,7 @@ The top-bar position label has its own 200 ms timer reading
 capture), so the epoch/batch counter advances during `step_run` / `detach`
 where `snapshot.position` would stay frozen.
 
-**`/watch` page.** One `_WatchLayerPanel` per watched layer, switchable between
+**`/stats` page.** One `_WatchLayerPanel` per watched layer, switchable between
 a HISTOGRAM and a MIN/MAX extreme-patch view; a 2 s timer feeds
 `session.watch_snapshot()` to the visible view. The constraint shaping this
 page is the **websocket keepalive budget** (~6 s): snapshotting and rendering

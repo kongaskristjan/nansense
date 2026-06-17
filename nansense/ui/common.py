@@ -115,7 +115,7 @@ def _refuse_unwatch_while_recording(session: Session) -> bool:
     if not _watch_views_recording(session):
         return False
     ui.notify(
-        "Watched layers are frozen while a watch view is recording",
+        "Watched layers are frozen while a stats view is recording",
         type="warning",
     )
     return True

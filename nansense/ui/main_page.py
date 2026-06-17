@@ -233,7 +233,7 @@ def _build_page(
             ).classes(
                 "ml-auto text-amber-700 font-mono"
             ).props("dense size=md no-caps").tooltip(
-                "Watched layers — click a layer to open its watch view"
+                "Watched layers — click a layer to open its stats view"
             )
             watch_list_container: ui.element
             with watch_chip:
@@ -273,9 +273,9 @@ def _build_page(
                         "px-3 py-2 text-slate-500 text-sm italic"
                     )
                     return
-                # Section header: each entry below opens the watch view
+                # Section header: each entry below opens the stats view
                 # focused on that layer.
-                ui.label("Open watch view").classes(
+                ui.label("Open stats view").classes(
                     "px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider "
                     "text-slate-400 select-none"
                 )
@@ -286,7 +286,7 @@ def _build_page(
                     # browser natively opens middle/ctrl clicks in a new tab
                     # and plain clicks in the current one.
                     ui.menu_item(layer).props(
-                        f'href="/watch?layer={quote(layer)}"'
+                        f'href="/stats?layer={quote(layer)}"'
                     ).classes("font-mono text-sm")
 
         def sync_watch_ui() -> None:
@@ -428,7 +428,7 @@ def _build_page(
         # perturbations, probe mode) are frozen: the recording renders with
         # the live probe state, so the input controls must not change it.
         input_panel.set_frozen(session.recording.is_recording("main"))
-        # Watched-set changes made elsewhere (another tab, the watch page)
+        # Watched-set changes made elsewhere (another tab, the stats page)
         # propagate here: sync flips card visibility and marks the frame
         # dirty so newly visible cards render from the current snapshot.
         if session.watched_layers != state.last_watched:
@@ -801,7 +801,7 @@ class _LayerView:
                         self.grad_html = ui.html("")
         self._card = card
         # A page (re)built with layers already in the watched set (e.g.
-        # after navigating back from `/watch`) shows those cards right away.
+        # after navigating back from `/stats`) shows those cards right away.
         self.set_visible(name in session.watched_layers)
 
     def set_visible(self, visible: bool) -> None:

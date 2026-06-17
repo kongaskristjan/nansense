@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from bisect import bisect_right
 from collections.abc import Callable
+from urllib.parse import quote
 
 from nicegui import ui
 
@@ -879,23 +880,24 @@ def _debug_action_button(
     report: LayerReport,
     watched: frozenset[str],
 ) -> None:
-    """Per-row Watch button, or a Histogram link when already watched.
+    """Per-row Watch button, or a Stats link when already watched.
 
-    Histograms need a watched layer (the watch accumulators feed them), so an
-    unwatched layer first gets watched; the dialog reopens to surface the
-    Histogram link once the watched set includes it.
+    The stats histograms need a watched layer (the watch accumulators feed
+    them), so an unwatched layer first gets watched; the dialog reopens to
+    surface the Stats link once the watched set includes it.
     """
     if report.layer in watched:
-        ui.button("Histogram").props(
-            'href="/watch" dense size=sm flat no-caps color=primary'
-        ).tooltip("Open the watch view's gradient histograms")
+        ui.button("Stats").props(
+            f'href="/stats?layer={quote(report.layer)}" '
+            "dense size=sm flat no-caps color=primary"
+        ).tooltip("Open this layer's stats view (gradient histograms)")
         return
 
     def watch_layer() -> None:
         session.watch(report.layer)
         ui.notify(
             f"Watching {report.layer} — let training step a few batches, then "
-            "open the histogram view.",
+            "open the stats view.",
             type="positive",
         )
         dialog.close()
@@ -903,7 +905,7 @@ def _debug_action_button(
 
     ui.button("Watch", on_click=watch_layer).props(
         "dense size=sm flat no-caps color=primary"
-    ).tooltip("Collect this layer's gradient stats for the histogram view")
+    ).tooltip("Collect this layer's gradient stats for the stats view")
 
 
 def _best_effort_ui_update(update: Callable[[], None]) -> None:

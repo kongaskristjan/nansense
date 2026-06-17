@@ -1,4 +1,4 @@
-"""The `/watch` page: per-layer histograms and extreme-patch grids."""
+"""The `/stats` page: per-layer histograms and extreme-patch grids."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ class _WatchPageState:
     # for every watched layer at once. Defaults (via reconciliation) to the
     # first watched layer so the page stays fast with many layers watched.
     selected_layer: str = ""
-    # Single-flight refresh flags (see `refresh` in `_build_watch_page`).
+    # Single-flight refresh flags (see `refresh` in `_build_stats_page`).
     refresh_running: bool = False
     refresh_dirty: bool = False
     # Last frozen flags pushed to the client, so the per-tick sync only
@@ -97,7 +97,7 @@ class _WatchPageState:
     count_label: ui.label = field(init=False)
 
 
-def _build_watch_page(
+def _build_stats_page(
     session: Session,
     layer_names: list[str],
     selected_layer: str = "",
@@ -129,7 +129,7 @@ def _build_watch_page(
     header here, which drops the corresponding accumulator entry — the
     change is reflected on the main page on next navigation.
     """
-    _page_scaffold("Watching")
+    _page_scaffold("Stats")
     _install_panel_resize()
 
     layer_panels: dict[str, _WatchLayerPanel] = {}
@@ -250,7 +250,7 @@ def _build_watch_page(
                 "border-r-2 border-slate-300 bg-slate-50"
             ).props(_resizable_pane_props("watch-controls")):
                 with ui.row().classes("items-baseline gap-2 no-wrap"):
-                    ui.label("Watching").classes("font-mono text-base font-bold")
+                    ui.label("Stats").classes("font-mono text-base font-bold")
                     state.count_label = ui.label("").classes(
                         "text-sm text-slate-500"
                     )

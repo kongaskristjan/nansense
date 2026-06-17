@@ -49,7 +49,7 @@ from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
 from nansense.ui.graph import build_mermaid
 from nansense.ui.main_page import _RenderCache, _build_page
-from nansense.ui.watch_page import _build_watch_page
+from nansense.ui.stats_page import _build_stats_page
 from nansense.ui.weights_page import _build_weights_page
 
 
@@ -189,9 +189,9 @@ def serve(
             render_cache=render_cache,
         )
 
-    @ui.page("/watch", favicon=str(favicon_path))
-    def watch_page(layer: str = "") -> None:
-        _build_watch_page(
+    @ui.page("/stats", favicon=str(favicon_path))
+    def stats_page(layer: str = "") -> None:
+        _build_stats_page(
             session,
             layer_names,
             layer,
