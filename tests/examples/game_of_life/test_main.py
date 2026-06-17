@@ -62,6 +62,25 @@ def test_dataset_is_deterministic_and_shaped() -> None:
     assert torch.equal(target, life_steps(board.unsqueeze(0), 2).squeeze(0))
 
 
+def test_input_is_one_silent_step_from_random() -> None:
+    """The model input is a random draw advanced one silent GoL step (so it
+    looks less random), and the target is that input advanced ``steps`` further."""
+    size, board_size, density, seed, steps = 8, 12, 0.3, 5, 2
+    ds = GameOfLifeDataset(
+        size=size, board_size=board_size, steps=steps, density=density, seed=seed
+    )
+    # Reproduce the seeded draw and apply the same silent step the dataset does.
+    generator = torch.Generator().manual_seed(seed)
+    probs = torch.rand(size, 1, board_size, board_size, generator=generator)
+    random_boards = (probs < density).float()
+    expected_inputs = life_step(random_boards)
+
+    assert torch.equal(ds.boards, expected_inputs)
+    assert torch.equal(ds.targets, life_steps(expected_inputs, steps))
+    # The silent step actually changes the board (it isn't a raw random draw).
+    assert not torch.equal(ds.boards, random_boards)
+
+
 @pytest.mark.parametrize("board_size", [8, 16])
 @pytest.mark.parametrize("steps", [1, 3])
 def test_build_model_shape_and_fx_traceable(board_size: int, steps: int) -> None:
@@ -78,6 +97,12 @@ def test_default_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
     """The documented default is kept modest for low GPU memory."""
     monkeypatch.setattr(sys, "argv", ["main.py"])
     assert main_module.parse_args().batch_size == 64
+
+
+def test_default_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default K=2: input is 1 silent step from random, target is 3 steps from random."""
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    assert main_module.parse_args().steps == 2
 
 
 def test_training_reduces_bce_loss() -> None:

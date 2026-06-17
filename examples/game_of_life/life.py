@@ -52,18 +52,22 @@ def life_steps(board: Tensor, steps: int) -> Tensor:
 class GameOfLifeDataset(Dataset[tuple[Tensor, Tensor]]):
     """Finite, map-style dataset of random binary boards and their futures.
 
-    ``size`` boards of shape ``[1, board_size, board_size]`` are sampled once
-    (each cell alive with probability ``density``) from a generator seeded with
-    ``seed``, making the dataset fully deterministic. ``__getitem__`` returns
-    ``(board, target)`` where ``target`` is the board advanced ``steps`` (K)
-    Game-of-Life steps under toroidal boundaries.
+    ``size`` random boards of shape ``[1, board_size, board_size]`` are sampled
+    once (each cell alive with probability ``density``) from a generator seeded
+    with ``seed``, making the dataset fully deterministic. Each random board is
+    then advanced one *silent* Game-of-Life step to form the model input: a
+    single step is enough for sparse random noise to die off and local structure
+    (blocks, blinkers, glider fragments) to emerge, so the input looks less
+    random than a raw draw. ``__getitem__`` returns ``(board, target)`` where
+    ``board`` is that one-step input and ``target`` is it advanced a further
+    ``steps`` (K) Game-of-Life steps under toroidal boundaries.
     """
 
     def __init__(
         self,
         size: int,
         board_size: int = 32,
-        steps: int = 1,
+        steps: int = 2,
         density: float = 0.3,
         seed: int = 0,
     ) -> None:
@@ -73,7 +77,10 @@ class GameOfLifeDataset(Dataset[tuple[Tensor, Tensor]]):
         generator = torch.Generator().manual_seed(seed)
         # [size, 1, H, W] float in {0, 1}; one fixed draw for the whole dataset.
         probs = torch.rand(size, 1, board_size, board_size, generator=generator)
-        self.boards: Tensor = (probs < density).float()
+        random_boards = (probs < density).float()
+        # One silent GoL step turns the sparse random draw into something with
+        # local structure, so inputs look less random; targets advance further.
+        self.boards: Tensor = life_step(random_boards)
         # Precompute targets once: cheap, and keeps __getitem__ trivially fast.
         self.targets: Tensor = life_steps(self.boards, steps)
 

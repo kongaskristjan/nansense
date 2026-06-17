@@ -1,8 +1,10 @@
 """Predict Conway's Game of Life K steps into the future, with full nansense wiring.
 
 A fully-convolutional residual net learns the Game-of-Life rule from synthetic
-random boards (no download): the input is a binary board ``[1, H, W]`` and the
-target is that board advanced ``--steps`` (K) steps under toroidal boundaries.
+random boards (no download): the input is a binary board ``[1, H, W]`` (a random
+draw advanced one silent Game-of-Life step, so it looks less random) and the
+target is that board advanced ``--steps`` (K) further steps under toroidal
+boundaries.
 Training minimises a per-cell ``BCEWithLogitsLoss`` and tracks per-cell accuracy.
 
     uv run examples/game_of_life/main.py --nansense-port 8080
@@ -51,8 +53,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--steps",
         type=int,
-        default=1,
-        help="K: how many Game-of-Life steps ahead to predict (default 1).",
+        default=2,
+        help="K: how many Game-of-Life steps ahead to predict (default 2).",
     )
     parser.add_argument("--board-size", type=int, default=32)
     parser.add_argument(
@@ -104,8 +106,8 @@ def default_depth(steps: int) -> int:
 
     One Game-of-Life step needs receptive radius 1; K steps need radius K. Each
     residual block (two 3x3 convs) adds radius 2, so ``steps`` blocks already
-    give radius 2K with margin. A floor of 4 keeps the default K=1 model deep
-    enough to be an interesting net rather than a near-linear one.
+    give radius 2K with margin. A floor of 4 keeps small-K models (including the
+    default) deep enough to be an interesting net rather than a near-linear one.
     """
     return max(4, steps)
 
