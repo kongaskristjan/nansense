@@ -231,17 +231,9 @@ _ARCHITECTURE_CLICK_JS: str = """
     const node = findMermaidNode(slug);
     if (node) node.classList.toggle('nansense-watched', on);
   };
-  // Jump both panes to a layer: the right pane's card and the architecture
-  // pane's mermaid node each scroll within their own container.
-  window.nansenseScrollToLayer = function(slug) {
-    const card = findCard(slug);
-    if (card) scrollTargetToTop(card);
-    const node = findMermaidNode(slug);
-    if (node) scrollTargetToTop(node);
-  };
-  // Card-only variant: used right after a diagram click reveals a card,
-  // where also scrolling the diagram would yank the just-clicked node away
-  // from under the cursor.
+  // Scroll the right pane to a layer's card. Used right after a diagram
+  // click reveals a card; the diagram itself isn't scrolled, which would
+  // yank the just-clicked node away from under the cursor.
   window.nansenseScrollToCard = function(slug) {
     const card = findCard(slug);
     if (card) scrollTargetToTop(card);

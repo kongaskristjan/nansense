@@ -100,6 +100,7 @@ class _WatchPageState:
 def _build_watch_page(
     session: Session,
     layer_names: list[str],
+    selected_layer: str = "",
     *,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
@@ -146,7 +147,11 @@ def _build_watch_page(
 
     ui.on(_HOVER_EVENT, _dispatch_hover)
     state = _WatchPageState(
-        selected_phase=phase_names[0] if phase_names else ""
+        selected_phase=phase_names[0] if phase_names else "",
+        # Seed the layer picked by the caller (e.g. a `?layer=` link from the
+        # main page's watch menu). Reconciliation drops it back to the first
+        # watched layer if it isn't currently watched.
+        selected_layer=selected_layer,
     )
 
     async def set_axis_log_x(value: bool) -> None:

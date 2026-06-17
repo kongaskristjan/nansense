@@ -184,9 +184,13 @@ def serve(
         )
 
     @ui.page("/watch", favicon=str(favicon_path))
-    def watch_page() -> None:
+    def watch_page(layer: str = "") -> None:
         _build_watch_page(
-            session, layer_names, input_mean=input_mean, input_std=input_std
+            session,
+            layer_names,
+            layer,
+            input_mean=input_mean,
+            input_std=input_std,
         )
 
     @ui.page("/weights", favicon=str(favicon_path))

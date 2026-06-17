@@ -233,7 +233,7 @@ def _build_page(
             ).classes(
                 "ml-auto text-amber-700 font-mono"
             ).props("dense size=md no-caps").tooltip(
-                "Watched layers — click to open the watch view or jump to a layer"
+                "Watched layers — click a layer to open its watch view"
             )
             watch_list_container: ui.element
             with watch_chip:
@@ -244,13 +244,6 @@ def _build_page(
                     # never opened. See quasarframework/quasar#16167. Block-level
                     # children stack vertically anyway.
                     with ui.element("div").classes("min-w-64"):
-                        # A real anchor (href) instead of a JS navigate: the
-                        # browser natively opens middle/ctrl clicks in a new
-                        # tab and plain clicks in the current one.
-                        ui.menu_item("Open watch view  →").props(
-                            'href="/watch"'
-                        ).classes("font-medium")
-                        ui.separator()
                         ui.menu_item(
                             "Watch all layers…",
                             on_click=watch_all_dialog.open,
@@ -280,21 +273,20 @@ def _build_page(
                         "px-3 py-2 text-slate-500 text-sm italic"
                     )
                     return
-                # Section header: the entries below scroll the main view to a
-                # layer, which is easy to misread as further actions like the
-                # "Open watch view" item above.
-                ui.label("Jump to layer").classes(
+                # Section header: each entry below opens the watch view
+                # focused on that layer.
+                ui.label("Open watch view").classes(
                     "px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider "
                     "text-slate-400 select-none"
                 )
                 for layer in layer_names:
                     if layer not in watched:
                         continue
-                    ui.menu_item(
-                        layer,
-                        on_click=lambda n=layer: ui.run_javascript(
-                            f"window.nansenseScrollToLayer({json.dumps(slugs[n])})"
-                        ),
+                    # A real anchor (href) instead of a JS navigate: the
+                    # browser natively opens middle/ctrl clicks in a new tab
+                    # and plain clicks in the current one.
+                    ui.menu_item(layer).props(
+                        f'href="/watch?layer={quote(layer)}"'
                     ).classes("font-mono text-sm")
 
         def sync_watch_ui() -> None:
