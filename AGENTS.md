@@ -10,6 +10,7 @@
   - 'nansense/' - Nansense visualization library (no training)
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)
   - `tests/` - Tests for both examples and the nansense library
+  - `assets/` - Assets. `assets/generators/` should contain Python generator scripts for assets that are deterministically generated.
   - `README.md` - How to run examples and the nansense library API usage
   - `INTERNALS.md` - High level overview of nansense library internals
 
