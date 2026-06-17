@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import torch
 
+from nansense import debugger
+from nansense.debugger import DebugError, LayerReport
 from nansense.patches import PATCH_TYPES, PatchAccumulator
 from nansense.session import BatchSnapshot
 from nansense.ui.histograms import _make_histogram_figure
@@ -20,11 +22,17 @@ from nansense.ui.stats_page import (
     _patch_grids_html,
     _patch_grids_signature,
     _reconcile_selected_layer,
+    _should_show_bands,
     _visible_layers,
     _watched_in_order,
 )
 from nansense.watch import ZERO_BIN, LayerStatsSnapshot, bin_index
-from tests.nansense.helpers import _layer_snap, _make_snapshot, _tensor_stats
+from tests.nansense.helpers import (
+    _layer_snap,
+    _make_snapshot,
+    _tensor_stats,
+    make_position,
+)
 
 
 def test_hover_attach_js_uses_one_shared_event_with_element_id() -> None:
@@ -245,3 +253,35 @@ def test_bin_samples_html_missing_gradients_notes_kind() -> None:
         _hover_snapshot(), "conv", "gradient", 0, ZERO_BIN, "x", None, None
     )
     assert "no captured gradients" in out
+
+
+# --- Under/overflow band auto-check on page open ---------------------------
+
+
+def _err(reasons: tuple[str, ...], checks_used: tuple[str, ...]) -> DebugError:
+    return DebugError(
+        position=make_position("train", 0, 1),
+        reasons=reasons,
+        checks_used=checks_used,
+        layers=(LayerReport("l", nan=0.5, inf=0.0, underflow=0.5, overflow=0.0),),
+    )
+
+
+def test_should_show_bands_none_when_no_error() -> None:
+    assert _should_show_bands(None) is False
+
+
+def test_should_show_bands_true_when_under_over_tripped() -> None:
+    # Any route to /stats while an under/overflow issue is active pre-checks
+    # the band — it reads the live error, not a query flag.
+    assert _should_show_bands(
+        _err(("underflow",), (debugger.UNDER_OVER,))
+    ) is True
+    assert _should_show_bands(
+        _err(("nan", "underflow"), (debugger.NAN_INF, debugger.UNDER_OVER))
+    ) is True
+
+
+def test_should_show_bands_false_for_nan_only_issue() -> None:
+    # A NaN/Inf-only issue isn't about under/overflow, so the band stays off.
+    assert _should_show_bands(_err(("nan",), (debugger.NAN_INF,))) is False

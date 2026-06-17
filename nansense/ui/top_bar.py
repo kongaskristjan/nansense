@@ -34,10 +34,11 @@ _DEBUG_DESCRIPTION: str = (
 _DEBUG_UNDER_OVER_INTRO: str = (
     "Underflow / overflow is dtype-aware and measured on gradients: a value "
     "counts as underflow when its magnitude is nonzero but below the dtype's "
-    "smallest normal value (the subnormal range, where the mantissa encodes "
-    "scale rather than precision), and as overflow when its magnitude reaches "
-    "the dtype's largest finite value. A layer trips when that band holds at "
-    "least the threshold share of its summed |gradient|."
+    "smallest normal value — the subnormal range, still representable but with "
+    "fewer and fewer significant bits as it shrinks toward zero (and which "
+    "some hardware flushes straight to zero) — and as overflow when its "
+    "magnitude reaches the dtype's largest finite value. A layer trips when "
+    "that band holds at least the threshold share of its summed |gradient|."
 )
 _DEBUG_WATCH_NOTE: str = (
     "A layer's gradient histogram only becomes available once it has been "
@@ -1009,16 +1010,15 @@ def _debug_action_button(
 
     The stats histograms need a watched layer (the watch accumulators feed
     them), so an unwatched layer first gets watched; the dialog reopens to
-    surface the Stats link once the watched set includes it. When under/overflow
-    tripped, the link pre-checks the stats page's "Show underflow/overflow"
-    band (`bands=1`) so the histogram opens with the band already marked.
+    surface the Stats link once the watched set includes it. The stats page
+    pre-checks its "Show underflow/overflow" band from the active issue itself
+    (`stats_page._should_show_bands`), so any route to it — this link or a
+    layer card's Stats button — opens with the band marked.
     """
     if report.layer in watched:
-        href = f"/stats?layer={quote(report.layer)}"
-        if debugger.UNDER_OVER in debugger.categories_present(error):
-            href += "&bands=1"
         ui.button("Stats").props(
-            f'href="{href}" dense size=sm flat no-caps color=primary'
+            f'href="/stats?layer={quote(report.layer)}" '
+            "dense size=sm flat no-caps color=primary"
         ).tooltip("Open this layer's stats view (gradient histograms)")
         return
 

@@ -518,11 +518,10 @@ dtype-aware under/overflow band in real magnitudes when that check ran
 (`_under_over_band_lines`), and lists the affected layers in a table — one
 column per reason whose check *ran* (so under/overflow columns show even when
 only NaN tripped), percentages per layer, and a per-row **Watch** button (or a
-**Stats** link to `/stats` once the layer is watched — pre-checking the
-histogram's under/overflow band via `bands=1` when that issue is active, since
-the gradient histogram needs a few watched batches first). The gear settings
-dialog's "Error checks" section edits the `DebugSettings` (enable, interval,
-per-check toggles, threshold %) via `Session.set_debug_settings`.
+**Stats** link to `/stats` once the layer is watched, since the gradient
+histogram needs a few watched batches first). The gear settings dialog's
+"Error checks" section edits the `DebugSettings` (enable, interval, per-check
+toggles, threshold %) via `Session.set_debug_settings`.
 
 ## Distributed training (`nansense.distributed`)
 
@@ -1109,9 +1108,11 @@ their own. Only edges within the histogram's `1e-9 .. 1e6` span are drawn — so
 fp32's bands, which sit off both ends, draw nothing (correctly reading as "no
 under/overflow risk at this scale"), while fp16's land in view. The lines are
 layout shapes, so a toggle (or the dtype first becoming known) forces a figure
-rebuild rather than a restyle. The box is pre-checked when arriving from the
-numerical-warning dialog's Stats link on an active under/overflow issue
-(`?bands=1`).
+rebuild rather than a restyle. The box is pre-checked whenever the page opens
+while an under/overflow issue is active (`_should_show_bands` reads
+`session.debug_error`), so any route to `/stats` — a layer card's Stats button,
+the numerical-warning dialog's per-row link, or a direct URL — surfaces the
+band that issue is about.
 
 **`/weights` page** (`?layer=`). One `_WeightPanel` per name in
 `session.layer_weights[layer]`, reading shapes from `model.named_parameters()`

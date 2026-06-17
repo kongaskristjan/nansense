@@ -104,12 +104,24 @@ class _WatchPageState:
     count_label: ui.label = field(init=False)
 
 
+def _should_show_bands(error: debugger.DebugError | None) -> bool:
+    """Whether to pre-check the histogram under/overflow band on page open.
+
+    True while a numerical issue whose under/overflow check *tripped* is
+    active — so opening `/stats` from anywhere (a layer card's Stats button,
+    the warning dialog's per-row link, a direct URL) surfaces the band that
+    issue is about, without threading a query flag through every link.
+    """
+    return error is not None and debugger.UNDER_OVER in debugger.categories_present(
+        error
+    )
+
+
 def _build_stats_page(
     session: Session,
     layer_names: list[str],
     selected_layer: str = "",
     *,
-    show_bands: bool = False,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
@@ -160,9 +172,9 @@ def _build_stats_page(
         # main page's watch menu). Reconciliation drops it back to the first
         # watched layer if it isn't currently watched.
         selected_layer=selected_layer,
-        # Pre-check the under/overflow band when arriving from the debug
-        # dialog's Stats link on an active under/overflow issue (`bands=1`).
-        show_bands=show_bands,
+        # Pre-check the under/overflow band whenever the page opens with an
+        # active under/overflow issue, regardless of how it was reached.
+        show_bands=_should_show_bands(session.debug_error),
     )
 
     async def set_axis_log_x(value: bool) -> None:
