@@ -137,6 +137,12 @@ def test_probe_leaves_no_trace_on_training_state(mode: str) -> None:
     model = BnDropNet()
     with paused_session(model, _bn_drop_step) as session:
         session.set_probe_mode(mode)
+        # Selecting eval/train runs a probe right away (no pin needed), which
+        # transiently flips the module flags. Drain it first so the baselines
+        # below capture the worker's restored resting state, not a mid-probe one.
+        if mode != "unchanged":
+            assert session.wait_for_probe(timeout=5)
+            assert session.probe_error is None
 
         running_mean = model.bn.running_mean
         running_var = model.bn.running_var
@@ -149,8 +155,9 @@ def test_probe_leaves_no_trace_on_training_state(mode: str) -> None:
         rng_before = torch.get_rng_state()
         flags_before = [m.training for m in model.modules()]
 
+        count = session.probe_count
         assert session.pin_current_batch() is True
-        assert session.wait_for_probe(timeout=5)
+        assert session.wait_for_probe(after_count=count, timeout=5)
         assert session.probe_error is None
 
         torch.testing.assert_close(running_mean, mean_before)
@@ -237,6 +244,73 @@ def test_unpin_clears_probe_result() -> None:
         assert session.is_pinned is False
         assert session.probe_result is None
         assert session.pinned_position is None
+
+
+@pytest.mark.parametrize("mode", ["eval", "train"])
+def test_set_mode_without_pin_probes_snapshot_input(mode: str) -> None:
+    """Selecting eval/train re-runs the model on the current snapshot's batch
+    without a pin — the documented "no pin required" behaviour."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        snap = session.snapshot
+        assert snap is not None
+        assert session.probe_result is None
+
+        session.set_probe_mode(mode)
+        assert session.wait_for_probe(timeout=5)
+        probe = session.probe_result
+        assert probe is not None
+        assert session.probe_error is None
+        assert session.is_pinned is False
+        assert probe.mode == mode
+        # The base is the snapshot's (unpinned) input batch.
+        torch.testing.assert_close(probe.input, snap.activations["x"])
+
+
+def test_mode_back_to_unchanged_clears_result_when_not_pinned() -> None:
+    """eval/train -> unchanged with nothing pinned/perturbed drops the result
+    so the page falls back to the live snapshot."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        session.set_probe_mode("eval")
+        assert session.wait_for_probe(timeout=5)
+        assert session.probe_result is not None
+
+        session.set_probe_mode("unchanged")
+        assert session.probe_result is None
+        assert session.is_pinned is False
+
+
+def test_mode_reruns_on_every_capture_without_pin() -> None:
+    """An eval/train mode tracks the changing batch: each capture re-runs the
+    probe on the just-stepped batch, like a pin does but on a live input."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        session.set_probe_mode("eval")
+        assert session.wait_for_probe(timeout=5)
+        first = session.probe_result
+        assert first is not None
+        count = session.probe_count
+
+        session.step_batch()
+        assert session.wait_until_paused(after_pauses=1, timeout=5)
+        assert session.probe_count == count + 1
+        second = session.probe_result
+        assert second is not None and second is not first
+
+
+def test_unpin_with_eval_mode_keeps_probing() -> None:
+    """Unpinning while an eval/train mode is selected keeps probing — now
+    against the snapshot input — instead of clearing the result."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        session.set_probe_mode("eval")
+        assert session.pin_current_batch() is True
+        assert session.wait_for_probe(timeout=5)
+        count = session.probe_count
+
+        session.unpin_batch()
+        assert session.wait_for_probe(after_count=count, timeout=5)
+        probe = session.probe_result
+        assert probe is not None  # eval mode keeps the probe alive
+        assert session.is_pinned is False
+        assert probe.mode == "eval"
 
 
 def test_set_probe_mode_rejects_unknown_mode() -> None:

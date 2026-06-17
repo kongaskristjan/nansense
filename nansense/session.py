@@ -638,7 +638,10 @@ class Session:
 
         Regardless of mode, probes never mutate training state: per-module
         flags and all buffers are restored after the run, and the RNG is
-        forked around it. A mode change while pinned re-runs the probe.
+        forked around it. Selecting `"eval"` or `"train"` itself activates
+        probing — the model is re-run on the current snapshot's batch under
+        that mode, no pin required — and switching back to `"unchanged"`
+        (with nothing pinned or perturbed) drops the result.
         """
         probe.set_probe_mode(self, mode)
 

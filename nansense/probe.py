@@ -122,8 +122,9 @@ def unpin_batch(session: Session) -> None:
             return
         session._pinned_input = None
         session._pinned_position = None
-        if session._perturbations:
-            # Perturbations keep probing, now against the snapshot input.
+        if _probe_active_locked(session):
+            # Perturbations or an "eval"/"train" mode keep probing, now
+            # against the snapshot input.
             request_probe_locked(session)
             return
         _clear_probe_result_locked(session)
@@ -146,7 +147,9 @@ def clear_perturbations(session: Session) -> None:
         if not session._perturbations:
             return
         session._perturbations.clear()
-        if session._pinned_input is not None:
+        if _probe_active_locked(session):
+            # A pin or an "eval"/"train" mode keeps probing without the
+            # cleared perturbations.
             request_probe_locked(session)
             return
         _clear_probe_result_locked(session)
@@ -163,9 +166,13 @@ def set_probe_mode(session: Session, mode: str) -> None:
             return
         session._probe_mode = mode
         if _probe_active_locked(session):
+            # Selecting "eval"/"train" (or changing mode while pinned /
+            # perturbed) re-runs the probe under the new mode.
             request_probe_locked(session)
         else:
-            session._probe_version += 1
+            # Back to "unchanged" with nothing else probing: drop the stale
+            # eval/train result so the UI reverts to the live snapshot.
+            _clear_probe_result_locked(session)
 
 
 def _clear_probe_result_locked(session: Session) -> None:
@@ -178,8 +185,19 @@ def _clear_probe_result_locked(session: Session) -> None:
 
 
 def _probe_active_locked(session: Session) -> bool:
-    """Whether probe runs should happen at all (caller holds `_cv`)."""
-    return session._pinned_input is not None or bool(session._perturbations)
+    """Whether probe runs should happen at all (caller holds `_cv`).
+
+    A pinned batch or any perturbation activates probing, and so does a
+    non-"unchanged" forward mode on its own: "eval"/"train" re-run the model
+    on the current snapshot's batch so the UI shows that batch's activations
+    under the chosen mode — no pin required. "unchanged" only probes when a
+    pin or perturbation gives it something to re-run.
+    """
+    return (
+        session._pinned_input is not None
+        or bool(session._perturbations)
+        or session._probe_mode != "unchanged"
+    )
 
 
 def request_probe_locked(session: Session) -> None:
@@ -241,7 +259,7 @@ def _run_probe(session: Session) -> None:
         pinned = session._pinned_input
         mode = session._probe_mode
         perturbations = dict(session._perturbations)
-    if pinned is None and not perturbations:
+    if pinned is None and not perturbations and mode == "unchanged":
         return
     base = pinned if pinned is not None else session._snapshot_input()
     if base is None:

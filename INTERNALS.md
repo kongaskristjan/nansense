@@ -640,6 +640,13 @@ Perturbations alone keep probing active without a pin — the base falls
 back to the snapshot's input (`_snapshot_input`), so edits track the
 current training batch.
 
+**Mode activates probing too.** `_probe_active_locked` treats a
+non-`"unchanged"` forward mode as active on its own, alongside a pin or any
+perturbation. So selecting `"eval"`/`"train"` re-runs the model on the
+current snapshot's batch under that mode (no pin needed), and switching back
+to `"unchanged"` with nothing pinned or perturbed clears the result so the
+UI reverts to the live snapshot.
+
 **Publishing and races.** Probe config (pinned input, mode, perturbations)
 is mutated by the UI thread under `_cv`, bumping `_probe_version`.
 `_run_probe` snapshots the config under the lock, computes without it, then

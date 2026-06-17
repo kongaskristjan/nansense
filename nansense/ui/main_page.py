@@ -437,9 +437,10 @@ def _build_page(
         if session.watched_layers != state.last_watched:
             sync_watch_ui()
         snap = session.snapshot
-        # With a probe result present (a batch is pinned), the page renders
-        # the probe instead of the snapshot — that's the point of pinning:
-        # the strips track one fixed input across stepping and time travel.
+        # With a probe result present (a batch is pinned, or an eval/train
+        # forward mode is selected), the page renders the probe instead of the
+        # snapshot: pinning tracks one fixed input across stepping and time
+        # travel, while eval/train shows the current batch under that mode.
         probe = session.probe_result
         if snap is None and probe is None:
             return

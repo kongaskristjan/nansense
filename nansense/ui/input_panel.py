@@ -138,8 +138,9 @@ class InputPanel:
 
             ui.separator()
             self._section_label("Forward mode")
-            # Shown regardless of the pin switch so the mode can be chosen up
-            # front; it only takes effect on probe forwards (which need a pin).
+            # Eval/Train re-run the model on the current batch under that mode
+            # on their own (no pin needed); Unchanged only shows a re-run when
+            # a batch is pinned or a pixel is perturbed.
             self._mode_toggle = ui.toggle(
                 _PROBE_MODE_OPTIONS,
                 value=self._session.probe_mode,
@@ -148,7 +149,9 @@ class InputPanel:
                 "Train/eval handling for probe forwards. Unchanged (default) "
                 "runs with whatever modes training left; Eval uses BatchNorm "
                 "running stats and disables dropout; Train uses batch stats "
-                "and dropout. All modes restore the model's state afterwards."
+                "and dropout. Selecting Eval or Train re-runs the current "
+                "batch under that mode even without a pin; all modes restore "
+                "the model's state afterwards."
             )
 
             ui.separator()
