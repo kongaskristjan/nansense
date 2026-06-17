@@ -451,8 +451,9 @@ values and are masked by the renderer.
 ## Numerical-error debugger (`nansense.debugger`)
 
 The debugger watches for two numerical failures and pauses training when it
-finds one, surfacing a red banner in the UI. It runs every *n*th batch
-(default 10, configurable/toggleable) so a clean run pays almost nothing.
+first finds one, surfacing a yellow *warning* banner in the UI. It runs every
+*n*th batch (default 10, configurable/toggleable) so a clean run pays almost
+nothing.
 
 - **NaN / ±Inf** — trips if a single non-finite value appears in any checked
   tensor (forward activations, activation gradients, and weight gradients).
@@ -474,7 +475,9 @@ finite_abssum]` vector per layer (weight gradients are mapped to layers via
 `Session.layer_weights`, exactly like the snapshot), stacks them, and pulls
 the whole batch's counters to the CPU in a single transfer. It returns a
 frozen `DebugError` (the tripped `reasons`, the `checks_used` categories, and
-a `LayerReport` per affected layer) or `None`.
+a `LayerReport` per affected layer) or `None`. Each `LayerReport` also carries
+the scanned gradient's `dtype`, so the UI can name the band edges
+(`finfo.tiny` / `finfo.max`, via `debugger.dtype_band`) in real magnitudes.
 
 **Lifecycle integration.** `_should_debug_check(pos)` mirrors
 `_should_freq_update`: a training-thread `_debug_counter` throttles checks to
@@ -482,33 +485,44 @@ every *n*th batch, independent of mode (so detach / run-until are covered),
 leader-only under DDP. A check batch installs hooks like a capture/stats
 batch (it needs the activation gradients), and `_run_debug_checks` runs at
 `__exit__` *before* `remove_hooks`, while the activations and their retained
-`.grad` are still live. On a hit it records the error, resets `_debug_counter`
-to 0 (so the next Step re-checks immediately rather than waiting out the
-interval), and calls `stop()` — which forces this batch to publish a snapshot
-(so the affected layers have data behind the banner) and pause, even in a
-free-running mode.
+`.grad` are still live. The *first* hit of an episode records the error, resets
+`_debug_counter` to 0 (so the next Step re-checks immediately rather than
+waiting out the interval), and calls `stop()` — forcing this batch to publish a
+snapshot (so the affected layers have data behind the banner) and pause, even
+in a free-running mode (it returns `True` from `_run_debug_checks`, the
+`debug_force` that gates the publish+pause). Once a banner is standing, later
+hits **merge** into it (`debugger.merged`: union the reasons/`checks_used`,
+keep the *first* error's position, keep each layer's worst observed fraction)
+and return `False` — so a user who chose to proceed past the first issue keeps
+running while the warning accumulates rather than stopping every *n*th batch.
 
 `Session.debug_error` is published as an atomic reference and read lock-free
-by the UI. It is cleared by any resume command (`_set_mode(resume=True)`), so
-a Step dismisses the banner and the next checked batch re-raises it if the
-problem persists; `stop()` resumes nothing, so an error-stop keeps its banner.
+by the UI. Resuming no longer clears it (`_set_mode(resume=True)` leaves it
+alone) — the warning stands across Run/Step so detections can accumulate. It
+is cleared only by silencing the active checks (the banner/dialog "Silence
+warning" button → `disable_debug_check` for every present category) or by a
+time-travel rewind (`_rewind_to_epoch`, the abandoned timeline's banner).
 `disable_debug_check(category)` turns off one check (`"nan_inf"` or
 `"under_over"`) and trims that category's reasons/columns from the active
 error via `without_category` (the banner clears entirely if nothing remains).
 
 **UI** (`top_bar._add_error_banner`, added under every page's top bar): a
-0.2 s timer polls `session.debug_error`, rebuilding the full-width banner when
-the record identity changes and hiding it when it clears. The banner shows the
-reasons and the error's `epoch | phase batch` (frozen as the live position
-advances under stepping/time travel), a hover description, a Details button,
-and one DISABLE button per present category. The details dialog explains the
-problem and lists the affected layers in a table — one column per reason whose
-check *ran* (so under/overflow columns show even when only NaN tripped),
-percentages per layer, and a per-row **Watch** button (or a **Stats** link
-to `/stats` once the layer is watched, since the gradient histogram needs a
-few watched batches first). The gear settings dialog's "Error checks" section
-edits the `DebugSettings` (enable, interval, per-check toggles, threshold %)
-via `Session.set_debug_settings`.
+0.2 s timer polls `session.debug_error`, rebuilding the full-width yellow
+warning banner (amber background, ⚠ icon) when the record identity changes
+(every detection / merge makes a fresh frozen record) and hiding it when it
+clears. The banner shows "Numerical issue detected", the reasons, and the
+*first* error's `epoch | phase batch`, a hover description, a Details button,
+and a single **Silence warning** button (turns off the active checks and
+dismisses the warning). The details dialog explains the problem, spells out the
+dtype-aware under/overflow band in real magnitudes when that check ran
+(`_under_over_band_lines`), and lists the affected layers in a table — one
+column per reason whose check *ran* (so under/overflow columns show even when
+only NaN tripped), percentages per layer, and a per-row **Watch** button (or a
+**Stats** link to `/stats` once the layer is watched — pre-checking the
+histogram's under/overflow band via `bands=1` when that issue is active, since
+the gradient histogram needs a few watched batches first). The gear settings
+dialog's "Error checks" section edits the `DebugSettings` (enable, interval,
+per-check toggles, threshold %) via `Session.set_debug_settings`.
 
 ## Distributed training (`nansense.distributed`)
 
@@ -1075,15 +1089,29 @@ histogram view is showing.
 The histogram view's one load-bearing design choice: routine ticks **restyle
 the Plotly figure in place** (`Plotly.update`) — only bar counts change, and an
 in-place restyle preserves client-side zoom/pan for free — and the figure is
-rebuilt only when the *structure* changes (a phase appears/disappears, or a
-log-axis toggle flips). A **Per channel** switch swaps each phase's universal
-histogram for one channel row, falling back to the universal histogram where
-rows are absent (1D layers, collapsed older epochs); hovering a bar while
-per-channel samples that `(channel, bin)` cell from the **last captured
-snapshot** — the running histogram discards its source values each batch, so
-the snapshot is the only population available. The axis-scaling and
-bar-clipping heuristics live in `histograms.py`; their tunables are constants at
-the top of that module.
+rebuilt only when the *structure* changes (a phase appears/disappears, a
+log-axis toggle flips, or the under/overflow band toggles). A **Per channel**
+switch swaps each phase's universal histogram for one channel row, falling back
+to the universal histogram where rows are absent (1D layers, collapsed older
+epochs); hovering a bar while per-channel samples that `(channel, bin)` cell
+from the **last captured snapshot** — the running histogram discards its source
+values each batch, so the snapshot is the only population available. The
+axis-scaling and bar-clipping heuristics live in `histograms.py`; their
+tunables are constants at the top of that module.
+
+A **Show underflow/overflow** checkbox marks the dtype-aware band edges
+(`±finfo.tiny`, `±finfo.max`) as dotted vertical lines spanning every phase row
+(`histograms.under_over_line_positions` / `_add_under_over_lines`). The band is
+per-stream: each `TensorStatsSnapshot` carries the source `dtype` (recorded by
+`TensorAccumulator` before its fp32 reduction cast, preserved across the
+distributed reduce overlay), and the activation/gradient histograms each use
+their own. Only edges within the histogram's `1e-9 .. 1e6` span are drawn — so
+fp32's bands, which sit off both ends, draw nothing (correctly reading as "no
+under/overflow risk at this scale"), while fp16's land in view. The lines are
+layout shapes, so a toggle (or the dtype first becoming known) forces a figure
+rebuild rather than a restyle. The box is pre-checked when arriving from the
+numerical-warning dialog's Stats link on an active under/overflow issue
+(`?bands=1`).
 
 **`/weights` page** (`?layer=`). One `_WeightPanel` per name in
 `session.layer_weights[layer]`, reading shapes from `model.named_parameters()`

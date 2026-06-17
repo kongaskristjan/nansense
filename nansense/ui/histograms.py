@@ -718,6 +718,77 @@ def _retained_y_range(
     return [math.log10(floor), math.log10(top)]
 
 
+# Dotted band-edge lines for the dtype-aware under/overflow regions (amber-700,
+# reads against any bar color). Only edges that fall within the histogram's
+# representable magnitude range (1e-9 .. 1e6) are drawn — fp32's bands, for
+# instance, sit off either end of the axis, which correctly reads as "no
+# under/overflow risk visible at these magnitudes".
+_UNDER_OVER_LINE_COLOR: str = "#b45309"
+_HIST_MIN_MAGNITUDE: float = 10.0**LOG10_MIN
+_HIST_MAX_MAGNITUDE: float = 10.0**LOG10_MAX
+
+
+def under_over_line_positions(
+    band: tuple[float, float], log_x: bool
+) -> list[tuple[float, str]]:
+    """In-range band-edge `(x, label)` lines for the under/overflow regions.
+
+    `band` is `(tiny, max)` (from `debugger.dtype_band`). Lines are placed at
+    `±tiny` (the underflow/subnormal edge) and `±max` (the overflow/saturation
+    edge), but only when the edge magnitude lies strictly within the
+    histogram's `1e-9 .. 1e6` span. The x-coordinate matches the figure's axis:
+    a continuous bin-index coordinate on the signed-log axis, the plain value
+    on the linear axis. Only the positive-side edge carries the text label, to
+    keep the symmetric pair from doubling it.
+    """
+    tiny, maxv = band
+    out: list[tuple[float, str]] = []
+    for value, label in (
+        (tiny, "underflow"),
+        (-tiny, ""),
+        (maxv, "overflow"),
+        (-maxv, ""),
+    ):
+        if _HIST_MIN_MAGNITUDE < abs(value) < _HIST_MAX_MAGNITUDE:
+            x = _value_to_bin_coord(value) if log_x else value
+            out.append((x, label))
+    return out
+
+
+def _add_under_over_lines(
+    fig: go.Figure,
+    band: tuple[float, float],
+    *,
+    log_x: bool,
+    n_rows: int,
+) -> None:
+    """Draw the under/overflow band-edge lines across every subplot row."""
+    for x, label in under_over_line_positions(band, log_x):
+        for row in range(1, n_rows + 1):
+            # Label only the top row's positive-side edge — passing annotation
+            # kwargs at all would otherwise create an invisible (text-`None`)
+            # annotation that shifts later annotation indices.
+            annotation = (
+                dict(
+                    annotation_text=label,
+                    annotation_position="top",
+                    annotation_font_size=9,
+                    annotation_font_color=_UNDER_OVER_LINE_COLOR,
+                )
+                if (row == 1 and label)
+                else {}
+            )
+            fig.add_vline(
+                x=x,
+                row=row,
+                col=1,
+                line_color=_UNDER_OVER_LINE_COLOR,
+                line_width=1,
+                line_dash="dot",
+                **annotation,
+            )
+
+
 def _make_histogram_figure(
     per_phase: dict[str, LayerStatsSnapshot],
     kind: str,
@@ -727,6 +798,7 @@ def _make_histogram_figure(
     log_y: bool = False,
     trace_names: list[str] | None = None,
     override_ranges: tuple[list[float] | None, list[float] | None] | None = None,
+    under_over_band: tuple[float, float] | None = None,
 ) -> tuple[go.Figure, tuple[list[float] | None, list[float] | None]]:
     """Plotly bar chart of the signed-log histogram, one subplot row per phase.
 
@@ -764,6 +836,12 @@ def _make_histogram_figure(
     to the data — used by the "Retain axes" toggle to carry the current view
     across a rebuild. The off-view bar blanking still tracks the applied
     x-range, so hovering stays correct.
+
+    `under_over_band` is the `(tiny, max)` dtype band (from
+    `debugger.dtype_band`) for this stream's dtype. When given, dotted vertical
+    lines mark the band edges that fall within the histogram's representable
+    magnitude range, so the gradient distribution can be read against the
+    dtype's underflow (subnormal) and overflow (saturation) thresholds.
     """
     phase_hists = _phase_hists(per_phase, kind)
     if override_ranges is not None:
@@ -893,4 +971,8 @@ def _make_histogram_figure(
             font=dict(size=10),
         ),
     )
+    if under_over_band is not None:
+        _add_under_over_lines(
+            fig, under_over_band, log_x=log_x, n_rows=max(1, len(phase_hists))
+        )
     return fig, (x_range, y_range)

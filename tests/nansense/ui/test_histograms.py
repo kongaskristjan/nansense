@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import pytest
+import torch
 
 from nansense.ui.histograms import (
     BIN_CENTERS,
@@ -30,6 +31,7 @@ from nansense.ui.histograms import (
     _retained_y_range,
     _stats_table_html,
     _trimmed_bin_bounds,
+    under_over_line_positions,
     _value_to_bin_coord,
     _x_range_linear_to_log,
     _x_range_log_to_linear,
@@ -695,6 +697,74 @@ def test_histogram_rows_share_the_capped_y_range() -> None:
     assert expected is not None
     assert tuple(fig.layout.yaxis.range) == tuple(expected)
     assert tuple(fig.layout.yaxis2.range) == tuple(expected)
+
+
+# --- Watching histogram: dtype under/overflow band lines --------------------
+
+
+def _fp16_band() -> tuple[float, float]:
+    finfo = torch.finfo(torch.float16)
+    return finfo.tiny, finfo.max
+
+
+def test_under_over_line_positions_fp16_linear_uses_values() -> None:
+    tiny, maxv = _fp16_band()
+    pos = under_over_line_positions((tiny, maxv), log_x=False)
+    values = [x for x, _ in pos]
+    # Both edges of both signs land in the histogram's 1e-9..1e6 span; on the
+    # linear axis the x-coordinate is the raw value.
+    assert values == [tiny, -tiny, maxv, -maxv]
+    # Only the positive edges carry a text label (the symmetric pair would
+    # otherwise double it).
+    assert {label for _, label in pos if label} == {"underflow", "overflow"}
+
+
+def test_under_over_line_positions_fp32_out_of_range() -> None:
+    finfo = torch.finfo(torch.float32)
+    # fp32's subnormal / saturation edges sit off both ends of the axis, so
+    # nothing is drawn — which reads as "no under/overflow risk at this scale".
+    assert under_over_line_positions((finfo.tiny, finfo.max), log_x=False) == []
+
+
+def test_under_over_line_positions_log_uses_bin_coords() -> None:
+    pos = under_over_line_positions(_fp16_band(), log_x=True)
+    by_label = {label: x for x, label in pos if label}
+    # Signed-log axis: x is the continuous bin coordinate — positive edges sit
+    # right of the zero band, overflow further out than underflow.
+    assert by_label["underflow"] > ZERO_BIN
+    assert by_label["overflow"] > by_label["underflow"]
+    assert all(0.0 <= x <= N_BINS for x, _ in pos)
+
+
+def test_make_histogram_figure_draws_band_lines() -> None:
+    per_phase = {"train": _layer_snap("train", hist={ZERO_BIN + 40: 100})}
+    fig, _ = _make_histogram_figure(
+        per_phase, "gradient", "g", under_over_band=_fp16_band()
+    )
+    # Four in-range edges → four dotted vertical lines, positive ones labeled.
+    lines = [s for s in fig.layout.shapes if s.type == "line"]
+    assert len(lines) == 4
+    assert all(s.line.dash == "dot" for s in lines)
+    texts = {a.text for a in fig.layout.annotations}
+    assert "underflow" in texts and "overflow" in texts
+
+
+def test_make_histogram_figure_no_band_lines_without_band() -> None:
+    per_phase = {"train": _layer_snap("train", hist={ZERO_BIN + 40: 100})}
+    fig, _ = _make_histogram_figure(per_phase, "gradient", "g")
+    assert list(fig.layout.shapes) == []
+
+
+def test_make_histogram_figure_band_lines_span_every_phase_row() -> None:
+    per_phase = {
+        "train": _layer_snap("train", hist={ZERO_BIN + 40: 100}),
+        "val": _layer_snap("val", hist={ZERO_BIN + 40: 100}),
+    }
+    fig, _ = _make_histogram_figure(
+        per_phase, "gradient", "g", under_over_band=_fp16_band()
+    )
+    # Four edges drawn on each of the two phase rows.
+    assert len([s for s in fig.layout.shapes if s.type == "line"]) == 8
 
 
 # --- Watching stats table ----------------------------------------------------

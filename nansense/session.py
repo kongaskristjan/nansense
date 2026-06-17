@@ -557,7 +557,16 @@ class Session:
             return snap
         stats = {
             key: (
-                replace(layer_snap, activations=r[0], gradients=r[1])
+                # The reduced stats don't carry the source dtype; keep the
+                # local accumulator's so the histogram's under/overflow band
+                # still shows on the leader.
+                replace(
+                    layer_snap,
+                    activations=replace(
+                        r[0], dtype=layer_snap.activations.dtype
+                    ),
+                    gradients=replace(r[1], dtype=layer_snap.gradients.dtype),
+                )
                 if (r := reduced.get(key)) is not None
                 else layer_snap
             )
@@ -1212,11 +1221,12 @@ class Session:
         with self._cv:
             self._mode = mode
             if resume:
-                # Any "go" command (step/detach) dismisses the error banner;
-                # the next checked batch re-raises it if the problem persists.
-                # `stop()` resumes nothing (resume=False), so an error-stop
-                # keeps its banner up for inspection.
-                self._debug_error = None
+                # Resuming no longer clears the numerical-error banner: once
+                # training has stopped on an issue, proceeding keeps the banner
+                # standing and later detections accumulate into it without
+                # stopping again (see `_run_debug_checks`). It is cleared only
+                # by silencing the checks (`disable_debug_check`) or a
+                # time-travel rewind (`_rewind_to_epoch`).
                 self._resume_token += 1
                 self._cv.notify_all()
 
@@ -1283,14 +1293,19 @@ class Session:
             self._debug_counter += 1
             return do_check
 
-    def _run_debug_checks(self, pos: BatchPosition) -> DebugError | None:
+    def _run_debug_checks(self, pos: BatchPosition) -> bool:
         """Run the debugger over this batch's live tensors (training thread).
 
         Called at `__exit__` while the captured activations (and their
-        retained `.grad`) are still resident, so it sees the same gradients
-        the snapshot will. On a hit it records the error and stops training
-        (STEP mode) so the batch pauses for inspection; the next checked batch
-        re-raises the banner if the problem persists.
+        retained `.grad`) are still resident, so it sees the same gradients the
+        snapshot will. Returns whether this batch should force a publish+pause.
+
+        The *first* detection of an episode records the error and stops
+        training (STEP mode) so the batch pauses for inspection — returning
+        `True`. Once a banner is standing, resuming does not clear it (see
+        `_set_mode`); further detections merge into it (`debugger.merged`)
+        *without* stopping again — returning `False` — so a user who chose to
+        proceed past the first issue keeps running while the banner grows.
         """
         with self._cv:
             settings = self._debug_settings
@@ -1313,13 +1328,19 @@ class Session:
             weight_grads=weight_grads,
             layer_weights=self._layer_weights,
         )
-        if error is not None:
-            self._debug_error = error
-            # Re-check the very next batch so a Step immediately re-evaluates,
-            # rather than waiting out the rest of the interval.
-            self._debug_counter = 0
-            self.stop()
-        return error
+        if error is None:
+            return False
+        existing = self._debug_error
+        if existing is not None:
+            # An episode is already on screen — accumulate and keep running.
+            self._debug_error = debugger.merged(existing, error)
+            return False
+        self._debug_error = error
+        # Re-check the very next batch so a Step immediately re-evaluates,
+        # rather than waiting out the rest of the interval.
+        self._debug_counter = 0
+        self.stop()
+        return True
 
     def _record_frames(self) -> None:
         """Append one frame to every active recording (training thread).
@@ -1484,6 +1505,9 @@ class Session:
             # Restart the per-batch update cadence so post-jump frames fire on
             # a clean phase instead of wherever the abandoned timeline left it.
             self._freq_counter = 0
+            # The standing numerical-error banner belonged to the abandoned
+            # timeline; drop it so the re-run starts clean and can stop afresh.
+            self._debug_error = None
         self._watch_accumulator.forget_epochs_from(epoch)
         # Re-running this (or any later) epoch must re-save fresh RNG, so clear
         # the "already saved" marker — otherwise the re-run's pre-iter save in
@@ -1723,18 +1747,20 @@ class _BatchContext:
                     # the UI never shows a pause with stale global stats.
                     distributed.reduce_watch_stats(self._session)
                 # Numerical-error checks read the live activations and their
-                # retained gradients, so they run before the hooks come off. A
-                # detected error stops training and forces this batch to
-                # publish + pause (even in a free-running mode) so the UI can
-                # show the affected layers behind the banner.
-                debug_error = (
+                # retained gradients, so they run before the hooks come off.
+                # The *first* detected error stops training and forces this
+                # batch to publish + pause (even in a free-running mode) so the
+                # UI can show the affected layers behind the banner. Once a
+                # banner is up, later detections accumulate without stopping
+                # (no force), so a resumed run keeps going.
+                debug_force = (
                     self._session._run_debug_checks(self._position)
                     if exc is None and self._debug_check
-                    else None
+                    else False
                 )
                 capture.remove_hooks(self._session)
                 if exc is None and not self._session.closed:
-                    force = debug_error is not None
+                    force = debug_force
                     if self._publishes or force:
                         self._session._publish_snapshot(self._position)
                         # The snapshot holds CPU clones of everything; drop the

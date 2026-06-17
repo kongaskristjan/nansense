@@ -17,6 +17,7 @@ from nansense.ui.top_bar import (
     _debug_pct,
     _summarize_epoch_ranges,
     _time_travel_default_index,
+    _under_over_band_lines,
     _validate_step_until_target,
 )
 from tests.nansense.helpers import (
@@ -270,10 +271,54 @@ def test_debug_banner_summary_lists_reasons_and_position() -> None:
         layers=(LayerReport("l", nan=1.0, inf=0.0, underflow=0.5, overflow=0.0),),
     )
     summary = _debug_banner_summary(error)
+    # Reframed as a warning: "Numerical issue detected", not "error".
+    assert summary.startswith("Numerical issue detected")
     assert "NaN" in summary
     assert "underflow" in summary
     assert "epoch 2" in summary
     assert "val batch 7" in summary
+
+
+def test_under_over_band_lines_name_dtype_and_magnitudes() -> None:
+    import torch
+
+    finfo = torch.finfo(torch.float16)
+    error = DebugError(
+        position=make_position("train", 0, 1),
+        reasons=("underflow",),
+        checks_used=(debugger.UNDER_OVER,),
+        layers=(
+            LayerReport(
+                "l", nan=0.0, inf=0.0, underflow=0.5, overflow=0.0,
+                dtype=torch.float16,
+            ),
+        ),
+    )
+    lines = _under_over_band_lines(error)
+    assert len(lines) == 1
+    assert "float16" in lines[0]
+    assert "underflow" in lines[0] and "overflow" in lines[0]
+    # The real band magnitudes are spelled out.
+    assert f"{finfo.tiny:.2e}" in lines[0]
+    assert f"{finfo.max:.2e}" in lines[0]
+
+
+def test_under_over_band_lines_one_per_distinct_dtype() -> None:
+    import torch
+
+    error = DebugError(
+        position=make_position("train", 0, 1),
+        reasons=("underflow",),
+        checks_used=(debugger.UNDER_OVER,),
+        layers=(
+            LayerReport("a", 0.0, 0.0, 0.5, 0.0, dtype=torch.float16),
+            LayerReport("b", 0.0, 0.0, 0.4, 0.0, dtype=torch.float16),
+            LayerReport("c", 0.0, 0.0, 0.3, 0.0, dtype=torch.bfloat16),
+        ),
+    )
+    lines = _under_over_band_lines(error)
+    # Distinct dtypes only: float16 once (shared by a, b) plus bfloat16.
+    assert len(lines) == 2
 
 
 @pytest.mark.parametrize(

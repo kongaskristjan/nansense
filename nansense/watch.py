@@ -146,6 +146,11 @@ class TensorStatsSnapshot:
     # tracking is off for this accumulator (1D tensors, a dim-1 size change,
     # or an older epoch collapsed when a newer one started for its phase).
     channel_hists: tuple[tuple[int, ...], ...] | None = None
+    # The dtype of the source tensor (before the fp32 reduction cast), so the
+    # UI can place the dtype-aware under/overflow band on the histogram.
+    # `None` when no data has been seen (or after a cross-rank reduction that
+    # didn't carry it).
+    dtype: torch.dtype | None = None
 
     @property
     def mean(self) -> float:
@@ -285,12 +290,17 @@ class TensorAccumulator:
         # with a usable channel axis, dropped by `collapse_channels`.
         self._channel_hist: Tensor | None = None
         self._channels_off = False
+        # The source dtype, recorded on the first non-empty update (before the
+        # fp32 reduction cast), so the UI can show the under/overflow band.
+        self._dtype: torch.dtype | None = None
 
     def update(self, x: Tensor, *, channel_limit: int | None = None) -> None:
         if x.numel() == 0:
             return
         if self._stats is None:
             self._stats = _RunningStats.zeros(x.device)
+        if self._dtype is None:
+            self._dtype = x.dtype
         stats = self._stats
         flat = x.detach().to(torch.float32).reshape(-1)
         # Scalar reductions run over the finite values only. A single NaN
@@ -452,6 +462,7 @@ class TensorAccumulator:
                 min=float("inf"),
                 max=float("-inf"),
                 hist=tuple([0] * N_BINS),
+                dtype=self._dtype,
             )
         # One sync per scalar group; the histogram lands separately because
         # it's int64 and the scalars are float32.
@@ -471,6 +482,7 @@ class TensorAccumulator:
             max=float(scalars[3].item()),
             hist=tuple(int(c) for c in hist_cpu.tolist()),
             channel_hists=channel_hists,
+            dtype=self._dtype,
         )
 
 

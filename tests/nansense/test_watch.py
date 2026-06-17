@@ -134,6 +134,16 @@ def test_accumulator_starts_empty() -> None:
     assert math.isnan(snap.mean)
     assert math.isnan(snap.median)
     assert all(c == 0 for c in snap.hist)
+    # No data seen, so no source dtype to place the under/overflow band at.
+    assert snap.dtype is None
+
+
+def test_accumulator_records_source_dtype() -> None:
+    # The snapshot carries the source dtype (before the fp32 reduction cast)
+    # so the UI can mark the dtype-aware under/overflow band on the histogram.
+    acc = TensorAccumulator()
+    acc.update(torch.full((8,), 1.0, dtype=torch.float16))
+    assert acc.snapshot().dtype is torch.float16
 
 
 def test_accumulator_aggregates_across_updates() -> None:

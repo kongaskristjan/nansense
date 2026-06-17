@@ -13,6 +13,7 @@ from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 
+from nansense import debugger
 from nansense.patches import PatchType
 from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session
@@ -74,6 +75,11 @@ class _WatchPageState:
     # (re-expressed for the new scale) instead of auto-fitting to the data —
     # see `_HistPlot`. Lives with the histogram-view controls.
     retain_axes: bool = False
+    # Whether to mark the dtype-aware underflow/overflow band edges on each
+    # histogram (the "Show underflow/overflow" checkbox). Seeded on via the
+    # `bands=1` query param the debug dialog's Stats link adds when an
+    # under/overflow issue is active.
+    show_bands: bool = False
     # MIN/MAX view state: which one of the four grids is shown (a radio
     # group defaulting to "Max pixel") and whether the activation heatmap
     # is blended over the patches. HISTOGRAM is the default view.
@@ -103,6 +109,7 @@ def _build_stats_page(
     layer_names: list[str],
     selected_layer: str = "",
     *,
+    show_bands: bool = False,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
@@ -153,6 +160,9 @@ def _build_stats_page(
         # main page's watch menu). Reconciliation drops it back to the first
         # watched layer if it isn't currently watched.
         selected_layer=selected_layer,
+        # Pre-check the under/overflow band when arriving from the debug
+        # dialog's Stats link on an active under/overflow issue (`bands=1`).
+        show_bands=show_bands,
     )
 
     async def set_axis_log_x(value: bool) -> None:
@@ -167,6 +177,12 @@ def _build_stats_page(
         # Just flips the flag; the refresh leaves a frozen view untouched and
         # re-fits on un-check (so the axes snap back to the data immediately).
         state.retain_axes = value
+        await refresh()
+
+    async def set_show_bands(value: bool) -> None:
+        # Toggles the dtype-aware underflow/overflow band lines on every
+        # histogram; each plot rebuilds to add/remove its layout shapes.
+        state.show_bands = value
         await refresh()
 
     async def set_mode(value: object) -> None:
@@ -313,6 +329,17 @@ def _build_stats_page(
                             "Keep the current axis ranges when toggling Log x / "
                             "Log y or switching phase, instead of auto-fitting "
                             "to the data"
+                        )
+                    )
+                    hist_boxes.append(
+                        ui.checkbox(
+                            "Show underflow/overflow",
+                            value=state.show_bands,
+                            on_change=lambda e: set_show_bands(bool(e.value)),
+                        ).props("dense").classes("text-sm").tooltip(
+                            "Mark the dtype's underflow (subnormal) and overflow "
+                            "(saturation) magnitude bands with dotted lines — "
+                            "in-range edges only (fp32's sit off the axis)"
                         )
                     )
                 with ui.column().classes("w-full gap-1") as minmax_controls:
@@ -689,6 +716,11 @@ class _HistPlot:
         # data refresh (restyle) from a structural change (rebuild).
         self._phases: list[str] = []
         self._axis = self._current_axis()
+        # The under/overflow band currently drawn (band-edge lines are layout
+        # shapes that only a rebuild can add/remove/move), so a toggle of the
+        # "Show underflow/overflow" checkbox — or the dtype first becoming
+        # known — forces a rebuild.
+        self._band: tuple[float, float] | None = None
         # Last axis ranges applied (set by every figure build, including the
         # empty one below), so refreshes only push a relayout when a cap
         # actually moved (a range write resets zoom on that axis).
@@ -834,6 +866,22 @@ class _HistPlot:
         )
         self._samples.set_content(content)
 
+    def _under_over_band(
+        self, per_phase: dict[str, LayerStatsSnapshot]
+    ) -> tuple[float, float] | None:
+        """The dtype-aware band edges for this stream, or `None`.
+
+        `None` when the checkbox is off or no data dtype is known yet (the band
+        is dtype-derived, so it can't be placed until a tensor has been seen).
+        """
+        if not self._state.show_bands:
+            return None
+        for snap in per_phase.values():
+            dtype = kind_stats(snap, self._kind).dtype
+            if dtype is not None:
+                return debugger.dtype_band(dtype)
+        return None
+
     def update(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
         self._last_per_phase = per_phase
         self._sync_channel_controls(per_phase)
@@ -844,11 +892,14 @@ class _HistPlot:
         density = use_density(log_x)
         retain = self._state.retain_axes
         phase_hists = _phase_hists(per_phase, self._kind)
-        if phases != self._phases or axis != self._axis:
-            # A phase appeared/disappeared or an axis-scale checkbox
-            # flipped — rebuild the whole figure. With "Retain axes" on, carry
-            # the current view across (re-expressed for the new scale); else
-            # let the build fit the ranges to the data and cache them.
+        band = self._under_over_band(per_phase)
+        if phases != self._phases or axis != self._axis or band != self._band:
+            # A phase appeared/disappeared, an axis-scale checkbox flipped, or
+            # the under/overflow band toggled — rebuild the whole figure (the
+            # band-edge lines are layout shapes only a rebuild can change).
+            # With "Retain axes" on, carry the current view across
+            # (re-expressed for the new scale); else let the build fit the
+            # ranges to the data and cache them.
             override = (
                 self._retained_ranges(axis, phase_hists) if retain else None
             )
@@ -860,10 +911,12 @@ class _HistPlot:
                 log_y=log_y,
                 trace_names=self._trace_names(per_phase),
                 override_ranges=override,
+                under_over_band=band,
             )
             self.element.update_figure(_figure_payload(fig))
             self._phases = phases
             self._axis = axis
+            self._band = band
             if not retain:
                 self._capture_y_top(phase_hists, density, self._y_range)
         elif phases:

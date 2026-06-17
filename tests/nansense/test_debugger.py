@@ -3,6 +3,7 @@ integration into the session's batch lifecycle."""
 
 from __future__ import annotations
 
+import pytest
 import torch
 from torch import Tensor, nn
 
@@ -12,6 +13,8 @@ from nansense.debugger import (
     DebugError,
     DebugSettings,
     LayerReport,
+    dtype_band,
+    merged,
     run_checks,
     without_category,
 )
@@ -160,6 +163,84 @@ def test_under_over_check_off_ignores_subnormals() -> None:
     )
 
 
+# --- Dtype band: recorded on the report, finfo-backed ----------------------
+
+
+def test_report_records_grad_dtype() -> None:
+    # The report carries the scanned gradient's dtype so the UI can show the
+    # band edges (the histogram/dialog read `finfo.tiny` / `finfo.max`).
+    grad = torch.full((100,), 1e-5, dtype=torch.float16)
+    error = _check(activation_grads={"l": grad}, layer_weights={"l": []})
+    assert error is not None
+    assert error.layers[0].dtype is torch.float16
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.bfloat16])
+def test_dtype_band_matches_finfo(dtype: torch.dtype) -> None:
+    finfo = torch.finfo(dtype)
+    assert dtype_band(dtype) == (finfo.tiny, finfo.max)
+
+
+# --- merged: accumulate later detections into the standing banner ----------
+
+
+def test_merged_unions_reasons_and_keeps_first_position() -> None:
+    first = DebugError(
+        position=make_position("train", 0, 1),
+        reasons=("nan",),
+        checks_used=(debugger.NAN_INF,),
+        layers=(LayerReport("a", nan=0.5, inf=0.0, underflow=0.0, overflow=0.0),),
+    )
+    later = DebugError(
+        position=make_position("train", 2, 4),
+        reasons=("underflow",),
+        checks_used=(debugger.UNDER_OVER,),
+        layers=(
+            LayerReport(
+                "b", nan=0.0, inf=0.0, underflow=0.3, overflow=0.0,
+                dtype=torch.float16,
+            ),
+        ),
+    )
+    out = merged(first, later)
+    # Reasons/checks union (in fixed order); the *first* error's position wins.
+    assert out.reasons == ("nan", "underflow")
+    assert out.checks_used == (debugger.NAN_INF, debugger.UNDER_OVER)
+    assert out.position == first.position
+    assert [r.layer for r in out.layers] == ["a", "b"]
+
+
+def test_merged_takes_worst_fraction_per_layer() -> None:
+    first = DebugError(
+        position=_POS,
+        reasons=("underflow",),
+        checks_used=(debugger.UNDER_OVER,),
+        layers=(
+            LayerReport(
+                "a", nan=0.0, inf=0.0, underflow=0.2, overflow=0.0,
+                dtype=torch.float16,
+            ),
+        ),
+    )
+    later = DebugError(
+        position=make_position("train", 1, 0),
+        reasons=("underflow",),
+        checks_used=(debugger.UNDER_OVER,),
+        layers=(
+            LayerReport(
+                "a", nan=0.0, inf=0.0, underflow=0.7, overflow=0.0,
+                dtype=torch.float16,
+            ),
+        ),
+    )
+    out = merged(first, later)
+    # A layer seen in both keeps its largest observed share, and the dtype
+    # carries through.
+    assert len(out.layers) == 1
+    assert out.layers[0].underflow == 0.7
+    assert out.layers[0].dtype is torch.float16
+
+
 # --- Multi-reason aggregation, checks_used, columns ------------------------
 
 
@@ -294,7 +375,9 @@ def test_session_stops_on_detected_nan() -> None:
     assert not thread.is_alive()
 
 
-def test_resume_clears_error_but_stop_keeps_it() -> None:
+def test_resume_keeps_error_and_rewind_clears_it() -> None:
+    """A standing banner survives resuming (so later detections accumulate into
+    it, request 3); only a time-travel rewind (new timeline) clears it."""
     model = nn.Linear(4, 3)
     session = nansense.start(model, epochs=1, phases={"train": 2})
     fake = DebugError(
@@ -309,9 +392,43 @@ def test_resume_clears_error_but_stop_keeps_it() -> None:
     session.stop()
     assert session.debug_error is fake
 
-    # Any "go" command dismisses the banner.
+    # Resuming no longer clears it — the warning stays up while training runs.
     session.detach()
+    assert session.debug_error is fake
+
+    # A time-travel rewind belongs to the new timeline and drops it.
+    session._rewind_to_epoch(0)
     assert session.debug_error is None
+
+
+def test_resume_after_error_runs_on_without_re_stopping() -> None:
+    """Once stopped on a numerical issue, resuming runs to the end without
+    pausing again; the standing banner persists and accumulates."""
+    model = _NanNet()
+    session = nansense.start(model, epochs=1, phases={"train": 3})
+    session.set_debug_settings(interval=1)  # check every batch
+
+    def loop() -> None:
+        for _ in range(3):
+            with session.batch(phase="train", epoch=0):
+                train_step(model)
+
+    thread = run_in_thread(loop)
+    try:
+        # First batch detects the NaN and stops.
+        assert session.wait_until_paused(timeout=5.0)
+        assert session.debug_error is not None
+        pauses = session._pause_count
+        # Resume: the run completes without pausing again, banner persists.
+        session.detach()
+        thread.join(timeout=5.0)
+        assert not thread.is_alive()
+        assert session.debug_error is not None
+        assert session._pause_count == pauses  # no further error-stops
+    finally:
+        session.set_debug_settings(enabled=False)
+        session.detach()
+        thread.join(timeout=5.0)
 
 
 def test_disable_debug_check_toggles_setting_and_trims_banner() -> None:

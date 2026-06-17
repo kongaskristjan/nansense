@@ -94,7 +94,10 @@ class LayerReport:
     """Per-layer fractions for one detected error (a row in the dialog table).
 
     `nan` / `inf` are fractions of *element count*; `underflow` / `overflow`
-    are fractions of the layer's summed ``|grad|``. All in ``[0, 1]``.
+    are fractions of the layer's summed ``|grad|``. All in ``[0, 1]``. `dtype`
+    is the gradient dtype the under/overflow band was measured against (its
+    `finfo.tiny` / `finfo.max` are the band edges), or `None` when no
+    floating-point gradient was scanned for the layer.
     """
 
     layer: str
@@ -102,6 +105,7 @@ class LayerReport:
     inf: float
     underflow: float
     overflow: float
+    dtype: torch.dtype | None = None
 
 
 @dataclass(frozen=True)
@@ -210,6 +214,9 @@ def run_checks(
         return None
 
     names: list[str] = []
+    # The gradient dtype each layer's under/overflow band was measured against
+    # (aligned with `names`), so the report can name the band edges.
+    dtypes: list[torch.dtype | None] = []
     vectors: list[Tensor] = []
     for name in _ordered_layers(layer_weights, activations):
         grad_tensors: list[Tensor] = []
@@ -232,6 +239,7 @@ def run_checks(
         if not ni_tensors and not scan_grads:
             continue
         names.append(name)
+        dtypes.append(grad_tensors[0].dtype if grad_tensors else None)
         vectors.append(_layer_metrics(ni_tensors, scan_grads, device))
 
     if not vectors:
@@ -242,8 +250,8 @@ def run_checks(
 
     reports: list[LayerReport] = []
     nan_hit = inf_hit = under_hit = over_hit = False
-    for name, (nan_c, inf_c, total_c, under_s, over_s, finite_s) in zip(
-        names, stacked
+    for name, dtype, (nan_c, inf_c, total_c, under_s, over_s, finite_s) in zip(
+        names, dtypes, stacked
     ):
         nan_f = nan_c / total_c if total_c > 0 else 0.0
         inf_f = inf_c / total_c if total_c > 0 else 0.0
@@ -267,6 +275,7 @@ def run_checks(
                     inf=inf_f,
                     underflow=under_f,
                     overflow=over_f,
+                    dtype=dtype,
                 )
             )
 
@@ -293,6 +302,56 @@ def run_checks(
         checks_used=checks_used,
         layers=tuple(reports),
     )
+
+
+def merged(existing: DebugError, new: DebugError) -> DebugError:
+    """Fold a freshly detected error into the one already on screen.
+
+    Once training has stopped on a numerical issue and the user resumes, later
+    detections accumulate into the standing banner instead of stopping again
+    (see `Session._run_debug_checks`). The merge keeps `existing.position` (the
+    *first* error's, which the banner reports), unions the reasons and
+    `checks_used`, and merges the per-layer rows — a layer seen in both keeps
+    the larger fraction per reason (its worst observed share), preserving the
+    existing layers' order and appending any newly affected ones.
+    """
+    seen_reasons = set(existing.reasons) | set(new.reasons)
+    reasons = tuple(r for r in REASONS if r in seen_reasons)
+    seen_checks = set(existing.checks_used) | set(new.checks_used)
+    checks_used = tuple(c for c in (NAN_INF, UNDER_OVER) if c in seen_checks)
+    by_layer: dict[str, LayerReport] = {r.layer: r for r in existing.layers}
+    for r in new.layers:
+        prev = by_layer.get(r.layer)
+        if prev is None:
+            by_layer[r.layer] = r
+        else:
+            by_layer[r.layer] = LayerReport(
+                layer=r.layer,
+                nan=max(prev.nan, r.nan),
+                inf=max(prev.inf, r.inf),
+                underflow=max(prev.underflow, r.underflow),
+                overflow=max(prev.overflow, r.overflow),
+                dtype=prev.dtype if prev.dtype is not None else r.dtype,
+            )
+    return replace(
+        existing,
+        reasons=reasons,
+        checks_used=checks_used,
+        layers=tuple(by_layer.values()),
+    )
+
+
+def dtype_band(dtype: torch.dtype) -> tuple[float, float]:
+    """The `(underflow_below, overflow_at_or_above)` magnitude band for `dtype`.
+
+    Underflow is nonzero ``|x|`` below the smallest *normal* value
+    (`finfo.tiny`, where the mantissa starts encoding scale rather than
+    precision); overflow is ``|x|`` at or above the largest finite value
+    (`finfo.max`). These are exactly the edges `run_checks` flags, and the UI
+    shows them next to the gradient histogram and in the details dialog.
+    """
+    finfo = torch.finfo(dtype)
+    return finfo.tiny, finfo.max
 
 
 def without_category(error: DebugError, category: str) -> DebugError | None:

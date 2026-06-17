@@ -7,6 +7,7 @@ from bisect import bisect_right
 from collections.abc import Callable
 from urllib.parse import quote
 
+import torch
 from nicegui import ui
 
 from nansense import debugger
@@ -25,9 +26,18 @@ _TOP_BAR_CLASSES: str = (
 )
 
 _DEBUG_DESCRIPTION: str = (
-    "The debugger paused training because the network produced bad numbers: "
-    "NaN/±Inf values, or gradients whose magnitude collapsed into a "
-    "precision-losing under/overflow range. Click for the affected layers."
+    "A numerical issue was detected: NaN/±Inf values, or gradients whose "
+    "magnitude collapsed into a precision-losing under/overflow range. "
+    "Training paused at the first issue; resuming keeps running and folds any "
+    "further issues into this warning. Click for the affected layers."
+)
+_DEBUG_UNDER_OVER_INTRO: str = (
+    "Underflow / overflow is dtype-aware and measured on gradients: a value "
+    "counts as underflow when its magnitude is nonzero but below the dtype's "
+    "smallest normal value (the subnormal range, where the mantissa encodes "
+    "scale rather than precision), and as overflow when its magnitude reaches "
+    "the dtype's largest finite value. A layer trips when that band holds at "
+    "least the threshold share of its summed |gradient|."
 )
 _DEBUG_WATCH_NOTE: str = (
     "A layer's gradient histogram only becomes available once it has been "
@@ -37,11 +47,34 @@ _DEBUG_WATCH_NOTE: str = (
 
 
 def _debug_banner_summary(error: DebugError) -> str:
-    """The one-line red-banner message for a detected error."""
+    """The one-line warning-banner message for a detected issue."""
     return (
-        f"Numerical error — {debugger.reasons_text(error)} — at "
+        f"Numerical issue detected — {debugger.reasons_text(error)} — at "
         f"{format_position(error.position)}"
     )
+
+
+def _under_over_band_lines(error: DebugError) -> list[str]:
+    """Per-dtype underflow/overflow band magnitudes for the affected layers.
+
+    One line per distinct gradient dtype seen across the error's layers,
+    spelling out the exact magnitudes counted as underflow (subnormal) and
+    overflow (saturation) for that dtype — so the dialog states the band in
+    real numbers rather than abstractly.
+    """
+    dtypes: list[torch.dtype] = []
+    for report in error.layers:
+        if report.dtype is not None and report.dtype not in dtypes:
+            dtypes.append(report.dtype)
+    lines: list[str] = []
+    for dtype in dtypes:
+        tiny, maxv = debugger.dtype_band(dtype)
+        name = str(dtype).removeprefix("torch.")
+        lines.append(
+            f"{name}: underflow when 0 < |grad| < {tiny:.2e}; "
+            f"overflow when |grad| ≥ {maxv:.2e}"
+        )
+    return lines
 
 
 def _debug_pct(frac: float) -> str:
@@ -817,28 +850,30 @@ def _add_error_banner(session: Session) -> None:
 
     Placed by every page directly under its top bar. A 0.2 s timer polls
     `session.debug_error`: the banner rebuilds when the error identity changes
-    and hides when it clears (a Step dismisses it; the next checked batch may
-    raise it again). Clicking the message opens the details dialog; per-category
-    DISABLE buttons turn off that check and drop its part of the banner.
+    (every detection / merge makes a fresh frozen record) and hides when it
+    clears. It is a yellow *warning* — training paused at the first issue, but
+    resuming keeps the banner standing while later issues fold into it.
+    Clicking the message opens the details dialog; "Silence warning" turns off
+    the active checks and clears the banner.
     """
     container = ui.element("div").classes("w-full shrink-0")
     container.set_visibility(False)
     # `id(error)` of the currently-shown record, so the timer only rebuilds on
-    # a genuine change (every detection / disable makes a fresh frozen record).
+    # a genuine change (every detection / merge makes a fresh frozen record).
     shown: dict[str, int | None] = {"key": None}
 
-    def disable(category: str) -> None:
-        session.disable_debug_check(category)
+    def silence(error: DebugError) -> None:
+        _silence_warning(session, error)
         refresh()
 
     def rebuild(error: DebugError) -> None:
         container.clear()
         with container:
             with ui.row().classes(
-                "w-full bg-red-600 text-white items-center gap-3 px-4 py-2 "
-                "no-wrap shadow-md"
+                "w-full bg-amber-400 text-amber-950 items-center gap-3 px-4 "
+                "py-2 no-wrap shadow-md"
             ):
-                ui.icon("error").classes("text-2xl shrink-0")
+                ui.icon("warning").classes("text-2xl shrink-0")
                 message = ui.label(_debug_banner_summary(error)).classes(
                     "text-sm font-medium grow min-w-0 truncate cursor-pointer"
                 )
@@ -846,14 +881,16 @@ def _add_error_banner(session: Session) -> None:
                 message.on("click", lambda e=error: _open_debug_dialog(session, e))
                 ui.button(
                     "Details", on_click=lambda e=error: _open_debug_dialog(session, e)
-                ).props("dense size=sm flat color=white no-caps")
-                for category in debugger.categories_present(error):
-                    ui.button(
-                        f"Disable {debugger.CATEGORY_LABELS[category]}",
-                        on_click=lambda c=category: disable(c),
-                    ).props(
-                        "dense size=sm outline color=white no-caps"
-                    ).tooltip("Turn off this check and remove it from the banner")
+                ).props("dense size=sm flat color=grey-10 no-caps")
+                ui.button(
+                    "Silence warning",
+                    on_click=lambda e=error: silence(e),
+                ).props(
+                    "dense size=sm outline color=grey-10 no-caps"
+                ).tooltip(
+                    "Turn off the active numerical checks and dismiss this "
+                    "warning (re-enable them under the settings gear)"
+                )
 
     def refresh() -> None:
         error = session.debug_error
@@ -871,11 +908,25 @@ def _add_error_banner(session: Session) -> None:
     ui.timer(0.2, refresh)
 
 
-def _open_debug_dialog(session: Session, error: DebugError) -> None:
-    """The details dialog: explanation + per-layer table + DISABLE buttons.
+def _silence_warning(session: Session, error: DebugError) -> None:
+    """Turn off every check category present in `error`, clearing the banner.
 
-    Built fresh on each open so the per-layer Watch/Histogram actions reflect
-    the current watched set (a Watch click reopens it).
+    Both "Silence warning" buttons (banner and dialog) route here: each active
+    category is disabled via `Session.disable_debug_check`, which trims the
+    matching reasons from the standing error until nothing remains and the
+    banner disappears. The checks can be turned back on from the settings gear.
+    """
+    for category in debugger.categories_present(error):
+        session.disable_debug_check(category)
+
+
+def _open_debug_dialog(session: Session, error: DebugError) -> None:
+    """The details dialog: explanation + per-layer table + Silence button.
+
+    Built fresh on each open so the per-layer Watch/Stats actions reflect the
+    current watched set (a Watch click reopens it). When the under/overflow
+    check ran, the dialog also spells out the dtype-aware bands in real
+    magnitudes (`_under_over_band_lines`).
     """
     cols = debugger.columns(error)
     watched = session.watched_layers
@@ -883,7 +934,7 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
         "min-w-[36rem] max-w-[56rem] p-6 gap-3"
     ):
         ui.label("Numerical issue detected").classes(
-            "text-lg font-bold text-red-600"
+            "text-lg font-bold text-amber-700"
         )
         ui.label(_DEBUG_DESCRIPTION).classes("text-sm text-slate-600")
         ui.label(
@@ -891,29 +942,40 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
             f"{format_position(error.position)}"
         ).classes("text-sm font-mono")
 
+        if debugger.UNDER_OVER in error.checks_used:
+            with ui.column().classes(
+                "w-full gap-1 bg-amber-50 border border-amber-200 rounded "
+                "px-3 py-2"
+            ):
+                ui.label(_DEBUG_UNDER_OVER_INTRO).classes(
+                    "text-xs text-slate-600"
+                )
+                for line in _under_over_band_lines(error):
+                    ui.label(line).classes("text-xs font-mono text-amber-800")
+
         with ui.element("div").classes(
             "w-full overflow-auto max-h-[24rem] border rounded"
         ):
             with ui.row().classes(
-                "w-full items-center gap-0 px-2 py-1 no-wrap bg-slate-100 "
+                "w-full items-center gap-x-6 px-3 py-1 no-wrap bg-slate-100 "
                 "text-xs font-semibold uppercase tracking-wider text-slate-500"
             ):
                 ui.label("Layer").classes("grow min-w-0")
                 for col in cols:
                     ui.label(debugger.REASON_LABELS[col]).classes(
-                        "w-20 text-right"
+                        "w-24 text-right"
                     )
                 ui.label("").classes("w-28 shrink-0")
             for report in error.layers:
                 with ui.row().classes(
-                    "w-full items-center gap-0 px-2 py-1 no-wrap border-t"
+                    "w-full items-center gap-x-6 px-3 py-1 no-wrap border-t"
                 ):
                     ui.label(report.layer).classes(
                         "grow min-w-0 font-mono text-sm truncate"
                     )
                     for col in cols:
                         ui.label(_debug_pct(getattr(report, col))).classes(
-                            "w-20 text-right font-mono text-sm"
+                            "w-24 text-right font-mono text-sm"
                         )
                     with ui.element("div").classes(
                         "w-28 shrink-0 flex justify-end"
@@ -922,17 +984,16 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
 
         ui.label(_DEBUG_WATCH_NOTE).classes("text-xs text-slate-500")
         with ui.row().classes("w-full justify-end gap-2"):
-            for category in debugger.categories_present(error):
 
-                def disable(c: str = category) -> None:
-                    session.disable_debug_check(c)
-                    dialog.close()
+            def silence() -> None:
+                _silence_warning(session, error)
+                dialog.close()
 
-                ui.button(
-                    f"Disable {debugger.CATEGORY_LABELS[category]}",
-                    on_click=disable,
-                    color="red",
-                ).props("flat no-caps")
+            ui.button(
+                "Silence warning", on_click=silence, color="amber-7"
+            ).props("flat no-caps").tooltip(
+                "Turn off the active numerical checks and dismiss this warning"
+            )
             ui.button("Close", on_click=dialog.close).props("flat")
     dialog.open()
 
@@ -948,12 +1009,16 @@ def _debug_action_button(
 
     The stats histograms need a watched layer (the watch accumulators feed
     them), so an unwatched layer first gets watched; the dialog reopens to
-    surface the Stats link once the watched set includes it.
+    surface the Stats link once the watched set includes it. When under/overflow
+    tripped, the link pre-checks the stats page's "Show underflow/overflow"
+    band (`bands=1`) so the histogram opens with the band already marked.
     """
     if report.layer in watched:
+        href = f"/stats?layer={quote(report.layer)}"
+        if debugger.UNDER_OVER in debugger.categories_present(error):
+            href += "&bands=1"
         ui.button("Stats").props(
-            f'href="/stats?layer={quote(report.layer)}" '
-            "dense size=sm flat no-caps color=primary"
+            f'href="{href}" dense size=sm flat no-caps color=primary'
         ).tooltip("Open this layer's stats view (gradient histograms)")
         return
 
