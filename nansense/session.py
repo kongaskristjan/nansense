@@ -285,7 +285,7 @@ class Session:
         self._pinned_input: Tensor | None = None
         self._pinned_position: BatchPosition | None = None
         self._perturbations: PerturbationMap = {}
-        self._probe_mode: str = "eval"
+        self._probe_mode: str = "unchanged"
         self._probe_request = False
         self._probe_version = 0
         self._probe_count = 0
@@ -630,11 +630,11 @@ class Session:
     def set_probe_mode(self, mode: str) -> None:
         """Set train/eval handling for probe forwards.
 
-        - `"eval"` (default): the whole model is switched to eval — BatchNorm
-          uses running stats, dropout is off — and restored afterwards.
+        - `"unchanged"` (default): modules run with whatever `training`
+          flags the training loop left on them.
+        - `"eval"`: the whole model is switched to eval — BatchNorm uses
+          running stats, dropout is off — and restored afterwards.
         - `"train"`: the whole model is switched to train and restored.
-        - `"unchanged"`: modules run with whatever `training` flags the
-          training loop left on them.
 
         Regardless of mode, probes never mutate training state: per-module
         flags and all buffers are restored after the run, and the RNG is

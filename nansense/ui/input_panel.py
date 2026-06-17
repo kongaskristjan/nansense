@@ -145,10 +145,10 @@ class InputPanel:
                 value=self._session.probe_mode,
                 on_change=self._on_mode_change,
             ).props("dense no-caps spread").classes("w-full").tooltip(
-                "Train/eval handling for probe forwards. Eval (default) uses "
-                "BatchNorm running stats and disables dropout; Unchanged runs "
-                "with whatever modes training left; Train uses batch stats and "
-                "dropout. All modes restore the model's state afterwards."
+                "Train/eval handling for probe forwards. Unchanged (default) "
+                "runs with whatever modes training left; Eval uses BatchNorm "
+                "running stats and disables dropout; Train uses batch stats "
+                "and dropout. All modes restore the model's state afterwards."
             )
 
             ui.separator()

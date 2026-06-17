@@ -74,8 +74,8 @@ def test_pin_while_paused_runs_probe_without_stepping() -> None:
         # The pinned input is the snapshot's input batch, position included.
         torch.testing.assert_close(probe.input, snap.activations["x"])
         assert session.pinned_position == snap.position
-        # Default mode is eval.
-        assert probe.mode == "eval"
+        # Default mode is unchanged.
+        assert probe.mode == "unchanged"
         # Every layer the snapshot knows shows up in the probe too, as
         # independent CPU clones.
         assert set(probe.activations) == set(session.layer_names)
