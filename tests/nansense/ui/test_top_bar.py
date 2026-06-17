@@ -10,6 +10,7 @@ from nansense.debugger import DebugError, LayerReport
 from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
+    _at_last_batch,
     _best_effort_ui_update,
     _current_position,
     _debug_banner_summary,
@@ -18,7 +19,15 @@ from nansense.ui.top_bar import (
     _time_travel_default_index,
     _validate_step_until_target,
 )
-from tests.nansense.helpers import _make_snapshot, make_position
+from tests.nansense.helpers import (
+    TinyNet,
+    _make_snapshot,
+    make_position,
+    make_session,
+    paused_session,
+    paused_worker,
+    train_step,
+)
 
 
 def _snapshot_at(phase: str, epoch: int, batch_idx: int) -> BatchSnapshot:
@@ -206,6 +215,36 @@ def test_time_travel_default_index(
     cached: list[int], current_epoch: int | None, expected: int
 ) -> None:
     assert _time_travel_default_index(cached, current_epoch) == expected
+
+
+def test_at_last_batch_false_before_start_and_mid_training() -> None:
+    """No live position yet, and a non-final captured batch, are both not-last —
+    so Run / Step Batch advance without the step-over-the-end confirmation."""
+    session, _ = make_session(epochs=1, phases={"train": 3})
+    assert _at_last_batch(session) is False  # nothing has entered a batch yet
+
+    model = TinyNet()
+    with paused_session(model, phases={"train": 3}) as paused:
+        assert paused.live_position is not None
+        assert paused.live_position.is_last_overall is False
+        assert _at_last_batch(paused) is False
+
+
+def test_at_last_batch_true_when_paused_on_final_batch() -> None:
+    """RUN pauses on the final overall batch; `_at_last_batch` flags it so the
+    next Run / Step Batch click routes through the confirmation dialog."""
+    session, model = make_session(epochs=1, phases={"train": 2})
+
+    def loop() -> None:
+        for _ in range(2):
+            with session.batch(phase="train", epoch=0):
+                train_step(model)
+
+    session.step_run()
+    with paused_worker(session, loop):
+        assert session.live_position is not None
+        assert session.live_position.is_last_overall is True
+        assert _at_last_batch(session) is True
 
 
 def test_best_effort_ui_update_runs_then_swallows_torn_down_client() -> None:

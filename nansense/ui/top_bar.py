@@ -106,12 +106,28 @@ def _add_step_controls(
     into at most ~5 cheap label updates per second, and NiceGUI skips the
     write when the text is unchanged.
     """
-    ui.button("Stop", on_click=session.stop, color="red").props(
-        "dense size=md"
-    ).tooltip("Pause at next batch")
+    last_batch_confirm = _build_last_batch_confirm_dialog(session)
+
+    def run() -> None:
+        # Run normally pauses *at* the final batch (UNTIL_END); stepping past
+        # it ends the run, so that only happens through the confirmation.
+        if _at_last_batch(session):
+            last_batch_confirm.open()
+        else:
+            session.step_run()
+
+    def step_batch() -> None:
+        if _at_last_batch(session):
+            last_batch_confirm.open()
+        else:
+            session.step_batch()
+
+    ui.button("Run", on_click=run, color="green").props("dense size=md").tooltip(
+        "Run to the last batch of training, then pause"
+    )
     with ui.dropdown_button(
         "Step Batch",
-        on_click=session.step_batch,
+        on_click=step_batch,
         split=True,
         auto_close=True,
         color="orange",
@@ -122,15 +138,13 @@ def _add_step_controls(
             session.step_epoch,
         )
         _step_menu_item(
-            "Step until end",
-            "Run to the last batch of training, then pause",
-            session.step_run,
-        )
-        _step_menu_item(
             "Step custom…",
             "Pick a phase/epoch/batch to pause at",
             step_until_custom.open,
         )
+    ui.button("Stop", on_click=session.stop, color="red").props(
+        "dense size=md"
+    ).tooltip("Pause at next batch")
     _add_time_travel_button(session)
     position_label = ui.label("(waiting for first snapshot)").classes(
         "ml-3 font-mono text-sm"
@@ -151,6 +165,42 @@ def _step_menu_item(
     with ui.item(on_click=on_click), ui.item_section():
         ui.item_label(title)
         ui.item_label(caption).props("caption")
+
+
+def _at_last_batch(session: Session) -> bool:
+    """Whether training is paused on the final overall batch.
+
+    Resuming from here in any mode runs the loop off its end, so Run and Step
+    Batch confirm before stepping past it (see `_build_last_batch_confirm_dialog`).
+    """
+    pos = session.live_position
+    return pos is not None and pos.is_last_overall
+
+
+def _build_last_batch_confirm_dialog(session: Session) -> ui.dialog:
+    """The confirm-before-stepping-past-the-final-batch dialog.
+
+    At the last overall batch there is nowhere left to advance to but the end
+    of the training loop: stepping past it discards the collected stats and
+    lets the training script exit, closing the session. Both Run and Step Batch
+    route here when `_at_last_batch`, so the step only happens on confirmation.
+    """
+    with ui.dialog() as dialog, ui.card().classes("min-w-96 p-6 gap-3"):
+        ui.label("Step over the last batch?").classes("text-lg font-bold")
+        ui.label(
+            "Training is paused at the final batch. Stepping past it ends the "
+            "run — the collected stats are lost and the session will likely "
+            "close."
+        ).classes("text-sm text-slate-700")
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=dialog.close, color="slate-500")
+
+            def step_over() -> None:
+                dialog.close()
+                session.step_batch()
+
+            ui.button("Step over", on_click=step_over, color="red")
+    return dialog
 
 
 def _add_time_travel_button(session: Session) -> None:
