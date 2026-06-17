@@ -21,6 +21,7 @@ from nansense.ui.common import (
     _b64_img_src,
     _defer_value_write,
     _install_panel_resize,
+    _notice_banner,
     _page_scaffold,
     _refuse_unwatch_while_recording,
     _resizable_pane_props,
@@ -1027,6 +1028,11 @@ class _WatchLayerPanel:
                     color="amber-600",
                     on_click=unwatch,
                 ).props("dense size=sm flat round").tooltip("Stop watching")
+            # Shown (with both view sections hidden) until the layer has any
+            # collected stats, so an unstepped layer is a single clear notice
+            # rather than empty plots and "no data yet" tables.
+            self._no_data = _notice_banner(_NO_STATS_MESSAGE, icon="bar_chart")
+            self._no_data.set_visibility(False)
             self._hist_section = ui.column().classes("w-full gap-3")
             with self._hist_section:
                 ui.label("Activations").classes(
@@ -1078,9 +1084,15 @@ class _WatchLayerPanel:
         loop by the page's refresh); `None` means the grids are unchanged.
         """
         per_phase = self._phase_view(snap)
+        # No stats accumulated for this layer/phase yet — show the notice and
+        # hide both views (their empty plots/grids are pure clutter here).
+        has_data = bool(per_phase)
+        self._no_data.set_visibility(not has_data)
         minmax = self._state.view_minmax
-        self._hist_section.set_visibility(not minmax)
-        self._patch_section.set_visibility(minmax)
+        self._hist_section.set_visibility(has_data and not minmax)
+        self._patch_section.set_visibility(has_data and minmax)
+        if not has_data:
+            return
         if minmax:
             if grids is not None:
                 self._grid_sig, html = grids
@@ -1217,6 +1229,16 @@ _PATCH_TYPE_LABELS: dict[PatchType, str] = {
 _NO_PATCHES_HTML: str = (
     '<div class="text-xs text-slate-400 italic py-1">no patches gathered '
     "yet — patches need an image-like (4D) model input</div>"
+)
+
+# Shown in a layer card (both views) until the layer has accumulated any
+# stats for the selected phase. Stresses that stats accumulate across
+# batches — stepping more keeps growing the running aggregate rather than
+# overwriting it with the last batch.
+_NO_STATS_MESSAGE: str = (
+    "No stats collected for this layer yet — step at least one batch to "
+    "start collecting. Each batch you step adds to the running statistics "
+    "(it doesn't overwrite them with just the last batch)."
 )
 
 

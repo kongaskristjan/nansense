@@ -22,6 +22,7 @@ from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _b64_img_src,
     _install_panel_resize,
+    _notice_banner,
     _page_scaffold,
     _refuse_unwatch_while_recording,
     _resizable_pane_props,
@@ -345,10 +346,12 @@ def _build_page(
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-3 bg-slate-200 gap-3"
             ):
-                empty_hint = ui.label(
+                empty_hint = _notice_banner(
                     "No layers shown — click a node in the architecture "
-                    "diagram to show a layer's card and start watching it."
-                ).classes("text-slate-500 italic text-sm p-2")
+                    "diagram to show a layer's activations and gradients "
+                    "and start collecting stats.",
+                    icon="touch_app",
+                )
                 empty_hint.set_visibility(not state.last_watched)
                 # Every card is built once (cheap: header + empty strips) but
                 # only watched ones are visible — and only visible cards get

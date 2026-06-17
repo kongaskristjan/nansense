@@ -85,6 +85,24 @@ def _defer_value_write(write: Callable[[], object]) -> None:
     ui.timer(0.0, write, once=True)
 
 
+def _notice_banner(message: str, *, icon: str = "info") -> ui.element:
+    """A red notice banner card for empty / no-data states.
+
+    Returned so the caller can toggle its visibility as the underlying
+    state changes. Intentionally a softer red than the full-strength
+    numerical-error banner (`_add_error_banner`): this flags an empty
+    state to act on, not an active error.
+    """
+    banner = ui.row().classes(
+        "w-full items-center gap-2 no-wrap rounded border border-red-300 "
+        "bg-red-50 text-red-700 px-3 py-2"
+    )
+    with banner:
+        ui.icon(icon).classes("text-xl shrink-0")
+        ui.label(message).classes("text-sm")
+    return banner
+
+
 def _weights_placeholder(message: str) -> None:
     with ui.column().classes("items-center gap-2 py-12 w-full"):
         ui.icon("grid_off", size="lg").classes("text-slate-400")
