@@ -33,9 +33,8 @@ try:
     from torchaudio.transforms import MelSpectrogram
 except ImportError as exc:  # pragma: no cover - exercised only where torchaudio is absent
     raise SystemExit(
-        "the audio_keywords example requires torchaudio, which is unavailable on "
-        "the ROCm PyTorch build. Install a CPU/CUDA build (e.g. `uv sync --group "
-        "cu130`) to run this example."
+        "the audio_keywords example requires torchaudio. Install a torch build "
+        "that ships it (e.g. `uv sync --group cuda`) to run this example."
     ) from exc
 
 DATA_URL: str = "https://storage.googleapis.com/download.tensorflow.org/data/mini_speech_commands.zip"

@@ -4,8 +4,8 @@
 
 - Python 3.13
 - Package manager: `uv`
-- Dependencies: `uv sync --group cu130`, `uv add <package>` etc.
-  - PyTorch is installed via mutually exclusive dependency groups (`cpu`, `cu126`, `cu130`, `cu132`, `rocm7-2`), each pinned to the matching PyTorch wheel index in `pyproject.toml`, so the user picks their own build. Groups are never published and nansense declares no direct torch dependency; note that the standard `captum` dependency (experiment-page attributions) does pull torch transitively. Always sync with a group; agents should use `--group cu130`.
+- Dependencies: `uv sync --group cuda`, `uv add <package>` etc.
+  - PyTorch is installed via mutually exclusive dependency groups (`cpu`, `cuda-legacy`, `cuda`, `rocm`), each pinned to the matching PyTorch wheel index in `pyproject.toml`, so the user picks their own build. The groups are named by hardware intent: `cuda-legacy` is CUDA 12.6 (the last build with Maxwell/Pascal/Volta support) and `cuda` is CUDA 13.0 (Turing through Blackwell). Groups are never published and nansense declares no direct torch dependency; note that the standard `captum` dependency (experiment-page attributions) does pull torch transitively. Always sync with a group; agents should use `--group cuda`.
 - Directory structure:
   - 'nansense/' - Nansense visualization library (no training)
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)

@@ -1,7 +1,7 @@
 """Consistency checks for the PyTorch variant dependency groups in pyproject.toml.
 
 PyTorch is installed through mutually exclusive dependency groups (cpu /
-cu126 / cu130 / cu132 / rocm7-2), each pinned to its PyTorch wheel index, so
+cuda-legacy / cuda / rocm), each pinned to its PyTorch wheel index, so
 the user picks their own hardware build. nansense declares no direct torch
 dependency; the one torch-bearing standard dependency is captum (for the
 experiment page's attributions), which pulls torch transitively. These tests
@@ -21,10 +21,7 @@ from typing import Any
 
 import pytest
 
-TORCH_GROUPS = ["cpu", "cu126", "cu130", "cu132", "rocm7-2"]
-# torchaudio (audio example only) ships no linux-x86_64 wheel on the CUDA 13.2
-# index, so it lives in every torch group except cu132.
-TORCHAUDIO_GROUPS = ["cpu", "cu126", "cu130", "rocm7-2"]
+TORCH_GROUPS = ["cpu", "cuda-legacy", "cuda", "rocm"]
 
 
 def _load_pyproject() -> dict[str, Any]:
@@ -49,10 +46,9 @@ def test_group_contains_torch_and_torchvision(group: str) -> None:
 
 
 @pytest.mark.parametrize("group", TORCH_GROUPS)
-def test_torchaudio_in_every_group_except_cu132(group: str) -> None:
+def test_torchaudio_in_every_group(group: str) -> None:
     groups = _load_pyproject()["dependency-groups"]
-    has_torchaudio = "torchaudio" in _requirement_names(groups[group])
-    assert has_torchaudio == (group in TORCHAUDIO_GROUPS)
+    assert "torchaudio" in _requirement_names(groups[group])
 
 
 def test_published_metadata_declares_no_direct_torch() -> None:
@@ -94,10 +90,10 @@ def test_sources_cover_all_groups(package: str) -> None:
     assert {s["index"] for s in sources} <= index_names
 
 
-def test_torchaudio_sources_cover_audio_groups() -> None:
+def test_torchaudio_sources_cover_all_groups() -> None:
     data = _load_pyproject()
     sources = data["tool"]["uv"]["sources"]["torchaudio"]
-    assert {s["group"] for s in sources} == set(TORCHAUDIO_GROUPS)
+    assert {s["group"] for s in sources} == set(TORCH_GROUPS)
     index_names = {idx["name"] for idx in data["tool"]["uv"]["index"]}
     assert {s["index"] for s in sources} <= index_names
 

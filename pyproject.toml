@@ -47,26 +47,27 @@ Repository = "https://github.com/kongaskristjan/nansense"
 
 # The torch variants live in (unpublished) dependency groups rather than
 # extras, so a plain install pulls torch only transitively (via captum) and
-# the matching hardware build is selected by syncing a group. lightning is
-# still left to the user (it also pulls torch): the Lightning integration is
-# simply unavailable when it is absent.
+# the matching hardware build is selected by syncing a group. The groups are
+# named by hardware intent (cpu / cuda-legacy / cuda / rocm) rather than by
+# CUDA toolkit version; the index each maps to is pinned in [tool.uv.sources]
+# below. lightning is still left to the user (it also pulls torch): the
+# Lightning integration is simply unavailable when it is absent.
 # Floors are kept deliberately loose — nansense is a library and supports a
 # broad range of torch builds (captum pins the effective floor to torch
-# >= 2.3). The loose torchaudio floor (used only by the
-# audio example) lets the resolver pick the newest wheel each index actually
-# ships, even when that pins torch slightly below its newest release. torchaudio
-# is omitted only from cu132 (the CUDA 13.2 index has no linux-x86_64 torchaudio
-# wheel yet), so the audio example is simply unavailable there.
+# >= 2.3). The loose floors also let the resolver pick the newest wheel each
+# index actually ships, even when that pins torch slightly below its newest
+# release.
 [dependency-groups]
+# CPU-only build; works everywhere, no GPU required.
 cpu = ["torch>=2.2.0", "torchvision>=0.17.0", "torchaudio>=2.2.0"]
-cu126 = ["torch>=2.2.0", "torchvision>=0.17.0", "torchaudio>=2.2.0"]
-cu130 = [
-    "torch>=2.2.0",
-    "torchvision>=0.17.0",
-    "torchaudio>=2.2.0",
-]
-cu132 = ["torch>=2.2.0", "torchvision>=0.17.0"]
-rocm7-2 = [
+# Older NVIDIA GPUs — Maxwell, Pascal, and Volta (through Hopper). The CUDA
+# 12.6 wheels are the last builds that still ship these architectures; CUDA
+# 13.x (the `cuda` group) dropped Maxwell/Pascal/Volta.
+cuda-legacy = ["torch>=2.2.0", "torchvision>=0.17.0", "torchaudio>=2.2.0"]
+# Current NVIDIA GPUs — Turing through Blackwell. CUDA 13.0 wheels.
+cuda = ["torch>=2.2.0", "torchvision>=0.17.0", "torchaudio>=2.2.0"]
+# AMD GPUs via ROCm 7.2.
+rocm = [
     "torch>=2.2.0",
     "torchvision>=0.17.0",
     "torchaudio>=2.2.0",
@@ -87,38 +88,33 @@ dev = [
 conflicts = [
     [
         { group = "cpu" },
-        { group = "cu126" },
-        { group = "cu130" },
-        { group = "cu132" },
-        { group = "rocm7-2" },
+        { group = "cuda-legacy" },
+        { group = "cuda" },
+        { group = "rocm" },
     ],
 ]
 
 [tool.uv.sources]
 torch = [
     { index = "pytorch-cpu", group = "cpu" },
-    { index = "pytorch-cu126", group = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-cu130", group = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-cu132", group = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-rocm7-2", group = "rocm7-2", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", group = "cuda-legacy", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu130", group = "cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm7-2", group = "rocm", marker = "sys_platform == 'linux'" },
 ]
 triton-rocm = [
-    { index = "pytorch-rocm7-2", group = "rocm7-2", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-rocm7-2", group = "rocm", marker = "sys_platform == 'linux'" },
 ]
 torchvision = [
     { index = "pytorch-cpu", group = "cpu" },
-    { index = "pytorch-cu126", group = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-cu130", group = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-cu132", group = "cu132", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-rocm7-2", group = "rocm7-2", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", group = "cuda-legacy", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu130", group = "cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm7-2", group = "rocm", marker = "sys_platform == 'linux'" },
 ]
-# No cu132 entry: torchaudio is not in the cu132 group (see the comment above
-# the dependency groups), so it never resolves against the cu132 index.
 torchaudio = [
     { index = "pytorch-cpu", group = "cpu" },
-    { index = "pytorch-cu126", group = "cu126", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-cu130", group = "cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { index = "pytorch-rocm7-2", group = "rocm7-2", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", group = "cuda-legacy", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-cu130", group = "cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { index = "pytorch-rocm7-2", group = "rocm", marker = "sys_platform == 'linux'" },
 ]
 
 [[tool.uv.index]]
@@ -134,11 +130,6 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu132"
-url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [[tool.uv.index]]

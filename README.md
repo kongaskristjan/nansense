@@ -60,23 +60,30 @@ TBD
 
 The examples run with [uv](https://docs.astral.sh/uv/getting-started/installation), a fast Python package manager. `uv` does not pollute your other Python environments, and automatically installs the necessary packages when running a script.
 
-Sync the dependency group that matches your hardware:
-
 ```bash
 # Install uv:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then launch any example. The requirements, datasets and any pretrained networks are downloaded automatically. UI servs on `--nansense-port`.
+Pick the dependency group that matches your hardware and pass it as `--group`:
+
+| Group | Hardware |
+| --- | --- |
+| `cpu` | No GPU — CPU-only, any platform |
+| `cuda-legacy` | Older NVIDIA GPUs: Maxwell, Pascal, Volta (CUDA 12.6) |
+| `cuda` | Current NVIDIA GPUs: Turing through Blackwell (CUDA 13.0) |
+| `rocm` | AMD GPUs (ROCm 7.2) |
+
+Then launch any example; the requirements, datasets and any pretrained networks are downloaded automatically, and the UI serves on `--nansense-port`.
 
 ```bash
-# The `examples/standard/main.py` script is a good starting point for mnist, cifar10 and imagenette. Use `--dataset` and `--model` for different combinations.
-uv run examples/standard/main.py --nansense-port 8080
+# `examples/standard/main.py` is a good starting point for mnist, cifar10 and imagenette. Use `--dataset` and `--model` for different combinations.
+uv run --group [group] examples/standard/main.py --nansense-port 8080
 
 # More exotic, but harder to interpret tasks:
-uv run examples/game_of_life/main.py --nansense-port 8080
-uv run examples/audio_keywords/main.py --nansense-port 8080
-uv run examples/depth_make3d/main.py --nansense-port 8080
+uv run --group [group] examples/game_of_life/main.py --nansense-port 8080
+uv run --group [group] examples/audio_keywords/main.py --nansense-port 8080
+uv run --group [group] examples/depth_make3d/main.py --nansense-port 8080
 ```
 
 A browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar. See [UI Tutorial]() for more info.
