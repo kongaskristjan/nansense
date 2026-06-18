@@ -181,10 +181,10 @@ for epoch in session.epochs(50, cache_dir=".nansense_cache"):
     with session.restore_point():
         # Training batch iteration
         for inputs, targets in session.batches(train_dl, phase="train"):
-            optimizer.zero_grad()
-            loss = criterion(model(inputs), targets)
-            loss.backward()
-            optimizer.step()
+            optimizer.zero_grad()  # keep zero_grad here, before backward():
+            loss = criterion(model(inputs), targets)  # nansense reads .grad when
+            loss.backward()  # the batch exits, so zeroing after step() would
+            optimizer.step()  # leave the weight-gradient views empty.
         # Validation batch iteration ...
 
 # Close the UI (the served page stays up for post-mortem browsing)
