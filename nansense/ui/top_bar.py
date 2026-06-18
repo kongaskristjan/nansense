@@ -180,7 +180,7 @@ def _add_step_controls(
     ).props("dense size=md").tooltip("Advance one batch"):
         _step_menu_item(
             "Step epoch",
-            "Run until the epoch changes, then pause",
+            "Run to the start of the next epoch",
             session.step_epoch,
         )
         _step_menu_item(
