@@ -596,9 +596,8 @@ model/optimizer/scheduler are replicated (loaded from the rank's
 self-sufficient file, `epoch_<n>.pt` on the leader and `epoch_<n>.rank<r>.pt`
 on followers), RNG is captured/restored per rank, and `DistributedSampler.set_epoch`
 reproduces shard order — so the replay is deterministic on every rank. Every
-rank wraps its epoch loop in the restorer (the leitmotif `while
-restorer.pending(): with restorer:`). `close()` should run after the loop on
-all ranks; a leader closed mid-loop stops broadcasting and would leave
+rank drives the same `session.epochs()` loop. `close()` should run after the
+loop on all ranks; a leader closed mid-loop stops broadcasting and would leave
 followers blocked at their next batch start until the collective timeout.
 
 ## Probe runs (`nansense.probe`)
@@ -870,20 +869,37 @@ closed during the await can't surface a teardown error.
 ## Time travel (`nansense.restore`)
 
 Time travel jumps training back to the start of any epoch whose state was
-checkpointed to disk. It is opt-in at the training-loop level: the user
-creates a `TrainingRestorer` (`session.training_restorer(cache_dir=...)`,
-default `.nansense_cache/`) and wraps the epoch loop in it:
+checkpointed to disk. It is opt-in at the training-loop level. A hand-written
+loop drives the flat API — `session.epochs(cache_dir=...)` (default
+`.nansense_cache/`) yields the epoch indices, and `session.restore_point()`
+wraps each iteration's body:
 
 ```python
-while restorer.pending():
-    with restorer:
-        for epoch in restorer.epochs():   # range(start_epoch, schedule.epochs)
-            ...
+for epoch in session.epochs(cache_dir=...):
+    with session.restore_point():
+        ...
 ```
 
-Without a restorer, nothing is written to disk, the session never raises a
+Both sit on a single session-owned `TrainingRestorer` (created lazily by the
+first `epochs()` call). The same object also exposes the older nested shape —
+`while restorer.pending(): with restorer: for epoch in restorer.epochs():` —
+which the Lightning integration transplants around `trainer.fit` (it cannot
+hand Lightning a generator to drive). `restore.py` keeps the restore/jump
+logic in one place: `_apply_pending_jump` (shared by both loops' entry) rolls
+state back to a jump target, and `__exit__` / `epoch_guard` both suppress only
+`TimeTravelJump`.
+
+Why a context manager is mandatory rather than folding the catch into
+`epochs()`: a `for` loop never throws its body's exception back into the
+iterator (it closes it with `GeneratorExit`), so the generator cannot catch
+the jump itself — `restore_point()` is what catches it, after which
+`iter_epochs` re-yields the target epoch. Omitting it is detected (the
+generator checks an "entered since the last yield" flag) rather than left to
+crash training or loop forever.
+
+Without this loop, nothing is written to disk, the session never raises a
 jump, and the UI's Time Travel button is disabled (its tooltip explains
-why). On a disabled session the restorer is inert.
+why). On a disabled session the loop is inert.
 
 **Epoch cache.** With a restorer attached, `_BatchContext.__enter__` on the
 first batch of each epoch (batch 0 of the schedule's first phase) writes
@@ -915,11 +931,12 @@ advance, covering requests that arrive mid-run between batches) and
 already bumped the token, so a pause that began after the request would
 otherwise wait for a second UI command.
 
-The exception unwinds through the user's loaders and loops to the
-`with restorer:` block, whose `__exit__` suppresses exactly this type and
-records the target. The next `__enter__` (training thread, between
-attempts, so nothing races a forward pass) loads the checkpoint back into
-the model / optimizer / scheduler / RNG and calls
+The exception unwinds through the user's loaders and loops to the enclosing
+context manager — `session.restore_point()` per epoch in the flat loop, or
+`with restorer:` around the whole epoch range in the nested one — which
+suppresses exactly this type and records the target. The next entry (training
+thread, between epochs, so nothing races a forward pass) loads the checkpoint
+back into the model / optimizer / scheduler / RNG and calls
 `Session._rewind_to_epoch(epoch)`, which drops the schedule's batch
 counters for `epoch` onward (`Schedule.rewind_to_epoch`) and the watch
 accumulators' buckets for those epochs (`forget_epochs_from` — they're
@@ -927,12 +944,20 @@ additive, so the re-run samples must start from empty ones). Because the
 mode was set to `STEP`, the first batch of the target epoch captures and
 pauses for inspection — the same behaviour as session start.
 
-`restorer.pending()` returns `False` once a `with` block completes without
-a jump; it also raises if called twice without the block ever being
-entered, catching a `while` loop that forgot the `with` (which would
-otherwise re-run training forever). Loop state that depends on history
-(`best_acc`, metric curves) belongs inside the `with` block, where a jump
-naturally resets it.
+Completion differs by loop. In the flat loop `iter_epochs` owns it: after the
+last epoch's body completes without a jump it marks the run finished and stops
+(`restore_point`'s exit deliberately does *not* mark completion, since it runs
+every epoch). In the nested loop `restorer.pending()` returns `False` once the
+single `with` block completes without a jump, and raises if called twice
+without the block being entered. Either way `finished` is what flips the UI to
+"run completed".
+
+One ergonomic difference: the nested loop's `with` spans the whole epoch
+range, so history-dependent state reset inside it (`best_acc`, metric curves)
+is rewound by a jump for free. The flat loop's `restore_point()` spans a single
+epoch, so it can't auto-reset such accumulators — a script that cares must
+reset them itself (e.g. when the yielded epoch is not the previous one + 1).
+The examples just keep `best_acc` across the run, which is fine for a demo.
 
 **UI.** The blue Time Travel button (right of Detach, built by
 `_add_time_travel_button`) opens a dialog whose content is rebuilt on

@@ -96,13 +96,15 @@ def train_one_epoch(
     amp_dtype: torch.dtype | None = None,
     *,
     session: Session,
-    epoch: int = 0,
     metric_fn: Callable[[Tensor, Tensor], float] = _accuracy,
 ) -> EpochStats:
     """One training epoch under `session.batches` (a disabled session is the
     no-branching off switch — the loop body runs inside the batch context
     either way, so hooks install before the forward pass and a time-travel
     jump surfaces from the `for` statement, not mid-body).
+
+    The epoch `session.batches` records is the one `session.epochs()` is on
+    (the caller's loop), so it is not threaded through here.
 
     `metric_fn(output, targets) -> float` defaults to classification accuracy;
     regression / dense examples pass their own (it is only logged, never
@@ -111,7 +113,7 @@ def train_one_epoch(
     total_loss = 0.0
     total_metric = 0.0
     n_batches = 0
-    for inputs, targets in session.batches(loader, phase="train", epoch=epoch):
+    for inputs, targets in session.batches(loader, phase="train"):
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
@@ -138,7 +140,6 @@ def evaluate(
     amp_dtype: torch.dtype | None = None,
     *,
     session: Session,
-    epoch: int = 0,
     metric_fn: Callable[[Tensor, Tensor], float] = _accuracy,
 ) -> EpochStats:
     """Mirror of `train_one_epoch` for the val phase: forward-only, with loss
@@ -147,7 +148,7 @@ def evaluate(
     total_loss = 0.0
     total_metric = 0.0
     n_batches = 0
-    for inputs, targets in session.batches(loader, phase="val", epoch=epoch):
+    for inputs, targets in session.batches(loader, phase="val"):
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 

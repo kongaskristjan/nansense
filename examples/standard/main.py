@@ -9,8 +9,8 @@ Pass `--distributed` and launch under torchrun for multi-rank
 DistributedDataParallel training — one process per rank. nansense's wiring is
 identical (every rank calls `nansense.start`); rank 0 serves the UI and drives
 pausing/stepping while the other ranks follow and fold their data shard into the
-watch-page statistics. Time travel works here too: every rank wraps its epoch
-loop in a restorer, and a jump rewinds all ranks in lockstep.
+watch-page statistics. Time travel works here too: every rank drives the same
+`session.epochs()` loop, and a jump rewinds all ranks in lockstep.
 
     uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080
 """
@@ -218,42 +218,39 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     )
 
     # Opting into time travel: each epoch start is checkpointed to
-    # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and
-    # re-enters the epoch loop at `restorer.start_epoch` with the cached
-    # model / optimizer / scheduler / RNG state restored.
-    restorer = session.training_restorer(cache_dir=args.cache_dir)
+    # `--cache-dir`, and a UI-requested jump unwinds to `with session.restore_point():`
+    # and re-enters at the chosen epoch with the cached model / optimizer /
+    # scheduler / RNG state restored.
     best_acc = 0.0
-    while restorer.pending():
-        with restorer:
-            best_acc = 0.0  # re-derived per attempt: a jump rewinds history
-            for epoch in restorer.epochs():
-                epoch_start = time.time()
-                train_stats = train_one_epoch(
-                    model, train_loader, optimizer, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch,
-                )
-                test_stats = evaluate(
-                    model, test_loader, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch,
-                )
-                scheduler.step()
+    for epoch in session.epochs(cache_dir=args.cache_dir):
+        with session.restore_point():
+            epoch_start = time.time()
+            train_stats = train_one_epoch(
+                model, train_loader, optimizer, criterion, device,
+                amp_dtype=amp_dtype, session=session,
+            )
+            test_stats = evaluate(
+                model, test_loader, criterion, device,
+                amp_dtype=amp_dtype, session=session,
+            )
+            scheduler.step()
 
-                elapsed = time.time() - epoch_start
-                print(
-                    f"epoch {epoch + 1:3d}/{args.epochs} "
-                    f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
-                    f"test_loss={test_stats.loss:.4f} test_acc={test_stats.accuracy:.4f} "
-                    f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
-                )
+            elapsed = time.time() - epoch_start
+            print(
+                f"epoch {epoch + 1:3d}/{args.epochs} "
+                f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
+                f"test_loss={test_stats.loss:.4f} test_acc={test_stats.accuracy:.4f} "
+                f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
+            )
 
-                if test_stats.accuracy > best_acc:
-                    best_acc = test_stats.accuracy
-                    if args.checkpoint is not None:
-                        args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
-                        torch.save(
-                            {"model": model.state_dict(), "epoch": epoch + 1, "test_acc": best_acc},
-                            args.checkpoint,
-                        )
+            if test_stats.accuracy > best_acc:
+                best_acc = test_stats.accuracy
+                if args.checkpoint is not None:
+                    args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(
+                        {"model": model.state_dict(), "epoch": epoch + 1, "test_acc": best_acc},
+                        args.checkpoint,
+                    )
 
     print(f"Best test accuracy: {best_acc:.4f}")
 
@@ -284,13 +281,12 @@ def distributed_test_accuracy(
     device: torch.device,
     *,
     session: nansense.Session,
-    epoch: int,
 ) -> float:
     """Global test accuracy across ranks, with the val phase wrapped by
     `session.batches` so nansense captures it like the single-process path."""
     model.eval()
     hits = torch.zeros(2, device=device)  # correct, total
-    for inputs, targets in session.batches(loader, phase="val", epoch=epoch):
+    for inputs, targets in session.batches(loader, phase="val"):
         inputs = inputs.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         preds = model(inputs).argmax(dim=1)
@@ -304,8 +300,8 @@ def distributed_test_accuracy(
 def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
     """Multi-rank DistributedDataParallel training with time travel.
 
-    Every rank wraps its epoch loop in a restorer exactly like `run_single`:
-    a UI-requested jump on rank 0 is broadcast to all ranks at the next
+    Every rank drives the same `session.epochs()` loop exactly like
+    `run_single`: a UI-requested jump on rank 0 is broadcast to all ranks at the next
     batch-start barrier, where every rank raises `TimeTravelJump` in lockstep
     and restores from its own per-rank epoch checkpoint (model/optimizer/
     scheduler are replicated by DDP, RNG is per-rank). `set_epoch` reseeds the
@@ -348,32 +344,30 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
         input_std=config.std,
     )
 
-    # Opting into time travel under DDP: every rank wraps the same epoch loop
-    # in a restorer. Each rank checkpoints its own state per epoch (rank 0 to
-    # `epoch_<n>.pt`, followers to `epoch_<n>.rank<r>.pt`); a jump rewinds them
-    # all in lockstep. `set_epoch(epoch)` is called inside the loop so a
-    # replayed epoch reshuffles its shards identically.
-    restorer = session.training_restorer(cache_dir=args.cache_dir)
-    while restorer.pending():
-        with restorer:
-            for epoch in restorer.epochs():
-                train_sampler.set_epoch(epoch)  # reshuffle shards each epoch
-                epoch_start = time.time()
-                train_stats = train_one_epoch(
-                    model, train_loader, optimizer, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch,
+    # Opting into time travel under DDP: every rank runs the same
+    # `session.epochs()` loop. Each rank checkpoints its own state per epoch
+    # (rank 0 to `epoch_<n>.pt`, followers to `epoch_<n>.rank<r>.pt`); a jump
+    # rewinds them all in lockstep. `set_epoch(epoch)` is called inside the
+    # loop so a replayed epoch reshuffles its shards identically.
+    for epoch in session.epochs(cache_dir=args.cache_dir):
+        with session.restore_point():
+            train_sampler.set_epoch(epoch)  # reshuffle shards each epoch
+            epoch_start = time.time()
+            train_stats = train_one_epoch(
+                model, train_loader, optimizer, criterion, device,
+                amp_dtype=amp_dtype, session=session,
+            )
+            test_acc = distributed_test_accuracy(
+                model, test_loader, device, session=session
+            )
+            scheduler.step()
+            if rank == 0:
+                elapsed = time.time() - epoch_start
+                print(
+                    f"epoch {epoch + 1:3d}/{args.epochs} "
+                    f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
+                    f"test_acc={test_acc:.4f} lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
                 )
-                test_acc = distributed_test_accuracy(
-                    model, test_loader, device, session=session, epoch=epoch
-                )
-                scheduler.step()
-                if rank == 0:
-                    elapsed = time.time() - epoch_start
-                    print(
-                        f"epoch {epoch + 1:3d}/{args.epochs} "
-                        f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
-                        f"test_acc={test_acc:.4f} lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
-                    )
 
     session.close()
     dist.destroy_process_group()

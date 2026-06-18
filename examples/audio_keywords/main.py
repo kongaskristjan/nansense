@@ -122,42 +122,39 @@ def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.devi
     )
 
     # Opting into time travel: each epoch start is checkpointed to
-    # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and
-    # re-enters the epoch loop at `restorer.start_epoch` with the cached
-    # model / optimizer / scheduler / RNG state restored.
-    restorer = session.training_restorer(cache_dir=args.cache_dir)
+    # `--cache-dir`, and a UI-requested jump unwinds to `with session.restore_point():`
+    # and re-enters at the chosen epoch with the cached model / optimizer /
+    # scheduler / RNG state restored.
     best_acc = 0.0
-    while restorer.pending():
-        with restorer:
-            best_acc = 0.0  # re-derived per attempt: a jump rewinds history
-            for epoch in restorer.epochs():
-                epoch_start = time.time()
-                train_stats = train_one_epoch(
-                    model, train_loader, optimizer, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch,
-                )
-                val_stats = evaluate(
-                    model, val_loader, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch,
-                )
-                scheduler.step()
+    for epoch in session.epochs(cache_dir=args.cache_dir):
+        with session.restore_point():
+            epoch_start = time.time()
+            train_stats = train_one_epoch(
+                model, train_loader, optimizer, criterion, device,
+                amp_dtype=amp_dtype, session=session,
+            )
+            val_stats = evaluate(
+                model, val_loader, criterion, device,
+                amp_dtype=amp_dtype, session=session,
+            )
+            scheduler.step()
 
-                elapsed = time.time() - epoch_start
-                print(
-                    f"epoch {epoch + 1:3d}/{args.epochs} "
-                    f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
-                    f"val_loss={val_stats.loss:.4f} val_acc={val_stats.accuracy:.4f} "
-                    f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
-                )
+            elapsed = time.time() - epoch_start
+            print(
+                f"epoch {epoch + 1:3d}/{args.epochs} "
+                f"train_loss={train_stats.loss:.4f} train_acc={train_stats.accuracy:.4f} "
+                f"val_loss={val_stats.loss:.4f} val_acc={val_stats.accuracy:.4f} "
+                f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
+            )
 
-                if val_stats.accuracy > best_acc:
-                    best_acc = val_stats.accuracy
-                    if args.checkpoint is not None:
-                        args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
-                        torch.save(
-                            {"model": model.state_dict(), "epoch": epoch + 1, "val_acc": best_acc},
-                            args.checkpoint,
-                        )
+            if val_stats.accuracy > best_acc:
+                best_acc = val_stats.accuracy
+                if args.checkpoint is not None:
+                    args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(
+                        {"model": model.state_dict(), "epoch": epoch + 1, "val_acc": best_acc},
+                        args.checkpoint,
+                    )
 
     print(f"Best val accuracy: {best_acc:.4f}")
 

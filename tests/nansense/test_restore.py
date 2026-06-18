@@ -386,6 +386,167 @@ def test_time_travel_jump_restores_and_replays_deterministically(
     assert replay_ep2[2] == first_ep2[2]
 
 
+# -- flat loop API (`session.epochs()` + `session.restore_point()`) ----------
+
+
+def _make_flat_session(
+    tmp_path: Path, *, epochs: int = 3, enabled: bool = True
+) -> tuple[
+    Session,
+    TinyNet,
+    torch.optim.SGD,
+    torch.optim.lr_scheduler.StepLR,
+    Path,
+]:
+    """Like `_make_training`, but leaves the restorer to `session.epochs()`."""
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+    session = nansense.start(
+        model,
+        epochs=epochs,
+        phases={"train": 2},
+        enabled=enabled,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+    return session, model, optimizer, scheduler, tmp_path / "cache"
+
+
+def test_session_epochs_runs_once_without_jumps(tmp_path: Path) -> None:
+    session, model, optimizer, _, cache = _make_flat_session(tmp_path, epochs=2)
+    session.detach()
+
+    seen: list[int] = []
+    for epoch in session.epochs(cache_dir=cache):
+        with session.restore_point():
+            seen.append(epoch)
+            for _ in range(2):
+                with session.batch(phase="train", epoch=epoch):
+                    optimizer_train_step(model, optimizer)
+
+    assert seen == [0, 1]
+    assert session._loop_restorer is not None and session._loop_restorer.finished
+    assert session._loop_restorer.cache.cached_epochs() == [0, 1]
+    # The run is over, so time travel reports completed (not "no restorer").
+    status = session.time_travel_status()
+    assert not status.available
+    assert status.reason is not None and "completed" in status.reason
+
+
+def test_session_epochs_missing_restore_point_raises(tmp_path: Path) -> None:
+    """Forgetting `with session.restore_point():` is caught, not silently run."""
+    session, model, optimizer, _, cache = _make_flat_session(tmp_path, epochs=2)
+    session.detach()
+
+    with pytest.raises(RuntimeError, match="restore_point"):
+        for epoch in session.epochs(cache_dir=cache):
+            for _ in range(2):
+                with session.batch(phase="train", epoch=epoch):
+                    optimizer_train_step(model, optimizer)
+
+
+def test_restore_point_outside_epochs_loop_raises(tmp_path: Path) -> None:
+    session, _, _, _, _ = _make_flat_session(tmp_path)
+    with pytest.raises(RuntimeError, match="inside a"):
+        session.restore_point()
+
+
+def test_session_batches_default_epoch_tracks_epochs_loop(tmp_path: Path) -> None:
+    """`session.batches()` with no `epoch=` uses the epoch `epochs()` is on.
+
+    Distinct per-epoch checkpoints prove the implicit epoch advanced — a
+    stuck default (always epoch 0) would leave only `epoch_0` cached.
+    """
+    session, _, _, _, cache = _make_flat_session(tmp_path, epochs=3)
+    session.detach()
+
+    for _epoch in session.epochs(cache_dir=cache):
+        with session.restore_point():
+            for _ in session.batches([0, 1], phase="train"):
+                pass
+
+    assert session._current_epoch == 2
+    assert session._loop_restorer is not None
+    assert session._loop_restorer.cache.cached_epochs() == [0, 1, 2]
+
+
+def test_disabled_session_epochs_is_inert(tmp_path: Path) -> None:
+    session, model, optimizer, _, cache = _make_flat_session(
+        tmp_path, epochs=2, enabled=False
+    )
+
+    seen: list[int] = []
+    for epoch in session.epochs(cache_dir=cache):
+        with session.restore_point():
+            seen.append(epoch)
+            for _ in range(2):
+                with session.batch(phase="train", epoch=epoch):
+                    optimizer_train_step(model, optimizer)
+
+    assert seen == [0, 1]
+    assert not cache.exists()  # nothing written to disk
+    assert not session.time_travel_status().available
+
+
+def test_session_epochs_jump_restores_and_replays_deterministically(
+    tmp_path: Path,
+) -> None:
+    """End-to-end flat-loop jump: the replay must reproduce the original.
+
+    Mirrors the nested-loop test, but driven by `session.epochs()` +
+    `session.restore_point()`: jumping from the pause at (train, 2, 0) back
+    to epoch 1 must re-yield epochs 1 and 2 with identical weights/lr, since
+    model/optimizer/scheduler/RNG were all restored.
+    """
+    session, model, optimizer, scheduler, cache = _make_flat_session(
+        tmp_path, epochs=3
+    )
+    epoch_log: list[tuple[int, Tensor, float]] = []
+
+    def loop() -> None:
+        for epoch in session.epochs(cache_dir=cache):
+            with session.restore_point():
+                epoch_log.append(
+                    (
+                        epoch,
+                        model.fc1.weight.detach().clone(),
+                        optimizer.param_groups[0]["lr"],
+                    )
+                )
+                for _ in range(2):
+                    with session.batch(phase="train", epoch=epoch):
+                        optimizer_train_step(model, optimizer)
+                scheduler.step()
+
+    with paused_worker(session, loop, timeout=10.0):
+        session.step_until_position(phase="train", epoch=2, batch_idx=0)
+        assert session.wait_until_paused(after_pauses=1, timeout=10.0)
+        assert session._loop_restorer is not None
+        assert session._loop_restorer.cache.cached_epochs() == [0, 1, 2]
+
+        pauses = session.pause_count
+        session.request_time_travel(1)
+        assert session.wait_until_paused(after_pauses=pauses, timeout=10.0)
+        snap = session.snapshot
+        assert snap is not None
+        assert (snap.position.phase, snap.position.epoch, snap.position.batch_idx) == (
+            "train",
+            1,
+            0,
+        )
+
+    assert session._loop_restorer.finished
+    # Attempt 1 logged epochs 0..2 (epoch 2 only began); the replay logged 1..2.
+    assert [e for e, _, _ in epoch_log] == [0, 1, 2, 1, 2]
+    first_ep1, first_ep2 = epoch_log[1], epoch_log[2]
+    replay_ep1, replay_ep2 = epoch_log[3], epoch_log[4]
+    torch.testing.assert_close(replay_ep1[1], first_ep1[1])
+    assert replay_ep1[2] == first_ep1[2]
+    torch.testing.assert_close(replay_ep2[1], first_ep2[1])
+    assert replay_ep2[2] == first_ep2[2]
+
+
 def _epoch_order(loader: torch.utils.data.DataLoader) -> list[int]:
     """The sample indices a fresh iterator over `loader` yields, in order."""
     return [int(i.item()) for (idx,) in loader for i in idx]

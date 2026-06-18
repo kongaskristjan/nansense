@@ -174,21 +174,20 @@ phases = {"train": len(train_dl), "val": len(val_dl)}
 # Setup UI
 session = nansense.start(model, epochs=50, phases=phases, optimizer=optimizer, port=8080, enabled=True)
 
-# Time-travel needs an epoch cache: the restorer wraps the epoch loop so a
-# UI-requested jump can unwind it and re-enter at a different epoch. Without it,
-# training runs once through and the Time Travel button is disabled.
-restorer = session.training_restorer(cache_dir=".nansense_cache")
-while restorer.pending():
-    with restorer:
-        # Time-travel aware epoch iteration: use just like `for epoch in range(50)`
-        for epoch in restorer.epochs():
-            # Training batch iteration (matches phase="train")
-            for inputs, targets in session.batches(train_dl, phase="train", epoch=epoch):
-                optimizer.zero_grad()
-                loss = criterion(model(inputs), targets)
-                loss.backward()
-                optimizer.step()
-            # Validation batch iteration (matches phase="val") ...
+# Time travel needs an epoch cache. `session.epochs()` iterates like
+# `range(50)` but checkpoints each epoch start; wrap each iteration's body in
+# `with session.restore_point():` so a UI-requested jump can unwind it and
+# re-enter at a different epoch. Without this loop, training runs once through
+# and the Time Travel button is disabled.
+for epoch in session.epochs(cache_dir=".nansense_cache"):
+    with session.restore_point():
+        # Training batch iteration (matches phase="train")
+        for inputs, targets in session.batches(train_dl, phase="train"):
+            optimizer.zero_grad()
+            loss = criterion(model(inputs), targets)
+            loss.backward()
+            optimizer.step()
+        # Validation batch iteration (matches phase="val") ...
 
 # Close the UI (the served page stays up for post-mortem browsing)
 session.close()
@@ -236,11 +235,11 @@ See the [Python API](#python-api) for more information.
 - `input_mean` / `input_std` — the input normalization, so images display in
   their original colors.
 
-Iterate each phase with `session.batches(loader, phase=..., epoch=...)`, and call
+Iterate each phase with `session.batches(loader, phase=...)`, and call
 `session.close()` when training finishes (the served page stays up for
-post-mortem browsing). For time travel, create a restorer with
-`session.training_restorer(cache_dir=...)` (default `.nansense_cache`) and wrap the
-epoch loop in `while restorer.pending(): with restorer:` as shown above.
+post-mortem browsing). For time travel, drive the epoch loop with
+`for epoch in session.epochs(cache_dir=...)` (default `.nansense_cache`) and wrap
+each iteration's body in `with session.restore_point():` as shown above.
 
 For **PyTorch Lightning**, attach a `NansenseCallback(model="<attr path to the
 network>", ...)` to your trainer and run the fit through `fit_with_time_travel`,
@@ -250,7 +249,7 @@ which owns the jump-and-replay loop. Both accept the same `port` / `host` /
 **Distributed (DDP)** needs no special wiring: call `nansense.start()` on every
 rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and
 drives pausing and stepping; the other ranks follow its pace and fold their data
-shard into the watch-page statistics. Time travel works too — wrap every rank's
-epoch loop in a restorer. See `examples/standard/main.py --distributed`.
+shard into the watch-page statistics. Time travel works too — drive every rank's
+epoch loop with `session.epochs()`. See `examples/standard/main.py --distributed`.
 
 See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood (it's long).

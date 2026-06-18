@@ -28,7 +28,9 @@ user's ``except Exception`` around the batch body cannot swallow a jump.
 
 from __future__ import annotations
 
+import contextlib
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -372,20 +374,28 @@ def validate_scheduler_state(
 class TrainingRestorer:
     """Restores the training loop at a cached epoch after a time-travel jump.
 
-    Created via `session.training_restorer(...)`; creating it is what
-    enables time travel (and epoch caching) for the session. Use as::
+    The session drives this through two equivalent loop shapes. The flat one
+    (`iter_epochs` + `epoch_guard`, surfaced as `session.epochs()` and
+    `session.restore_point()`) is what hand-written loops use::
+
+        for epoch in session.epochs(cache_dir=...):
+            with session.restore_point():
+                ...
+
+    The nested one (`pending` + the restorer itself as a context manager) is
+    what the Lightning integration transplants around `trainer.fit`::
 
         while restorer.pending():
             with restorer:
                 for epoch in restorer.epochs():
                     ...
 
-    `pending()` is True until a `with` block runs to completion without a
-    jump. Entering the block after a jump loads the cached epoch state back
-    into the model / optimizer / scheduler and RNG, rewinds the session's
-    schedule and watch statistics, and sets `start_epoch` to the jump
-    target. The `with` block's exit suppresses `TimeTravelJump` (and only
-    that), so any other exception still propagates normally.
+    Both re-enter at the start of an epoch: entering after a jump loads the
+    cached epoch state back into the model / optimizer / scheduler and RNG,
+    rewinds the session's schedule and watch statistics, and sets
+    `start_epoch` to the jump target (`_apply_pending_jump`). The exit
+    suppresses `TimeTravelJump` (and only that), so any other exception still
+    propagates normally.
     """
 
     def __init__(
@@ -439,12 +449,80 @@ class TrainingRestorer:
         self._entered_since_pending = False
         return not self._finished
 
-    def __enter__(self) -> TrainingRestorer:
+    def _apply_pending_jump(self) -> None:
+        """Restore cached state when a jump was armed, else just note the entry.
+
+        Shared by `__enter__` (the nested `while pending(): with restorer:`
+        loop) and `epoch_guard` (the flat `for epoch in session.epochs():`
+        loop): both re-enter at the start of an epoch and must roll the live
+        state back to the jump target before that epoch trains. Marking
+        `_entered_since_pending` here is also what satisfies both loops'
+        "forgot the `with`" guard.
+        """
         self._entered_since_pending = True
         if self._jump_target is not None:
             self._restore(self._jump_target)
             self._start_epoch = self._jump_target
             self._jump_target = None
+
+    def iter_epochs(self) -> Iterator[int]:
+        """Yield epoch indices for the flat `session.epochs()` loop.
+
+        Drives the whole run as a generator: it yields `start_epoch …
+        schedule.epochs - 1`, but after a time-travel jump (recorded by the
+        `with session.restore_point():` block's exit) it re-yields the jump
+        target and continues from there instead of advancing. The run is
+        finished once the last epoch's body completes without a jump.
+
+        Each body must be wrapped in `with session.restore_point():` — that
+        context manager is what catches the `TimeTravelJump` (a `for` loop
+        never throws its body's exception back into the iterator, so the
+        generator cannot catch it itself), and a missing wrapper is reported
+        rather than left to crash training or loop forever.
+        """
+        session = self._require_session()
+        epoch = self._start_epoch
+        while True:
+            session._current_epoch = epoch
+            self._entered_since_pending = False
+            yield epoch
+            if not self._entered_since_pending:
+                raise RuntimeError(
+                    "the body of `for epoch in session.epochs()` must be "
+                    "wrapped in `with session.restore_point():` — without it a "
+                    "time-travel jump cannot be caught"
+                )
+            if self._jump_target is not None:
+                # The next `restore_point()` entry consumes the target and
+                # rolls state back; here we only pick the epoch to re-run.
+                epoch = self._jump_target
+            else:
+                epoch += 1
+                if epoch >= session.schedule.epochs:
+                    self._finished = True
+                    return
+
+    @contextlib.contextmanager
+    def epoch_guard(self) -> Iterator[TrainingRestorer]:
+        """Per-epoch context for the flat loop (`session.restore_point()`).
+
+        On entry it restores the cached state when the previous epoch's exit
+        armed a jump; on exit it catches `TimeTravelJump` and re-arms it,
+        suppressing the exception so `iter_epochs` re-yields the target.
+        Unlike the restorer's own `__exit__`, completing one epoch does not
+        mark the run finished — `iter_epochs` owns completion.
+        """
+        self._apply_pending_jump()
+        try:
+            yield self
+        except TimeTravelJump as jump:
+            # Suppressed (not re-raised): control returns to the
+            # `for epoch in session.epochs():` loop, which resumes
+            # `iter_epochs` to re-yield this target.
+            self._jump_target = jump.epoch
+
+    def __enter__(self) -> TrainingRestorer:
+        self._apply_pending_jump()
         return self
 
     def __exit__(

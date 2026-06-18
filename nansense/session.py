@@ -32,6 +32,7 @@ and `nansense.experiments` (the experiment queue and runners).
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import threading
 import warnings
@@ -223,6 +224,14 @@ class Session:
         self._mode: Mode = Mode.STEP
         self._target_position: tuple[str, int, int] | None = None
         self._restorer: TrainingRestorer | None = None
+        # The restorer that backs the flat `session.epochs()` / `restore_point()`
+        # loop, created lazily on the first `epochs()` call. Kept distinct from
+        # `_restorer` (which stays None on a disabled session) so `restore_point()`
+        # can reach it regardless, while time travel itself only arms when enabled.
+        self._loop_restorer: TrainingRestorer | None = None
+        # The epoch `session.epochs()` last yielded, so `session.batches()` can
+        # default its `epoch=` to the current epoch instead of taking it again.
+        self._current_epoch = 0
         # Tracks which epoch's start checkpoint has already been written for
         # the current attempt, so the pre-iter save (in `batches`) and the
         # fallback save (in `_BatchContext.__enter__`) don't double-save — and
@@ -481,7 +490,7 @@ class Session:
         return _BatchContext(self, phase=phase, epoch=epoch)
 
     def batches(
-        self, loader: Iterable[_BatchItem], *, phase: str, epoch: int
+        self, loader: Iterable[_BatchItem], *, phase: str, epoch: int | None = None
     ) -> Iterator[_BatchItem]:
         """Iterate `loader` with each item wrapped in a `batch()` context.
 
@@ -492,9 +501,15 @@ class Session:
         A `TimeTravelJump` raised at a batch boundary therefore surfaces
         from the `for` statement itself, not from inside the user's body.
 
-            for inputs, targets in session.batches(loader, phase="train", epoch=e):
+            for inputs, targets in session.batches(loader, phase="train"):
                 ...  # forward / backward / step
+
+        `epoch` defaults to the epoch `session.epochs()` last yielded, so the
+        flat loop need not repeat it; pass it explicitly when driving the
+        phases outside an `epochs()` loop.
         """
+        if epoch is None:
+            epoch = self._current_epoch
         # Checkpoint the epoch-start state BEFORE `iter(loader)` draws the
         # DataLoader's shuffle seed from the global RNG. The `__enter__` save
         # (a fallback for users who drive `batch()` manually) would capture the
@@ -1077,6 +1092,50 @@ class Session:
 
     def detach(self) -> None:
         self._set_mode(Mode.DETACH, resume=True)
+
+    def epochs(self, *, cache_dir: Path = DEFAULT_CACHE_DIR) -> Iterator[int]:
+        """Time-travel-aware epoch loop: `for epoch in session.epochs(): ...`.
+
+        Yields `0 … epochs - 1` like `range`, but opts the session into time
+        travel: each epoch start is checkpointed to `cache_dir` and a
+        UI-requested jump re-enters the loop at the chosen epoch with the
+        model / optimizer / scheduler / RNG restored. Wrap each iteration's
+        body — every phase of the epoch — in `with session.restore_point():`,
+        the block that catches the jump; the generator then re-yields the
+        target epoch::
+
+            for epoch in session.epochs(cache_dir="models/latest"):
+                with session.restore_point():
+                    for inputs, targets in session.batches(train_dl, phase="train"):
+                        ...
+                    for inputs, targets in session.batches(val_dl, phase="val"):
+                        ...
+
+        Not iterating this leaves the run a straight pass with the UI's Time
+        Travel button disabled; on a disabled session it is inert and nothing
+        touches the disk. Under DDP call it on every rank — a leader jump is
+        broadcast so all ranks re-yield the same epoch in lockstep.
+        """
+        if self._loop_restorer is None:
+            self._loop_restorer = self.training_restorer(cache_dir=cache_dir)
+        return self._loop_restorer.iter_epochs()
+
+    def restore_point(self) -> contextlib.AbstractContextManager[TrainingRestorer]:
+        """Per-epoch restore boundary for the `session.epochs()` loop.
+
+        Enter it around each epoch's body (both train and val phases): on a
+        time-travel jump the `TimeTravelJump` unwinds to here, is suppressed,
+        and `session.epochs()` re-yields the target epoch with state restored.
+        Loop state that depends on history (a running `best_acc`, metric
+        curves) belongs inside it, so a jump rewinds it naturally. Must be
+        used inside a `for epoch in session.epochs():` loop.
+        """
+        if self._loop_restorer is None:
+            raise RuntimeError(
+                "session.restore_point() must be used inside a "
+                "`for epoch in session.epochs():` loop"
+            )
+        return self._loop_restorer.epoch_guard()
 
     def training_restorer(
         self, *, cache_dir: Path = DEFAULT_CACHE_DIR

@@ -140,35 +140,32 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     )
 
     # Opting into time travel: each epoch start is checkpointed to
-    # `--cache-dir`, and a UI-requested jump unwinds to `with restorer:` and
-    # re-enters the epoch loop at `restorer.start_epoch` with the cached
-    # model / optimizer / scheduler / RNG state restored.
-    restorer = session.training_restorer(cache_dir=args.cache_dir)
+    # `--cache-dir`, and a UI-requested jump unwinds to `with session.restore_point():`
+    # and re-enters at the chosen epoch with the cached model / optimizer /
+    # scheduler / RNG state restored.
     best_delta = 0.0
-    while restorer.pending():
-        with restorer:
-            best_delta = 0.0  # re-derived per attempt: a jump rewinds history
-            for epoch in restorer.epochs():
-                epoch_start = time.time()
-                train_stats = train_one_epoch(
-                    model, train_loader, optimizer, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch, metric_fn=delta_accuracy,
-                )
-                test_stats = evaluate(
-                    model, test_loader, criterion, device,
-                    amp_dtype=amp_dtype, session=session, epoch=epoch, metric_fn=delta_accuracy,
-                )
-                scheduler.step()
+    for epoch in session.epochs(cache_dir=args.cache_dir):
+        with session.restore_point():
+            epoch_start = time.time()
+            train_stats = train_one_epoch(
+                model, train_loader, optimizer, criterion, device,
+                amp_dtype=amp_dtype, session=session, metric_fn=delta_accuracy,
+            )
+            test_stats = evaluate(
+                model, test_loader, criterion, device,
+                amp_dtype=amp_dtype, session=session, metric_fn=delta_accuracy,
+            )
+            scheduler.step()
 
-                elapsed = time.time() - epoch_start
-                print(
-                    f"epoch {epoch + 1:3d}/{args.epochs} "
-                    f"train_loss={train_stats.loss:.4f} train_d1={train_stats.accuracy:.4f} "
-                    f"test_loss={test_stats.loss:.4f} test_d1={test_stats.accuracy:.4f} "
-                    f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
-                )
+            elapsed = time.time() - epoch_start
+            print(
+                f"epoch {epoch + 1:3d}/{args.epochs} "
+                f"train_loss={train_stats.loss:.4f} train_d1={train_stats.accuracy:.4f} "
+                f"test_loss={test_stats.loss:.4f} test_d1={test_stats.accuracy:.4f} "
+                f"lr={scheduler.get_last_lr()[0]:.4f} ({elapsed:.1f}s)"
+            )
 
-                best_delta = max(best_delta, test_stats.accuracy)
+            best_delta = max(best_delta, test_stats.accuracy)
 
     print(f"Best test delta<1.25 accuracy: {best_delta:.4f}")
 
