@@ -436,7 +436,13 @@ class TrainingRestorer:
 
     def epochs(self) -> range:
         """Epochs the current attempt should run: `start_epoch` to the end."""
-        return range(self._start_epoch, self._require_session().schedule.epochs)
+        total = self._require_session().schedule.epochs
+        if total is None:
+            raise RuntimeError(
+                "epoch count is unknown — set it via session.epochs(n) or "
+                "nansense.start(epochs=n) before iterating restorer.epochs()"
+            )
+        return range(self._start_epoch, total)
 
     def pending(self) -> bool:
         """Whether another `with restorer:` attempt should run."""
@@ -481,6 +487,10 @@ class TrainingRestorer:
         rather than left to crash training or loop forever.
         """
         session = self._require_session()
+        # `session.epochs(n)` set the count before reaching here (it errors
+        # otherwise), so the schedule's epoch count is known.
+        total = session.schedule.epochs
+        assert total is not None
         epoch = self._start_epoch
         while True:
             session._current_epoch = epoch
@@ -498,7 +508,7 @@ class TrainingRestorer:
                 epoch = self._jump_target
             else:
                 epoch += 1
-                if epoch >= session.schedule.epochs:
+                if epoch >= total:
                     self._finished = True
                     return
 

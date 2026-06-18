@@ -168,18 +168,16 @@ optimizer = ...
 criterion = ...
 train_dl, val_dl = ...
 
-# Nansense needs to know the total number of batches in each phase
-phases = {"train": len(train_dl), "val": len(val_dl)}
+# Setup UI — the schedule is discovered as you train (phase names and batch
+# counts are learned from the loop below); no need to declare them up front.
+session = nansense.start(model, optimizer=optimizer, port=8080, enabled=True)
 
-# Setup UI
-session = nansense.start(model, epochs=50, phases=phases, optimizer=optimizer, port=8080, enabled=True)
-
-# Time travel needs an epoch cache. `session.epochs()` iterates like
+# Time travel needs an epoch cache. `session.epochs(50)` iterates like
 # `range(50)` but checkpoints each epoch start; wrap each iteration's body in
 # `with session.restore_point():` so a UI-requested jump can unwind it and
 # re-enter at a different epoch. Without this loop, training runs once through
 # and the Time Travel button is disabled.
-for epoch in session.epochs(cache_dir=".nansense_cache"):
+for epoch in session.epochs(50, cache_dir=".nansense_cache"):
     with session.restore_point():
         # Training batch iteration (matches phase="train")
         for inputs, targets in session.batches(train_dl, phase="train"):
@@ -218,13 +216,9 @@ See the [Python API](#python-api) for more information.
 
 ### Python API
 
-`nansense.start(model, *, epochs, phases, ...)` creates the `Session` and, when
-`port=` is given, serves the UI. The arguments worth knowing:
+`nansense.start(model, ...)` creates the `Session` and, when `port=` is given,
+serves the UI. The arguments worth knowing:
 
-- `epochs` / `phases` — the run's shape. `phases` maps each phase name to its
-  batch count, e.g. `{"train": len(train_dl), "val": len(val_dl)}` (order
-  matters — the last entry is each epoch's final phase). Declaring it up front is
-  what lets nansense pause exactly on epoch and run boundaries.
 - `optimizer` (optional) — adds per-parameter optimizer state and live
   hyperparameters to the weights page.
 - `scheduler` (optional) — lets time-travel checkpoints restore the LR schedule.
@@ -238,8 +232,14 @@ See the [Python API](#python-api) for more information.
 Iterate each phase with `session.batches(loader, phase=...)`, and call
 `session.close()` when training finishes (the served page stays up for
 post-mortem browsing). For time travel, drive the epoch loop with
-`for epoch in session.epochs(cache_dir=...)` (default `.nansense_cache`) and wrap
-each iteration's body in `with session.restore_point():` as shown above.
+`for epoch in session.epochs(N, cache_dir=...)` (default `.nansense_cache`) and
+wrap each iteration's body in `with session.restore_point():` as shown above.
+
+The schedule is discovered as you go: phase names and per-phase batch counts are
+learned while you iterate `session.batches`, so the UI's per-phase progress and
+boundary stops become exact after the first epoch. Pass `phases={"train": a,
+"val": b}` to `start()` if you want that precision from the very first epoch — an
+optional up-front declaration (it's what the PyTorch Lightning integration uses).
 
 For **PyTorch Lightning**, attach a `NansenseCallback(model="<attr path to the
 network>", ...)` to your trainer and run the fit through `fit_with_time_travel`,

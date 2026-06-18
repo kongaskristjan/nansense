@@ -214,8 +214,6 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     # `port=` serves the UI immediately (skipped automatically when disabled).
     session = nansense.start(
         model,
-        epochs=args.epochs,
-        phases={"train": len(train_loader), "val": len(test_loader)},
         enabled=not args.disable_nansense,
         # Optional: lets the weights page show per-parameter optimizer state
         # (Adam moments) and the group's live hyperparameters (lr, ...).
@@ -230,9 +228,10 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     # Opting into time travel: each epoch start is checkpointed to
     # `--cache-dir`, and a UI-requested jump unwinds to `with session.restore_point():`
     # and re-enters at the chosen epoch with the cached model / optimizer /
-    # scheduler / RNG state restored.
+    # scheduler / RNG state restored. The epoch count is declared here; phase
+    # names and batch counts are discovered as `session.batches(...)` runs.
     best_acc = 0.0
-    for epoch in session.epochs(cache_dir=args.cache_dir):
+    for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():
             epoch_start = time.time()
             train_stats = train_one_epoch(
@@ -344,8 +343,6 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
 
     session = nansense.start(
         model,
-        epochs=args.epochs,
-        phases={"train": len(train_loader), "val": len(test_loader)},
         enabled=not args.disable_nansense,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -359,7 +356,7 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
     # (rank 0 to `epoch_<n>.pt`, followers to `epoch_<n>.rank<r>.pt`); a jump
     # rewinds them all in lockstep. `set_epoch(epoch)` is called inside the
     # loop so a replayed epoch reshuffles its shards identically.
-    for epoch in session.epochs(cache_dir=args.cache_dir):
+    for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():
             train_sampler.set_epoch(epoch)  # reshuffle shards each epoch
             epoch_start = time.time()

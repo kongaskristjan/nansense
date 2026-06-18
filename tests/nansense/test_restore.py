@@ -299,7 +299,7 @@ def test_time_travel_status_reports_reason_and_cached_epochs(tmp_path: Path) -> 
     session = nansense.start(TinyNet(), epochs=3, phases={"train": 2})
     status = session.time_travel_status()
     assert not status.available
-    assert status.reason is not None and "restorer" in status.reason
+    assert status.reason is not None and "session.epochs()" in status.reason
 
     restorer = session.training_restorer(cache_dir=tmp_path / "cache")
     restorer.cache.save(1, model=session.model, optimizer=None, scheduler=None)
@@ -354,7 +354,7 @@ def test_time_travel_jump_restores_and_replays_deterministically(
     # First batch pauses (STEP mode); run forward to the pause at (2, 0) so
     # epochs 0, 1, and 2 all have checkpoints.
     with paused_worker(session, loop, timeout=10.0):
-        session.step_until_position(phase="train", epoch=2, batch_idx=0)
+        session.step_until_position(phase_index=0, epoch=2, batch_idx=0)
         assert session.wait_until_paused(after_pauses=1, timeout=10.0)
         assert restorer.cache.cached_epochs() == [0, 1, 2]
 
@@ -520,7 +520,7 @@ def test_session_epochs_jump_restores_and_replays_deterministically(
                 scheduler.step()
 
     with paused_worker(session, loop, timeout=10.0):
-        session.step_until_position(phase="train", epoch=2, batch_idx=0)
+        session.step_until_position(phase_index=0, epoch=2, batch_idx=0)
         assert session.wait_until_paused(after_pauses=1, timeout=10.0)
         assert session._loop_restorer is not None
         assert session._loop_restorer.cache.cached_epochs() == [0, 1, 2]

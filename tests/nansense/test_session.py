@@ -85,7 +85,7 @@ def test_detach_skips_capture_for_every_batch() -> None:
             id="until_phase_change",
         ),
         pytest.param(
-            lambda s: s.step_until_position(phase="val", epoch=0, batch_idx=1),
+            lambda s: s.step_until_position(phase_index=1, epoch=0, batch_idx=1),
             2,
             {"train": 2, "val": 2},
             [("val", 0, 1)],
@@ -128,6 +128,38 @@ def test_step_modes_capture_only_at_target(
     if expect_last_overall:
         assert session.snapshot is not None
         assert session.snapshot.position.is_last_overall
+
+
+def test_step_epoch_lands_on_first_batch_of_next_epoch() -> None:
+    """Issued while paused on a batch, STEP EPOCH lands on batch 0 of the *next*
+    epoch (a position comparison against the issue-time origin), not the last
+    batch of the current one."""
+    model = TinyNet()
+    with paused_session(model, epochs=2, phases={"train": 2}) as session:
+        lp = session.live_position
+        assert lp is not None
+        assert (lp.phase, lp.epoch, lp.batch_idx) == ("train", 0, 0)
+        pauses = session.pause_count
+        session.step_epoch()
+        assert session.wait_until_paused(after_pauses=pauses, timeout=5)
+        lp = session.live_position
+        assert lp is not None
+        assert (lp.phase, lp.epoch, lp.batch_idx) == ("train", 1, 0)
+
+
+def test_lazy_session_batches_learn_phase_counts() -> None:
+    """Started without a declared `phases`, the schedule learns each phase's
+    name and batch count from `session.batches` running to completion."""
+    session = nansense.start(TinyNet(), epochs=2)
+    session.detach()
+    assert session.schedule.phases == {}  # nothing declared up front
+    for epoch in range(2):
+        for _ in session.batches([0, 1, 2], phase="train", epoch=epoch):
+            pass
+        for _ in session.batches([0, 1], phase="val", epoch=epoch):
+            pass
+    assert session.schedule.phase_order == ["train", "val"]
+    assert session.schedule.phases == {"train": 3, "val": 2}
 
 
 def test_step_mode_pauses_on_every_batch() -> None:

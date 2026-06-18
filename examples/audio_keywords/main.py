@@ -111,8 +111,6 @@ def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.devi
     # the single-channel spectrogram renders denormalized in the UI.
     session = nansense.start(
         model,
-        epochs=args.epochs,
-        phases={"train": len(train_loader), "val": len(val_loader)},
         enabled=not args.disable_nansense,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -126,7 +124,7 @@ def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.devi
     # and re-enters at the chosen epoch with the cached model / optimizer /
     # scheduler / RNG state restored.
     best_acc = 0.0
-    for epoch in session.epochs(cache_dir=args.cache_dir):
+    for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():
             epoch_start = time.time()
             train_stats = train_one_epoch(

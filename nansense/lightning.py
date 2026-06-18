@@ -351,7 +351,8 @@ class NansenseCallback(Callback):
         if session is None or restorer is None or restorer.finished:
             return
         next_epoch = self._epoch + 1
-        if next_epoch < session.schedule.epochs:
+        total = session.schedule.epochs
+        if total is not None and next_epoch < total:
             restorer.save_for_epoch(trainer, next_epoch)
 
     def on_save_checkpoint(

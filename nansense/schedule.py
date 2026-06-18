@@ -1,10 +1,14 @@
 """Schedule tracking: where in (phase, epoch) the current batch sits.
 
-The schedule is fully declared at session construction time so that, when a
-batch starts, we already know whether it is the last of its phase/epoch/run.
-That lets the session decide *before* the forward pass whether to install
-activation hooks for this batch, eliminating any reactive "phase just changed"
-logic at `__exit__` time.
+The schedule can be **declared** up front (`Schedule(epochs=N, phases={...})`)
+or **discovered lazily** (`Schedule()` with no phases). When declared, a batch
+knows on arrival whether it is the last of its phase/epoch/run, so the session
+can decide *before* the forward pass whether to install hooks. When lazy, phase
+names appear as `advance` first sees them and per-phase batch counts are learned
+when a phase completes (`record_phase_length`), so those `is_last_*` flags only
+become reliable from the second epoch on — the first epoch is the blind window.
+The step modes that must work on the first epoch compare positions instead (see
+`Session._should_capture`).
 """
 
 from __future__ import annotations
@@ -32,96 +36,178 @@ def format_position(position: BatchPosition) -> str:
 class Schedule:
     """Batch-position bookkeeping, safe to touch from both session threads.
 
-    `advance` runs on the training thread (every batch) while the UI thread
-    reads `epochs`/`phases` and may `update`/`rewind_to_epoch`; a lock guards
+    `advance` and `record_phase_length` run on the training thread (every
+    batch / each phase end) while the UI thread reads `epochs`/`phases`/
+    `phase_order` and may `update`/`set_epochs`/`rewind_to_epoch`; a lock guards
     the shared counters and the phase/epoch fields so a mid-`advance` schedule
     swap can't yield an inconsistent `BatchPosition` or corrupt the counters.
     The lock is never held while touching the session's condition variable, so
     it only ever nests *inside* it — no lock-ordering cycle.
+
+    `phases` may be `None` (lazy mode): phase names and counts are then learned
+    by observation. A declared `phases` dict pins both up front and keeps the
+    stricter validation (unknown phase / more batches than declared raise).
     """
 
-    def __init__(self, epochs: int, phases: dict[str, int]) -> None:
-        self._validate(epochs, phases)
+    def __init__(
+        self,
+        epochs: int | None = None,
+        phases: dict[str, int] | None = None,
+    ) -> None:
+        if epochs is not None and epochs <= 0:
+            raise ValueError(f"epochs must be positive, got {epochs}")
+        if phases is not None:
+            self._validate_phases(phases)
         self._lock = threading.Lock()
         self._epochs = epochs
-        self._phases: dict[str, int] = dict(phases)
+        # Declared mode pins the phase set and counts and keeps the strict
+        # validation; lazy mode learns both and never raises on an unseen phase
+        # or an over-count (the dataset may simply have grown).
+        self._declared = phases is not None
+        self._phase_order: list[str] = list(phases) if phases else []
+        self._phase_counts: dict[str, int] = dict(phases) if phases else {}
         self._counters: dict[tuple[str, int], int] = {}
 
     @staticmethod
-    def _validate(epochs: int, phases: dict[str, int]) -> None:
-        if epochs <= 0:
-            raise ValueError(f"epochs must be positive, got {epochs}")
+    def _validate_phases(phases: dict[str, int]) -> None:
         if not phases:
             raise ValueError("phases must be non-empty")
         for name, n in phases.items():
             if n <= 0:
-                raise ValueError(f"phase {name!r} must declare a positive batch count, got {n}")
+                raise ValueError(
+                    f"phase {name!r} must declare a positive batch count, got {n}"
+                )
 
     @property
-    def epochs(self) -> int:
+    def epochs(self) -> int | None:
+        """Total epochs, or `None` until `set_epochs`/`session.epochs(n)` runs."""
         with self._lock:
             return self._epochs
 
     @property
     def phases(self) -> dict[str, int]:
+        """Known phases mapped to their batch counts, in first-seen order.
+
+        Declared mode returns the full dict up front; lazy mode grows it as each
+        phase's count is learned (so it can be empty during the first epoch).
+        """
         with self._lock:
-            return dict(self._phases)
+            return {
+                name: self._phase_counts[name]
+                for name in self._phase_order
+                if name in self._phase_counts
+            }
 
     @property
-    def first_phase_name(self) -> str:
+    def phase_order(self) -> list[str]:
+        """All phase names seen so far, in order — including ones whose count is
+        not yet known (unlike `phases`, which only lists counted phases)."""
         with self._lock:
-            return next(iter(self._phases))
+            return list(self._phase_order)
+
+    def phase_count(self, phase: str) -> int | None:
+        """The known batch count for `phase`, or `None` if not yet learned."""
+        with self._lock:
+            return self._phase_counts.get(phase)
 
     @property
-    def last_phase_name(self) -> str:
+    def first_phase_name(self) -> str | None:
         with self._lock:
-            return next(reversed(self._phases))
+            return self._phase_order[0] if self._phase_order else None
+
+    @property
+    def last_phase_name(self) -> str | None:
+        with self._lock:
+            return self._phase_order[-1] if self._phase_order else None
+
+    def set_epochs(self, n: int) -> None:
+        """Set the total epoch count (from `session.epochs(n)`)."""
+        if n <= 0:
+            raise ValueError(f"epochs must be positive, got {n}")
+        with self._lock:
+            self._epochs = n
 
     def rewind_to_epoch(self, epoch: int) -> None:
         """Forget batch counters for `epoch` and everything after it.
 
         Called when time travel jumps back to the start of `epoch`, so the
-        re-run epochs advance from batch 0 again instead of tripping the
-        more-batches-than-declared check.
+        re-run epochs advance from batch 0 again. The learned phase set and
+        counts are kept (the shape is stable across the rewind).
         """
         with self._lock:
             for key in [k for k in self._counters if k[1] >= epoch]:
                 del self._counters[key]
 
-    def update(self, *, epochs: int | None = None, phases: dict[str, int] | None = None) -> None:
+    def record_phase_length(self, phase: str, epoch: int, n: int) -> None:
+        """Record the observed batch count of a just-completed phase (lazy mode).
+
+        Called by `Session.batches` when its loop exhausts; the first
+        observation teaches the count, later epochs update it if the dataset
+        size changed. No-op in declared mode (counts are pinned up front).
+        """
+        if n <= 0:
+            return
         with self._lock:
-            new_epochs = self._epochs if epochs is None else epochs
-            new_phases = self._phases if phases is None else dict(phases)
-            self._validate(new_epochs, new_phases)
-            self._epochs = new_epochs
-            self._phases = new_phases
+            if self._declared:
+                return
+            if phase not in self._phase_order:
+                self._phase_order.append(phase)
+            self._phase_counts[phase] = n
+
+    def update(
+        self, *, epochs: int | None = None, phases: dict[str, int] | None = None
+    ) -> None:
+        """Re-declare the schedule (Lightning re-declares per epoch).
+
+        Passing `phases` switches to declared mode and replaces the phase set /
+        counts; `_counters` are kept so the run does not restart.
+        """
+        with self._lock:
+            if epochs is not None:
+                if epochs <= 0:
+                    raise ValueError(f"epochs must be positive, got {epochs}")
+                self._epochs = epochs
+            if phases is not None:
+                self._validate_phases(phases)
+                self._declared = True
+                self._phase_order = list(phases)
+                self._phase_counts = dict(phases)
 
     def advance(self, phase: str, epoch: int) -> BatchPosition:
         with self._lock:
-            if phase not in self._phases:
-                raise ValueError(
-                    f"unknown phase {phase!r}; declared: {list(self._phases)}"
-                )
-            if not 0 <= epoch < self._epochs:
+            if self._epochs is not None and not 0 <= epoch < self._epochs:
                 raise ValueError(f"epoch {epoch} out of range [0, {self._epochs})")
+            if phase not in self._phase_order:
+                if self._declared:
+                    raise ValueError(
+                        f"unknown phase {phase!r}; declared: {self._phase_order}"
+                    )
+                self._phase_order.append(phase)
 
             key = (phase, epoch)
             batch_idx = self._counters.get(key, 0)
-            declared = self._phases[phase]
-            if batch_idx >= declared:
+            count = self._phase_counts.get(phase)  # None until learned/declared
+            # Declared mode still rejects overrunning a pinned count; lazy mode
+            # tolerates it (the count will be re-learned at phase end).
+            if self._declared and count is not None and batch_idx >= count:
                 raise ValueError(
                     f"more batches than declared for phase {phase!r} "
-                    f"(declared {declared}, got {batch_idx + 1})"
+                    f"(declared {count}, got {batch_idx + 1})"
                 )
             self._counters[key] = batch_idx + 1
 
-            is_last_in_phase = batch_idx == declared - 1
-            # Raw read (not the locked `last_phase_name` property) — the lock
-            # is not reentrant and is already held here.
-            is_last_in_epoch = is_last_in_phase and phase == next(
-                reversed(self._phases)
+            # All three flags are best-effort: they require the count to be
+            # known (declared, or learned from a prior epoch). During the first
+            # lazy epoch they stay False — position-based stepping covers it.
+            is_last_in_phase = count is not None and batch_idx == count - 1
+            is_last_in_epoch = (
+                is_last_in_phase and phase == self._phase_order[-1]
             )
-            is_last_overall = is_last_in_epoch and epoch == self._epochs - 1
+            is_last_overall = (
+                is_last_in_epoch
+                and self._epochs is not None
+                and epoch == self._epochs - 1
+            )
         return BatchPosition(
             phase=phase,
             epoch=epoch,

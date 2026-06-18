@@ -15,7 +15,7 @@ from nansense.debugger import DebugError, LayerReport
 from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL
 from nansense.recording import RecordedView
 from nansense.restore import TimeTravelError
-from nansense.schedule import BatchPosition, Schedule, format_position
+from nansense.schedule import BatchPosition, format_position
 from nansense.session import BatchSnapshot, Session
 from nansense.watch import DEFAULT_CHANNEL_LIMIT
 
@@ -439,7 +439,9 @@ def _add_settings_button(
     "this view") rather than twice. A red badge on the gear carries the
     active-recording count.
     """
-    phase_names = list(session.schedule.phases)
+    # Phases seen so far; refreshed each time the dialog opens (lazy schedules
+    # learn them as training runs).
+    phase_names = session.schedule.phase_order
 
     with ui.dialog() as dialog, ui.card().classes("min-w-[30rem] p-6 gap-3"):
         ui.label("Experiments").classes("text-lg font-bold")
@@ -825,7 +827,11 @@ def _add_settings_button(
         freq = session.update_frequency
         unit_select.value = freq.unit
         n_input.value = freq.n
-        phase_select.value = freq.phase if freq.phase is not None else _ANY_PHASE
+        # Re-read the phases seen so far before mapping the saved filter onto them.
+        phase_select.set_options(
+            [_ANY_PHASE] + session.schedule.phase_order,
+            value=freq.phase if freq.phase is not None else _ANY_PHASE,
+        )
         debug = session.debug_settings
         debug_enable.value = debug.enabled
         debug_interval.value = debug.interval
@@ -1106,37 +1112,88 @@ def _time_travel_default_index(cached: list[int], current_epoch: int | None) -> 
     return max(0, bisect_right(cached, current_epoch) - 1)
 
 
-def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
-    schedule = session.schedule
-    phase_names = list(schedule.phases)
+def _int_value(element: ui.number, default: int = 0) -> int:
+    """A `ui.number`'s value as a non-negative int (it stores floats / None)."""
+    try:
+        return max(0, int(element.value)) if element.value is not None else default
+    except (TypeError, ValueError):
+        return default
 
-    with ui.dialog() as dialog, ui.card().classes("min-w-96 p-6 gap-4"):
+
+def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
+    """Run-until-position dialog over a possibly-still-unknown schedule.
+
+    The schedule is discovered lazily, so the target is addressed by *phase
+    index* rather than name: pick an epoch (slider over the known total), a
+    phase number (its name is shown once observed), and a batch number. Phases
+    or batch counts beyond what has been seen are allowed with a warning —
+    training matches the target if it ever reaches it, and runs to the end
+    otherwise.
+    """
+    with ui.dialog() as dialog, ui.card().classes("min-w-96 p-6 gap-3"):
         ui.label("Step until custom").classes("text-lg font-bold")
-        with ui.row().classes("w-full gap-4 items-end no-wrap"):
-            epoch_input = ui.number(
-                label="Epoch", value=0, min=0, step=1, format="%d"
-            ).classes("flex-1")
-            phase_select = ui.select(
-                phase_names, label="Phase", value=phase_names[0]
+
+        with ui.row().classes("w-full items-center gap-4 no-wrap"):
+            epoch_label = ui.label("epoch 0").classes("font-mono text-sm w-20 shrink-0")
+            epoch_slider = ui.slider(
+                min=0,
+                max=0,
+                step=1,
+                value=0,
+                on_change=lambda e: epoch_label.set_text(f"epoch {int(e.value)}"),
+            ).classes("grow")
+
+        with ui.row().classes("w-full gap-4 items-start no-wrap"):
+            phase_input = ui.number(
+                label="Phase #", value=0, min=0, step=1, format="%d"
             ).classes("flex-1")
             batch_input = ui.number(
                 label="Batch", value=0, min=0, step=1, format="%d"
             ).classes("flex-1")
+        phase_hint = ui.label("").classes("text-xs min-h-4")
+        batch_hint = ui.label("").classes("text-xs min-h-4")
         error_label = ui.label("").classes("text-red-500 text-sm min-h-4")
 
+        def refresh_hints() -> None:
+            order = session.schedule.phase_order
+            pidx = _int_value(phase_input)
+            if pidx < len(order):
+                name = order[pidx]
+                phase_hint.text = f"phase {pidx}: {name!r}"
+                phase_hint.classes(replace="text-xs min-h-4 text-slate-600")
+                count = session.schedule.phase_count(name)
+            else:
+                phase_hint.text = (
+                    f"phase {pidx} not observed yet — matched once training "
+                    "reaches it"
+                )
+                phase_hint.classes(replace="text-xs min-h-4 text-amber-700")
+                count = None
+            bidx = _int_value(batch_input)
+            if count is None:
+                batch_hint.text = ""
+            elif bidx >= count:
+                batch_hint.text = (
+                    f"phase has {count} batches so far — the target may differ "
+                    "if the dataset size changes"
+                )
+                batch_hint.classes(replace="text-xs min-h-4 text-amber-700")
+            else:
+                batch_hint.text = f"{count} batches in this phase"
+                batch_hint.classes(replace="text-xs min-h-4 text-slate-600")
+
+        phase_input.on_value_change(lambda: refresh_hints())
+        batch_input.on_value_change(lambda: refresh_hints())
+
         def submit() -> None:
-            try:
-                epoch = int(epoch_input.value) if epoch_input.value is not None else 0
-                batch_idx = int(batch_input.value) if batch_input.value is not None else 0
-            except (TypeError, ValueError):
-                error_label.text = "Invalid input"
-                return
-            phase = str(phase_select.value)
+            epoch = int(epoch_slider.value) if epoch_slider.value is not None else 0
+            phase_index = _int_value(phase_input)
+            batch_idx = _int_value(batch_input)
             error = _validate_step_until_target(
-                schedule=schedule,
                 live_position=session.live_position,
                 snapshot=session.snapshot,
-                phase=phase,
+                phase_order=session.schedule.phase_order,
+                phase_index=phase_index,
                 epoch=epoch,
                 batch_idx=batch_idx,
             )
@@ -1144,23 +1201,32 @@ def _build_step_until_custom_dialog(session: Session) -> ui.dialog:
                 error_label.text = error
                 return
             error_label.text = ""
-            session.step_until_position(phase=phase, epoch=epoch, batch_idx=batch_idx)
+            session.step_until_position(
+                phase_index=phase_index, epoch=epoch, batch_idx=batch_idx
+            )
             dialog.close()
 
         with ui.row():
             ui.button("Cancel", on_click=dialog.close)
             ui.button("Step", on_click=submit)
 
-        def apply_current_position() -> None:
+        def on_show() -> None:
+            total = session.schedule.epochs
+            epoch_slider._props["max"] = (total - 1) if total else 0
+            epoch_slider.update()
+            order = session.schedule.phase_order
             position = _current_position(session.live_position, session.snapshot)
-            if position is None:
-                return
-            epoch_input.value = position.epoch
-            phase_select.value = position.phase
-            batch_input.value = position.batch_idx
+            if position is not None:
+                epoch_slider.value = position.epoch
+                phase_input.value = (
+                    order.index(position.phase) if position.phase in order else 0
+                )
+                batch_input.value = position.batch_idx
+            epoch_label.set_text(f"epoch {int(epoch_slider.value or 0)}")
             error_label.text = ""
+            refresh_hints()
 
-        dialog.on("before-show", apply_current_position)
+        dialog.on("before-show", on_show)
 
     return dialog
 
@@ -1182,40 +1248,33 @@ def _current_position(
 
 def _validate_step_until_target(
     *,
-    schedule: Schedule,
     live_position: BatchPosition | None,
     snapshot: BatchSnapshot | None,
-    phase: str,
+    phase_order: list[str],
+    phase_index: int,
     epoch: int,
     batch_idx: int,
 ) -> str | None:
-    phases = schedule.phases
-    if phase not in phases:
-        return f"Unknown phase {phase!r}"
-    if not 0 <= epoch < schedule.epochs:
-        return f"Epoch must be in [0, {schedule.epochs - 1}]"
-    declared = phases[phase]
-    if not 0 <= batch_idx < declared:
-        return f"Batch must be in [0, {declared - 1}] for phase {phase!r}"
-    # `step_until_position` captures on an *exact* (phase, epoch, batch_idx)
-    # match against the live training position, so validate against that same
-    # source the dialog prefills from (see `_current_position`).
-    # `snapshot.position` is stale mid-step_epoch/step_run/detach — a target
-    # between it and the live position would pass here yet never be hit.
+    """The one hard requirement on a custom-step target: it must lie ahead.
+
+    Unknown phases / over-large batch indices are *not* rejected here (the
+    dialog surfaces those as warnings) — they simply match if training reaches
+    them. But the target must be after the current position, since stepping
+    only moves forward (going back is time travel). The rank compares against
+    the live position the dialog prefills from; `snapshot.position` is stale
+    mid-step_epoch/step_run/detach, so a target between it and the live
+    position would pass yet never be hit.
+    """
     current = live_position if live_position is not None else (
         snapshot.position if snapshot is not None else None
     )
-    if current is not None:
-        target_rank = _position_rank(phases, phase, epoch, batch_idx)
-        current_rank = _position_rank(
-            phases, current.phase, current.epoch, current.batch_idx
-        )
-        if target_rank <= current_rank:
-            return "Target must be after the current position"
+    if current is None:
+        return None
+    cur_index = (
+        phase_order.index(current.phase) if current.phase in phase_order else 0
+    )
+    target_rank = (epoch, phase_index, batch_idx)
+    current_rank = (current.epoch, cur_index, current.batch_idx)
+    if target_rank <= current_rank:
+        return "Target must be after the current position"
     return None
-
-
-def _position_rank(
-    phases: dict[str, int], phase: str, epoch: int, batch_idx: int
-) -> tuple[int, int, int]:
-    return (epoch, list(phases).index(phase), batch_idx)

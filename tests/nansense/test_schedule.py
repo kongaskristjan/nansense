@@ -123,6 +123,71 @@ def test_rewind_to_epoch_resets_counters_for_that_epoch_onward() -> None:
         schedule.advance("train", 0)
 
 
+# -- lazy mode (phases discovered by observation) ---------------------------
+
+
+def test_lazy_construction_starts_empty() -> None:
+    schedule = Schedule()
+    assert schedule.epochs is None
+    assert schedule.phases == {}
+    assert schedule.phase_order == []
+    assert schedule.first_phase_name is None
+    assert schedule.last_phase_name is None
+
+
+def test_lazy_advance_registers_phases_without_error() -> None:
+    schedule = Schedule(epochs=2)
+    # Unknown phases are learned, not rejected; counts unknown so no is_last.
+    pos = schedule.advance("train", 0)
+    assert (pos.phase, pos.batch_idx) == ("train", 0)
+    assert not pos.is_last_in_phase
+    schedule.advance("train", 0)
+    schedule.advance("val", 0)  # a second phase, discovered on first sight
+    assert schedule.phase_order == ["train", "val"]
+    # No counts learned yet, so `phases` (counted phases only) stays empty.
+    assert schedule.phases == {}
+    assert schedule.phase_count("train") is None
+
+
+def test_lazy_counts_learned_after_first_epoch() -> None:
+    schedule = Schedule(epochs=2)
+    # Epoch 0: counts unknown, is_last_in_phase never fires.
+    for _ in range(3):
+        assert not schedule.advance("train", 0).is_last_in_phase
+    schedule.record_phase_length("train", 0, 3)
+    for _ in range(2):
+        assert not schedule.advance("val", 0).is_last_in_phase
+    schedule.record_phase_length("val", 0, 2)
+    assert schedule.phases == {"train": 3, "val": 2}
+    # Epoch 1: counts known → flags fire on the true last batches.
+    train = [schedule.advance("train", 1) for _ in range(3)]
+    assert [p.is_last_in_phase for p in train] == [False, False, True]
+    assert not train[-1].is_last_in_epoch  # val still follows
+    val = [schedule.advance("val", 1) for _ in range(2)]
+    assert val[-1].is_last_in_phase and val[-1].is_last_in_epoch
+    assert val[-1].is_last_overall  # last epoch, last phase, last batch
+
+
+def test_lazy_tolerates_growing_dataset() -> None:
+    schedule = Schedule(epochs=3)
+    schedule.record_phase_length("train", 0, 2)  # learned 2 from epoch 0
+    # Epoch 1 runs 3 batches (dataset grew): must not raise.
+    for _ in range(3):
+        schedule.advance("train", 1)
+    schedule.record_phase_length("train", 1, 3)
+    assert schedule.phase_count("train") == 3
+
+
+def test_set_epochs_enables_is_last_overall() -> None:
+    schedule = Schedule()
+    schedule.record_phase_length("train", 0, 1)
+    # epochs unknown → is_last_overall can't be True even on the last batch.
+    assert not schedule.advance("train", 0).is_last_overall
+    schedule.rewind_to_epoch(0)  # reset the counter to re-advance batch 0
+    schedule.set_epochs(1)
+    assert schedule.advance("train", 0).is_last_overall
+
+
 def test_advance_is_thread_safe_under_concurrency() -> None:
     """`advance` runs on the training thread while the UI thread reads/updates
     the schedule; concurrent advances must not lose increments. Many threads

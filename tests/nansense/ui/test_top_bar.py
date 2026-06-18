@@ -45,10 +45,10 @@ def test_validate_passes_for_future_position(schedule: Schedule) -> None:
     snap = _snapshot_at("train", 0, 1)
     assert (
         _validate_step_until_target(
-            schedule=schedule,
             live_position=None,
             snapshot=snap,
-            phase="val",
+            phase_order=schedule.phase_order,
+            phase_index=1,  # val
             epoch=0,
             batch_idx=0,
         )
@@ -59,10 +59,10 @@ def test_validate_passes_for_future_position(schedule: Schedule) -> None:
 def test_validate_passes_when_no_snapshot_yet(schedule: Schedule) -> None:
     assert (
         _validate_step_until_target(
-            schedule=schedule,
             live_position=None,
             snapshot=None,
-            phase="train",
+            phase_order=schedule.phase_order,
+            phase_index=0,
             epoch=0,
             batch_idx=0,
         )
@@ -70,23 +70,47 @@ def test_validate_passes_when_no_snapshot_yet(schedule: Schedule) -> None:
     )
 
 
+def test_validate_allows_unknown_phase_and_overlarge_batch(
+    schedule: Schedule,
+) -> None:
+    """Targets beyond the known schedule are warnings in the dialog, not hard
+    rejects here — they simply match if training reaches them. Only the
+    forward-progress rule is enforced."""
+    for phase_index, epoch, batch_idx in [
+        (5, 0, 0),  # phase index not observed yet
+        (0, 99, 0),  # epoch beyond the total
+        (0, 0, 999),  # batch beyond the learned count
+    ]:
+        assert (
+            _validate_step_until_target(
+                live_position=None,
+                snapshot=None,
+                phase_order=schedule.phase_order,
+                phase_index=phase_index,
+                epoch=epoch,
+                batch_idx=batch_idx,
+            )
+            is None
+        )
+
+
 def test_validate_uses_live_position_over_stale_snapshot(schedule: Schedule) -> None:
     """The live position runs ahead of the snapshot during step_epoch/run/detach.
 
-    `step_until_position` only captures on an *exact* (phase, epoch, batch_idx)
-    match against the live position, so a target between the stale snapshot and
-    the live position can never be hit — it must be rejected, not silently let
-    training run to the end.
+    `step_until_position` only captures on an *exact* (phase_index, epoch,
+    batch_idx) match against the live position, so a target between the stale
+    snapshot and the live position can never be hit — it must be rejected, not
+    silently let training run to the end.
     """
     snap = _snapshot_at("train", 0, 0)
     live = make_position("train", 1, 3)
     # Between snapshot (train,0,0) and live (train,1,3): already passed.
     assert (
         _validate_step_until_target(
-            schedule=schedule,
             live_position=live,
             snapshot=snap,
-            phase="train",
+            phase_order=schedule.phase_order,
+            phase_index=0,
             epoch=0,
             batch_idx=4,
         )
@@ -95,10 +119,10 @@ def test_validate_uses_live_position_over_stale_snapshot(schedule: Schedule) -> 
     # Strictly ahead of the live position: accepted.
     assert (
         _validate_step_until_target(
-            schedule=schedule,
             live_position=live,
             snapshot=snap,
-            phase="train",
+            phase_order=schedule.phase_order,
+            phase_index=0,
             epoch=2,
             batch_idx=0,
         )
@@ -107,55 +131,35 @@ def test_validate_uses_live_position_over_stale_snapshot(schedule: Schedule) -> 
 
 
 @pytest.mark.parametrize(
-    ("current", "phase", "epoch", "batch_idx", "expected"),
+    ("current", "phase_index", "epoch", "batch_idx"),
     [
-        pytest.param(
-            ("train", 0, 2), "train", 0, 0, "after the current", id="before-current"
-        ),
-        pytest.param(
-            ("train", 0, 2),
-            "train",
-            0,
-            1,
-            "after the current",
-            id="just-before-current",
-        ),
-        pytest.param(
-            ("train", 0, 2), "train", 0, 2, "after the current", id="at-current"
-        ),
-        pytest.param(
-            ("val", 0, 0),
-            "train",
-            0,
-            4,
-            "after the current",
-            id="earlier-phase-same-epoch",
-        ),
-        pytest.param(None, "bogus", 0, 0, "Unknown phase", id="unknown-phase"),
-        pytest.param(None, "train", 3, 0, "Epoch", id="epoch-out-of-range"),
-        pytest.param(None, "train", 0, 5, "Batch", id="batch-out-of-range"),
+        pytest.param(("train", 0, 2), 0, 0, 0, id="before-current"),
+        pytest.param(("train", 0, 2), 0, 0, 1, id="just-before-current"),
+        pytest.param(("train", 0, 2), 0, 0, 2, id="at-current"),
+        pytest.param(("val", 0, 0), 0, 0, 4, id="earlier-phase-same-epoch"),
     ],
 )
-def test_validate_step_until_rejects_invalid_targets(
+def test_validate_step_until_rejects_backward_targets(
     schedule: Schedule,
-    current: tuple[str, int, int] | None,
-    phase: str,
+    current: tuple[str, int, int],
+    phase_index: int,
     epoch: int,
     batch_idx: int,
-    expected: str,
 ) -> None:
-    """`current` is the last-captured position (None: nothing captured yet)."""
-    snap = _snapshot_at(*current) if current is not None else None
+    """A target at or before the current position is rejected (stepping is
+    forward-only; going back is time travel). `current` is the last-captured
+    position."""
+    snap = _snapshot_at(*current)
     msg = _validate_step_until_target(
-        schedule=schedule,
         live_position=None,
         snapshot=snap,
-        phase=phase,
+        phase_order=schedule.phase_order,
+        phase_index=phase_index,
         epoch=epoch,
         batch_idx=batch_idx,
     )
     assert msg is not None
-    assert expected in msg
+    assert "after the current" in msg
 
 
 @pytest.mark.parametrize(

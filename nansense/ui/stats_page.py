@@ -158,7 +158,7 @@ def _build_stats_page(
     # replaces the per-element handlers that used to leak on rebuild.
     hover_registry: dict[int, _HistPlot] = {}
     body_container: ui.column
-    phase_names = list(session.schedule.phases)
+    phase_names = session.schedule.phase_order
 
     async def _dispatch_hover(e: GenericEventArguments) -> None:
         view = hover_registry.get(int(e.args.get("id", -1)))

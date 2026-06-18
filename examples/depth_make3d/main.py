@@ -126,8 +126,6 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     # `port=` serves the UI immediately (skipped automatically when disabled).
     session = nansense.start(
         model,
-        epochs=args.epochs,
-        phases={"train": len(train_loader), "val": len(test_loader)},
         enabled=not args.disable_nansense,
         # Optional: lets the weights page show per-parameter optimizer state
         # (Adam moments) and the group's live hyperparameters (lr, ...).
@@ -144,7 +142,7 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     # and re-enters at the chosen epoch with the cached model / optimizer /
     # scheduler / RNG state restored.
     best_delta = 0.0
-    for epoch in session.epochs(cache_dir=args.cache_dir):
+    for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():
             epoch_start = time.time()
             train_stats = train_one_epoch(

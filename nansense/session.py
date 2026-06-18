@@ -190,8 +190,8 @@ class Session:
         self,
         model: nn.Module,
         *,
-        epochs: int,
-        phases: dict[str, int],
+        epochs: int | None = None,
+        phases: dict[str, int] | None = None,
         enabled: bool = True,
         optimizer: Optimizer | None = None,
         scheduler: LRScheduler | None = None,
@@ -222,7 +222,15 @@ class Session:
         self._scheduler = scheduler
         self._schedule = Schedule(epochs=epochs, phases=phases)
         self._mode: Mode = Mode.STEP
-        self._target_position: tuple[str, int, int] | None = None
+        # UNTIL_POSITION target as (phase_index, epoch, batch_idx) — phase by
+        # index into the (possibly still-growing) phase order, so a target in a
+        # not-yet-observed phase/epoch is matched once training reaches it.
+        self._target_position: tuple[int, int, int] | None = None
+        # The (phase, epoch) the live run sat at when "step phase"/"step epoch"
+        # was issued. The step modes compare against it to land on the *first*
+        # batch of the next phase/epoch — a position comparison that needs no
+        # prospective is_last_* flags, so it works on the first (unlearned) epoch.
+        self._step_origin: tuple[str, int] | None = None
         self._restorer: TrainingRestorer | None = None
         # The restorer that backs the flat `session.epochs()` / `restore_point()`
         # loop, created lazily on the first `epochs()` call. Kept distinct from
@@ -515,10 +523,16 @@ class Session:
         # (a fallback for users who drive `batch()` manually) would capture the
         # RNG *after* the draw, so restoring it on replay produces a different
         # shuffle order. Saving here, pre-iter, makes the replay deterministic.
-        self._maybe_save_epoch_start(phase, epoch)
+        self._maybe_save_epoch_start(epoch)
+        count = 0
         for item in loader:
             with self.batch(phase=phase, epoch=epoch):
                 yield item
+            count += 1
+        # The loop ran to completion (no early break / time-travel jump): teach
+        # a lazily-discovered schedule this phase's batch count, so the next
+        # epoch's is_last_* flags are exact. No-op when phases were declared.
+        self._schedule.record_phase_length(phase, epoch, count)
 
     @property
     def watched_layers(self) -> frozenset[str]:
@@ -794,10 +808,10 @@ class Session:
         if phase is not None:
             if unit != "batch":
                 raise ValueError("a phase filter only applies to unit='batch'")
-            if phase not in self._schedule.phases:
+            if phase not in self._schedule.phase_order:
                 raise ValueError(
-                    f"unknown phase {phase!r}; declared: "
-                    f"{list(self._schedule.phases)}"
+                    f"unknown phase {phase!r}; seen so far: "
+                    f"{self._schedule.phase_order}"
                 )
         with self._cv:
             self._update_frequency = UpdateFrequency(unit=unit, n=n, phase=phase)
@@ -1077,34 +1091,57 @@ class Session:
         self._set_mode(Mode.STEP, resume=True)
 
     def step_phase(self) -> None:
+        self._record_step_origin()
         self._set_mode(Mode.UNTIL_PHASE_CHANGE, resume=True)
 
     def step_epoch(self) -> None:
+        self._record_step_origin()
         self._set_mode(Mode.UNTIL_EPOCH_CHANGE, resume=True)
 
     def step_run(self) -> None:
         self._set_mode(Mode.UNTIL_END, resume=True)
 
-    def step_until_position(self, *, phase: str, epoch: int, batch_idx: int) -> None:
+    def _record_step_origin(self) -> None:
+        """Snapshot where the run sits now, so a step-phase/epoch lands on the
+        first batch of the *next* phase/epoch (not the rest of the current one)."""
+        pos = self._live_position
         with self._cv:
-            self._target_position = (phase, epoch, batch_idx)
+            self._step_origin = None if pos is None else (pos.phase, pos.epoch)
+
+    def step_until_position(
+        self, *, phase_index: int, epoch: int, batch_idx: int
+    ) -> None:
+        """Run until the batch at `(phase_index, epoch, batch_idx)` is reached.
+
+        `phase_index` is the position of the phase in the epoch's phase order
+        (0 = first phase). A target in a phase/epoch not yet observed is simply
+        matched once training arrives there; one that never arrives runs to the
+        end (acceptable — there is nothing to stop on)."""
+        with self._cv:
+            self._target_position = (phase_index, epoch, batch_idx)
         self._set_mode(Mode.UNTIL_POSITION, resume=True)
 
     def detach(self) -> None:
         self._set_mode(Mode.DETACH, resume=True)
 
-    def epochs(self, *, cache_dir: Path = DEFAULT_CACHE_DIR) -> Iterator[int]:
-        """Time-travel-aware epoch loop: `for epoch in session.epochs(): ...`.
+    def epochs(
+        self, n: int | None = None, *, cache_dir: Path = DEFAULT_CACHE_DIR
+    ) -> Iterator[int]:
+        """Time-travel-aware epoch loop: `for epoch in session.epochs(50): ...`.
 
-        Yields `0 … epochs - 1` like `range`, but opts the session into time
-        travel: each epoch start is checkpointed to `cache_dir` and a
-        UI-requested jump re-enters the loop at the chosen epoch with the
-        model / optimizer / scheduler / RNG restored. Wrap each iteration's
-        body — every phase of the epoch — in `with session.restore_point():`,
-        the block that catches the jump; the generator then re-yields the
-        target epoch::
+        `n` is the total number of epochs — the canonical place to declare it
+        (it sets the schedule's epoch count); pass it here rather than to
+        `nansense.start`. If omitted, the count set on `start(epochs=…)` is
+        used, and it is an error if neither was given.
 
-            for epoch in session.epochs(cache_dir="models/latest"):
+        Yields `0 … n - 1` like `range`, but opts the session into time travel:
+        each epoch start is checkpointed to `cache_dir` and a UI-requested jump
+        re-enters the loop at the chosen epoch with the model / optimizer /
+        scheduler / RNG restored. Wrap each iteration's body — every phase of
+        the epoch — in `with session.restore_point():`, the block that catches
+        the jump; the generator then re-yields the target epoch::
+
+            for epoch in session.epochs(50, cache_dir="models/latest"):
                 with session.restore_point():
                     for inputs, targets in session.batches(train_dl, phase="train"):
                         ...
@@ -1116,6 +1153,13 @@ class Session:
         touches the disk. Under DDP call it on every rank — a leader jump is
         broadcast so all ranks re-yield the same epoch in lockstep.
         """
+        if n is not None:
+            self._schedule.set_epochs(n)
+        elif self._schedule.epochs is None:
+            raise ValueError(
+                "epoch count is unknown — pass it to session.epochs(n) "
+                "(or, as a fallback, nansense.start(epochs=n))"
+            )
         if self._loop_restorer is None:
             self._loop_restorer = self.training_restorer(cache_dir=cache_dir)
         return self._loop_restorer.iter_epochs()
@@ -1204,10 +1248,9 @@ class Session:
             )
         if restorer.finished:
             raise TimeTravelError("the training run has already completed")
-        if not 0 <= epoch < self._schedule.epochs:
-            raise TimeTravelError(
-                f"epoch {epoch} out of range [0, {self._schedule.epochs})"
-            )
+        total = self._schedule.epochs
+        if total is None or not 0 <= epoch < total:
+            raise TimeTravelError(f"epoch {epoch} out of range [0, {total or 0})")
         payload = restorer.cache.load(epoch)
         # Validate every piece of the checkpoint the training thread will load
         # back into live state — model, optimizer, scheduler — here on the UI
@@ -1232,16 +1275,16 @@ class Session:
         """What the UI needs to render the time-travel button and dialog."""
         total = self._schedule.epochs
         restorer = self._restorer
-        if restorer is None:
+        if restorer is None or total is None:
             return TimeTravelStatus(
                 available=False,
                 reason=(
-                    "Time travel is off: the training loop is not wrapped in "
-                    "a training restorer (`while restorer.pending(): with "
-                    "restorer: ...`), so no epoch checkpoints are saved."
+                    "Time travel is off: the training loop is not driven by "
+                    "`for epoch in session.epochs(): with session.restore_point(): "
+                    "...`, so no epoch checkpoints are saved."
                 ),
                 cached_epochs=[],
-                total_epochs=total,
+                total_epochs=total or 0,
             )
         cached = [e for e in restorer.cache.cached_epochs() if 0 <= e < total]
         if restorer.finished:
@@ -1295,19 +1338,32 @@ class Session:
                 return False
             mode = self._mode
             target = self._target_position
+            origin = self._step_origin
         match mode:
             case Mode.STEP:
                 return True
             case Mode.UNTIL_PHASE_CHANGE:
-                return pos.is_last_in_phase
+                # First batch of the next phase (the position left `origin`),
+                # or the run's last batch when that is detectable (so the last
+                # phase, which has no successor, still stops instead of running
+                # off the end). Falls back to the flag if no origin was recorded.
+                if origin is None:
+                    return pos.is_last_in_phase
+                return (pos.phase, pos.epoch) != origin or pos.is_last_overall
             case Mode.UNTIL_EPOCH_CHANGE:
-                return pos.is_last_in_epoch
+                # First batch of the next epoch, or the run's last batch when
+                # detectable (last epoch has no successor to land on).
+                if origin is None:
+                    return pos.is_last_in_epoch
+                return pos.epoch > origin[1] or pos.is_last_overall
             case Mode.UNTIL_END:
                 return pos.is_last_overall
             case Mode.UNTIL_POSITION:
                 if target is None:
                     return False
-                return (pos.phase, pos.epoch, pos.batch_idx) == target
+                phases = self._schedule.phase_order
+                phase_index = phases.index(pos.phase) if pos.phase in phases else -1
+                return (phase_index, pos.epoch, pos.batch_idx) == target
             case Mode.DETACH:
                 return False
 
@@ -1543,21 +1599,21 @@ class Session:
         jump = self._pending_jump
         return jump if jump is not None else -1
 
-    def _maybe_save_epoch_start(self, phase: str, epoch: int) -> None:
+    def _maybe_save_epoch_start(self, epoch: int) -> None:
         """Checkpoint the epoch-start state, once per epoch attempt.
 
         Called from `batches()` before `iter(loader)` draws the shuffle seed
         (the deterministic-replay anchor) and, as a fallback, from
         `_BatchContext.__enter__` for users who drive `batch()` manually. The
-        `_epoch_start_saved_for` guard makes whichever path runs first win, so
-        the fallback's post-iter save can't overwrite the good pre-iter RNG.
+        `_epoch_start_saved_for` guard makes the epoch's *first* phase win — a
+        later phase of the same epoch finds it already saved and skips — and
+        also lets whichever entry point runs first win, so the fallback's
+        post-iter save can't overwrite the good pre-iter RNG. Anchoring on "the
+        first call this epoch" (rather than a declared first-phase name) is what
+        keeps it correct when the schedule is discovered lazily.
         """
         restorer = self._restorer
-        if (
-            restorer is not None
-            and phase == self._schedule.first_phase_name
-            and self._epoch_start_saved_for != epoch
-        ):
+        if restorer is not None and self._epoch_start_saved_for != epoch:
             restorer.save_epoch_start(epoch)
             self._epoch_start_saved_for = epoch
 
@@ -1737,9 +1793,7 @@ class _BatchContext:
         # draws the shuffle seed, and the `_epoch_start_saved_for` guard inside
         # `_maybe_save_epoch_start` keeps this post-draw save from clobbering it.
         if self._position.batch_idx == 0:
-            self._session._maybe_save_epoch_start(
-                self._position.phase, self._epoch
-            )
+            self._session._maybe_save_epoch_start(self._epoch)
         if dist_ctx is None or dist_ctx.is_leader:
             self._captured = self._session._should_capture(self._position)
             # A frequency update publishes like a capture but never pauses;
@@ -1883,8 +1937,8 @@ class _BatchContext:
 def start(
     model: nn.Module,
     *,
-    epochs: int,
-    phases: dict[str, int],
+    epochs: int | None = None,
+    phases: dict[str, int] | None = None,
     enabled: bool = True,
     optimizer: Optimizer | None = None,
     scheduler: LRScheduler | None = None,
@@ -1895,6 +1949,15 @@ def start(
     input_std: tuple[float, ...] | None = None,
 ) -> Session:
     """Create a `Session` for `model` (and optionally serve the UI).
+
+    The training schedule is discovered as you go: declare the epoch count at
+    the loop (`for epoch in session.epochs(N)`), and phase names + per-phase
+    batch counts are learned as `session.batches(loader, phase=…)` runs (the
+    full shape is known after the first epoch). `epochs` here is an optional
+    fallback for the count; `phases={"train": a, "val": b}` is an optional
+    up-front declaration that restores full first-epoch fidelity (exact
+    progress and boundary stops from batch 0) — the Lightning integration uses
+    it, and it is the right choice when you need the UI fully precise on epoch 0.
 
     With `enabled=False` the session is a near-zero-overhead no-op: no fx
     trace at construction, `batch()` does nothing, and the UI is skipped.
@@ -1922,9 +1985,9 @@ def start(
     automatically). Rank 0 serves the UI and drives pausing/stepping;
     the other ranks skip the UI, follow rank 0's pace, and contribute
     their data shard to the watch page's statistics, which become global
-    across ranks. Time travel is supported under DDP: wrap every rank's epoch
-    loop in a restorer (see `training_restorer`); a jump rewinds all ranks in
-    lockstep from their own per-rank checkpoints.
+    across ranks. Time travel is supported under DDP: drive every rank's epoch
+    loop with `session.epochs()`; a jump rewinds all ranks in lockstep from
+    their own per-rank checkpoints.
     """
     session = Session(
         model,

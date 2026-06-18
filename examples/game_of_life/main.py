@@ -184,8 +184,6 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
     # passed to nansense is the identity.
     session = nansense.start(
         model,
-        epochs=args.epochs,
-        phases={"train": len(train_loader), "val": len(val_loader)},
         enabled=not args.disable_nansense,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -199,7 +197,7 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
     # and re-enters at the chosen epoch with the cached model / optimizer /
     # scheduler / RNG state restored.
     best_acc = 0.0
-    for epoch in session.epochs(cache_dir=args.cache_dir):
+    for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():
             epoch_start = time.time()
             train_stats = train_one_epoch(

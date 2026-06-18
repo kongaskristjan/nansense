@@ -230,7 +230,7 @@ def test_fit_with_time_travel_jump_and_deterministic_replay(tmp_path: Path) -> N
     def drive() -> None:
         session = _wait_for_session(callback)
         assert session.wait_until_paused(after_pauses=0, timeout=60.0)
-        session.step_until_position(phase="train", epoch=2, batch_idx=0)
+        session.step_until_position(phase_index=0, epoch=2, batch_idx=0)
         assert session.wait_until_paused(after_pauses=1, timeout=60.0)
         # Epoch 0 was checkpointed at fit start, epochs 1 and 2 at the
         # ends of epochs 0 and 1.

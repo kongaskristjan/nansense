@@ -34,40 +34,53 @@ GIL.
 
 ## Schedule
 
-A `Schedule` is constructed once at `nansense.start(model, epochs=...,
-phases=...)`. The `phases` dict is order-preserving (the last key in
-insertion order is treated as the final phase of each epoch).
+A `Schedule` can be **declared** up front (`Schedule(epochs=N,
+phases={...})`) or **discovered lazily** (the default — `start()` with no
+`phases`). The epoch count comes from `session.epochs(N)` (or, as a fallback,
+`start(epochs=N)`); phase names appear in `advance` first-seen order, and a
+phase's batch count is learned by observation: `Session.batches` reports the
+count to `Schedule.record_phase_length` when its loop runs to completion.
 
 `Schedule.advance(phase, epoch)` is called inside `_BatchContext.__enter__`
-and returns a `BatchPosition` with:
+and returns a `BatchPosition` with `batch_idx` and three boundary flags:
+`is_last_in_phase`, `is_last_in_epoch`, `is_last_overall`. The flags are
+*predictive* — known on a batch's `__enter__`, before its forward pass — but
+only when the relevant count is known: that is from batch 0 when `phases` was
+declared, and from the **second** epoch on when discovered (the first epoch is
+the blind window, since a count isn't known until that phase first completes).
+A declared schedule additionally validates (unknown phase / over-count raise);
+a lazy one tolerates both (an over-count just re-learns the length). The step
+modes that must work on the first epoch do not rely on these flags — see below.
 
-- `batch_idx` (0-based within `(phase, epoch)`)
-- `is_last_in_phase`
-- `is_last_in_epoch`
-- `is_last_overall`
-
-Because the run length is declared up-front, these flags are *predictive*:
-we know on a batch's `__enter__` whether it is a boundary, before any
-forward pass runs. That's what lets the session decide whether to install
-hooks before the forward pass — there is no reactive "phase just changed"
-detection at `__exit__`.
-
-For non-deterministic workloads, `Session.set_schedule()` re-declares
-`epochs` / `phases` mid-run.
+For non-deterministic workloads (and the Lightning integration, which knows its
+counts up front), `Session.set_schedule()` re-declares `epochs` / `phases`
+mid-run, which also pins them for full first-epoch fidelity.
 
 ## Modes and capture decisions
 
 | Mode | Public method | Captures + pauses at |
 |---|---|---|
 | `STEP` | `step_batch()` (also `stop()`, no resume) | every batch |
-| `UNTIL_PHASE_CHANGE` | `step_phase()` | `is_last_in_phase` |
-| `UNTIL_EPOCH_CHANGE` | `step_epoch()` | `is_last_in_epoch` |
+| `UNTIL_PHASE_CHANGE` | `step_phase()` | first batch of the next phase (position left the origin), or the run's last batch |
+| `UNTIL_EPOCH_CHANGE` | `step_epoch()` | first batch of the next epoch (`epoch > origin`), or the run's last batch |
 | `UNTIL_END` | `step_run()` | `is_last_overall` |
-| `UNTIL_POSITION` | `step_until_position(phase, epoch, batch_idx)` | exactly that `(phase, epoch, batch_idx)` |
+| `UNTIL_POSITION` | `step_until_position(phase_index, epoch, batch_idx)` | exactly that `(phase_index, epoch, batch_idx)` |
 | `DETACH` | `detach()` | never |
 
 A session starts in `STEP` mode — the first batch always pauses so the UI
 can show its initial state.
+
+`step_phase` / `step_epoch` snapshot the live position as `_step_origin` when
+issued and pause on the first batch that *leaves* it (a position comparison, so
+no prospective `is_last_*` flag is needed — these work on the first, unlearned
+epoch). "Step epoch" therefore lands on **batch 0 of the next epoch**, not the
+last batch of the current one. The last epoch has no successor to land on, so
+both fall back to `is_last_overall` to stop on the run's final batch *when that
+is detectable* (a multi-epoch run has learned its shape by then); when it is not
+(e.g. a single-epoch lazy run), stepping simply runs off the end — acceptable,
+the post-mortem page keeps the last frame. `step_until_position` addresses the
+phase by **index** into the phase order, so a target in a not-yet-observed
+phase/epoch is matched once training reaches it.
 
 `_should_capture(pos)` is the single decision function for both "install
 hooks?" and "pause after this batch?". Capture and pause are intentionally
@@ -901,8 +914,9 @@ Without this loop, nothing is written to disk, the session never raises a
 jump, and the UI's Time Travel button is disabled (its tooltip explains
 why). On a disabled session the loop is inert.
 
-**Epoch cache.** With a restorer attached, `_BatchContext.__enter__` on the
-first batch of each epoch (batch 0 of the schedule's first phase) writes
+**Epoch cache.** With a restorer attached, the first `session.batches` call of
+each epoch (its first phase, before `iter(loader)`) — or `_BatchContext.__enter__`
+on batch 0, as the manual-`batch()` fallback — writes
 `epoch_<n>.pt` into the cache directory before any forward pass:
 `model.state_dict()`, `optimizer.state_dict()`, `scheduler.state_dict()`
 (when passed to `start()`), and the torch/CUDA RNG states. Writes go
