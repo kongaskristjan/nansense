@@ -60,8 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/audio_keywords"),
-        help="Directory for time-travel epoch checkpoints (default models/audio_keywords).",
+        default=Path(".nansense_cache/audio_keywords"),
+        help="Directory for time-travel epoch checkpoints (default .nansense_cache/audio_keywords).",
     )
     parser.add_argument(
         "--nansense-port",

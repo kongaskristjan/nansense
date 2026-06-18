@@ -10,6 +10,7 @@ from torch import Tensor, nn
 
 import nansense
 from nansense.restore import (
+    DEFAULT_CACHE_DIR,
     EpochCache,
     TimeTravelError,
     TrainingRestorer,
@@ -54,6 +55,14 @@ def _make_training(
     )
     restorer = session.training_restorer(cache_dir=tmp_path / "cache")
     return session, restorer, model, optimizer, scheduler
+
+
+def test_default_cache_dir() -> None:
+    # The library default lands in `.nansense_cache/` (gitignored), and a
+    # restorer built without an explicit cache_dir picks it up. Construction is
+    # lazy (no mkdir), so this asserts the path without touching disk.
+    assert DEFAULT_CACHE_DIR == Path(".nansense_cache")
+    assert TrainingRestorer().cache.directory == DEFAULT_CACHE_DIR
 
 
 def test_epoch_cache_save_load_roundtrip(tmp_path: Path) -> None:

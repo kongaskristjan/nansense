@@ -69,8 +69,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/depth_make3d"),
-        help="Directory for time-travel epoch checkpoints (default models/depth_make3d).",
+        default=Path(".nansense_cache/depth_make3d"),
+        help="Directory for time-travel epoch checkpoints (default .nansense_cache/depth_make3d).",
     )
     parser.add_argument(
         "--nansense-port",

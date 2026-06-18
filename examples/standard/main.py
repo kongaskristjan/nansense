@@ -122,8 +122,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/standard"),
-        help="Directory for time-travel epoch checkpoints (default models/standard).",
+        default=None,
+        help=(
+            "Directory for time-travel epoch checkpoints "
+            "(default .nansense_cache/standard/<model>)."
+        ),
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -384,6 +387,11 @@ def main() -> None:
     config = DATASETS[args.dataset]
     if args.batch_size is None:
         args.batch_size = default_batch_size(args.dataset)
+    if args.cache_dir is None:
+        # The architecture is selectable here, so the cache is namespaced per
+        # model — jumping timelines after switching --model never reloads a
+        # checkpoint written for a differently shaped network.
+        args.cache_dir = Path(".nansense_cache/standard") / args.model
     if args.distributed:
         run_distributed(args, config)
     else:

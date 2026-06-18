@@ -872,7 +872,7 @@ closed during the await can't surface a teardown error.
 Time travel jumps training back to the start of any epoch whose state was
 checkpointed to disk. It is opt-in at the training-loop level: the user
 creates a `TrainingRestorer` (`session.training_restorer(cache_dir=...)`,
-default `models/latest/`) and wraps the epoch loop in it:
+default `.nansense_cache/`) and wraps the epoch loop in it:
 
 ```python
 while restorer.pending():

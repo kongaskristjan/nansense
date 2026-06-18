@@ -38,7 +38,7 @@ import torch
 if TYPE_CHECKING:
     from nansense.session import Session
 
-DEFAULT_CACHE_DIR = Path("models/latest")
+DEFAULT_CACHE_DIR = Path(".nansense_cache")
 
 
 def _mps_available() -> bool:

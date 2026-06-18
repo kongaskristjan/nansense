@@ -95,8 +95,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/game_of_life"),
-        help="Directory for time-travel epoch checkpoints (default models/game_of_life).",
+        default=Path(".nansense_cache/game_of_life"),
+        help="Directory for time-travel epoch checkpoints (default .nansense_cache/game_of_life).",
     )
     return parser.parse_args()
 

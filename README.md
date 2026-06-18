@@ -177,7 +177,7 @@ session = nansense.start(model, epochs=50, phases=phases, optimizer=optimizer, p
 # Time-travel needs an epoch cache: the restorer wraps the epoch loop so a
 # UI-requested jump can unwind it and re-enter at a different epoch. Without it,
 # training runs once through and the Time Travel button is disabled.
-restorer = session.training_restorer(cache_dir="models/latest")
+restorer = session.training_restorer(cache_dir=".nansense_cache")
 while restorer.pending():
     with restorer:
         # Time-travel aware epoch iteration: use just like `for epoch in range(50)`
@@ -239,7 +239,7 @@ See the [Python API](#python-api) for more information.
 Iterate each phase with `session.batches(loader, phase=..., epoch=...)`, and call
 `session.close()` when training finishes (the served page stays up for
 post-mortem browsing). For time travel, create a restorer with
-`session.training_restorer(cache_dir=...)` (default `models/latest`) and wrap the
+`session.training_restorer(cache_dir=...)` (default `.nansense_cache`) and wrap the
 epoch loop in `while restorer.pending(): with restorer:` as shown above.
 
 For **PyTorch Lightning**, attach a `NansenseCallback(model="<attr path to the

@@ -125,8 +125,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("models/pytorch_lightning"),
-        help="Directory for time-travel epoch checkpoints (default models/pytorch_lightning).",
+        default=Path(".nansense_cache/pytorch_lightning"),
+        help="Directory for time-travel epoch checkpoints (default .nansense_cache/pytorch_lightning).",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
