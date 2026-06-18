@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Directory for time-travel epoch checkpoints "
-            "(default .nansense_cache/standard/<model>)."
+            "(default .nansense_cache/standard/<dataset>/<model>)."
         ),
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -148,6 +148,16 @@ def default_batch_size(dataset: str) -> int:
     cost ~16x the activation memory of the 32x32 cifar10 / mnist crops, so it
     drops to 32 where the smaller datasets use 64."""
     return 32 if dataset == "imagenette" else 64
+
+
+def default_cache_dir(dataset: str, model: str) -> Path:
+    """Per-(dataset, model) time-travel checkpoint directory.
+
+    Both flags change the network shape — the dataset sets the input channels
+    and class count, --model the architecture — so a cached checkpoint is only
+    reloadable within the same (dataset, model) pair. Namespacing by both means
+    switching either flag never reloads an incompatible checkpoint on a jump."""
+    return Path(".nansense_cache/standard") / dataset / model
 
 
 def build_model(name: str, config: DatasetConfig, blocks_per_stage: int = 3) -> nn.Module:
@@ -382,10 +392,7 @@ def main() -> None:
     if args.batch_size is None:
         args.batch_size = default_batch_size(args.dataset)
     if args.cache_dir is None:
-        # The architecture is selectable here, so the cache is namespaced per
-        # model — jumping timelines after switching --model never reloads a
-        # checkpoint written for a differently shaped network.
-        args.cache_dir = Path(".nansense_cache/standard") / args.model
+        args.cache_dir = default_cache_dir(args.dataset, args.model)
     if args.distributed:
         run_distributed(args, config)
     else:

@@ -77,6 +77,18 @@ def test_default_batch_size_is_dataset_dependent(dataset: str, expected: int) ->
     assert main_module.default_batch_size(dataset) == expected
 
 
+@pytest.mark.parametrize("dataset", sorted(DATASETS))
+@pytest.mark.parametrize("model", ["resnet", "resnet_deep", "vit", "lenet"])
+def test_default_cache_dir_namespaces_by_dataset_and_model(
+    dataset: str, model: str
+) -> None:
+    """The standard example caches under .nansense_cache/standard/<dataset>/<model>
+    so switching either selectable flag can't reload an incompatible checkpoint."""
+    assert main_module.default_cache_dir(dataset, model) == Path(
+        ".nansense_cache/standard"
+    ) / dataset / model
+
+
 def test_build_distributed_dataloaders_shards_with_sampler(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
