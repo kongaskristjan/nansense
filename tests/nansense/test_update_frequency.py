@@ -59,13 +59,30 @@ def test_set_update_frequency_rejects_invalid(
         session.set_update_frequency(**kwargs)  # ty: ignore[invalid-argument-type]
 
 
-def test_epoch_frequency_publishes_at_nth_epoch_ends() -> None:
+def test_epoch_frequency_publishes_at_nth_epoch_starts() -> None:
     phases = {"train": 2, "val": 2}
     session, model = make_session(epochs=4, phases=phases)
     session.set_update_frequency(unit="epoch", n=2)
     published = _run_detached(session, model, epochs=4, phases=phases)
-    # Every 2nd epoch's last batch: epochs 1 and 3, last phase, last batch.
-    assert published == [("val", 1, 1), ("val", 3, 1)]
+    # Like Step Epoch, fires on the first batch of every 2nd epoch (0 and 2),
+    # detected from the epoch number rather than the last batch.
+    assert published == [("train", 0, 0), ("train", 2, 0)]
+
+
+def test_epoch_frequency_fires_on_epoch_change_without_known_counts() -> None:
+    """The epoch unit detects boundaries from the epoch number advancing — like
+    Step Epoch — so it fires even during the first lazy epoch, where the batch
+    count is unknown and `is_last_in_epoch` can never be set."""
+    session, _ = make_session(epochs=3, phases={"train": 2})
+    session.set_update_frequency(unit="epoch", n=1)
+    # All is_last_* flags False, as during lazy phase-count discovery.
+    fired = [
+        session._should_freq_update(make_position("train", e, b))
+        for e in range(3)
+        for b in range(2)
+    ]
+    # First batch of each epoch fires; the rest of that epoch does not.
+    assert fired == [True, False, True, False, True, False]
 
 
 def test_batch_frequency_publishes_every_nth_batch() -> None:
@@ -88,7 +105,7 @@ def test_batch_frequency_with_phase_counts_only_that_phase() -> None:
 def test_capture_still_pauses_and_publishes_with_sparse_frequency() -> None:
     """Mode captures stay independent of the frequency setting."""
     session, model = make_session(epochs=1, phases={"train": 2})
-    session.set_update_frequency(unit="epoch", n=100)  # effectively never
+    session.set_update_frequency(unit="batch", n=100)  # effectively never
 
     def loop() -> None:
         for _ in range(2):
@@ -110,7 +127,7 @@ def test_request_snapshot_publishes_only_the_next_free_running_batch() -> None:
     next free-running batch — refreshing activations, gradients, and weights —
     without pausing and without recomputing anything off the batch."""
     session, model = make_session(epochs=1, phases={"train": 3})
-    session.set_update_frequency(unit="epoch", n=100)  # effectively never
+    session.set_update_frequency(unit="batch", n=100)  # effectively never
     session.detach()
 
     def run_batch(batch_idx: int) -> BatchSnapshot | None:
@@ -242,3 +259,15 @@ def test_rewind_resets_the_frequency_counter() -> None:
     assert session._freq_counter == 1
     session._rewind_to_epoch(1)
     assert session._freq_counter == 0
+
+
+def test_rewind_resets_epoch_frequency_tracking() -> None:
+    """A jump clears the last-seen epoch, so re-entering it counts as a fresh
+    boundary and fires again (the abandoned timeline's progress is forgotten)."""
+    session, _ = make_session(epochs=3, phases={"train": 2})
+    session.set_update_frequency(unit="epoch", n=1)
+    assert session._should_freq_update(make_position("train", 1, 0))  # new epoch
+    assert not session._should_freq_update(make_position("train", 1, 1))
+    session._rewind_to_epoch(1)
+    assert session._freq_epoch is None
+    assert session._should_freq_update(make_position("train", 1, 0))  # fires anew

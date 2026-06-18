@@ -155,21 +155,27 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
         assert session.is_leader == (rank == 0)
         if rank == 0:
             session.detach()
+            # Suppress the per-epoch auto-publish (which now fires on the
+            # epoch's *first* batch) so the run reduces exactly once, on the
+            # explicit snapshot request below — after both batches accumulate.
+            session.set_update_frequency(unit="batch", n=100)
             assert session.watch("x")
 
         # Rank-distinguishable data: rank r feeds constant `r + 1`, so the
         # reduced stats are exactly predictable.
-        for _ in range(2):
+        for i in range(2):
             x = torch.full((4, 4), float(rank + 1))
             y = torch.randint(0, 3, (4,))
+            if rank == 0 and i == 1:
+                session.request_snapshot()  # publish + reduce on the last batch
             with session.batch(phase="train", epoch=0):
                 ddp.zero_grad(set_to_none=True)
                 cross_entropy(ddp(x), y).backward()
 
         key = ("x", "train", 0)
         if rank == 0:
-            # The default update frequency published on the epoch's last
-            # batch, which reduced the watch stats across both ranks.
+            # The snapshot request published on the epoch's last batch, which
+            # reduced the watch stats across both ranks.
             act = session.watch_snapshot(include_patches=False).stats[key].activations
             per_rank = 2 * 4 * 4  # batches x batch size x features
             assert act.n == world_size * per_rank

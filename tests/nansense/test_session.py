@@ -58,11 +58,12 @@ def test_detach_skips_capture_for_every_batch() -> None:
 
     assert captured == [False] * 8
     # No batch *captured* (no pause), but the default update frequency
-    # (every epoch) still publishes a snapshot at each epoch's last batch.
+    # (every epoch) still publishes a snapshot at the first batch of each
+    # epoch — so the last one is epoch 1's opening train batch.
     snap = session.snapshot
     assert snap is not None
-    assert snap.position.is_last_in_epoch
-    assert snap.position.epoch == 1
+    pos = snap.position
+    assert (pos.phase, pos.epoch, pos.batch_idx) == ("train", 1, 0)
 
 
 @pytest.mark.parametrize(
@@ -187,16 +188,20 @@ def test_live_position_starts_none_and_tracks_every_batch_under_detach() -> None
         with session.batch(phase="train", epoch=0) as ctx:
             train_step(model)
             assert ctx.captured is False  # detach: no capture
-        if i < 2:
-            # No snapshot until the default update frequency (every epoch)
-            # publishes one at the epoch's last batch.
-            assert session.snapshot is None
+        if i == 0:
+            # The default update frequency (every epoch) publishes once, on the
+            # first batch of the epoch, without pausing.
+            assert session.snapshot is not None
+            assert session.snapshot.position.batch_idx == 0
         lp = session.live_position
         assert lp is not None
         seen.append((lp.phase, lp.epoch, lp.batch_idx))
 
     assert seen == [("train", 0, 0), ("train", 0, 1), ("train", 0, 2)]
-    assert session.snapshot is not None  # the epoch-end frequency update
+    # The frequency snapshot stays at the epoch's first batch while
+    # live_position keeps advancing past it.
+    assert session.snapshot is not None
+    assert session.snapshot.position.batch_idx == 0
 
 
 def test_live_position_tracks_non_captured_batches_during_step_epoch() -> None:

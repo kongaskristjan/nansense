@@ -129,12 +129,13 @@ _BatchItem = TypeVar("_BatchItem")
 class UpdateFrequency:
     """How often visualizations refresh while training runs.
 
-    `unit="epoch"` updates at the last batch of every `n`-th epoch;
-    `unit="batch"` updates on every `n`-th batch — counting only `phase`'s
-    batches when one is given. A frequency update publishes a snapshot,
-    re-runs the probe and any live auto experiments, and feeds recording
-    frames — all *without pausing*, in addition to the mode-driven captures
-    that pause training. The default is one update per epoch.
+    `unit="epoch"` updates on the first batch of every `n`-th epoch
+    (0, n, 2n, …), detecting the boundary from the epoch number the same way
+    Step Epoch does; `unit="batch"` updates on every `n`-th batch — counting
+    only `phase`'s batches when one is given. A frequency update publishes a
+    snapshot, re-runs the probe and any live auto experiments, and feeds
+    recording frames — all *without pausing*, in addition to the mode-driven
+    captures that pause training. The default is one update per epoch.
     """
 
     unit: str = "epoch"
@@ -325,10 +326,12 @@ class Session:
         self._experiment_cancelled: set[int] = set()
         self._experiment_running: int | None = None
         # Visualization update frequency (see `UpdateFrequency`): mutated by
-        # the UI under `_cv`; `_freq_counter` counts frequency-eligible
-        # batches and is touched by the training thread only.
+        # the UI under `_cv`; `_freq_counter` (batch unit) and `_freq_epoch`
+        # (epoch unit, the last epoch the detector saw) are touched by the
+        # training thread only.
         self._update_frequency = UpdateFrequency()
         self._freq_counter = 0
+        self._freq_epoch: int | None = None
         # Experiments re-run on every update, keyed by the registering
         # client (a UI page or a recording). Mutated under `_cv`.
         self._auto_experiments: dict[str, _AutoExperiment] = {}
@@ -799,7 +802,7 @@ class Session:
     ) -> None:
         """Set how often visualizations refresh while training runs.
 
-        `unit="epoch"` updates at the end of every `n`-th epoch (the
+        `unit="epoch"` updates on the first batch of every `n`-th epoch (the
         default, with `n=1`); `unit="batch"` updates every `n`-th batch,
         counting only `phase`'s batches when one is given. Raises
         `ValueError` for an unknown unit/phase, `n < 1`, or a phase
@@ -824,6 +827,7 @@ class Session:
         with self._cv:
             self._update_frequency = UpdateFrequency(unit=unit, n=n, phase=phase)
             self._freq_counter = 0
+            self._freq_epoch = None
 
     @property
     def auto_run_experiments(self) -> bool:
@@ -1381,9 +1385,9 @@ class Session:
     def _should_freq_update(self, pos: BatchPosition) -> bool:
         """Whether this batch publishes a non-pausing frequency update.
 
-        Training thread only (it advances `_freq_counter` for the batch
-        unit). Frequency updates fire in every mode — including detach and
-        the run-until modes — so the visualizations keep refreshing at the
+        Training thread only (it advances `_freq_counter`/`_freq_epoch`).
+        Frequency updates fire in every mode — including detach and the
+        run-until modes — so the visualizations keep refreshing at the
         configured cadence while training runs freely.
         """
         with self._cv:
@@ -1391,7 +1395,14 @@ class Session:
                 return False
             freq = self._update_frequency
             if freq.unit == "epoch":
-                return pos.is_last_in_epoch and (pos.epoch + 1) % freq.n == 0
+                # Mirror Step Epoch: detect the epoch boundary from the epoch
+                # number advancing, not the `is_last_in_epoch` flag (which
+                # needs the batch count and so never fires during the first
+                # lazy epoch). Publishes on the first batch of every n-th
+                # epoch (0, n, 2n, …); `_freq_epoch` is the last epoch seen.
+                is_new_epoch = pos.epoch != self._freq_epoch
+                self._freq_epoch = pos.epoch
+                return is_new_epoch and pos.epoch % freq.n == 0
             if freq.phase is not None and pos.phase != freq.phase:
                 return False
             # Mutated under the lock so `set_update_frequency`'s reset to 0
@@ -1646,9 +1657,10 @@ class Session:
         """
         with self._cv:
             self._schedule.rewind_to_epoch(epoch)
-            # Restart the per-batch update cadence so post-jump frames fire on
-            # a clean phase instead of wherever the abandoned timeline left it.
+            # Restart the update cadence so post-jump frames fire on a clean
+            # phase/epoch instead of wherever the abandoned timeline left it.
             self._freq_counter = 0
+            self._freq_epoch = None
             # The standing numerical-error banner belonged to the abandoned
             # timeline; drop it so the re-run starts clean and can stop afresh.
             self._debug_error = None
