@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 import torch
+import torch.distributed as dist
 
 import nansense
 from nansense.ui import app
@@ -15,6 +18,27 @@ from nansense.ui.app import (
     _open_browser_when_ready,
     serve,
 )
+
+
+def test_reduce_op_future_warning_is_silenced() -> None:
+    """`_silence_reduce_op_future_warning` mutes the `torch.distributed.reduce_op`
+    FutureWarning that NiceGUI's `gc.get_objects()` server-discovery walk trips
+    (its `isinstance` check reads the deprecated instance's `__class__`).
+
+    The control branch confirms the walk really would warn without the filter,
+    so a passing assertion can't be a false negative from warning de-dup."""
+    reduce_op = dist.reduce_op  # the deprecated module-level instance
+
+    with warnings.catch_warnings(record=True) as control:
+        warnings.simplefilter("always")
+        isinstance(reduce_op, int)  # what NiceGUI does to every live object
+    assert any("reduce_op" in str(w.message) for w in control)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        app._silence_reduce_op_future_warning()
+        isinstance(reduce_op, int)
+    assert not any("reduce_op" in str(w.message) for w in caught)
 
 
 def test_serve_on_disabled_session_is_noop() -> None:

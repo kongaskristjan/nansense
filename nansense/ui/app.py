@@ -37,6 +37,7 @@ import logging
 import shutil
 import threading
 import time
+import warnings
 import webbrowser
 from pathlib import Path
 from typing import Protocol
@@ -64,6 +65,27 @@ class _DropListenerRerenderWarning(logging.Filter):
 
 
 logging.getLogger("nicegui").addFilter(_DropListenerRerenderWarning())
+
+
+def _silence_reduce_op_future_warning() -> None:
+    """Suppress the spurious `torch.distributed.reduce_op` FutureWarning.
+
+    On startup NiceGUI walks `gc.get_objects()` to find the running uvicorn
+    server, `isinstance`-checking every live object. PyTorch keeps a deprecated
+    module-level instance, `torch.distributed.reduce_op`, whose
+    `__getattribute__` emits a FutureWarning on *any* attribute access — and
+    `isinstance` reads `__class__`. So the moment we serve (with
+    `torch.distributed` imported) the walk trips a warning that is neither ours
+    nor actionable. Silence just that message; everything else still surfaces.
+    """
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`torch\.distributed\.reduce_op` is deprecated",
+        category=FutureWarning,
+    )
+
+
+_silence_reduce_op_future_warning()
 
 
 def _display_url(host: str, port: int) -> str:
