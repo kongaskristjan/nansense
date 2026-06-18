@@ -179,13 +179,13 @@ session = nansense.start(model, optimizer=optimizer, port=8080, enabled=True)
 # and the Time Travel button is disabled.
 for epoch in session.epochs(50, cache_dir=".nansense_cache"):
     with session.restore_point():
-        # Training batch iteration (matches phase="train")
+        # Training batch iteration
         for inputs, targets in session.batches(train_dl, phase="train"):
             optimizer.zero_grad()
             loss = criterion(model(inputs), targets)
             loss.backward()
             optimizer.step()
-        # Validation batch iteration (matches phase="val") ...
+        # Validation batch iteration ...
 
 # Close the UI (the served page stays up for post-mortem browsing)
 session.close()
