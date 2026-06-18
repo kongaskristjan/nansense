@@ -67,7 +67,7 @@ class _ExperimentParam:
 
 # Shared knobs reused across kinds. A param is shared *by key*, so its value
 # survives switching experiment type (point 1): set "channel" for Neuron
-# Gradient and it carries over to Deep Dream, "Inputs" carries everywhere, …
+# Gradient and it carries over to Occlusion, "Inputs" carries everywhere, …
 _CHANNEL_PARAM = _ExperimentParam(
     "channel",
     "Channel (-1 = whole layer)",
@@ -75,6 +75,25 @@ _CHANNEL_PARAM = _ExperimentParam(
     0,
     minimum=-1,
     tooltip="Which channel / feature of the selected layer to target",
+)
+_CHANNELS_PARAM = _ExperimentParam(
+    "channels",
+    "Channels",
+    "int",
+    _DEFAULT_DREAM_BATCH,
+    minimum=1,
+    tooltip=(
+        "Dream on this many of the layer's first channels — one synthesized "
+        "sample per channel (capped at the layer's channel count)"
+    ),
+)
+_SAMPLE_PARAM = _ExperimentParam(
+    "sample",
+    "Sample",
+    "int",
+    0,
+    minimum=0,
+    tooltip="Which input-batch sample every channel's dream starts from",
 )
 _TARGET_PARAM = _ExperimentParam(
     "target",
@@ -144,15 +163,17 @@ _ZOOM_PARAM = _ExperimentParam(
     ),
 )
 
-# Ordered per kind: Channel/Target first, then Inputs, then (deep dream) Start
-# from, then the method-specific knobs (point 1). The Layer selector is
-# rendered above this list (point 2).
+# Ordered per kind: the targeting knob first (deep dream's Channels, Captum's
+# Channel/Target), then Inputs (Captum) or Start from + Sample (deep dream),
+# then the method-specific knobs (point 1). The Layer selector is rendered
+# above this list (point 2). Deep dream's Sample knob only shows when starting
+# from the current batch (toggled in `rebuild_params`).
 _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
     "deep_dream": [
-        _CHANNEL_PARAM,
-        _BATCH_PARAM,
+        _CHANNELS_PARAM,
         _START_PARAM,
-        _ExperimentParam("steps", "Steps", "int", 100, minimum=1),
+        _SAMPLE_PARAM,
+        _ExperimentParam("steps", "Steps", "int", 300, minimum=1),
         _ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0, step=0.01),
         _DIFFUSION_PARAM,
         _JITTER_PARAM,
@@ -185,10 +206,10 @@ _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
 # bottom of the left pane) — point 4.
 _EXPERIMENT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "deep_dream": (
-        "Synthesize an input that maximally excites the selected channel.",
-        "Deep Dream runs gradient ascent on the input to maximize the "
-        "selected channel's (or the whole layer's) mean activation — a "
-        "picture of what the unit 'wants' to see.",
+        "Synthesize one input per channel that maximally excites it.",
+        "Deep Dream runs gradient ascent on the input to maximize each of the "
+        "layer's first channels' mean activation — one synthesized sample per "
+        "channel, a picture of what each unit 'wants' to see.",
     ),
     "gradcam": (
         "Coarse class heatmap localized onto the selected layer.",
@@ -546,24 +567,41 @@ def _build_experiment_page(
         """Re-gray the layer options for the current kind (point 2)."""
         layer_select.update()
 
-    def clip_channel() -> None:
-        """Pin the channel widget's max to the layer's channels, clipping the
-        current value when the new layer has fewer (point 2)."""
-        channel_widget = widgets.get("channel")
-        if not isinstance(channel_widget, ui.number):
+    def _clip_number(key: str, maximum: int) -> None:
+        """Pin a number widget's max, clipping its value when the layer shrank."""
+        widget = widgets.get(key)
+        if not isinstance(widget, ui.number):
             return
+        widget.max = maximum
+        current = widget.value
+        if isinstance(current, (int, float)) and current > maximum:
+            state.values[key] = maximum
+            _defer_value_write(lambda: widget.set_value(maximum))
+
+    def clip_channel() -> None:
+        """Pin the targeting widgets to the layer's channel count, clipping a
+        value the new layer can no longer reach (point 2): deep dream's
+        Channels is a count of the first N (max = channels), Captum's Channel
+        is a single index (max = channels − 1)."""
         channels = _layer_channel_count(session.snapshot, state.layer)
         if channels is None:
             return
-        channel_widget.max = channels - 1
-        current = channel_widget.value
-        if isinstance(current, (int, float)) and current > channels - 1:
-            clipped = channels - 1
-            state.values["channel"] = clipped
-            _defer_value_write(lambda: channel_widget.set_value(clipped))
+        _clip_number("channels", channels)
+        _clip_number("channel", channels - 1)
+
+    def _sync_sample_visibility() -> None:
+        """Show deep dream's Sample knob only when starting from the current
+        batch — noise has no input to pick (point 2)."""
+        sample_widget = widgets.get("sample")
+        start_widget = widgets.get("start")
+        if sample_widget is None or start_widget is None:
+            return
+        sample_widget.set_visibility(getattr(start_widget, "value", None) == "sample")
 
     def _on_param_change(key: str, widget: ui.element) -> None:
         state.values[key] = getattr(widget, "value", None)
+        if key == "start":
+            _sync_sample_visibility()
         schedule_run()
 
     def rebuild_params() -> None:
@@ -588,10 +626,15 @@ def _build_experiment_page(
                         live = session.input_batch_size
                         default = min(_DEFAULT_DREAM_BATCH, live) if live else _DEFAULT_DREAM_BATCH
                     maximum: float | None = None
-                    if spec.key == "channel":
+                    if spec.key in ("channel", "channels"):
                         channels = _layer_channel_count(session.snapshot, state.layer)
                         if channels is not None:
-                            maximum = channels - 1
+                            # Channel is a single index; Channels is a count.
+                            maximum = channels - 1 if spec.key == "channel" else channels
+                    elif spec.key == "sample":
+                        live = session.input_batch_size
+                        if live:
+                            maximum = live - 1
                     default_number = default if isinstance(default, (int, float)) else 0
                     widget = (
                         ui.number(
@@ -611,6 +654,7 @@ def _build_experiment_page(
                     lambda _e, k=spec.key, w=widget: _on_param_change(k, w)
                 )
                 widgets[spec.key] = widget
+        _sync_sample_visibility()
         if state.frozen:
             _set_controls_enabled(_param_controls(), False)
 
@@ -636,40 +680,50 @@ def _build_experiment_page(
         with ui.element("div").classes("max-w-full overflow-x-auto"):
             ui.html(_strip_html(strip))
 
+    def _captioned_cells(cells: list[tuple[str, Callable[[], None]]]) -> None:
+        """A horizontal, scrollable row of captioned cells (caption over body),
+        consistent with the watch / weights cards."""
+        with ui.row().classes("items-start gap-4 no-wrap w-full overflow-x-auto"):
+            for caption, build in cells:
+                with ui.column().classes("items-center gap-1 shrink-0"):
+                    ui.label(caption).classes(
+                        "text-xs text-slate-500 font-mono uppercase tracking-wide"
+                    )
+                    build()
+
     def _sample_card(idx: int, cells: list[tuple[str, Callable[[], None]]]) -> None:
-        """One result card per sample (point 3): a label over captioned cells
-        laid out side by side, consistent with the watch / weights cards."""
+        """One Captum result card per sample: a label over a row of captioned
+        cells."""
         with ui.card().classes("w-full p-3 gap-2"):
             ui.label(f"Sample {idx}").classes(
                 "font-mono text-sm font-bold text-slate-600"
             )
-            with ui.row().classes("items-start gap-4 no-wrap w-full overflow-x-auto"):
-                for caption, build in cells:
-                    with ui.column().classes("items-center gap-1 shrink-0"):
-                        ui.label(caption).classes(
-                            "text-xs text-slate-500 font-mono uppercase tracking-wide"
-                        )
-                        build()
+            _captioned_cells(cells)
 
     def render_result(result: ExperimentResult) -> None:
-        """One card per sample (point 3): for deep dream the input beside its
-        result; for Captum the attribution map beside its input (the map first,
-        point 1) — or, with overlay on, the attribution blended over the input.
+        """Deep dream renders one card holding a single horizontal row — the
+        starting input (only when dreaming from the current batch) followed by
+        one dreamed image per channel (points 1–3). Captum keeps one card per
+        sample: the attribution map beside its input (the map first, point 1),
+        or — with overlay on — the attribution blended over the input.
         Attribution maps and overlays are sized to match the input (point 2)."""
         results_col.clear()
         with results_col:
             if result.image is not None:
-                _render_image_cards(result.reference, result.image)
+                _render_image_row(result.reference, result.image)
             elif result.attribution is not None:
                 _render_attribution_cards(result)
 
-    def _render_image_cards(reference: Tensor | None, image: Tensor) -> None:
+    def _render_image_row(reference: Tensor | None, image: Tensor) -> None:
+        # One card, one horizontal row: the shared input (current-batch start
+        # only) then one dreamed image per channel (points 2, 3).
+        cells: list[tuple[str, Callable[[], None]]] = []
+        if reference is not None:
+            cells.append(("input", lambda: _image_widget(reference, 0)))
         for i in range(int(image.shape[0])):
-            cells: list[tuple[str, Callable[[], None]]] = []
-            if reference is not None:
-                cells.append(("input", lambda i=i: _image_widget(reference, i)))
-            cells.append(("result", lambda i=i: _image_widget(image, i)))
-            _sample_card(i, cells)
+            cells.append((f"channel {i}", lambda i=i: _image_widget(image, i)))
+        with ui.card().classes("w-full p-3 gap-2"):
+            _captioned_cells(cells)
 
     def _render_attribution_cards(result: ExperimentResult) -> None:
         attribution = result.attribution

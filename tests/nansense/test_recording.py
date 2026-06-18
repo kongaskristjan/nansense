@@ -289,7 +289,7 @@ def test_experiment_recording_tracks_auto_reruns(tmp_path: Path) -> None:
         "page-1",
         kind="deep_dream",
         layer="conv",
-        params={"steps": 1, "batch": 1, "mean": None, "std": None},
+        params={"steps": 1, "channels": 1, "mean": None, "std": None},
     )
     assert session.pin_auto_experiment("page-1")
     assert manager.start(

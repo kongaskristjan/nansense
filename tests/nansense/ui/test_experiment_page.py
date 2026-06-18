@@ -22,17 +22,19 @@ def test_experiment_params_cover_every_kind() -> None:
                 assert isinstance(spec.default, (int, float)), spec.key
 
 
-def test_experiment_param_order_channel_then_inputs() -> None:
+def test_experiment_param_order_targeting_then_inputs() -> None:
     from nansense.ui.experiment_page import _EXPERIMENT_PARAMS
 
     for kind, specs in _EXPERIMENT_PARAMS.items():
         keys = [s.key for s in specs]
-        # The targeting knob comes first, Inputs directly below it (point 1).
-        assert keys[0] in ("channel", "target"), kind
-        assert keys[1] == "batch", kind
-    # Deep dream's "Start from" sits directly below Inputs.
-    dd = [s.key for s in _EXPERIMENT_PARAMS["deep_dream"]]
-    assert dd[dd.index("batch") + 1] == "start"
+        if kind == "deep_dream":
+            # Channels first, then Start from with Sample directly below it.
+            assert keys[0] == "channels", kind
+            assert keys[1] == "start" and keys[2] == "sample", kind
+        else:
+            # Captum: the targeting knob first, Inputs directly below it.
+            assert keys[0] in ("channel", "target"), kind
+            assert keys[1] == "batch", kind
 
 
 def test_experiment_descriptions_cover_every_kind() -> None:

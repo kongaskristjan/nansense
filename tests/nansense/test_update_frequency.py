@@ -160,7 +160,7 @@ def test_auto_experiment_reruns_with_same_seq_on_updates() -> None:
         "page-1",
         kind="deep_dream",
         layer="fc1",
-        params={"steps": 1, "batch": 1, "mean": None, "std": None},
+        params={"steps": 1, "channels": 1, "mean": None, "std": None},
     )
 
     session.detach()
@@ -181,9 +181,10 @@ def test_auto_experiment_reruns_with_same_seq_on_updates() -> None:
     # Each epoch-end update re-ran the experiment: a fresh result object.
     assert results[0] is not results[1] is not results[2]
     # The seeded noise start is derived from the seq, which never changes —
-    # with identical input data, every rerun starts from the same tensor.
-    first = results[0].reference
-    last = results[2].reference
+    # with identical input data and weights, every rerun produces the same
+    # dreamed image (noise start carries no reference to compare).
+    first = results[0].image
+    last = results[2].image
     assert first is not None and last is not None
     assert torch.equal(first, last)
 
@@ -195,7 +196,7 @@ def test_auto_experiment_expires_without_heartbeat() -> None:
         "page-1",
         kind="deep_dream",
         layer="fc1",
-        params={"steps": 1, "batch": 1, "mean": None, "std": None},
+        params={"steps": 1, "channels": 1, "mean": None, "std": None},
     )
     session.detach()
     with session.batch(phase="train", epoch=0):
@@ -221,7 +222,7 @@ def test_pinned_auto_experiment_survives_expiry_check() -> None:
         "page-1",
         kind="deep_dream",
         layer="fc1",
-        params={"steps": 1, "batch": 1, "mean": None, "std": None},
+        params={"steps": 1, "channels": 1, "mean": None, "std": None},
     )
     assert session.pin_auto_experiment("page-1")
     session.detach()

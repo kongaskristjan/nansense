@@ -104,7 +104,9 @@ def layer_available(session: Session, layer: str, kind: str) -> bool:
 # How many intermediate publishes a deep-dream run spreads over its steps.
 _PUBLISH_COUNT: int = 20
 
-# Default cap on how many inputs a deep dream covers (the UI mirrors it).
+# Default count for deep dream channels and the Captum input batch — a cap a
+# layer with fewer channels (or a smaller input batch) shrinks to. The UI
+# mirrors it.
 _DEFAULT_DREAM_BATCH: int = 8
 
 
@@ -404,17 +406,18 @@ def _captum_input(
 
 
 def _dream_start(
-    session: Session, request: ExperimentRequest, rng: torch.Generator
+    session: Session, request: ExperimentRequest, rng: torch.Generator, n: int
 ) -> Tensor | ExperimentResult:
-    """The `[batch, ...]` starting batch for deep dream, or an error.
+    """The `[n, ...]` starting batch for deep dream, or an error.
 
-    Built from the network's *real* input (the snapshot's input-node
-    tensor), so non-image inputs work too: `start="noise"` draws `batch`
-    fresh samples matching the real input's per-sample shape and overall
-    mean/std from `rng` — seeded per request, so successive runs explore
-    different noise; `start="sample"` takes the first `batch` samples of the
-    real input batch. `batch` defaults to the real batch size, capped at
-    `_DEFAULT_DREAM_BATCH`.
+    Deep dream runs one sample per channel over the layer's first `n`
+    channels, so the batch size is the channel count. Built from the
+    network's *real* input (the snapshot's input-node tensor), so non-image
+    inputs work too: `start="noise"` draws `n` fresh samples matching the real
+    input's per-sample shape and overall mean/std from `rng` — seeded per
+    request, so successive runs explore different noise; `start="sample"`
+    replicates the chosen input-batch sample `n` times, so every channel's
+    dream starts from the same real image.
     """
     base = session._snapshot_input()
     if base is None:
@@ -424,11 +427,12 @@ def _dream_start(
     if base.ndim < 2:
         return _error(request, "deep dream needs a batched input [B, ...]")
     base = base.detach().float()
-    default = min(_DEFAULT_DREAM_BATCH, int(base.shape[0]))
-    batch = max(1, int_param(request.params, "batch", default))
     if str(request.params.get("start", "noise")) != "noise":
-        return base[:batch].clone()
-    noise = torch.randn((batch, *base.shape[1:]), generator=rng)
+        sample = int_param(request.params, "sample", 0)
+        sample = max(0, min(sample, int(base.shape[0]) - 1))
+        chosen = base[sample : sample + 1]
+        return chosen.repeat(n, *([1] * (base.ndim - 1)))
+    noise = torch.randn((n, *base.shape[1:]), generator=rng)
     return float(base.mean()) + float(base.std()) * noise
 
 
@@ -485,16 +489,21 @@ def _target_activation(session: Session, x: Tensor, layer: str) -> Tensor:
     return act
 
 
-def _channel_objective(act: Tensor, channel: int) -> Tensor:
-    """Mean activation of one channel (or of the whole layer for -1)."""
-    if act.ndim < 2 or channel < 0:
+def _channels_objective(act: Tensor) -> Tensor:
+    """Sum of each sample's own channel mean — sample i targets channel i.
+
+    Deep dream runs one sample per channel over the layer's first channels, so
+    the batch and channel axes are matched on the diagonal: sample i maximizes
+    channel i's mean activation, and the per-sample gradient ascent drives each
+    sample toward its channel. Falls back to the whole-tensor mean for an
+    activation with no channel axis (a flat `[B]` shape).
+    """
+    if act.ndim < 2:
         return act.mean()
-    if channel >= act.shape[1]:
-        raise ValueError(
-            f"channel {channel} out of range for activation shape "
-            f"{tuple(act.shape)}"
-        )
-    return act[:, channel].mean()
+    n = min(int(act.shape[0]), int(act.shape[1]))
+    idx = torch.arange(n, device=act.device)
+    diag = act[idx, idx]  # [n, *spatial] — sample i's channel-i map
+    return diag.reshape(n, -1).mean(dim=1).sum()
 
 
 def _zoom_in(x: Tensor, zoom: float) -> Tensor:
@@ -515,36 +524,41 @@ def _run_deep_dream(
     request: ExperimentRequest,
     should_abort: Callable[[], bool],
 ) -> Iterator[ExperimentResult]:
-    """Gradient ascent on a channel's mean activation w.r.t. a batch of inputs.
+    """Gradient ascent over the layer's first channels — one sample per channel.
 
-    The starting batch comes from the network's real input (`_dream_start`):
-    fresh per-request noise by default, or the current input batch. The
+    The batch is sized to the `channels` knob and clipped to the layer's
+    channel count, so sample i maximizes channel i's mean activation
+    (`_channels_objective`). The starting batch comes from the network's real
+    input (`_dream_start`): fresh per-request noise by default, or the chosen
+    sample of the current input batch replicated across the channels. The
     classic bag of regularizers, each optional and image-only (applied when
     the input is `[B, C, H, W]`): per-step jitter (random roll, undone after
     the update — drawn from the request-seeded generator), "diffusion"
     (blend with a 3×3 box blur, damping high-frequency noise), center zoom
     (a per-step multiplier), and clamping to the displayable value range.
     Gradients are normalized per sample by their mean magnitude so `lr`
-    behaves comparably across layers and batch sizes.
+    behaves comparably across layers and channels. `reference` (the shown
+    input) is carried only for the current-batch start; noise has none.
     """
     p = request.params
-    steps = max(1, int_param(p, "steps", 100))
+    steps = max(1, int_param(p, "steps", 300))
     lr = float_param(p, "lr", 0.05)
     diffusion = min(1.0, max(0.0, float_param(p, "diffusion", 0.05)))
     jitter = max(0, int_param(p, "jitter", 2))
     zoom = max(1.0, float_param(p, "zoom", 1.0))
-    channel = int_param(p, "channel", 0)
+    n_channels = max(1, int_param(p, "channels", _DEFAULT_DREAM_BATCH))
     clamp = bool_param(p, "clamp", True)
+    from_sample = str(p.get("start", "noise")) != "noise"
 
     rng = torch.Generator().manual_seed(request.seq)
-    x0 = _dream_start(session, request, rng)
+    x0 = _dream_start(session, request, rng, n_channels)
     if isinstance(x0, ExperimentResult):
         yield x0
         return
-    reference = x0.clone()
     spatial = x0.ndim == 4  # the regularizers below act on image axes only
     lo, hi = _value_bounds(int(x0.shape[1]), p.get("mean"), p.get("std"))
     publish_every = max(1, steps // _PUBLISH_COUNT)
+    reference: Tensor | None = None
 
     def partial(
         x: Tensor, step: int, objective: float, *, done: bool
@@ -564,6 +578,16 @@ def _run_deep_dream(
     with isolated_model(session, "eval") as device:
         lo, hi = lo.to(device), hi.to(device)
         x = x0.to(device)
+        # One sample per channel: clip the batch to the layer's channel count
+        # so sample i targets channel i with no empty trailing samples.
+        with torch.no_grad():
+            probe = _target_activation(session, x[:1], request.layer)
+        if probe.ndim >= 2:
+            x = x[: min(int(x.shape[0]), int(probe.shape[1]))]
+        # The starting input is shown only when dreaming from the current
+        # batch (noise has nothing meaningful to show); all channels share it.
+        if from_sample:
+            reference = x[:1].detach().cpu()
         objective_value = 0.0
         step_done = 0
         for step in range(steps):
@@ -578,7 +602,7 @@ def _run_deep_dream(
             x_step = x_step.detach().requires_grad_(True)
             with torch.enable_grad():
                 act = _target_activation(session, x_step, request.layer)
-                objective = _channel_objective(act, channel)
+                objective = _channels_objective(act)
                 (grad,) = torch.autograd.grad(objective, x_step)
             objective_value = float(objective.detach())
             sample_dims = tuple(range(1, grad.ndim))

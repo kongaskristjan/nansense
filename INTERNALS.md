@@ -744,16 +744,22 @@ with per-module flags and all buffers restored, forked RNG. Gradients are
 taken w.r.t. the *input* only (`torch.autograd.grad`), so parameter
 `.grad` — which the snapshot path reads at `__exit__` — is never touched.
 
-**Deep dream** (`_run_deep_dream`) is per-sample-normalized gradient
-ascent on a channel's mean activation (`_target_activation`: the fx
-interpreter against a local dict, so any name in `layer_names` is a valid
-target; a single temporary hook in the fallback). It runs on a *batch*
-built from the network's real input (`_dream_start` — any input shape, not
-just images): by default `batch` fresh noise samples matching the real
-input's per-sample shape and overall mean/std, drawn from a generator
-seeded by the request seq so successive Runs explore different noise;
-`start="sample"` takes the first `batch` samples of the real input batch
-instead. Regularizers per step, applied only to `[B, C, H, W]` inputs:
+**Deep dream** (`_run_deep_dream`) is per-sample-normalized gradient ascent
+that runs **one sample per channel** over the layer's first `channels`
+channels: the batch and channel axes are matched on the diagonal, so sample i
+maximizes channel i's mean activation (`_channels_objective`), read via
+`_target_activation` (the fx interpreter against a local dict, so any name in
+`layer_names` is a valid target; a single temporary hook in the fallback). The
+batch is sized to the `channels` knob and clipped to the layer's channel count
+by a one-shot probe forward, so there are never empty trailing samples. The
+starting batch is built from the network's real input (`_dream_start` — any
+input shape, not just images): `start="noise"` draws one fresh noise sample
+per channel matching the real input's per-sample shape and overall mean/std,
+from a generator seeded by the request seq so successive Runs explore
+different noise; `start="sample"` replicates one chosen input-batch sample
+across the channels, so every channel's dream starts from the same real image.
+The shown input (`reference`) is carried only for the current-batch start —
+noise has none. Regularizers per step, applied only to `[B, C, H, W]` inputs:
 jitter (random roll, undone after the update — drawn from the same
 request-seeded generator), diffusion (blend with a 3×3 box blur), center
 zoom (a per-step multiplier, ≥ 1), and clamping to `_value_bounds` — the
@@ -782,11 +788,13 @@ form is headed by a **layer selector** — the first knob — whose options
 carry a `disable` flag (`_patched_update_options` reassigns
 `_props['options']` so the flag survives NiceGUI's option regeneration),
 graying out layers the current kind can't run; switching to a shorter layer
-clips the channel. The rest of each kind's knobs are declared in
-`_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
-number/switch/select widgets) ordered Channel/Target → Inputs → Start from
-→ method knobs; values persist across kind switches via a shared
-`state.values`. A 200 ms timer streams the page's *own* request via
+clips the channel selectors (deep dream's Channels count to the channel
+count, Captum's Channel index to one less). The rest of each kind's knobs are
+declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
+number/switch/select widgets) ordered, for deep dream, Channels → Start from →
+Sample → method knobs (Sample shows only for the current-batch start) and, for
+Captum, Channel/Target → Inputs → method knobs; values persist across kind
+switches via a shared `state.values`. A 200 ms timer streams the page's *own* request via
 `session.experiment_result_for(seq)`, drives **auto-run** (re-register on
 init and on any parameter / layer change, buffered to one run per tick;
 `register_auto_experiment` drops a superseded queued request so the pause
@@ -795,11 +803,14 @@ setting, and toggles Run/Cancel enablement (Run off while auto-run is on or
 a run is in flight; Cancel off while idle). Run replaces and Cancel aborts
 only this page's request, so tabs don't clobber each other.
 
-Results render as one card per sample (`render_result` → `_sample_card`, the
-same card look as the watch / weights pages) with captioned cells: for deep
-dream the input start beside its dreamed result (`render_image`; non-image
-inputs fall back to a "not renderable" note); for Captum the attribution
-strip *first*, then its input (`render_strip`, shared diverging colormap).
+Results render through `render_result`. Deep dream uses a **single** card
+(`_render_image_row`) holding one horizontal row of captioned cells: the
+shared starting input first (only for the current-batch start), then one
+dreamed image per channel captioned `channel i` (`render_image`; non-image
+inputs fall back to a "not renderable" note). Captum keeps one card per sample
+(`_sample_card`, the same card look as the watch / weights pages) with
+captioned cells: the attribution strip *first*, then its input (`render_strip`,
+shared diverging colormap).
 A Captum-only **Overlay** toggle instead blends each attribution channel over
 the input (`render_attribution_overlay` → `blend_signed_heat`, the same
 signed red/blue alpha overlay the MIN/MAX patch grid uses) on a shared

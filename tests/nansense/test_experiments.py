@@ -54,7 +54,8 @@ def _paused_session(
 
 def _dream_params(**overrides: object) -> dict[str, object]:
     params: dict[str, object] = {
-        "channel": 0,
+        "channels": 4,  # TinyClassifier.conv emits 4 channels
+        "sample": 0,
         "steps": 5,
         "lr": 0.1,
         "diffusion": 0.1,
@@ -109,64 +110,76 @@ def test_deep_dream_publishes_done_result_with_image() -> None:
         assert result.error is None
         assert result.done and result.step == result.total_steps == 5
         assert result.kind == "deep_dream" and result.layer == "conv"
-        # Without a "batch" param the dream covers the whole current batch.
-        assert result.image is not None and result.image.shape == (2, 3, 4, 4)
+        # One sample per channel over conv's 4 channels.
+        assert result.image is not None and result.image.shape == (4, 3, 4, 4)
         assert result.image.device.type == "cpu"
-        assert result.reference is not None and result.reference.shape == (2, 3, 4, 4)
+        # Current-batch start shows the single chosen input.
+        assert result.reference is not None and result.reference.shape == (1, 3, 4, 4)
         assert isinstance(result.objective, float)
 
 
-def test_deep_dream_default_batch_caps_at_eight() -> None:
+def test_deep_dream_clips_channels_to_layer_count() -> None:
     with _paused_session(batch_size=10) as (session, _):
         session.request_experiment(
             kind="deep_dream",
             layer="conv",
-            params=_dream_params(start="noise", steps=1),  # no "batch" param
+            # More channels requested than conv has (4): clip to the layer.
+            params=_dream_params(channels=99, start="noise", steps=1),
         )
         assert session.wait_for_experiment(timeout=10)
         result = session.experiment_result
         assert result is not None and result.error is None
-        assert result.image is not None and result.image.shape == (8, 3, 4, 4)
+        assert result.image is not None and result.image.shape == (4, 3, 4, 4)
+        # The worker survived the clip and is still paused/responsive.
+        assert session.pause_count == 1
 
 
 @pytest.mark.parametrize(
-    "start, batch, expected",
+    "start, channels, expected",
     [
-        ("noise", 3, 3),  # noise draws exactly the requested count
-        ("sample", 5, 2),  # the real input batch caps sample starts
-        ("sample", 1, 1),
+        ("noise", 3, 3),  # under conv's 4-channel cap
+        ("noise", 8, 4),  # clipped to conv's channel count
+        ("sample", 2, 2),
+        ("sample", 4, 4),
     ],
 )
-def test_deep_dream_batch_param(start: str, batch: int, expected: int) -> None:
+def test_deep_dream_channels_param(start: str, channels: int, expected: int) -> None:
     with _paused_session() as (session, _):
         session.request_experiment(
             kind="deep_dream",
             layer="conv",
-            params=_dream_params(start=start, batch=batch, steps=2),
+            params=_dream_params(start=start, channels=channels, steps=2),
         )
         assert session.wait_for_experiment(timeout=10)
         result = session.experiment_result
         assert result is not None and result.error is None
+        # One dreamed sample per channel.
         assert result.image is not None and result.image.shape == (expected, 3, 4, 4)
-        assert result.reference is not None
-        assert result.reference.shape == (expected, 3, 4, 4)
+        if start == "noise":
+            assert result.reference is None  # noise shows no input
+        else:
+            # Current batch shows the single shared starting sample.
+            assert result.reference is not None
+            assert result.reference.shape == (1, 3, 4, 4)
 
 
 def test_deep_dream_noise_differs_across_runs() -> None:
     with _paused_session() as (session, _):
-        references: list[Tensor] = []
+        images: list[Tensor] = []
         for _ in range(2):
             session.request_experiment(
                 kind="deep_dream",
                 layer="conv",
-                params=_dream_params(start="noise", batch=2, steps=1),
+                params=_dream_params(start="noise", channels=2, steps=1),
             )
             assert session.wait_for_experiment(timeout=10)
             result = session.experiment_result
             assert result is not None and result.error is None
-            assert result.reference is not None
-            references.append(result.reference)
-        assert not torch.equal(references[0], references[1])
+            assert result.reference is None  # noise start carries no input
+            assert result.image is not None
+            images.append(result.image)
+        # Per-request-seeded noise → different dreams across runs.
+        assert not torch.equal(images[0], images[1])
 
 
 def test_deep_dream_clamps_to_displayable_range() -> None:
@@ -211,19 +224,6 @@ def test_deep_dream_leaves_training_state_untouched() -> None:
         assert [m.training for m in model.modules()] == flags_before
 
 
-def test_deep_dream_bad_channel_publishes_error() -> None:
-    with _paused_session() as (session, _):
-        session.request_experiment(
-            kind="deep_dream", layer="conv", params=_dream_params(channel=99)
-        )
-        assert session.wait_for_experiment(timeout=10)
-        result = session.experiment_result
-        assert result is not None and result.done
-        assert result.error is not None and "channel" in result.error
-        # The worker survived and is still paused/responsive.
-        assert session.pause_count == 1
-
-
 def test_deep_dream_works_on_fx_intermediate_layer() -> None:
     with _paused_session() as (session, _):
         assert "relu" in session.layer_names
@@ -253,12 +253,14 @@ def test_deep_dream_works_on_vector_input() -> None:
         session.request_experiment(
             kind="deep_dream",
             layer="fc1",
-            params={"channel": 0, "steps": 3, "lr": 0.1, "start": "noise", "batch": 3},
+            # fc1 emits 6 features; 3 channels → 3 vector samples of width 8.
+            params={"channels": 3, "steps": 3, "lr": 0.1, "start": "noise"},
         )
         assert session.wait_for_experiment(timeout=10)
         result = session.experiment_result
         assert result is not None and result.error is None
         assert result.image is not None and result.image.shape == (3, 8)
+        assert result.reference is None  # noise start carries no input
 
 
 @pytest.mark.parametrize(
