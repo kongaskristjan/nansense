@@ -446,3 +446,28 @@ def test_batches_runs_each_item_inside_a_batch_context() -> None:
     with pytest.raises(ValueError, match="more batches than declared"):
         with session.batch(phase="train", epoch=0):
             pass
+
+
+def test_snapshot_property_never_blocks_mid_publish() -> None:
+    # `_publish_snapshot` releases the old snapshot before building the new one
+    # so the two never stack in memory, leaving `_snapshot` transiently None.
+    # The property must return that None *without blocking* — blocking here
+    # would stall the UI's asyncio event loop, which reads it synchronously on
+    # the render tick. (The render loop treats None as "no new frame" and skips
+    # the tick, re-rendering once the next read sees the published snapshot.)
+    session, _ = make_session(epochs=1, phases={"train": 1})
+    session.detach()
+    session._snapshot = None  # mid-publish window
+
+    result: list[object] = []
+    reader = run_in_thread(lambda: result.append(session.snapshot))
+    reader.join(timeout=1.0)
+    assert not reader.is_alive()
+    assert result == [None]
+
+
+def test_publish_snapshot_installs_readable_snapshot() -> None:
+    # The happy path leaves a readable snapshot behind the lock-free property.
+    with paused_session(TinyNet()) as session:
+        assert session._snapshot is not None
+        assert session.snapshot is session._snapshot

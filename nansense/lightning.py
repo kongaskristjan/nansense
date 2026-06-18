@@ -406,15 +406,19 @@ class _LightningCkptCache(EpochCache):
             "Lightning epoch checkpoints are written via trainer.save_checkpoint"
         )
 
-    def load(self, epoch: int) -> dict[str, Any]:
+    def load(self, epoch: int, *, mmap: bool = False) -> dict[str, Any]:
         path = self.path_for(epoch)
         if not path.exists():
             raise TimeTravelError(f"no cached checkpoint for epoch {epoch} ({path})")
         try:
             # Lightning checkpoints carry loop/callback state beyond plain
             # tensors, so weights_only loading is not an option; the file is
-            # one this process (or a previous run of it) wrote itself.
-            payload = torch.load(path, map_location="cpu", weights_only=False)
+            # one this process (or a previous run of it) wrote itself. `mmap`
+            # (used by the validation path) maps the weight storages instead of
+            # reading them into RAM; the pickled loop state still loads normally.
+            payload = torch.load(
+                path, map_location="cpu", weights_only=False, mmap=mmap
+            )
         except Exception as e:  # corrupt file, unpicklable content, ...
             raise TimeTravelError(f"failed to load {path}: {e}") from e
         state = payload.get("state_dict") if isinstance(payload, dict) else None

@@ -15,6 +15,7 @@ from nansense.restore import (
     TimeTravelError,
     TrainingRestorer,
     capture_rng,
+    release_cpu_memory,
     restore_rng,
     validate_model_state,
     validate_optimizer_state,
@@ -98,6 +99,27 @@ def test_epoch_cache_load_missing_epoch_raises(tmp_path: Path) -> None:
     cache = EpochCache(tmp_path / "cache")
     with pytest.raises(TimeTravelError, match="no cached model for epoch 5"):
         cache.load(5)
+
+
+def test_epoch_cache_mmap_load_round_trips_and_validates(tmp_path: Path) -> None:
+    # The validation path loads memory-mapped (no full copy in RAM); it must
+    # still expose the keys, shapes, and values the validators read.
+    cache = EpochCache(tmp_path / "cache")
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    cache.save(0, model=model, optimizer=optimizer, scheduler=None)
+
+    payload = cache.load(0, mmap=True)
+    assert payload["epoch"] == 0
+    torch.testing.assert_close(payload["model"]["fc1.weight"], model.fc1.weight)
+    assert validate_model_state(payload, TinyNet()) is None
+    assert validate_optimizer_state(payload, optimizer) is None
+
+
+def test_release_cpu_memory_is_safe_to_call() -> None:
+    # A best-effort trim: it must never raise, even where `malloc_trim` is
+    # absent (musl, macOS) — the restore path calls it unconditionally.
+    release_cpu_memory()
 
 
 @pytest.mark.parametrize(

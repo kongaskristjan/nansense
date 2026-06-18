@@ -367,6 +367,14 @@ class Session:
 
     @property
     def snapshot(self) -> BatchSnapshot | None:
+        # A plain lock-free read (assignment is atomic under the GIL). `None`
+        # means either nothing has published yet or a publish is mid-flight:
+        # `_publish_snapshot` drops the old snapshot before building the new
+        # one so the two never stack in CPU memory. Readers never block on it —
+        # the render loop treats a `None` like a frame with no new data and
+        # keeps the prior frame, re-rendering once the next read sees the new
+        # snapshot. Blocking here instead would stall the UI's asyncio event
+        # loop (the render tick reads this synchronously before offloading).
         return self._snapshot
 
     @property
@@ -1251,7 +1259,10 @@ class Session:
         total = self._schedule.epochs
         if total is None or not 0 <= epoch < total:
             raise TimeTravelError(f"epoch {epoch} out of range [0, {total or 0})")
-        payload = restorer.cache.load(epoch)
+        # Memory-mapped: validation only reads keys and shapes, so the full
+        # model + optimizer state never materializes in CPU memory on the UI
+        # thread (the training thread's `_restore` loads the values for real).
+        payload = restorer.cache.load(epoch, mmap=True)
         # Validate every piece of the checkpoint the training thread will load
         # back into live state — model, optimizer, scheduler — here on the UI
         # thread, before the jump is armed. The training thread's `_restore`
@@ -1543,18 +1554,26 @@ class Session:
         return fallback
 
     def _publish_snapshot(self, pos: BatchPosition) -> None:
-        activations = {
-            n: capture.cpu_clone(a) for n, a in self._activations.items()
-        }
-        activation_gradients = {
-            n: capture.cpu_clone(a.grad)
-            for n, a in self._activations.items()
-            if a.grad is not None
-        }
+        # Release the previous snapshot's CPU clones *before* allocating the
+        # new ones: a snapshot clones every activation, gradient, weight and
+        # optimizer-state tensor, so holding the old one while the new one is
+        # built would stack two full snapshots in CPU memory. Dropping the
+        # session's reference first lets the allocator reuse those pages, so
+        # the publish peak is one snapshot, not two. A reader that already
+        # grabbed the old snapshot keeps it alive (no torn read); one that
+        # reads `snapshot` during the build sees `None` and skips a render tick
+        # (see the `snapshot` property). Both writes are atomic under the GIL.
+        self._snapshot = None
         self._snapshot = BatchSnapshot(
             position=pos,
-            activations=activations,
-            activation_gradients=activation_gradients,
+            activations={
+                n: capture.cpu_clone(a) for n, a in self._activations.items()
+            },
+            activation_gradients={
+                n: capture.cpu_clone(a.grad)
+                for n, a in self._activations.items()
+                if a.grad is not None
+            },
             weights=capture.current_weights(self.model),
             weight_gradients=capture.current_weight_gradients(self.model),
             # Runs on the training thread at __exit__, so these reads are

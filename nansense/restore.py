@@ -29,6 +29,9 @@ user's ``except Exception`` around the batch body cannot swallow a jump.
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import ctypes.util
+import gc
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -45,6 +48,27 @@ DEFAULT_CACHE_DIR = Path(".nansense_cache")
 
 def _mps_available() -> bool:
     return hasattr(torch, "mps") and torch.backends.mps.is_available()
+
+
+def release_cpu_memory() -> None:
+    """Return freed CPU allocations to the OS after a checkpoint load.
+
+    `torch.load` materializes the whole checkpoint in CPU memory — the model
+    parameters plus, for Adam-family optimizers, two moment tensors per
+    parameter (so roughly 3x the model size). Once it has been copied into the
+    live model/optimizer the buffers are dropped, but glibc keeps the freed
+    arenas mapped, so RSS sits at the load peak ("never given back") until
+    later allocations happen to reuse it. `gc.collect()` breaks any reference
+    cycles holding the tensors, and `malloc_trim` (glibc only) hands the arenas
+    back, so a time-travel jump's peak is reclaimed at the jump rather than
+    lingering. A no-op on platforms without `malloc_trim` (musl, macOS).
+    """
+    gc.collect()
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+        libc.malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def capture_rng() -> dict[str, Any]:
@@ -201,13 +225,24 @@ class EpochCache:
         torch.save(payload, tmp)
         tmp.replace(path)
 
-    def load(self, epoch: int) -> dict[str, Any]:
-        """Load epoch `epoch`'s checkpoint; raises `TimeTravelError` if absent."""
+    def load(self, epoch: int, *, mmap: bool = False) -> dict[str, Any]:
+        """Load epoch `epoch`'s checkpoint; raises `TimeTravelError` if absent.
+
+        `mmap=True` memory-maps the tensor storages from the file instead of
+        reading them into RAM. The validation path
+        (`Session.request_time_travel`) uses it: it only inspects keys and
+        shapes, so mmap avoids materializing a full copy of the model and
+        optimizer state in CPU memory on every jump request. The training
+        thread's `_restore` loads for real (the default) since it copies the
+        values back into the live state.
+        """
         path = self.path_for(epoch)
         if not path.exists():
             raise TimeTravelError(f"no cached model for epoch {epoch} ({path})")
         try:
-            payload = torch.load(path, map_location="cpu", weights_only=True)
+            payload = torch.load(
+                path, map_location="cpu", weights_only=True, mmap=mmap
+            )
         except Exception as e:  # corrupt file, unpicklable content, ...
             raise TimeTravelError(f"failed to load {path}: {e}") from e
         if not isinstance(payload, dict) or "model" not in payload:
@@ -585,4 +620,9 @@ class TrainingRestorer:
         if session.scheduler is not None and scheduler_state is not None:
             session.scheduler.load_state_dict(scheduler_state)
         restore_rng(_state_dict(payload, "rng"))
+        # The checkpoint (model params plus the optimizer's moment tensors) was
+        # just copied into the live state; drop it and hand the freed pages
+        # back to the OS so the jump doesn't leave the load peak resident.
+        del payload, model_state, optimizer_state, scheduler_state
+        release_cpu_memory()
         session._rewind_to_epoch(epoch)

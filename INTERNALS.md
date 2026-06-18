@@ -240,6 +240,9 @@ this is tens of MB; for large models, a `watch=` filter to opt out of
 some modules is the future escape hatch. In exchange, the snapshot is
 thread-safe to read from the UI without holding any session lock and
 survives arbitrarily long after the training thread has moved on.
+`_publish_snapshot` releases the previous snapshot *before* allocating the
+new clones (see the Snapshot lifecycle section), so the peak is one
+snapshot rather than two stacked while the new one is built.
 
 ## Resume mechanism
 
@@ -280,11 +283,19 @@ training advances and Stop while it is paused.
 batch has been captured yet. It persists after `close()`, so the UI can
 stay open and present a post-mortem view.
 
-The snapshot is a frozen dataclass of CPU tensors. Assignment is a single
-attribute write; readers in the UI thread observe either the previous
-snapshot or the new one — never a torn half-written state. The UI can
-hold references to a snapshot for as long as it wants without preventing
-the next batch from running.
+The snapshot is a frozen dataclass of CPU tensors. To avoid stacking two
+full snapshots in host memory, `_publish_snapshot` first drops the session's
+reference (`_snapshot = None`), builds the new clones, then installs them —
+both writes atomic under the GIL. A reader that already holds the previous
+snapshot keeps it alive (no torn read); a reader that calls the `snapshot`
+property during the build sees the transient `None`. The property never
+blocks on it: the render tick reads `snapshot` synchronously on the UI's
+asyncio event loop before offloading the heavy render to a thread, so
+blocking would stall every client. Instead a `None` is treated like a tick
+with no new frame — the render loop keeps the prior frame and re-renders once
+the next read (≈200 ms later) sees the published snapshot. The UI can hold
+references to a snapshot for as long as it wants without preventing the next
+batch from running.
 
 Rendering (image strips, histograms, summary stats) happens on the UI
 thread against the published snapshot; the eager copy in
@@ -929,8 +940,10 @@ draws its shuffle seed from the global generator at `iter()` time.
 **Jump flow.** `Session.request_time_travel(epoch)` runs on the UI thread
 and validates everything up-front: the restorer exists and isn't finished,
 the epoch is in range, the checkpoint loads, and its model state matches
-the live model's parameter names and shapes (`validate_model_state`). Any
-failure raises `TimeTravelError` with a displayable message and nothing
+the live model's parameter names and shapes (`validate_model_state`). The
+validation load is memory-mapped (`EpochCache.load(mmap=True)`): it only
+reads keys and shapes, so the full model + optimizer state never
+materializes in RAM on the UI thread. Any
 unwinds — this is what catches a cache directory left behind by a previous
 run of a different model. On success the request arms `_pending_jump`
 under `_cv`, switches the mode to `STEP`, and bumps the resume token.
@@ -954,7 +967,12 @@ back into the model / optimizer / scheduler / RNG and calls
 `Session._rewind_to_epoch(epoch)`, which drops the schedule's batch
 counters for `epoch` onward (`Schedule.rewind_to_epoch`) and the watch
 accumulators' buckets for those epochs (`forget_epochs_from` — they're
-additive, so the re-run samples must start from empty ones). Because the
+additive, so the re-run samples must start from empty ones). The restore
+load is the real (non-mmap) one; once its tensors are copied into the live
+model/optimizer/scheduler, `_restore` drops the payload and calls
+`release_cpu_memory()` (`gc.collect()` + glibc `malloc_trim`) so the
+checkpoint's load peak — model params plus the optimizer's moment tensors —
+is handed back to the OS at the jump instead of sitting resident. Because the
 mode was set to `STEP`, the first batch of the target epoch captures and
 pauses for inspection — the same behaviour as session start.
 
