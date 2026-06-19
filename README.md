@@ -250,6 +250,6 @@ which owns the jump-and-replay loop. Both accept the same `port` / `host` /
 rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and
 drives pausing and stepping; the other ranks follow its pace and fold their data
 shard into the watch-page statistics. Time travel works too — drive every rank's
-epoch loop with `session.epochs()`. See `examples/standard/main.py --distributed`.
+epoch loop with `session.epochs()`. See `examples/standard/main.py --distributed`. Keep in mind that DDP support is currently **experimental**.
 
 See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood (it's long).
