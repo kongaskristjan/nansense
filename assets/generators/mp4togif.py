@@ -19,13 +19,15 @@ MODES = {
 }
 
 
-def build_filter(fps: int, width: int | None, stats_mode: str, dither: str) -> str:
-    steps = [f"fps={fps}"]
+def build_filter(fps: int | None, width: int | None, stats_mode: str, dither: str) -> str:
+    steps = []
+    if fps is not None:
+        steps.append(f"fps={fps}")
     if width is not None:
         steps.append(f"scale={width}:-2:flags=lanczos")
-    pre = ",".join(steps)
+    pre = ",".join(steps) + "," if steps else ""
     return (
-        f"{pre},split[s0][s1];"
+        f"{pre}split[s0][s1];"
         f"[s0]palettegen=stats_mode={stats_mode}[p];"
         f"[s1][p]paletteuse=dither={dither}"
     )
@@ -100,13 +102,20 @@ def main() -> int:
         sys.exit("error: ffmpeg not found on PATH")
 
     cfg = MODES[args.mode]
-    vf = build_filter(args.fps, args.width, cfg["stats_mode"], cfg["dither"])
-
     input_spec = _resolve_input(args.input)
+    is_dir = os.path.isdir(args.input)
+
+    # For an image directory, set the frame rate on the INPUT (-framerate) so
+    # every image becomes one GIF frame. Using the fps filter instead resamples
+    # ffmpeg's default 25fps input timeline and silently drops frames.
+    vf = build_filter(None if is_dir else args.fps, args.width, cfg["stats_mode"], cfg["dither"])
+
     cmd = ["ffmpeg", "-y"]
+    if is_dir:
+        cmd += ["-framerate", str(args.fps)]
     if args.start_number is not None:
         cmd += ["-start_number", str(args.start_number)]
-    elif os.path.isdir(args.input):
+    elif is_dir:
         files = sorted(
             f
             for f in os.listdir(args.input)
@@ -114,7 +123,9 @@ def main() -> int:
             in {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
         )
         start = _extract_number(files[0]) if files else None
-        if start is not None and start != 0:
+        # ffmpeg's image2 demuxer defaults start_number to 1, so an explicit
+        # value is only needed when the sequence starts anywhere but 1.
+        if start is not None and start != 1:
             cmd += ["-start_number", str(start)]
     cmd += ["-i", input_spec, "-vf", vf, args.output]
 
