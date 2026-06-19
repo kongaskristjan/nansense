@@ -250,7 +250,7 @@ def _build_page(
                             on_click=watch_all_dialog.open,
                         ).classes("text-sm")
                         ui.menu_item(
-                            "Clear all watches",
+                            "Clear all watched layers",
                             on_click=lambda: clear_all(),
                         ).classes("text-sm")
                         ui.separator()

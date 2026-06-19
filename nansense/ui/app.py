@@ -14,7 +14,7 @@ disabled so it survives being started from a non-main thread). Layout:
   button that hides the card again. The watch-chip menu in the top bar
   offers "Watch all layers" (behind a performance-warning dialog, since
   watching everything renders every card and accumulates stats for every
-  layer on every batch) and "Clear all watches".
+  layer on every batch) and "Clear all watched layers".
 - Right pane: the "Input Selection" sidebar (see `nansense.ui.input_panel`)
   with the sample spinner, the batch-pinning probe controls, and the input
   image.
