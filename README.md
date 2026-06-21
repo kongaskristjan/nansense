@@ -24,23 +24,27 @@ You can easily try out the [examples](#run-examples) yourself. Or wire it into y
 
 ### Visualize activations and gradients throughout training
 
-A watched layer's activations (top row) and gradients (bottom row) for a single input — here a paraglider flowing through `stage3.1.bn1`. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
+A layer's activations (top row) and gradients (bottom row) for a single input. Here, the activations from an image of a paraglider are flowing through an intermediate batch normalization layer. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
 
 ![Activations and gradients of an image of a paraglider.](assets/docs/activations_gradients.png)
 
 ### Min/max activation patches
 
-For any channel, nansense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a channel has learned to detect.
+For any channel, nansense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a specific neuron has learned to detect. Here, we have 5 examples (each column is a neuron/channel) of what causes it to fire maximally.
 
 ![Patches that maximally activate a resnet-style network's certain hidden layer](assets/docs/max_activations.png)
 
 ### Simulate what a neuron is searching for (deep dream)
 
-Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for. On Imagenette the class neurons grow into rich, textured fragments of their category; on MNIST they conjure up ghostly digits.
-
-![](assets/docs/deep_dream_imagenette.png)
+Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for. Any layer can be visualized this way, but for better interpretability, we've here used the last layer corresponding to the outputs of the neural network. On MNIST, it results in ghostly digits between 0 and 9.
 
 ![](assets/docs/deep_dream_mnist.png)
+
+Why do those numbers look so strange? Deep dream does not necessarily make the features realistic - it maximizes them. A good example is the number 4. There's many ways you can read this number out from the strokes of the image, which is why this image excites the neuron more than a typical 4.
+
+The next picture has 5 columns corresponding to 5 of 10 output channels of the imagenette dataset. Here, the top row are the deep dream images, and two maximally activating patches have been added as bottom rows for comparison.
+
+![](assets/docs/deep_dream_imagenette.png)
 
 ### Measure receptive field of a neuron
 
