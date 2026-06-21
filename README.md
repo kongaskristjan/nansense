@@ -96,7 +96,7 @@ uv run --group [group] examples/audio_keywords/main.py --nansense-port 8080
 uv run --group [group] examples/depth_make3d/main.py --nansense-port 8080
 ```
 
-A browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar. See the [UI tutorial](#ui-tutorial) for more info.
+Open the URL it prints in your browser; training pauses on the first batch. Drive it from the top bar. See the [UI tutorial](#ui-tutorial) for more info.
 
 If you hit out-of-memory errors, lower `--batch-size`. If training is slow and you have GPU VRAM left, increase `--batch-size`. Both memory and training speed can be improved with `--dtype bf16` (older GPUs don't support it).
 
@@ -234,7 +234,7 @@ serves the UI. The arguments worth knowing:
 - `scheduler` (optional) — lets time-travel checkpoints restore the LR schedule.
 - `enabled` — `False` makes the session a near-zero-overhead no-op, so you can
   leave the wiring in place and switch the UI off with one flag.
-- `port` / `host` / `open_browser` — serve the UI immediately; omit `port` and
+- `port` / `host` — serve the UI immediately; omit `port` and
   call `nansense.serve(session, port=...)` separately for finer control.
 - `input_mean` / `input_std` — the input normalization, so images display in
   their original colors.

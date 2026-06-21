@@ -89,7 +89,6 @@ class NansenseCallback(Callback):
         *,
         port: int | None = None,
         host: str = "127.0.0.1",
-        open_browser: bool = True,
         model: str | None = None,
         input_mean: tuple[float, ...] | None = None,
         input_std: tuple[float, ...] | None = None,
@@ -97,7 +96,6 @@ class NansenseCallback(Callback):
     ) -> None:
         self._port = port
         self._host = host
-        self._open_browser = open_browser
         self._model_attr = model
         self._input_mean = input_mean
         self._input_std = input_std
@@ -144,7 +142,6 @@ class NansenseCallback(Callback):
             scheduler=scheduler if isinstance(scheduler, LRScheduler) else None,
             port=self._port,
             host=self._host,
-            open_browser=self._open_browser,
             input_mean=self._input_mean,
             input_std=self._input_std,
         )

@@ -14,8 +14,6 @@ from nansense.ui import app
 from nansense.ui.app import (
     _announce,
     _display_url,
-    _format_box,
-    _open_browser_when_ready,
     serve,
 )
 
@@ -55,7 +53,7 @@ def test_serve_on_disabled_session_is_noop() -> None:
         ("localhost", "http://localhost:8080"),
         ("192.168.1.5", "http://192.168.1.5:8080"),
         # "bind every interface" addresses are not routable from a browser,
-        # so they are shown (and opened) as loopback.
+        # so they are shown as loopback.
         ("0.0.0.0", "http://127.0.0.1:8080"),
         ("::", "http://127.0.0.1:8080"),
         ("", "http://127.0.0.1:8080"),
@@ -65,64 +63,11 @@ def test_display_url(host: str, expected: str) -> None:
     assert _display_url(host, 8080) == expected
 
 
-def test_format_box_frames_every_line() -> None:
-    box = _format_box(["nansense UI is running at:", "http://127.0.0.1:8080"], 100)
-    lines = box.splitlines()
-    # Top/bottom borders plus one row per input line.
-    assert len(lines) == 4
-    assert lines[0].startswith("┌") and lines[0].endswith("┐")
-    assert lines[-1].startswith("└") and lines[-1].endswith("┘")
-    # The URL is framed, and every framed row shares the box width.
-    assert "http://127.0.0.1:8080" in box
-    assert len({len(line) for line in lines}) == 1
-
-
-def test_format_box_spans_requested_width() -> None:
-    box = _format_box(["short"], 100)
-    assert all(len(line) == 100 for line in box.splitlines())
-
-
-def test_format_box_never_shrinks_below_content() -> None:
-    """A width narrower than the text keeps the box readable rather than
-    clipping the line."""
-    long_line = "x" * 60
-    box = _format_box([long_line], 10)
-    assert all(len(line) == len(long_line) + 4 for line in box.splitlines())
-    assert long_line in box
-
-
-def test_announce_prints_boxed_url(capsys: pytest.CaptureFixture[str]) -> None:
+def test_announce_prints_plain_url(capsys: pytest.CaptureFixture[str]) -> None:
+    """The address is one plain line (no box, no auto-open) so it never
+    over-promises on a port the server thread may fail to bind."""
     _announce("http://127.0.0.1:8080")
     out = capsys.readouterr().out
-    assert "http://127.0.0.1:8080" in out
-    assert "┌" in out and "└" in out
-
-
-class _FakeServer:
-    """Stands in for a uvicorn server that is already up."""
-
-    started: bool = True
-
-
-def test_open_browser_opens_focused_new_tab(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The browser is opened in a new tab (`new=2`) and raised (`autoraise=True`)."""
-    calls: list[tuple[str, int, bool]] = []
-
-    def fake_open(url: str, new: int = 0, autoraise: bool = True) -> bool:
-        calls.append((url, new, autoraise))
-        return True
-
-    monkeypatch.setattr(app.webbrowser, "open", fake_open)
-    _open_browser_when_ready(_FakeServer(), "http://127.0.0.1:8080")
-    assert calls == [("http://127.0.0.1:8080", 2, True)]
-
-
-def test_open_browser_swallows_backend_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A headless box (no browser) must never take down the run."""
-
-    def boom(*args: object, **kwargs: object) -> bool:
-        raise RuntimeError("no display")
-
-    monkeypatch.setattr(app.webbrowser, "open", boom)
-    # Should not raise.
-    _open_browser_when_ready(_FakeServer(), "http://127.0.0.1:8080")
+    assert out == "nansense UI: http://127.0.0.1:8080\n"
+    # No leftover banner box from the old prominent announcement.
+    assert "┌" not in out and "└" not in out
