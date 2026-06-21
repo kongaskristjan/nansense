@@ -3,7 +3,8 @@
 
 Uses ffmpeg's palettegen/paletteuse filter chain in a single pass for
 good-quality 256-color GIFs. --mode tunes the palette stats and dithering
-for different content types.
+for different content types. --fps sets the playback rate by retiming frames
+(every frame is kept), not by resampling.
 """
 
 import argparse
@@ -21,10 +22,12 @@ MODES = {
 
 def build_filter(fps: int | None, width: int | None, stats_mode: str, dither: str) -> str:
     steps = []
-    if fps is not None:
-        steps.append(f"fps={fps}")
     if width is not None:
         steps.append(f"scale={width}:-2:flags=lanczos")
+    if fps is not None:
+        # Retime, don't resample: place frame N at N/fps seconds so every frame
+        # is kept and the gif simply plays at `fps`.
+        steps.append(f"setpts=N/({fps}*TB)")
     pre = ",".join(steps) + "," if steps else ""
     return (
         f"{pre}split[s0][s1];"
@@ -91,7 +94,8 @@ def main() -> int:
         help="tuning preset: normal (real video), ui (screen/UI capture), "
              "flat (flat-color diagrams) [default: normal]",
     )
-    p.add_argument("--fps", type=int, default=15, help="output frame rate [default: 15]")
+    p.add_argument("--fps", type=int, default=15,
+                   help="playback frame rate; every frame is kept, not resampled [default: 15]")
     p.add_argument("--width", type=int, default=None,
                    help="output width in px, height auto [default: keep original resolution]")
     p.add_argument("--start-number", type=int, default=None,
@@ -105,9 +109,9 @@ def main() -> int:
     input_spec = _resolve_input(args.input)
     is_dir = os.path.isdir(args.input)
 
-    # For an image directory, set the frame rate on the INPUT (-framerate) so
-    # every image becomes one GIF frame. Using the fps filter instead resamples
-    # ffmpeg's default 25fps input timeline and silently drops frames.
+    # Both paths keep every frame and only change playback speed: an image
+    # directory gets its rate from the INPUT (-framerate, one GIF frame per
+    # image), while a video/gif is retimed by setpts inside build_filter.
     vf = build_filter(None if is_dir else args.fps, args.width, cfg["stats_mode"], cfg["dither"])
 
     cmd = ["ffmpeg", "-y"]

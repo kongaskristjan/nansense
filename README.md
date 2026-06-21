@@ -16,45 +16,39 @@ Hook a `Session` into your PyTorch loop and a web UI opens onto the running
 model with activations, gradients, weights, and optimizer state, live as it
 trains. **Pause, step batch-by-batch, and time-travel to a different epoch**, and see exactly what every layer is doing. Here's what you can do:
 
-- **Deepen your intuition** — [investigate activations and gradients](#activations-and-gradients-throughout-training), [find min/max activation patches](#minmax-activation-patches) and [simulate what each neuron is searching for](#simulate-what-a-neuron-is-searching-for-deep-dream)
+- **Deepen your intuition** — [visualize activations and gradients](#activations-and-gradients-throughout-training), [find min/max activation patches](#minmax-activation-patches) and [simulate what each neuron is searching for](#simulate-what-a-neuron-is-searching-for-deep-dream)
 - **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [fix augmentation padding artifacts](#augmentation-padding-artifacts)
-- **Investigate failure modes** — [spot gradient underflow](#gradient-underflow) and [record weight and optimizer dynamics to understand training instability](#training-instability)
+- **Investigate failure modes** — [spot gradient underflow](#gradient-underflow)
 
 [Try out the pre-made examples](#run-examples) or wire it into your own training loop. You're just a `pip install nansense` and a few lines of code away. Here's an example integration in [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and in [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
 ## Showcase
 
-### Activations and gradients throughout training
+### Visualize activations and gradients throughout training
 
-TBD
+![Activations and gradients of an image of a paraglider.](assets/docs/activations_gradients.png)
 
 ### Min/max activation patches
 
-TBD
+![Patches that maximally activate a resnet-style network's certain hidden layer](assets/docs/max_activations.png)
 
 ### Simulate what a neuron is searching for (deep dream)
 
-TBD
+![](assets/docs/deep_dream_imagenette.png)
+
+![](assets/docs/deep_dream_mnist.png)
 
 ### Measure receptive field of a neuron
 
-TBD
+![First frame shows the activations of the first hidden layer. Then a single pixel is perturbed, and the difference in this layer is shown. Then we move deep inside the neural network, showing how the diff disperses throughout the network. This is useful for empirically measuring the receptive field of individual neurons and the whole network.](assets/docs/receptive_field.gif)
 
 ### Investigate dead neurons
 
-TBD
+![A layer whose all activations are below 0, just before going through relu](assets/docs/dead_neuron_histogram.png)
 
 ### Augmentation padding artifacts
 
-TBD
-
-### Gradient underflow
-
-TBD
-
-### Training instability
-
-TBD
+![Activations of a CIFAR10 based neural network's layer. The zero-padded, augmented initial image is visible as the rightmost item. Zero-padded augmentation clearly produced artifacts inside the neural network.](assets/docs/augmented_activation.png)
 
 ## Run examples
 
