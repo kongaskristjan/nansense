@@ -1,8 +1,6 @@
-<p align="center">
-  <img src="assets/logo_large.png" alt="nansense" width="220">
-</p>
-
-<h1 align="center">nansense</h1>
+<h1 align="center">
+  <img src="assets/logo/logo_small.png" alt="nansense logo" height="36" align="middle"> nansense
+</h1>
 
 <p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
 
@@ -24,7 +22,7 @@ You can easily try out the [examples](#run-examples) yourself. Or wire it into y
 
 ### Visualize activations and gradients throughout training
 
-A layer's activations (top row) and gradients (bottom row) for a single input. Here, the activations from an image of a paraglider are flowing through an intermediate batch normalization layer. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
+A layer's activations (top row) and gradients (bottom row) for a single input. Here, an image of a paraglider passes through an intermediate batch normalization layer. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
 
 ![Activations and gradients of an image of a paraglider.](assets/docs/activations_gradients.png)
 
@@ -36,13 +34,13 @@ For any channel, nansense collects the input patches that drove it to its strong
 
 ### Simulate what a neuron is searching for (deep dream)
 
-Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for. Any layer can be visualized this way, but for better interpretability, we've here used the last layer corresponding to the outputs of the neural network. On MNIST, it results in ghostly digits between 0 and 9.
+Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for. Any layer can be visualized this way, but here we use the network's final output layer, where the result is easiest to interpret. On MNIST, it produces ghostly digits between 0 and 9.
 
 ![](assets/docs/deep_dream_mnist.png)
 
-Why do those numbers look so strange? Deep dream does not necessarily make the features realistic - it maximizes them. A good example is the number 4. There's many ways you can read this number out from the strokes of the image, which is why this image excites the neuron more than a typical 4.
+Why do those numbers look so strange? Deep dream does not necessarily make the features realistic — it maximizes them. A good example is the number 4. There are many ways to read this digit out of the strokes of the image, which is why it excites the neuron more than a typical 4 would.
 
-The next picture has 5 columns corresponding to 5 of 10 output channels of the imagenette dataset. Here, the top row are the deep dream images, and two maximally activating patches have been added as bottom rows for comparison.
+The next picture has 5 columns corresponding to 5 of the 10 output channels of the Imagenette dataset. Here, the top row shows the deep dream images, and two maximally activating patches have been added as the bottom rows for comparison.
 
 ![](assets/docs/deep_dream_imagenette.png)
 
@@ -63,6 +61,10 @@ A per-channel histogram of the activations feeding a ReLU. This channel's entire
 Activations of a CIFAR10 layer, with the augmented input shown at the far right. The augmentation zero-pads the image, and that hard border lights up as strong edge activations ringing every channel — an artifact baked in by the padding.
 
 ![Activations of a CIFAR10 based neural network's layer. The zero-padded, augmented initial image is visible as the rightmost item. Zero-padded augmentation clearly produced artifacts inside the neural network.](assets/docs/augmented_activation.png)
+
+## Gradient underflow
+
+Not every failure mode has a picture. In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range — below the dtype's smallest normal value — where precision drains toward zero and the layer quietly stops learning. nansense checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there — so you catch the stall instead of guessing.
 
 ## Run examples
 
