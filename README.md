@@ -14,7 +14,7 @@
 
 *Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing. Here's how *nansense* can help:
 
-- **Deepen your intuition** — [visualize activations and gradients](#activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
+- **Deepen your intuition** — [visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
 - **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [discover padding artifacts](#augmentation-padding-artifacts)
 - **Investigate failure modes** — [spot gradient underflow](#gradient-underflow)
 
@@ -24,13 +24,19 @@ You can easily try out the [examples](#run-examples) yourself. Or wire it into y
 
 ### Visualize activations and gradients throughout training
 
+A watched layer's activations (top row) and gradients (bottom row) for a single input — here a paraglider flowing through `stage3.1.bn1`. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
+
 ![Activations and gradients of an image of a paraglider.](assets/docs/activations_gradients.png)
 
 ### Min/max activation patches
 
+For any channel, nansense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a channel has learned to detect.
+
 ![Patches that maximally activate a resnet-style network's certain hidden layer](assets/docs/max_activations.png)
 
 ### Simulate what a neuron is searching for (deep dream)
+
+Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for. On Imagenette the class neurons grow into rich, textured fragments of their category; on MNIST they conjure up ghostly digits.
 
 ![](assets/docs/deep_dream_imagenette.png)
 
@@ -38,13 +44,19 @@ You can easily try out the [examples](#run-examples) yourself. Or wire it into y
 
 ### Measure receptive field of a neuron
 
+Starting from the first layer's activations, a single input pixel is perturbed and the resulting difference is traced into ever deeper layers. How far that diff spreads is the empirical receptive field — of an individual neuron and of the network as a whole.
+
 ![First frame shows the activations of the first hidden layer. Then a single pixel is perturbed, and the difference in this layer is shown. Then we move deep inside the neural network, showing how the diff disperses throughout the network. This is useful for empirically measuring the receptive field of individual neurons and the whole network.](assets/docs/receptive_field.gif)
 
 ### Investigate dead neurons
 
+A per-channel histogram of the activations feeding a ReLU. This channel's entire distribution sits below zero, so the ReLU clamps every value to zero — the neuron is dead and contributes nothing downstream.
+
 ![A layer whose all activations are below 0, just before going through relu](assets/docs/dead_neuron_histogram.png)
 
 ### Augmentation padding artifacts
+
+Activations of a CIFAR10 layer, with the augmented input shown at the far right. The augmentation zero-pads the image, and that hard border lights up as strong edge activations ringing every channel — an artifact baked in by the padding.
 
 ![Activations of a CIFAR10 based neural network's layer. The zero-padded, augmented initial image is visible as the rightmost item. Zero-padded augmentation clearly produced artifacts inside the neural network.](assets/docs/augmented_activation.png)
 
