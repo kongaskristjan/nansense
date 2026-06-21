@@ -12,15 +12,13 @@
   <img src="assets/showcase.gif" alt="nansense showcase" width="720">
 </p>
 
-Hook a `Session` into your PyTorch loop and a web UI opens onto the running
-model with activations, gradients, weights, and optimizer state, live as it
-trains. **Pause, step batch-by-batch, and time-travel to a different epoch**, and see exactly what every layer is doing. Here's what you can do:
+*Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing. Here's how *nansense* can help:
 
-- **Deepen your intuition** — [visualize activations and gradients](#activations-and-gradients-throughout-training), [find min/max activation patches](#minmax-activation-patches) and [simulate what each neuron is searching for](#simulate-what-a-neuron-is-searching-for-deep-dream)
-- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [fix augmentation padding artifacts](#augmentation-padding-artifacts)
+- **Deepen your intuition** — [visualize activations and gradients](#activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
+- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [discover padding artifacts](#augmentation-padding-artifacts)
 - **Investigate failure modes** — [spot gradient underflow](#gradient-underflow)
 
-[Try out the pre-made examples](#run-examples) or wire it into your own training loop. You're just a `pip install nansense` and a few lines of code away. Here's an example integration in [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and in [Lightning](#wire-it-into-your-loop-pytorch-lightning).
+You can easily try out the [examples](#run-examples) yourself. Or wire it into your own training loop. Adding nansense support is just a few lines of code. Here's an example for integrating with [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and with [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
 ## Showcase
 
