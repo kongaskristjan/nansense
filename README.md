@@ -4,17 +4,17 @@
 
 <p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
 
-<!-- TODO: replace with a real showcase GIF (assets/showcase.gif): perturb a pixel,
-     watch the diff ripple through the layers, then time-travel back an epoch. -->
 <p align="center">
   <img src="assets/showcase.gif" alt="nansense showcase" width="720">
 </p>
 
-*Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing. Here's how *nansense* can help:
+*Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
+
+Here's how *nansense* can help:
 
 - **Deepen your intuition** — [visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
 - **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [discover padding artifacts](#augmentation-padding-artifacts)
-- **Investigate failure modes** — [spot gradient underflow](#gradient-underflow)
+- **Investigate failure modes** — [spot gradient underflow](#spot-gradient-underflow)
 
 You can easily try out the [examples](#run-examples) yourself. Or wire it into your own training loop. Adding nansense support is just a few lines of code. Here's an example for integrating with [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and with [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
@@ -36,7 +36,7 @@ For any channel, nansense collects the input patches that drove it to its strong
 
 Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for. Any layer can be visualized this way, but here we use the network's final output layer, where the result is easiest to interpret. On MNIST, it produces ghostly digits between 0 and 9.
 
-![](assets/docs/deep_dream_mnist.png)
+![Deep dream images for each of the 10 MNIST output classes.](assets/docs/deep_dream_mnist.png)
 
 Why do those numbers look so strange? Deep dream does not necessarily make the features realistic — it maximizes them. A good example is the number 4. There are many ways to read this digit out of the strokes of the image, which is why it excites the neuron more than a typical 4 would.
 
@@ -62,7 +62,7 @@ Activations of a CIFAR10 layer, with the augmented input shown at the far right.
 
 ![Activations of a CIFAR10 based neural network's layer. The zero-padded, augmented initial image is visible as the rightmost item. Zero-padded augmentation clearly produced artifacts inside the neural network.](assets/docs/augmented_activation.png)
 
-## Gradient underflow
+### Spot gradient underflow
 
 Not every failure mode has a picture. In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range — below the dtype's smallest normal value — where precision drains toward zero and the layer quietly stops learning. nansense checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there — so you catch the stall instead of guessing.
 
@@ -159,12 +159,12 @@ watched or an experiment open, then save or discard it from the same dialog.
 pip install nansense
 ```
 
-Install your PyTorch build first (see
-[pytorch.org](https://pytorch.org/get-started/locally/)) so your CUDA / ROCm /
-CPU choice is preserved: nansense bundles `captum` for the experiment page's
-attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch
-keeps `pip` from pulling a default CPU build. `pip install lightning`
-additionally enables `nansense.lightning`. Runs on Python 3.10–3.14.
+> **Note:** Install your PyTorch build first (see
+> [pytorch.org](https://pytorch.org/get-started/locally/)) so your CUDA / ROCm /
+> CPU choice is preserved: nansense bundles `captum` for the experiment page's
+> attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch
+> keeps `pip` from pulling a default CPU build. `pip install lightning`
+> additionally enables `nansense.lightning`. Runs on Python 3.10–3.14.
 
 ### Wire it into your loop: raw PyTorch
 
