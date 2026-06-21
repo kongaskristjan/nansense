@@ -48,7 +48,7 @@ The next picture has 5 columns corresponding to 5 of the 10 output channels of t
 
 Starting from the first layer's activations, a single input pixel is perturbed and the resulting difference is traced into ever deeper layers. How far that diff spreads is the empirical receptive field — of an individual neuron and of the network as a whole.
 
-![First frame shows the activations of the first hidden layer. Then a single pixel is perturbed, and the difference in this layer is shown. Then we move deep inside the neural network, showing how the diff disperses throughout the network. This is useful for empirically measuring the receptive field of individual neurons and the whole network.](assets/docs/receptive_field.gif)
+![A single pixel is perturbed, and the difference in the first hidden layer's activations is shown. Then we move deep inside the neural network, showing how the diff disperses throughout the network. This is useful for empirically measuring the receptive field of individual neurons and the whole network.](assets/docs/receptive_field.gif)
 
 ### Investigate dead neurons
 
