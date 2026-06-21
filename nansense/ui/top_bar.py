@@ -553,7 +553,7 @@ def _add_settings_button(
         with ui.row().classes("w-full gap-2 no-wrap items-start"):
             debug_interval = ui.number(
                 label="Check every (batches)",
-                value=10,
+                value=100,
                 min=1,
                 step=1,
                 format="%d",
@@ -657,7 +657,7 @@ def _add_settings_button(
             return
         try:
             interval = (
-                int(debug_interval.value) if debug_interval.value is not None else 10
+                int(debug_interval.value) if debug_interval.value is not None else 100
             )
             percent = (
                 float(debug_threshold.value)

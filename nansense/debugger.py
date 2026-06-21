@@ -1,7 +1,7 @@
 """Automatic numerical-error detection: NaN/Inf and gradient subnormal/overflow.
 
 The neural-network debugger runs a small set of checks every *n*th batch
-(configurable, default 10) and, when it finds trouble, records a
+(configurable, default 100) and, when it finds trouble, records a
 `DebugError`, stops training, and the UI raises a warning banner. Two checks:
 
 - **NaN / ±Inf** — trips if a single non-finite value appears anywhere in a
@@ -86,7 +86,7 @@ class DebugSettings:
     """
 
     enabled: bool = True
-    interval: int = 10
+    interval: int = 100
     check_nan_inf: bool = True
     check_under_over: bool = True
     threshold: float = 0.1

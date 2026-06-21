@@ -476,7 +476,7 @@ values and are masked by the renderer.
 
 The debugger watches for two numerical failures and pauses training when it
 first finds one, surfacing a yellow *warning* banner in the UI. It runs every
-*n*th batch (default 10, configurable/toggleable) so a clean run pays almost
+*n*th batch (default 100, configurable/toggleable) so a clean run pays almost
 nothing.
 
 - **NaN / ±Inf** — trips if a single non-finite value appears in any checked
