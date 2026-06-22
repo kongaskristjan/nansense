@@ -1975,6 +1975,7 @@ def start(
     scheduler: LRScheduler | None = None,
     port: int | None = None,
     host: str = "127.0.0.1",
+    open_browser: bool = True,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> Session:
@@ -2005,9 +2006,11 @@ def start(
 
     `port` is optional: when given, the UI is served immediately on that
     port (equivalent to a separate `nansense.serve(session, port=...)`
-    call, which remains available for finer control). `host`, `input_mean`,
-    and `input_std` are forwarded to `serve`, which prints the UI address as
-    a single line (no auto-opened browser).
+    call, which remains available for finer control). `host`,
+    `open_browser`, `input_mean`, and `input_std` are forwarded to `serve`;
+    once the port binds, the address is printed in a box and (unless
+    `open_browser=False`) opened in a focused browser tab. If a concurrent
+    session already holds the port, both are suppressed.
 
     Distributed (DDP) runs need no special wiring: call `start()` on every
     rank (a `DistributedDataParallel`-wrapped model is unwrapped
@@ -2034,6 +2037,7 @@ def start(
             session,
             port=port,
             host=host,
+            open_browser=open_browser,
             input_mean=input_mean,
             input_std=input_std,
         )
