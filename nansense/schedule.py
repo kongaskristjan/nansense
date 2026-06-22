@@ -27,10 +27,29 @@ class BatchPosition:
     is_last_overall: bool
 
 
-def format_position(position: BatchPosition) -> str:
+def format_position(
+    position: BatchPosition,
+    *,
+    total_epochs: int | None = None,
+    total_batches: int | None = None,
+) -> str:
     """The "epoch 0 | train batch 0" rendering shared by the top bar's
-    live-position label and recorded frames' position banner."""
-    return f"epoch {position.epoch} | {position.phase} batch {position.batch_idx}"
+    live-position label and recorded frames' position banner.
+
+    `total_epochs` / `total_batches` are the run's known totals: when given,
+    the count gets an "epoch 0/50" / "batch 0/196" suffix (both numbers stay
+    0-indexed, matching the rest of the UI). Either is `None` while still
+    unknown — a fully-lazy schedule before `session.epochs(n)`, or a phase's
+    batch count during the first, unlearned epoch — and that part renders
+    bare, so the suffix appears only once the total is real.
+    """
+    epoch = f"{position.epoch}/{total_epochs}" if total_epochs else f"{position.epoch}"
+    batch = (
+        f"{position.batch_idx}/{total_batches}"
+        if total_batches
+        else f"{position.batch_idx}"
+    )
+    return f"epoch {epoch} | {position.phase} batch {batch}"
 
 
 class Schedule:

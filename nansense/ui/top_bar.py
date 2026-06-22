@@ -206,7 +206,15 @@ def _add_step_controls(
         nonlocal last_running
         live = session.live_position
         if live is not None:
-            position_label.text = format_position(live)
+            # Append the run's totals when known: total epochs from the
+            # schedule, total batches from the live phase's learned count
+            # (both stay None — and so render bare — until known).
+            schedule = session.schedule
+            position_label.text = format_position(
+                live,
+                total_epochs=schedule.epochs,
+                total_batches=schedule.phase_count(live.phase),
+            )
         running = session.is_running
         if running != last_running:
             last_running = running

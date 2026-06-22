@@ -1155,7 +1155,12 @@ tick loop picks up like a new snapshot.
 The top-bar position label has its own 200 ms timer reading
 `session.live_position` (recorded on every batch `__enter__`, independent of
 capture), so the epoch/batch counter advances during `step_run` / `detach`
-where `snapshot.position` would stay frozen.
+where `snapshot.position` would stay frozen. It passes the schedule's known
+totals to `format_position` — `schedule.epochs` and the live phase's
+`schedule.phase_count(phase)` — which append an "epoch 0/50 | train batch
+0/196" suffix to whichever is known (a fully-lazy schedule shows no epoch
+total until `session.epochs(n)`, and no batch total until the phase's count is
+learned at the end of the first epoch).
 
 **`/stats` page.** One `_WatchLayerPanel` per watched layer, switchable between
 a HISTOGRAM and a MIN/MAX extreme-patch view; a 2 s timer feeds
