@@ -34,9 +34,13 @@ decoupled from the heavier strip rendering.
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
+import time
 import warnings
+import webbrowser
 from pathlib import Path
+from typing import Protocol
 
 import uvicorn
 from fastapi import FastAPI
@@ -94,15 +98,72 @@ def _display_url(host: str, port: int) -> str:
     return f"http://{shown_host}:{port}"
 
 
-def _announce(url: str) -> None:
-    """Print the UI address as a single line.
+def _format_box(lines: list[str], width: int) -> str:
+    """Frame `lines` in a Unicode box `width` columns wide so the address
+    stands out in the busy training log it is printed amongst.
 
-    Kept deliberately modest: the bind happens on the server thread just
-    after this prints, so a loud banner here would over-promise on a port
-    that may already be taken (and the line goes out before any bind error
-    surfaces). One plain line is enough to find the address in the log.
+    The interior is widened to span `width` (one space of padding on each
+    side of the text), but never shrinks below the longest line.
     """
-    print(f"nansense UI: {url}", flush=True)
+    inner = max(width - 4, max(len(line) for line in lines))
+    rule = "─" * (inner + 2)
+    body = [f"│ {line.ljust(inner)} │" for line in lines]
+    return "\n".join([f"┌{rule}┐", *body, f"└{rule}┘"])
+
+
+def _announce(url: str) -> None:
+    """Print the UI address inside a box that spans the terminal width (a
+    sensible default when output is redirected), padded by blank lines so it
+    is easy to spot between training-log lines."""
+    width = shutil.get_terminal_size().columns
+    box = _format_box(["nansense UI is running at:", url], width)
+    print(f"\n{box}\n", flush=True)
+
+
+class _Startable(Protocol):
+    """The slice of `uvicorn.Server` the announcer reads — its `started`
+    flag, flipped once the port is bound and serving has begun."""
+
+    started: bool
+
+
+def _announce_when_ready(
+    server: _Startable,
+    server_thread: threading.Thread,
+    url: str,
+    open_browser: bool,
+    *,
+    timeout: float = 10.0,
+) -> None:
+    """Announce the UI — and, if `open_browser`, open a focused browser tab —
+    but only once the server has actually bound its port.
+
+    Runs on a daemon thread so it never blocks training. The wait is what
+    makes this safe under a concurrent session: if another session already
+    holds the port, uvicorn's bind fails on its own thread (it logs the
+    `[Errno 98]` error and exits), so `server.started` never flips and that
+    thread dies. We notice both, print nothing, and open nothing — no banner
+    promising a URL we don't own, and no tab racing to a page served by the
+    *other* session. On a clean bind we announce and (where supported) open
+    the tab focused: `new=2` requests a new tab, `autoraise=True` raises it.
+    On a headless box `webbrowser.open` is a harmless no-op, and any backend
+    error is swallowed so a missing display never disrupts the run.
+    """
+    deadline = time.monotonic() + timeout
+    while (
+        not server.started
+        and server_thread.is_alive()
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.05)
+    if not server.started:
+        return  # a concurrent session holds the port — stay silent
+    _announce(url)
+    if open_browser:
+        try:
+            webbrowser.open(url, new=2, autoraise=True)
+        except Exception:
+            pass
 
 
 def serve(
@@ -111,6 +172,7 @@ def serve(
     port: int = 8080,
     host: str = "127.0.0.1",
     log_level: str = "warning",
+    open_browser: bool = True,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> threading.Thread | None:
@@ -127,10 +189,14 @@ def serve(
     disabled so uvicorn doesn't try to wire SIGINT/SIGTERM from a thread
     that isn't the main one.
 
-    Once the server thread is launched the UI address is printed as a single
-    line. We don't auto-open a browser: the bind happens on the server thread
-    right after, so opening a tab (or printing a loud banner) here would
-    over-promise on a port that may already be in use.
+    Once the server thread is launched, a daemon thread waits for the port to
+    bind and then prints the UI address inside a box (so it stands out in the
+    training log) and, unless `open_browser` is `False`, opens it in a focused
+    browser tab. If a concurrent session already holds the port the bind
+    fails, so the banner and the browser tab are both suppressed — only
+    uvicorn's own `address already in use` error is shown. On a headless
+    machine the bind still succeeds, so the banner prints and the browser open
+    is a harmless no-op.
 
     `input_mean` / `input_std` are passed to the input-image pane so the
     sample is denormalized (`x * std + mean`) before display. When either
@@ -202,5 +268,10 @@ def serve(
     thread = threading.Thread(target=server.run, name="nansense-ui", daemon=False)
     thread.start()
 
-    _announce(_display_url(host, port))
+    threading.Thread(
+        target=_announce_when_ready,
+        args=(server, thread, _display_url(host, port), open_browser),
+        name="nansense-announce",
+        daemon=True,
+    ).start()
     return thread

@@ -1114,11 +1114,17 @@ uvicorn on a **non-daemon background thread**, so the UI outlives the training
 script's main thread for post-mortem browsing. `install_signal_handlers` is
 patched to a no-op because uvicorn can't register signal handlers off the main
 thread. `serve()` no-ops on non-leader ranks and on a disabled session. Once the
-thread is launched it prints the address as a single plain line. We don't auto-
-open a browser or print a loud banner: the bind happens on the server thread
-*after* this line, so either would over-promise on a port that may already be in
-use (the address goes out before any bind error surfaces). `0.0.0.0`/`::` are
-shown as loopback.
+server thread is launched, a second **daemon** thread (`_announce_when_ready`)
+waits for `server.started` before doing anything user-facing: on a clean bind it
+prints the address in a Unicode box spanning the terminal width
+(`shutil.get_terminal_size`, so it stands out in the training log) and, unless
+`open_browser=False`, opens a focused new browser tab (`new=2`, `autoraise=True`,
+a no-op on a headless box). The wait is what makes a concurrent session safe: if
+another session already holds the port, uvicorn's bind raises, it logs the
+`address already in use` error and `sys.exit`s its own thread, so `started` never
+flips — the announcer sees the dead thread (or times out), prints nothing and
+opens nothing. No banner promises a URL we don't own, and no tab races to a page
+served by the *other* session. `0.0.0.0`/`::` are shown (and opened) as loopback.
 
 **Main page.** One `_LayerView` card per layer, but a card is visible **iff its
 layer is watched** — visible ≡ watched (`session.watch`), so the center pane
