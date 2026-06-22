@@ -11,16 +11,34 @@ from tests.nansense.helpers import make_position
 
 
 @pytest.mark.parametrize(
-    ("phase", "epoch", "batch_idx", "expected"),
+    ("phase", "epoch", "batch_idx", "total_epochs", "total_batches", "expected"),
     [
-        ("train", 0, 0, "epoch 0 | train batch 0"),
-        ("val", 12, 345, "epoch 12 | val batch 345"),
+        # No totals known: bare, as before.
+        ("train", 0, 0, None, None, "epoch 0 | train batch 0"),
+        ("val", 12, 345, None, None, "epoch 12 | val batch 345"),
+        # Both totals known: "/N" suffix on each (numbers stay 0-indexed).
+        ("train", 26, 5, 50, 196, "epoch 26/50 | train batch 5/196"),
+        # Only one total known: the other half stays bare.
+        ("train", 3, 7, 50, None, "epoch 3/50 | train batch 7"),
+        ("val", 3, 7, None, 40, "epoch 3 | val batch 7/40"),
     ],
 )
 def test_format_position(
-    phase: str, epoch: int, batch_idx: int, expected: str
+    phase: str,
+    epoch: int,
+    batch_idx: int,
+    total_epochs: int | None,
+    total_batches: int | None,
+    expected: str,
 ) -> None:
-    assert format_position(make_position(phase, epoch, batch_idx)) == expected
+    assert (
+        format_position(
+            make_position(phase, epoch, batch_idx),
+            total_epochs=total_epochs,
+            total_batches=total_batches,
+        )
+        == expected
+    )
 
 
 def test_advance_through_full_run() -> None:
