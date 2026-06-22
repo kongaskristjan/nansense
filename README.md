@@ -13,7 +13,7 @@
 Here's how *nansense* can help:
 
 - **Deepen your intuition** — [visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
-- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [discover padding artifacts](#augmentation-padding-artifacts)
+- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and discover padding artifacts
 - **Investigate failure modes** — [spot gradient underflow](#spot-gradient-underflow)
 
 You can easily try out the [examples](#run-examples) yourself. Or wire it into your own training loop. Adding nansense support is just a few lines of code. Here's an example for integrating with [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and with [Lightning](#wire-it-into-your-loop-pytorch-lightning).
@@ -25,6 +25,10 @@ You can easily try out the [examples](#run-examples) yourself. Or wire it into y
 A layer's activations (top row) and gradients (bottom row) for a single input. Here, an image of a paraglider passes through an intermediate batch normalization layer. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
 
 ![Activations and gradients of an image of a paraglider.](assets/docs/activations_gradients.png)
+
+Here's another example: Activations of a CIFAR10 layer, with the augmented input shown at the far right. The augmentation zero-pads the image, and that hard border lights up as strong edge activations ringing every channel — an artifact baked in by the padding. Maybe use reflection padding next time?
+
+![Activations of a CIFAR10 based neural network's layer. The zero-padded, augmented initial image is visible as the rightmost item. Zero-padded augmentation clearly produced artifacts inside the neural network.](assets/docs/augmented_activation.png)
 
 ### Min/max activation patches
 
@@ -46,21 +50,15 @@ The next picture has 5 columns corresponding to 5 of the 10 output channels of t
 
 ### Measure receptive field of a neuron
 
-Starting from the first layer's activations, a single input pixel is perturbed and the resulting difference is traced into ever deeper layers. How far that diff spreads is the empirical receptive field — of an individual neuron and of the network as a whole.
+To measure the receptive field of a neuron, *nansense* has support for perturbing a single pixel, and watching the diff between the original propagate through the neural network. Here's an animation of such a diff spreading through layers. In this case, most of the input size gets covered, which indicates that the network is reasonably strided and deep.
 
-![A single pixel is perturbed, and the difference in the first hidden layer's activations is shown. Then we move deep inside the neural network, showing how the diff disperses throughout the network. This is useful for empirically measuring the receptive field of individual neurons and the whole network.](assets/docs/receptive_field.gif)
+![A single pixel is perturbed, and the difference in the layer's successive activations are shown.](assets/docs/receptive_field.gif)
 
 ### Investigate dead neurons
 
-A per-channel histogram of the activations feeding a ReLU. This channel's entire distribution sits below zero, so the ReLU clamps every value to zero — the neuron is dead and contributes nothing downstream.
+*Nansense* can measure each channel's activation and gradient distribution over a full epoch. With this particular channel, the entire distribution is negative, so the ReLU clamps every value to zero — the neuron is dead and contributes nothing downstream.
 
 ![A layer whose all activations are below 0, just before going through relu](assets/docs/dead_neuron_histogram.png)
-
-### Augmentation padding artifacts
-
-Activations of a CIFAR10 layer, with the augmented input shown at the far right. The augmentation zero-pads the image, and that hard border lights up as strong edge activations ringing every channel — an artifact baked in by the padding.
-
-![Activations of a CIFAR10 based neural network's layer. The zero-padded, augmented initial image is visible as the rightmost item. Zero-padded augmentation clearly produced artifacts inside the neural network.](assets/docs/augmented_activation.png)
 
 ### Spot gradient underflow
 
