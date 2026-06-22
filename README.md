@@ -100,6 +100,8 @@ If you hit out-of-memory errors, lower `--batch-size`. If training is slow and y
 
 ## UI tutorial
 
+![UI](assets/docs/ui.png)
+
 When a session starts, nansense serves a web page and pauses on the first batch.
 You drive the run from the top bar: **Step Batch** advances one batch, **Run**
 runs to the end and then pauses, and **Stop** pauses a free-running session. The
@@ -111,17 +113,26 @@ which checkpoints each epoch start to disk.
 
 ### Watching layers and viewing stats
 
-The main page shows the model as a clickable architecture graph. Click a node to
+The left pane shows the model as a clickable architecture graph. Click a node to
 **watch** that layer: its activations and gradients appear as a card, and from
 that point on every batch feeds them into running statistics. Watched views
 refresh on every pause and, while training runs, on the cadence set under
 *Update frequency* in the settings.
 
-Watching runs the model at capture speed, so watch a few layers at a time rather
-than the whole network. Open a watched layer's **stats view** for the deep dive:
+Watching slows down the training and consumes memory, so
+it's generally better to watch only a number of layers at a
+time. Open a watched layer's **stats view** for the deep dive:
 a histogram of its activation and gradient values over the epoch (down to a
 single channel), and a gallery of the input patches that drove each channel to
 its most extreme responses.
+
+### Running experiments
+
+Each layer card has an **Experiment** button. On the experiment page, pick a
+method — deep dream, or a Captum attribution (Grad-CAM, Neuron Gradient, Neuron
+Integrated Gradients, Occlusion) — set its parameters, and run it on the layer.
+Experiments run between batches, so training must be paused; results show one
+card per input sample.
 
 ### Select visualization inputs
 
@@ -136,14 +147,6 @@ behave on those re-runs.
 **Perturb** lets you click pixels to edit the input; nansense re-runs the model
 and the layer cards switch to the diff, so you can trace a single changed pixel
 through the network.
-
-### Running experiments
-
-Each layer card has an **Experiment** button. On the experiment page, pick a
-method — deep dream, or a Captum attribution (Grad-CAM, Neuron Gradient, Neuron
-Integrated Gradients, Occlusion) — set its parameters, and run it on the layer.
-Experiments run between batches, so training must be paused; results show one
-card per input sample.
 
 ### Recording videos
 
