@@ -58,6 +58,16 @@ def test_build_model(dataset: str, model_name: str, model_cls: type) -> None:
     assert model(x).shape == (2, config.num_classes)
 
 
+def test_build_model_resnet_deep_has_deep_final_stage() -> None:
+    """resnet_deep deepens its final stage to 8 blocks while earlier stages
+    keep the depth knob."""
+    config = DATASETS["cifar10"]
+    model = main_module.build_model("resnet_deep", config, blocks_per_stage=2)
+    assert isinstance(model, PreActResNet)
+    counts = [len(getattr(model, f"stage{i}")) for i in range(1, model.num_stages + 1)]
+    assert counts == [2, 2, 2, 2, 8]
+
+
 def test_build_optimizer_and_scheduler() -> None:
     model = torch.nn.Linear(4, 2)
     args = argparse.Namespace(lr=1e-3, weight_decay=0.05, epochs=10)
