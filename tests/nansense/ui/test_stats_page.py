@@ -13,6 +13,7 @@ from nansense.ui.stats_page import (
     _ALL_LAYERS_MAX,
     _HOVER_EVENT,
     _LAYER_ALL,
+    _PHASE_CURRENT_BATCH,
     _PLOTLY_CONFIG,
     _bin_samples_html,
     _figure_payload,
@@ -22,6 +23,7 @@ from nansense.ui.stats_page import (
     _patch_grids_html,
     _patch_grids_signature,
     _reconcile_selected_layer,
+    _selectable_layers,
     _should_show_bands,
     _visible_layers,
     _watched_in_order,
@@ -150,6 +152,16 @@ def test_watched_in_order_follows_layer_names_not_set_order() -> None:
     assert _watched_in_order(_NAMES, frozenset()) == []
     # A name not in `layer_names` is ignored.
     assert _watched_in_order(_NAMES, frozenset({"a", "z"})) == ["a"]
+
+
+def test_selectable_layers_depends_on_phase() -> None:
+    watched = frozenset({"a", "c"})
+    # A real phase offers only the watched layers (graph order).
+    assert _selectable_layers("train", _NAMES, watched) == ["a", "c"]
+    # "Current batch" reads the snapshot, which covers every layer.
+    assert _selectable_layers(_PHASE_CURRENT_BATCH, _NAMES, watched) == _NAMES
+    # Current batch offers all layers even when nothing is watched.
+    assert _selectable_layers(_PHASE_CURRENT_BATCH, _NAMES, frozenset()) == _NAMES
 
 
 def test_layer_select_options_offers_all_only_when_few_watched() -> None:

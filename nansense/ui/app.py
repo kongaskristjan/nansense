@@ -235,11 +235,12 @@ def serve(
         )
 
     @ui.page("/stats", favicon=str(favicon_path))
-    def stats_page(layer: str = "") -> None:
+    def stats_page(layer: str = "", phase: str = "") -> None:
         _build_stats_page(
             session,
             layer_names,
             layer,
+            start_current_batch=phase == "current",
             input_mean=input_mean,
             input_std=input_std,
         )

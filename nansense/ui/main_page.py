@@ -36,6 +36,7 @@ from nansense.ui.render import probe_act_tensor, render_image, render_strip, ten
 from nansense.ui.static import (
     _ARCHITECTURE_CLICK_CSS,
     _ARCHITECTURE_CLICK_JS,
+    _STATS_TOGGLE_CSS,
     _STRIP_MARKER_CSS,
 )
 from nansense.ui.top_bar import (
@@ -183,6 +184,7 @@ def _build_page(
     _install_panel_resize()
     ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
     ui.add_head_html(_STRIP_MARKER_CSS)
+    ui.add_head_html(_STATS_TOGGLE_CSS)
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
     ui.add_body_html(_layer_info_script(session.layer_info, slugs))
 
@@ -228,16 +230,25 @@ def _build_page(
             _refresh_button(session)
             _add_step_controls(session, step_until_custom)
             watch_chip = ui.button(
-                str(len(session.watched_layers)),
-                icon="visibility",
                 color="slate-100",
             ).classes(
                 "ml-auto text-amber-700 font-mono"
             ).props("dense size=md no-caps").tooltip(
-                "Watched layers — click a layer to open its stats view"
+                "Watched layers — click a layer to open its stats view; "
+                "use the menu to pause stats collection"
             )
+            stats_icon: ui.icon
+            watch_count_label: ui.label
             watch_list_container: ui.element
             with watch_chip:
+                # Icon and count are built as button children (rather than the
+                # button's `icon=` / text) so the stats icon carries its own
+                # colour and the "not collecting" strike independently of the
+                # amber count. `sync_stats_icon` drives its appearance.
+                stats_icon = ui.icon("bar_chart").classes("text-base")
+                watch_count_label = ui.label(
+                    str(len(session.watched_layers))
+                ).classes("ml-1")
                 with ui.menu().props("anchor='bottom right' self='top right'"):
                     # Plain block container, NOT a flex column: Firefox fails to
                     # position/size a QMenu whose content root is a flex column,
@@ -246,13 +257,42 @@ def _build_page(
                     # children stack vertically anyway.
                     with ui.element("div").classes("min-w-64"):
                         ui.menu_item(
-                            "Watch all layers…",
+                            "Watch all layers",
                             on_click=watch_all_dialog.open,
                         ).classes("text-sm")
                         ui.menu_item(
                             "Clear all watched layers",
                             on_click=lambda: clear_all(),
                         ).classes("text-sm")
+                        ui.menu_item(
+                            "Toggle collecting stats",
+                            on_click=lambda: toggle_stats(),
+                            auto_close=False,
+                        ).classes("text-sm").tooltip(
+                            "Pause/resume folding watched layers' batches into "
+                            "the running stats (cards stay visible either way)"
+                        )
+                        ui.separator()
+                        # "Current batch" submenu: every layer (watched or not),
+                        # each routing straight to that layer's current-batch
+                        # stats view. The nested menu's content root is a block
+                        # div, so the Firefox QMenu caveat above doesn't apply.
+                        with ui.menu_item(
+                            "Current batch", auto_close=False
+                        ).classes("text-sm"):
+                            with ui.item_section().props("side"):
+                                ui.icon("chevron_right")
+                            with ui.menu().props(
+                                "anchor='top end' self='top start'"
+                            ):
+                                with ui.element("div").classes(
+                                    "min-w-56 max-h-96 overflow-auto"
+                                ):
+                                    for name in layer_names:
+                                        ui.menu_item(name).props(
+                                            f'href="/stats?layer={quote(name)}'
+                                            '&phase=current"'
+                                        ).classes("font-mono text-sm")
                         ui.separator()
                         watch_list_container = ui.element("div").classes("py-1")
             _add_settings_button(session, record_view)
@@ -264,9 +304,36 @@ def _build_page(
 
         _add_error_banner(session)
 
+        def sync_stats_icon() -> None:
+            """Colour the top-bar stats icon from the collection state.
+
+            Green = collecting (the default), red + diagonal strike = paused
+            (the slashed look of the Unwatch button's `visibility_off`). Driven
+            on a timer too, so a toggle in one tab is reflected in every other.
+            """
+            collecting = session.stats_collecting
+            stats_icon.classes(
+                remove="text-green-600 text-red-600 nansense-strike",
+                add=(
+                    "text-green-600"
+                    if collecting
+                    else "text-red-600 nansense-strike"
+                ),
+            )
+            stats_icon.tooltip(
+                "Collecting stats for watched layers"
+                if collecting
+                else "Stats collection paused — watched cards still render, "
+                "but no batch is accumulated"
+            )
+
+        def toggle_stats() -> None:
+            session.toggle_stats_collecting()
+            sync_stats_icon()
+
         def refresh_chip() -> None:
             watched = session.watched_layers
-            watch_chip.text = str(len(watched))
+            watch_count_label.text = str(len(watched))
             watch_list_container.clear()
             with watch_list_container:
                 if not watched:
@@ -414,6 +481,7 @@ def _build_page(
     # set into JS so the MutationObserver applies the amber treatment to
     # mermaid nodes once Mermaid finishes rendering them client-side.
     refresh_chip()
+    sync_stats_icon()
     initial_watched = list(state.last_watched)
     if initial_watched:
         slugs_js = json.dumps([slugs[n] for n in initial_watched])
@@ -436,6 +504,9 @@ def _build_page(
         # dirty so newly visible cards render from the current snapshot.
         if session.watched_layers != state.last_watched:
             sync_watch_ui()
+        # Stats-collection state can change from another tab too; keep the
+        # icon's colour/strike in sync (cheap class writes, no-op when stable).
+        sync_stats_icon()
         snap = session.snapshot
         # With a probe result present (a batch is pinned, or an eval/train
         # forward mode is selected), the page renders the probe instead of the
