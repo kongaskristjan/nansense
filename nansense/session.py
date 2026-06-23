@@ -37,7 +37,7 @@ import sys
 import threading
 import warnings
 from collections import OrderedDict, deque
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
@@ -83,10 +83,8 @@ from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.watch import (
     DEFAULT_CHANNEL_LIMIT,
     DEFAULT_SAMPLES_PER_CHANNEL,
-    LayerStatsSnapshot,
     WatchAccumulator,
     WatchSnapshot,
-    single_batch_stats,
 )
 
 if TYPE_CHECKING:
@@ -298,12 +296,6 @@ class Session:
         self._original_forward: object | None = None
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
-        # Whether watched layers fold their batches into the running stats. The
-        # top bar's stats toggle flips it: off, watched cards still render in the
-        # main view, but no batch is accumulated (and non-publishing batches skip
-        # the capture-mode hook install they'd otherwise pay for stats). Existing
-        # stats are kept — toggling back on resumes adding to them.
-        self._stats_collecting = True
         self._watch_accumulator = WatchAccumulator()
         # Per-channel watch caps (GPU VRAM); the accumulator defaults already
         # match, so no initial `configure` flush is needed.
@@ -584,28 +576,6 @@ class Session:
             self._watch_version += 1
         self._watch_accumulator.forget_layer(layer)
 
-    @property
-    def stats_collecting(self) -> bool:
-        """Whether watched layers fold their batches into the running stats."""
-        return self._stats_collecting
-
-    def set_stats_collecting(self, value: bool) -> None:
-        """Enable or disable running-stats collection for watched layers.
-
-        Off, watched layers stay visible in the main view but no batch is
-        accumulated — non-publishing batches also skip the capture-mode hook
-        install they'd otherwise pay just for stats. Already-collected stats
-        are preserved, so toggling back on resumes adding to them.
-        """
-        with self._cv:
-            self._stats_collecting = bool(value)
-
-    def toggle_stats_collecting(self) -> bool:
-        """Flip stats collection and return the new state."""
-        with self._cv:
-            self._stats_collecting = not self._stats_collecting
-            return self._stats_collecting
-
     def watch_snapshot(self, *, include_patches: bool = True) -> WatchSnapshot:
         """Snapshot of all currently-watched layers' stats.
 
@@ -643,47 +613,6 @@ class Session:
             for key, layer_snap in snap.stats.items()
         }
         return WatchSnapshot(stats=stats)
-
-    def current_batch_stats(
-        self, *, layers: Iterable[str], include_patches: bool = True
-    ) -> WatchSnapshot:
-        """Stats computed directly from the last published batch snapshot.
-
-        Backs the `/stats` page's "Current batch" view. Unlike
-        `watch_snapshot` — running aggregates over watched layers only — this
-        reads the published `BatchSnapshot`, so it covers *any* requested
-        layer (watched or not) for the one most recently captured batch. The
-        result is keyed by the snapshot's own `(phase, epoch)` and shaped like
-        a `WatchSnapshot` so the UI renders it through the same path. Returns
-        an empty snapshot before any batch has been captured.
-        """
-        snap = self._snapshot
-        if snap is None:
-            return WatchSnapshot()
-        perf = self._watch_performance
-        channel_limit = perf.channel_limit if perf.channel_limit_enabled else None
-        patch_source = (
-            self._image_like_input(snap.activations) if include_patches else None
-        )
-        pos = snap.position
-        out: dict[tuple[str, str, int], LayerStatsSnapshot] = {}
-        for layer in layers:
-            activation = snap.activations.get(layer)
-            gradient = snap.activation_gradients.get(layer)
-            if activation is None and gradient is None:
-                continue
-            out[(layer, pos.phase, pos.epoch)] = single_batch_stats(
-                layer=layer,
-                phase=pos.phase,
-                epoch=pos.epoch,
-                activation=activation,
-                gradient=gradient,
-                patch_source=patch_source,
-                channel_limit=channel_limit,
-                samples_per_channel=perf.samples_per_channel,
-                include_patches=include_patches,
-            )
-        return WatchSnapshot(stats=out)
 
     @property
     def probe_result(self) -> ProbeResult | None:
@@ -1618,23 +1547,15 @@ class Session:
                 )
 
     def _patch_source_input(self) -> Tensor | None:
-        """The live forward input to crop extreme-activation patches from."""
-        return self._image_like_input(self._activations)
+        """The forward input to crop extreme-activation patches from.
 
-    def _image_like_input(
-        self, activations: Mapping[str, Tensor]
-    ) -> Tensor | None:
-        """The input to crop extreme-activation patches from, from `activations`.
-
-        Prefers the first image-like input (4D with 1 or 3 channels); falls
-        back to any 4D input so `PatchAccumulator.update` can apply its own
-        guards. `None` when the model takes no 4D input. Shared by the live
-        watch path (`_activations`) and the "Current batch" view (a snapshot's
-        activation dict).
+        Prefers the first image-like input (4D with 1 or 3 channels);
+        falls back to any 4D input so `PatchAccumulator.update` can apply
+        its own guards. `None` when the model takes no 4D input.
         """
         fallback: Tensor | None = None
         for name in self._input_names:
-            t = activations.get(name)
+            t = self._activations.get(name)
             if not isinstance(t, Tensor) or t.ndim != 4:
                 continue
             if t.shape[1] in (1, 3):
@@ -1943,9 +1864,7 @@ class _BatchContext:
                     self._session._take_pending_jump()
                 raise TimeTravelJump(jump_epoch)
         self._stats_only = (
-            not self._publishes
-            and bool(self._session._watched_layers)
-            and self._session._stats_collecting
+            not self._publishes and bool(self._session._watched_layers)
         )
         # Publishing, frequency-update, stats-only, and debug-check batches use
         # the same hook installation: full fx interpreter (or full per-module
@@ -1978,11 +1897,7 @@ class _BatchContext:
             # `remove_hooks` is then a no-op (it is idempotent) — its job is to
             # cover the path where `_update_watch_stats` raised before it ran.
             try:
-                if (
-                    exc is None
-                    and self._session._watched_layers
-                    and self._session._stats_collecting
-                ):
+                if exc is None and self._session._watched_layers:
                     self._session._update_watch_stats(self._position)
                 if exc is None and self._dist_reduce:
                     # Collective: every rank folds its shard's accumulated
