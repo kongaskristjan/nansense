@@ -239,6 +239,17 @@ _EXPERIMENT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
 }
 
 
+def _coerce_number(spec: _ExperimentParam, *candidates: object) -> int | float:
+    """The first numeric `candidate` cast to the spec's type. A cleared number
+    field reads back from NiceGUI as None, so callers pass the widget value, the
+    persisted value and finally the always-numeric default — the cast then can
+    never see a None."""
+    for candidate in candidates:
+        if isinstance(candidate, (int, float)):
+            return int(candidate) if spec.kind == "int" else float(candidate)
+    raise AssertionError(f"no numeric value for {spec.key!r}")  # default is numeric
+
+
 def _experiment_status(result: ExperimentResult) -> str:
     state = "running"
     if result.done:
@@ -362,10 +373,11 @@ def _build_experiment_page(
         for spec in _EXPERIMENT_PARAMS[state.kind]:
             value: object = getattr(widgets.get(spec.key), "value", None)
             if spec.kind in ("int", "float"):
-                if not isinstance(value, (int, float)):
-                    value = state.values.get(spec.key, spec.default)
-                assert isinstance(value, (int, float))  # numeric specs only
-                params[spec.key] = int(value) if spec.kind == "int" else float(value)
+                # `run` blocks the call while a numeric field is empty; the
+                # persisted value / numeric-default fallbacks guard the rest.
+                params[spec.key] = _coerce_number(
+                    spec, value, state.values.get(spec.key), spec.default
+                )
             elif spec.kind == "bool":
                 params[spec.key] = bool(value)
             else:
@@ -373,6 +385,8 @@ def _build_experiment_page(
         return params
 
     def run() -> None:
+        if _refresh_param_error():  # an empty/non-numeric field — don't run
+            return
         if state.my_seq is not None:  # a re-run replaces this page's request
             session.cancel_experiment(state.my_seq)
         state.my_seq = session.register_auto_experiment(
@@ -509,6 +523,11 @@ def _build_experiment_page(
                     .classes("w-full")
                 )
                 params_pane = ui.column().classes("w-full gap-2 p-0")
+                # Flags an empty / non-numeric number field (which would
+                # otherwise read back as None and crash the run).
+                param_error_label = ui.label("").classes(
+                    "text-xs text-red-600 whitespace-normal leading-snug"
+                )
                 overlay_switch = (
                     ui.switch("Overlay on input", value=state.overlay, on_change=on_overlay_change)
                     .props("dense")
@@ -598,10 +617,35 @@ def _build_experiment_page(
             return
         sample_widget.set_visibility(getattr(start_widget, "value", None) == "sample")
 
+    def _invalid_number_fields() -> list[str]:
+        """Labels of numeric params whose widget holds no usable number — an
+        empty or non-numeric field reads back from NiceGUI as None."""
+        invalid: list[str] = []
+        for spec in _EXPERIMENT_PARAMS[state.kind]:
+            if spec.kind not in ("int", "float"):
+                continue
+            value = getattr(widgets.get(spec.key), "value", None)
+            if not isinstance(value, (int, float)):
+                invalid.append(spec.label)
+        return invalid
+
+    def _refresh_param_error() -> list[str]:
+        """Sync the red hint with the current fields; return the invalid ones."""
+        invalid = _invalid_number_fields()
+        param_error_label.text = (
+            "Enter a number for: " + ", ".join(invalid) if invalid else ""
+        )
+        return invalid
+
     def _on_param_change(key: str, widget: ui.element) -> None:
-        state.values[key] = getattr(widget, "value", None)
-        if key == "start":
-            _sync_sample_visibility()
+        value = getattr(widget, "value", None)
+        # A cleared / non-numeric number field reads back as None; keep the last
+        # good value rather than persisting it — `run` reports it as a red hint.
+        if not (isinstance(widget, ui.number) and not isinstance(value, (int, float))):
+            state.values[key] = value
+            if key == "start":
+                _sync_sample_visibility()
+        _refresh_param_error()
         schedule_run()
 
     def rebuild_params() -> None:
