@@ -122,6 +122,7 @@ def _build_stats_page(
     layer_names: list[str],
     selected_layer: str = "",
     *,
+    start_current_batch: bool = False,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
@@ -132,7 +133,14 @@ def _build_stats_page(
     which phase (train / val / …) the cards show, and pick which watched
     layer to render — one named layer (the default, which keeps the page
     fast when many layers are watched) or, while fewer than `_ALL_LAYERS_MAX`
-    are watched, every watched layer at once. The view and phase apply in
+    are watched, every watched layer at once.
+
+    The Phase dropdown's last entry, "Current batch", is special: it shows
+    stats computed directly from the last captured `BatchSnapshot` rather than
+    the running watch aggregates, so it works for *any* layer whether or not
+    it is watched — and the Layer dropdown then offers every layer, not just
+    the watched ones. `start_current_batch` opens the page already on it (the
+    watch menu's per-layer "Current batch" links). The view and phase apply in
     both views, one at a time:
 
     - HISTOGRAM (the default) — one plotly figure per tensor kind for the
@@ -167,7 +175,13 @@ def _build_stats_page(
 
     ui.on(_HOVER_EVENT, _dispatch_hover)
     state = _WatchPageState(
-        selected_phase=phase_names[0] if phase_names else "",
+        # "Current batch" when the caller asked for it (the watch menu's
+        # per-layer links), else the schedule's first phase.
+        selected_phase=(
+            _PHASE_CURRENT_BATCH
+            if start_current_batch
+            else (phase_names[0] if phase_names else "")
+        ),
         # Seed the layer picked by the caller (e.g. a `?layer=` link from the
         # main page's watch menu). Reconciliation drops it back to the first
         # watched layer if it isn't currently watched.
@@ -227,6 +241,10 @@ def _build_stats_page(
     step_until_custom = _build_step_until_custom_dialog(session)
 
     def record_view() -> RecordedView | None:
+        # The recorder renders from the running watch accumulators, which the
+        # "Current batch" view doesn't use — so that view isn't recordable.
+        if state.selected_phase == _PHASE_CURRENT_BATCH:
+            return None
         # Record exactly the cards on screen — the selected layer, or every
         # watched layer while "all" is showing.
         ordered = _watched_in_order(layer_names, session.watched_layers)
@@ -292,14 +310,35 @@ def _build_stats_page(
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
                 ).tooltip("What each layer card shows")
+                # Phases, then "Current batch" as the last entry. A scoped
+                # `option` slot draws a divider above it (Quasar has no native
+                # per-option separator) while keeping default selection via
+                # `itemProps`.
+                phase_options = {p: p for p in phase_names}
+                phase_options[_PHASE_CURRENT_BATCH] = _PHASE_CURRENT_BATCH_LABEL
                 phase_select = ui.select(
-                    phase_names,
+                    phase_options,
                     label="Phase",
                     value=state.selected_phase,
                     on_change=lambda e: set_phase(e.value),
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
-                ).tooltip("Which phase the cards show")
+                ).tooltip(
+                    "Which phase the cards show — or the last captured batch's "
+                    "stats for any layer (watched or not)"
+                )
+                # The divider keys off the label, not the value: NiceGUI sets
+                # each option's `value` to its integer index, so only the label
+                # carries our sentinel text.
+                phase_select.add_slot(
+                    "option",
+                    "<q-separator v-if=\"props.opt.label === "
+                    f"'{_PHASE_CURRENT_BATCH_LABEL}'\" />"
+                    '<q-item v-bind="props.itemProps">'
+                    "<q-item-section><q-item-label>"
+                    "{{ props.opt.label }}"
+                    "</q-item-label></q-item-section></q-item>",
+                )
                 layer_select = ui.select(
                     {},
                     label="Layer",
@@ -307,9 +346,9 @@ def _build_stats_page(
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
                 ).tooltip(
-                    "Which watched layer's cards to show — one keeps the page "
-                    f'fast; "all" is offered with fewer than {_ALL_LAYERS_MAX} '
-                    "layers watched"
+                    "Which layer's cards to show — one keeps the page fast. In "
+                    "a phase, the watched layers; in Current batch, any layer. "
+                    f'"all" is offered with fewer than {_ALL_LAYERS_MAX} options'
                 )
                 hist_boxes: list[ui.checkbox] = []
                 minmax_boxes: list[DisableableElement] = []
@@ -391,7 +430,9 @@ def _build_stats_page(
         re-enter `set_layer`), and disables the dropdown when nothing is
         watched. Cheap enough to call every refresh tick.
         """
-        ordered = _watched_in_order(layer_names, session.watched_layers)
+        ordered = _selectable_layers(
+            state.selected_phase, layer_names, session.watched_layers
+        )
         state.selected_layer = _reconcile_selected_layer(
             state.selected_layer, ordered
         )
@@ -410,7 +451,9 @@ def _build_stats_page(
         # would grow on every rebuild.
         hover_registry.clear()
         body_container.clear()
-        ordered = _watched_in_order(layer_names, session.watched_layers)
+        ordered = _selectable_layers(
+            state.selected_phase, layer_names, session.watched_layers
+        )
         with body_container:
             if not ordered:
                 with ui.column().classes("items-center gap-2 py-12 w-full"):
@@ -452,23 +495,34 @@ def _build_stats_page(
                     f"{n} layer{'' if n == 1 else 's'}"
                 )
                 sync_layer_select()
-                ordered = _watched_in_order(layer_names, watched)
+                ordered = _selectable_layers(
+                    state.selected_phase, layer_names, watched
+                )
                 desired = _visible_layers(state.selected_layer, ordered)
                 if list(layer_panels) != desired:
                     rebuild_cards()
                 panels = dict(layer_panels)
                 minmax = state.view_minmax
+                current_batch = state.selected_phase == _PHASE_CURRENT_BATCH
 
                 def compute(
                     panels: dict[str, _WatchLayerPanel] = panels,
                     minmax: bool = minmax,
+                    current_batch: bool = current_batch,
                 ) -> tuple[
                     WatchSnapshot,
                     dict[str, tuple[tuple[object, ...], str] | None],
                 ]:
-                    # The GPU→CPU patch sync is only paid when the MIN/MAX
-                    # view will actually consume it.
-                    snap = session.watch_snapshot(include_patches=minmax)
+                    # "Current batch" computes stats from the last snapshot for
+                    # exactly the visible layers; a phase reads the running
+                    # watch aggregates. Either way the patch GPU→CPU work is
+                    # only paid when the MIN/MAX view will consume it.
+                    if current_batch:
+                        snap = session.current_batch_stats(
+                            layers=list(panels), include_patches=minmax
+                        )
+                    else:
+                        snap = session.watch_snapshot(include_patches=minmax)
                     grids: dict[str, tuple[tuple[object, ...], str] | None] = {}
                     if minmax:
                         for name, panel in panels.items():
@@ -1169,10 +1223,16 @@ class _WatchLayerPanel:
         self._grad.update(per_phase)
 
     def _phase_view(self, snap: WatchSnapshot) -> dict[str, LayerStatsSnapshot]:
-        """The layer's latest-epoch stats, narrowed to the selected phase."""
-        return _filter_phase(
-            snap.latest_per_phase(self.name), self._state.selected_phase
-        )
+        """The layer's stats for the current selection.
+
+        For a phase, the latest-epoch stats narrowed to it. For "Current
+        batch", `snap` already holds exactly one entry (keyed by the captured
+        batch's own phase/epoch), so it's returned unfiltered.
+        """
+        per_phase = snap.latest_per_phase(self.name)
+        if self._state.selected_phase == _PHASE_CURRENT_BATCH:
+            return per_phase
+        return _filter_phase(per_phase, self._state.selected_phase)
 
     def prepare_grids(
         self, snap: WatchSnapshot
@@ -1212,6 +1272,13 @@ def _filter_phase(
 _VIEW_HISTOGRAM: str = "HISTOGRAM"
 _VIEW_MINMAX: str = "MIN/MAX"
 
+# Phase dropdown: the sentinel value (and label) of the "Current batch" entry,
+# which shows the last captured batch's stats for any layer instead of a
+# phase's running aggregate. The value is a plain-but-unlikely string (not a
+# control char) so it can be compared in the option slot's Vue template.
+_PHASE_CURRENT_BATCH: str = "::current-batch::"
+_PHASE_CURRENT_BATCH_LABEL: str = "Current batch"
+
 # Layer dropdown: the sentinel value of the "all watched layers" entry (a NUL
 # prefix keeps it distinct from any real layer name) and its display label.
 _LAYER_ALL: str = "\x00all"
@@ -1231,6 +1298,20 @@ def _watched_in_order(
     architecture order the cards have always rendered in).
     """
     return [n for n in layer_names if n in watched]
+
+
+def _selectable_layers(
+    selected_phase: str, layer_names: list[str], watched: frozenset[str]
+) -> list[str]:
+    """The layers the Layer dropdown offers for the current phase selection.
+
+    "Current batch" stats come from the snapshot, which covers every layer, so
+    any layer is selectable there; a real phase only has running stats for the
+    watched layers. Either way the order is the stable graph order.
+    """
+    if selected_phase == _PHASE_CURRENT_BATCH:
+        return list(layer_names)
+    return _watched_in_order(layer_names, watched)
 
 
 def _all_layers_available(watched_count: int) -> bool:

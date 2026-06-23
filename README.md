@@ -124,7 +124,9 @@ it's generally better to watch only a number of layers at a
 time. Open a watched layer's **stats view** for the deep dive:
 a histogram of its activation and gradient values over the epoch (down to a
 single channel), and a gallery of the input patches that drove each channel to
-its most extreme responses.
+its most extreme responses. Its **Current batch** phase shows the last captured
+batch's distribution for *any* layer, watched or not, and the top bar's stats
+button pauses or resumes collection without hiding the cards.
 
 ### Running experiments
 

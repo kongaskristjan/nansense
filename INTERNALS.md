@@ -306,8 +306,9 @@ renders free.
 ## Watch accumulators
 
 Independently of the snapshot path, the session can collect running
-statistics for any subset of layer names — driven by the eye-icon
-toggle on the main page, surfaced on the `/stats` deep-dive page.
+statistics for any subset of layer names — driven by clicking nodes in
+the main page's architecture diagram, surfaced on the `/stats` deep-dive
+page.
 
 `Session.watch(name)` / `unwatch(name)` mutate the `_watched_layers`
 set under `_cv`. The `Session.watched_layers` snapshot is a
@@ -324,6 +325,17 @@ snapshot path uses — so every name in `layer_names` lands in
 between capture and stats-only batches is that capture also publishes
 a snapshot and pauses; stats-only batches just compute stats and let
 the training loop continue.
+
+`Session.set_stats_collecting(False)` (the top bar's stats toggle) pauses
+this without unwatching anything: it gates both `_stats_only` (so a
+non-publishing batch no longer installs hooks just for stats — the
+capture-mode cost above disappears) and the `_update_watch_stats` call at
+`__exit__` (so even a capture batch, which installs hooks for its snapshot,
+folds nothing in). Watched cards therefore stay visible and keep rendering
+from the published snapshot while the running aggregates freeze; toggling
+back on resumes adding to the existing buckets. In distributed runs the flag
+also drops the reduce: `sync_batch_control` only sets the leader's reduce
+flag when `publish and watched and _stats_collecting`.
 
 This is a deliberate trade: when watching is active, the user is
 already paying capture-mode forward cost on every batch (fx
@@ -398,6 +410,18 @@ least one layer watched, every batch pays capture-mode cost — that's
 the cost of exposing fx intermediates and inputs to the stats
 collector without a parallel implementation. Snapshot timeline and
 pause behaviour are unaffected on non-watching sessions.
+
+**Current-batch stats.** The same `WatchSnapshot` shape can be produced for
+*one* batch without any running accumulator: `watch.single_batch_stats` folds
+a single tensor through throwaway `TensorAccumulator` / `PatchAccumulator`
+instances, and `Session.current_batch_stats(layers=...)` calls it for each
+requested layer using the published `BatchSnapshot`'s own activations,
+gradients, and image input (`_image_like_input`, the snapshot-dict twin of
+`_patch_source_input`). Because the snapshot CPU-clones *every* layer (not
+just the watched ones), this works for any layer regardless of the watched
+set — it backs the `/stats` page's "Current batch" phase. The caps come from
+`watch_performance`, so per-channel rows match the running path; the result
+keys under the snapshot's own `(phase, epoch)`.
 
 ### Extreme input patches (`nansense.patches`)
 
@@ -1142,6 +1166,18 @@ out over a shared `ThreadPoolExecutor` (the torch/numpy/PIL work releases the
 GIL) into a `_RenderCache` keyed `(name, kind, sample_idx)` and invalidated by
 render-source identity, so re-showing a card or a second tab is a dict hit.
 
+The top-bar watch/stats chip shows the watched-layer count behind a
+`bar_chart` icon whose colour reflects `session.stats_collecting` —
+`text-green-600` when collecting, `text-red-600` + a `nansense-strike` overlay
+(a CSS diagonal line, since there's no `bar_chart_off` glyph; the slashed look
+of the per-card Unwatch button's `visibility_off`) when paused. `sync_stats_icon`
+drives it on init, on toggle, and on the 200 ms tick so the state stays in step
+across tabs. Its menu carries *Watch all layers* (behind the perf-warning
+dialog), *Clear all watched layers*, *Toggle collecting stats*
+(`session.toggle_stats_collecting`), a *Current batch* submenu listing every
+layer (each a `/stats?layer=…&phase=current` anchor), and the watched-layer
+list (each a plain-phase `/stats?layer=…` anchor).
+
 The right sidebar (`InputPanel`) shows the input image plus the Pin /
 probe-mode / Perturb controls. Two non-obvious points: NiceGUI delivers click
 coordinates in the image's **native** pixel space (the handler clamps into
@@ -1172,6 +1208,19 @@ dirty rather than queueing one render per click), patch grids are always PNG (a
 wide layer's BMP grid is multi-MB and stalls the transport), and
 `watch_snapshot(include_patches=False)` skips the patch GPU→CPU copy while the
 histogram view is showing.
+
+The Phase dropdown's last entry, **Current batch** (a sentinel value with a
+divider drawn above it by an `option` scoped slot — Quasar has no native
+per-option separator, and the slot keys off the *label* because NiceGUI sets
+each option's `value` to its integer index), switches the data source: the
+refresh's worker thread calls `session.current_batch_stats(layers=...)`
+instead of `watch_snapshot`, and `_WatchLayerPanel._phase_view` returns its
+single snapshot-keyed entry unfiltered. `_selectable_layers` then offers
+*every* layer in the Layer dropdown (not just the watched ones), since the
+snapshot covers them all; a `?phase=current` query param opens the page
+already on it (the watch menu's per-layer links). `record_view` returns
+`None` in this mode — the recorders render from the running accumulators,
+which it doesn't use.
 
 The histogram view's one load-bearing design choice: routine ticks **restyle
 the Plotly figure in place** (`Plotly.update`) — only bar counts change, and an
