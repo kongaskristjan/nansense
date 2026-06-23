@@ -91,6 +91,18 @@ def test_resnet_deep_is_fx_traceable() -> None:
     assert torch.allclose(traced(x), model(x))
 
 
+def test_resnet_per_stage_block_counts() -> None:
+    """A per-stage sequence sets each stage's block count independently."""
+    model = PreActResNet(blocks_per_stage=[1, 2, 4], num_stages=3)
+    counts = [len(getattr(model, f"stage{i}")) for i in range(1, 4)]
+    assert counts == [1, 2, 4]
+
+
+def test_resnet_rejects_mismatched_blocks_per_stage() -> None:
+    with pytest.raises(ValueError):
+        PreActResNet(blocks_per_stage=[1, 2], num_stages=3)
+
+
 def test_resnet_rejects_zero_stages() -> None:
     with pytest.raises(ValueError):
         PreActResNet(num_stages=0)

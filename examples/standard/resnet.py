@@ -11,6 +11,8 @@ count stays essentially identical to the original CIFAR ResNet-20.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 from torch import Tensor, nn
 
@@ -56,12 +58,14 @@ class PreActBlock(nn.Module):
 
 
 class PreActResNet(nn.Module):
-    """Pre-activation ResNet with `blocks_per_stage` blocks per stage.
+    """Pre-activation ResNet with a configurable number of blocks per stage.
 
     Stages are registered as `stage1` .. `stage{num_stages}`; the first runs
     at stride 1 and every later one downsamples by 2, doubling the channel
-    count (16, 32, 64, ...). Total depth = 2 * num_stages * blocks_per_stage
-    + 2 (e.g. ResNet-20 -> 3 stages of 3 blocks).
+    count (16, 32, 64, ...). `blocks_per_stage` is either a single int applied
+    to every stage or a per-stage sequence of length `num_stages` (e.g. a
+    deeper final stage). With a uniform int, total depth is
+    2 * num_stages * blocks_per_stage + 2 (ResNet-20 -> 3 stages of 3 blocks).
     """
 
     STEM_CHANNELS: int = 16
@@ -69,13 +73,22 @@ class PreActResNet(nn.Module):
     def __init__(
         self,
         num_classes: int = 10,
-        blocks_per_stage: int = 3,
+        blocks_per_stage: int | Sequence[int] = 3,
         num_stages: int = 3,
         in_channels: int = 3,
     ) -> None:
         super().__init__()
         if num_stages < 1:
             raise ValueError(f"num_stages must be >= 1, got {num_stages}")
+        blocks = (
+            [blocks_per_stage] * num_stages
+            if isinstance(blocks_per_stage, int)
+            else list(blocks_per_stage)
+        )
+        if len(blocks) != num_stages:
+            raise ValueError(
+                f"blocks_per_stage must have {num_stages} entries, got {len(blocks)}"
+            )
         self.num_stages = num_stages
         self.stem = nn.Conv2d(
             in_channels, self.STEM_CHANNELS, kernel_size=3, stride=1, padding=1, bias=False
@@ -86,7 +99,7 @@ class PreActResNet(nn.Module):
             self.add_module(
                 f"stage{i + 1}",
                 self._make_stage(
-                    in_channels, out_channels, blocks_per_stage, stride=1 if i == 0 else 2
+                    in_channels, out_channels, blocks[i], stride=1 if i == 0 else 2
                 ),
             )
             in_channels = out_channels
