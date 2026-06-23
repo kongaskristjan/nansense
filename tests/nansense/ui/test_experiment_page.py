@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from tests.nansense.helpers import _frame_snapshot
@@ -46,6 +47,35 @@ def test_experiment_descriptions_cover_every_kind() -> None:
         assert short and long  # both a tooltip and a pane description
     # Neuron Gradient calls out its grainy maps (point 4).
     assert "grain" in _EXPERIMENT_DESCRIPTIONS["neuron_gradient"][1].lower()
+
+
+@pytest.mark.parametrize(
+    ("kind", "candidates", "expected"),
+    [
+        ("int", (3.7,), 3),  # cast to the spec's type
+        ("float", (2,), 2.0),
+        ("int", (None, 5), 5),  # a cleared field (None) skips to the next candidate
+        ("float", (None, None, 0.5), 0.5),  # falls through to the numeric default
+        ("int", ("abc", 4), 4),  # a non-numeric value is skipped too
+    ],
+)
+def test_coerce_number_skips_non_numeric_candidates(
+    kind: str, candidates: tuple[object, ...], expected: float
+) -> None:
+    from nansense.ui.experiment_page import _coerce_number, _ExperimentParam
+
+    spec = _ExperimentParam("k", "K", kind, 0)
+    result = _coerce_number(spec, *candidates)
+    assert result == expected
+    assert isinstance(result, int if kind == "int" else float)
+
+
+def test_coerce_number_requires_a_numeric_candidate() -> None:
+    from nansense.ui.experiment_page import _coerce_number, _ExperimentParam
+
+    spec = _ExperimentParam("k", "K", "int", 0)
+    with pytest.raises(AssertionError):
+        _coerce_number(spec, None, "x")  # would otherwise crash the run with a cast
 
 
 def test_layer_channel_count_reads_snapshot_activation() -> None:
