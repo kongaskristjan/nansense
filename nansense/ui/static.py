@@ -408,25 +408,3 @@ _STRIP_MARKER_CSS: str = """
   }
 </style>
 """
-
-
-# A diagonal "slash" across an icon, drawn in the icon's own color
-# (`currentColor`). There is no Material `bar_chart_off` glyph, so the stats
-# toggle in the top bar marks "not collecting" by adding this over the chart
-# icon — the slashed-eye look of the Unwatch button's `visibility_off`.
-_STATS_TOGGLE_CSS: str = """
-<style>
-  .nansense-strike { position: relative; }
-  .nansense-strike::after {
-    content: "";
-    position: absolute;
-    left: -2px;
-    right: -2px;
-    top: 50%;
-    border-top: 2px solid currentColor;
-    transform: rotate(-45deg);
-    transform-origin: center;
-    pointer-events: none;
-  }
-</style>
-"""

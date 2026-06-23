@@ -36,7 +36,6 @@ from nansense.ui.render import probe_act_tensor, render_image, render_strip, ten
 from nansense.ui.static import (
     _ARCHITECTURE_CLICK_CSS,
     _ARCHITECTURE_CLICK_JS,
-    _STATS_TOGGLE_CSS,
     _STRIP_MARKER_CSS,
 )
 from nansense.ui.top_bar import (
@@ -184,7 +183,6 @@ def _build_page(
     _install_panel_resize()
     ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
     ui.add_head_html(_STRIP_MARKER_CSS)
-    ui.add_head_html(_STATS_TOGGLE_CSS)
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
     ui.add_body_html(_layer_info_script(session.layer_info, slugs))
 
@@ -242,10 +240,11 @@ def _build_page(
             watch_list_container: ui.element
             with watch_chip:
                 # Icon and count are built as button children (rather than the
-                # button's `icon=` / text) so the stats icon carries its own
-                # colour and the "not collecting" strike independently of the
-                # amber count. `sync_stats_icon` drives its appearance.
-                stats_icon = ui.icon("bar_chart").classes("text-base")
+                # button's `icon=` / text) so the eye icon carries its own colour
+                # independently of the amber count. `sync_stats_icon` swaps it
+                # between `visibility` (green, collecting) and `visibility_off`
+                # (red, paused) — the slashed eye of the per-card Unwatch button.
+                stats_icon = ui.icon("visibility").classes("text-base")
                 watch_count_label = ui.label(
                     str(len(session.watched_layers))
                 ).classes("ml-1")
@@ -304,27 +303,28 @@ def _build_page(
 
         _add_error_banner(session)
 
-        def sync_stats_icon() -> None:
-            """Colour the top-bar stats icon from the collection state.
+        # The collection state last drawn into the icon, so the 200 ms tick only
+        # touches the DOM when it actually flips (and never re-adds a tooltip —
+        # an earlier per-tick `.tooltip()` here stacked dozens of them).
+        stats_shown: bool | None = None
 
-            Green = collecting (the default), red + diagonal strike = paused
-            (the slashed look of the Unwatch button's `visibility_off`). Driven
-            on a timer too, so a toggle in one tab is reflected in every other.
+        def sync_stats_icon() -> None:
+            """Reflect the collection state in the top-bar eye icon.
+
+            `visibility` in green while collecting, the slashed `visibility_off`
+            in red while paused (the per-card Unwatch button's glyph). Called on
+            init, on toggle, and on the 200 ms tick so a toggle in one tab shows
+            in every other — but it rewrites the icon only when the state flips.
             """
+            nonlocal stats_shown
             collecting = session.stats_collecting
+            if collecting == stats_shown:
+                return
+            stats_shown = collecting
+            stats_icon.set_name("visibility" if collecting else "visibility_off")
             stats_icon.classes(
-                remove="text-green-600 text-red-600 nansense-strike",
-                add=(
-                    "text-green-600"
-                    if collecting
-                    else "text-red-600 nansense-strike"
-                ),
-            )
-            stats_icon.tooltip(
-                "Collecting stats for watched layers"
-                if collecting
-                else "Stats collection paused — watched cards still render, "
-                "but no batch is accumulated"
+                remove="text-green-600 text-red-600",
+                add="text-green-600" if collecting else "text-red-600",
             )
 
         def toggle_stats() -> None:
