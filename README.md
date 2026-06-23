@@ -18,6 +18,14 @@ Here's how *nansense* can help:
 
 You can easily try out the [examples](#run-examples) yourself. Or wire it into your own training loop. Adding nansense support is just a few lines of code. Here's an example for integrating with [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and with [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
+## How is this different from wandb or TensorBoard?
+
+Loggers like Weights & Biases and TensorBoard answer *what* your metrics did — they record scalar curves of loss and accuracy that you scroll through after the run. Nansense answers *why*: it pauses inside the live training loop and lets you step batch-by-batch and time-travel through the actual activations, gradients, weights and optimizer state of every layer. You can even run experiments on the paused model — deep dream, or Captum attributions like Grad-CAM — to probe what a given neuron has learned.
+
+This is a different approach, not a richer log. A single batch's activations and gradients can run to gigabytes, so persisting them every step the way a logger persists scalars simply isn't feasible. Nansense sidesteps that by pausing and inspecting the tensors in memory, on demand, instead of writing everything to disk.
+
+Think interactive debugger, not metrics dashboard. The two are complementary — keep logging your curves, and reach for nansense when one of them goes wrong and you need to look inside.
+
 ## Showcase
 
 ### Visualize activations and gradients throughout training
