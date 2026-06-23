@@ -745,3 +745,50 @@ class WatchAccumulator:
                 patches=stats.patches.snapshot() if include_patches else None,
             )
         return WatchSnapshot(stats=out)
+
+
+def single_batch_stats(
+    *,
+    layer: str,
+    phase: str,
+    epoch: int,
+    activation: Tensor | None,
+    gradient: Tensor | None,
+    patch_source: Tensor | None,
+    channel_limit: int | None,
+    samples_per_channel: int,
+    include_patches: bool,
+) -> LayerStatsSnapshot:
+    """Stats for a single batch's tensors, computed on the fly.
+
+    Folds exactly one batch's activation (and gradient, and image patches)
+    into throwaway accumulators — the `/stats` page's "Current batch" view,
+    which reads the published `BatchSnapshot` so it works for *any* layer
+    whether or not it is watched (the running `WatchAccumulator` only covers
+    watched layers). Reusing the same accumulators the watch path uses means
+    the result renders through the identical histogram / MIN-MAX code.
+    """
+    act_acc = TensorAccumulator()
+    if activation is not None:
+        act_acc.update(activation, channel_limit=channel_limit)
+    grad_acc = TensorAccumulator()
+    if gradient is not None:
+        grad_acc.update(gradient, channel_limit=channel_limit)
+    patches: PatchSnapshot | None = None
+    if include_patches and activation is not None and patch_source is not None:
+        patch_acc = PatchAccumulator()
+        patch_acc.update(
+            act=activation,
+            x=patch_source,
+            channel_limit=channel_limit,
+            n_per_channel=samples_per_channel,
+        )
+        patches = patch_acc.snapshot()
+    return LayerStatsSnapshot(
+        layer=layer,
+        phase=phase,
+        epoch=epoch,
+        activations=act_acc.snapshot(),
+        gradients=grad_acc.snapshot(),
+        patches=patches,
+    )

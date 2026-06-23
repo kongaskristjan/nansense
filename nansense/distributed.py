@@ -184,7 +184,7 @@ def sync_batch_control(
         with session._cv:
             version = session._watch_version
             watched = sorted(session._watched_layers)
-        flag = publish and bool(watched)
+        flag = publish and bool(watched) and session._stats_collecting
         ctx.broadcast_control(
             publish=flag, version=version, watched=watched, jump_epoch=jump_epoch
         )
