@@ -1166,13 +1166,13 @@ out over a shared `ThreadPoolExecutor` (the torch/numpy/PIL work releases the
 GIL) into a `_RenderCache` keyed `(name, kind, sample_idx)` and invalidated by
 render-source identity, so re-showing a card or a second tab is a dict hit.
 
-The top-bar watch/stats chip shows the watched-layer count behind a
-`bar_chart` icon whose colour reflects `session.stats_collecting` —
-`text-green-600` when collecting, `text-red-600` + a `nansense-strike` overlay
-(a CSS diagonal line, since there's no `bar_chart_off` glyph; the slashed look
-of the per-card Unwatch button's `visibility_off`) when paused. `sync_stats_icon`
-drives it on init, on toggle, and on the 200 ms tick so the state stays in step
-across tabs. Its menu carries *Watch all layers* (behind the perf-warning
+The top-bar watch/stats chip shows the watched-layer count behind an eye icon
+whose glyph and colour reflect `session.stats_collecting`: green `visibility`
+when collecting, red `visibility_off` (the slashed eye of the per-card Unwatch
+button) when paused. `sync_stats_icon` runs on init, on toggle, and on the
+200 ms tick so a toggle in one tab shows in every other — but it rewrites the
+icon only when the state flips (a guard that also avoids re-adding a tooltip
+every tick). Its menu carries *Watch all layers* (behind the perf-warning
 dialog), *Clear all watched layers*, *Toggle collecting stats*
 (`session.toggle_stats_collecting`), a *Current batch* submenu listing every
 layer (each a `/stats?layer=…&phase=current` anchor), and the watched-layer
