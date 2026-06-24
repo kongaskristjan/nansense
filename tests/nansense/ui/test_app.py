@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import warnings
 
@@ -13,6 +14,7 @@ import torch.distributed as dist
 import nansense
 from nansense.ui import app
 from nansense.ui.app import (
+    _DropBenignNiceguiNoise,
     _announce,
     _announce_when_ready,
     _display_url,
@@ -190,3 +192,54 @@ def test_announce_when_ready_swallows_browser_backend_errors(
         timeout=0.0,
     )
     assert "┌" in capsys.readouterr().out  # banner printed despite the error
+
+
+def _nicegui_record(message: object) -> logging.LogRecord:
+    """A log record as `logging.Logger.exception`/`.warning` build it.
+
+    `message` may be a string or an exception instance — NiceGUI's global
+    handler (`app.handle_exception` → `log.exception`) logs the exception
+    object itself, so the record's message text is `str(exc)`.
+    """
+    return logging.LogRecord(
+        name="nicegui", level=logging.ERROR, pathname=__file__, lineno=0,
+        msg=message, args=(), exc_info=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Event listeners changed after initial definition",
+        # The per-connection `ui.timer` disconnect race, logged as the bare
+        # RuntimeError object exactly as NiceGUI's global handler emits it.
+        RuntimeError("The parent slot of the element has been deleted."),
+    ],
+)
+def test_benign_nicegui_noise_is_dropped(message: object) -> None:
+    """Both known-benign NiceGUI lines are filtered out of the run log."""
+    assert _DropBenignNiceguiNoise().filter(_nicegui_record(message)) is False
+
+
+def test_unrelated_nicegui_errors_still_pass() -> None:
+    """A genuine error must never be masked — only the listed lines are dropped."""
+    record = _nicegui_record(RuntimeError("the model exploded"))
+    assert _DropBenignNiceguiNoise().filter(record) is True
+
+
+def test_noise_filter_installed_on_nicegui_logger() -> None:
+    """Importing the module installs the filter on the `nicegui` logger — the
+    same logger `app.handle_exception` → `log.exception` routes to — so the
+    benign parent-slot teardown traceback is dropped end-to-end, while a real
+    error still passes (`Logger.filter` consults the logger's own filters)."""
+    logger = logging.getLogger("nicegui")
+    assert any(isinstance(f, _DropBenignNiceguiNoise) for f in logger.filters)
+    benign = _nicegui_record(
+        RuntimeError("The parent slot of the element has been deleted.")
+    )
+    real = _nicegui_record(RuntimeError("the model exploded"))
+    # `Logger.filter` returns a falsy value when a record is dropped and a
+    # truthy one when it passes (a bool on Python <3.12, the record itself on
+    # 3.12+), so assert truthiness rather than identity for version-robustness.
+    assert not logger.filter(benign)
+    assert logger.filter(real)

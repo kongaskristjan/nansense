@@ -54,17 +54,45 @@ from nansense.ui.stats_page import _build_stats_page
 from nansense.ui.weights_page import _build_weights_page
 
 
-class _DropListenerRerenderWarning(logging.Filter):
-    """Drop NiceGUI's browser-relayed "Event listeners changed after initial
-    definition" warning — adding listeners to live elements is routine here
-    (e.g. cards rebuilt against a new snapshot), and the warning would repeat
-    on every such update."""
+class _DropBenignNiceguiNoise(logging.Filter):
+    """Drop two benign NiceGUI log lines that would otherwise spam the run.
+
+    Both originate inside NiceGUI, are harmless here, and would repeat often
+    enough to bury real errors:
+
+    - *"Event listeners changed after initial definition"* — a browser-relayed
+      warning emitted whenever listeners are added to a live element, which is
+      routine here (e.g. cards rebuilt against a new snapshot).
+
+    - *"The parent slot of the element has been deleted"* — an unhandled
+      ``RuntimeError`` from NiceGUI's per-connection ``ui.timer`` machinery
+      (see this module's docstring on the polling timers). When a client goes
+      away — a page reload, a navigation, or an abandoned load that NiceGUI
+      later prunes — its element tree is torn down; a timer that was still
+      waiting to start (parked in ``Timer._can_start`` on ``client.connected()``)
+      is then woken by the client's deletion and walks straight into its
+      element's parent-slot context (``Timer._get_context``), whose weakref'd
+      slot is already gone. The error belongs to the connection that just left:
+      training and every still-connected client keep working. But it is raised
+      in NiceGUI's timer loop, *outside* our tick body and even before the
+      loop's own ``_should_stop`` guard, so neither our in-tick guards nor a
+      disconnect handler can pre-empt it — NiceGUI routes it through its global
+      handler (``app.handle_exception`` → ``log.exception``), which logs a full
+      traceback. Suppressing that one line is the only client-side lever; the
+      durable fix is upstream (guarding the timer's context acquisition).
+    """
+
+    _BENIGN: tuple[str, ...] = (
+        "Event listeners changed after initial definition",
+        "The parent slot of the element has been deleted",
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return "Event listeners changed after initial definition" not in record.getMessage()
+        message = record.getMessage()
+        return not any(noise in message for noise in self._BENIGN)
 
 
-logging.getLogger("nicegui").addFilter(_DropListenerRerenderWarning())
+logging.getLogger("nicegui").addFilter(_DropBenignNiceguiNoise())
 
 
 def _silence_reduce_op_future_warning() -> None:
