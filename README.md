@@ -4,27 +4,23 @@
 
 <p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
 
-<p align="center">
-  <img src="assets/showcase.gif" alt="nansense showcase" width="720">
-</p>
+![UI](assets/docs/ui.png)
 
 *Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 
 Here's how *nansense* can help:
 
 - **Deepen your intuition** — [visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
-- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and discover padding artifacts
+- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [discover padding artifacts](#padding-jump-target)
 - **Investigate failure modes** — [spot gradient underflow](#spot-gradient-underflow)
 
 You can easily try out the [examples](#run-examples) yourself. Or wire it into your own training loop. Adding nansense support is just a few lines of code. Here's an example for integrating with [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and with [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
 ## How is this different from wandb or TensorBoard?
 
-Loggers like Weights & Biases and TensorBoard answer *what* your metrics did — they record scalar curves of loss and accuracy that you scroll through after the run. Nansense answers *why*: it pauses inside the live training loop and lets you step batch-by-batch and time-travel through the actual activations, gradients, weights and optimizer state of every layer. You can even run experiments on the paused model — deep dream, or Captum attributions like Grad-CAM — to probe what a given neuron has learned.
+Loggers like Weights & Biases and TensorBoard answer *what* your metrics did — they record scalar curves of loss and accuracy that you scroll through after the run. Nansense tries to answer *why*: it pauses inside the live training loop and lets you step batch-by-batch and time-travel while inspecting the activations, gradients, weights and optimizer state of every layer. You can even run experiments on the paused model — deep dream, or Captum attributions like Grad-CAM — to probe what a given neuron has learned.
 
-This is a different approach, not a richer log. A single batch's activations and gradients can run to gigabytes, so persisting them every step the way a logger persists scalars simply isn't feasible. Nansense sidesteps that by pausing and inspecting the tensors in memory, on demand, instead of writing everything to disk.
-
-Think interactive debugger, not metrics dashboard. The two are complementary — keep logging your curves, and reach for nansense when one of them goes wrong and you need to look inside.
+Persisting all this data on disk is infeasible, as a single batch of activations and gradients can easily be several gigabytes. Nansense sidesteps that by pausing and inspecting the tensors on demand, instead of writing everything to disk.
 
 ## Showcase
 
@@ -33,6 +29,8 @@ Think interactive debugger, not metrics dashboard. The two are complementary —
 A layer's activations (top row) and gradients (bottom row) for a single input. Here, an image of a paraglider passes through an intermediate batch normalization layer. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
 
 ![Activations and gradients of an image of a paraglider.](assets/docs/activations_gradients.png)
+
+<a id="padding-jump-target"></a>
 
 Here's another example: Activations of a CIFAR10 layer, with the augmented input shown at the far right. The augmentation zero-pads the image, and that hard border lights up as strong edge activations ringing every channel — an artifact baked in by the padding. Maybe use reflection padding next time?
 
@@ -70,7 +68,7 @@ To measure the receptive field of a neuron, *nansense* has support for perturbin
 
 ### Spot gradient underflow
 
-Not every failure mode has a picture. In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range — below the dtype's smallest normal value — where precision drains toward zero and the layer quietly stops learning. nansense checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there — so you catch the stall instead of guessing.
+In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range — below the dtype's smallest normal value — where precision drains toward zero and the layer's learning quality quietly drops. *nansense* checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there — so you catch the issue.
 
 ## Run examples
 
@@ -108,7 +106,7 @@ If you hit out-of-memory errors, lower `--batch-size`. If training is slow and y
 
 ## UI tutorial
 
-![UI](assets/docs/ui.png)
+![UI](assets/docs/ui_with_elements.png)
 
 When a session starts, nansense serves a web page and pauses on the first batch.
 You drive the run from the top bar: **Step Batch** advances one batch, **Run**
