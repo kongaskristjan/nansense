@@ -422,7 +422,7 @@ class _WeightPanel:
             x_dim=x_dim, y_dim=y_dim, tile=tile, fixed=fixed
         )
         return _PanelRender(
-            weight_html=_strip_html(strip),
+            weight_html=_strip_html(strip, show_labels=True),
             grad_html=(
                 _strip_html(grad_strip)
                 if grad_strip is not None

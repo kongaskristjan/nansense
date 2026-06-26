@@ -89,8 +89,9 @@ def test_patch_grids_html_renders_enabled_grids_per_phase() -> None:
         mean=None,
         std=None,
     )
-    # 4 grids × 2 phases, each grid one captioned <img> per channel (2 here).
-    assert html.count("<img") == 2 * len(PATCH_TYPES) * 2
+    # 4 grids × 2 phases, each grid a cell <img> per (channel, sample) — the
+    # fixture has 2 channels and 5 samples per channel.
+    assert html.count("<img") == 2 * 5 * len(PATCH_TYPES) * 2
     for label in ("Max pixel", "Min pixel", "Max average", "Min average"):
         assert html.count(label) >= 2
     assert "train (ep 1)" in html
@@ -102,7 +103,7 @@ def test_patch_grids_html_filters_to_enabled_types() -> None:
     html = _patch_grids_html(
         per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
     )
-    assert html.count("<img") == 2  # one column <img> per channel (2 channels)
+    assert html.count("<img") == 2 * 5  # 2 channels × 5 sample cells
     assert "Max pixel" in html
     assert "Min pixel" not in html
 
@@ -227,8 +228,8 @@ def test_patch_grids_html_adds_heat_legend_when_enabled() -> None:
     heat = _patch_grids_html(
         per_phase, enabled=["max_pixel"], heatmap=True, mean=None, std=None
     )
-    assert plain.count("<img") == 2  # one column <img> per channel (2 channels)
-    assert heat.count("<img") == 3  # the 2 channel columns plus the colorbar
+    assert plain.count("<img") == 2 * 5  # 2 channels × 5 sample cells
+    assert heat.count("<img") == 2 * 5 + 1  # the cells plus the colorbar
 
 
 def _hover_snapshot() -> BatchSnapshot:

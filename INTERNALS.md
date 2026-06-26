@@ -1122,11 +1122,14 @@ Render conventions worth knowing before editing `render.py`:
   `image-rendering: pixelated` (an 8×8 feature map ships as 64 px, not a
   server-upscaled blob), shown as a `tile_px` square. Legends are the exception
   (rendered at display resolution so their text stays crisp).
-- Each tile carries a column caption (`StripTile.label`) drawn above it by both
-  the UI (`_strip_tile_html`) and recordings (`_compose_captioned_columns`):
-  activation/gradient tiles read `CHANNEL n`, weight tiles `DIM d: n` for the
-  tiled axis `d`. `_tile_labels` picks the longest form that fits the tile
-  width (full → short `CH n` → bare index), uniformly across the strip.
+- Each tile carries a `CHANNEL n` column caption (`StripTile.label`, weight
+  strips included — the tiled axis reads as a channel). `_tile_labels` picks the
+  longest form that fits the tile width (full → short `CH n` → bare index),
+  uniformly across the strip. The captions render as slate header bars
+  (`_column_header_bar`, styled to match the row markers) but only when
+  `_strip_html(..., show_labels=True)`: a card draws its *first* strip with the
+  headers and stacks the rows below it without (`show_labels=False`), so the
+  shared column headers sit once atop the table rather than repeating per row.
 - Every strip (activations, gradients, weights) uses one diverging
   blue-white-red colormap; strips are told apart by a labelled colored marker
   bar, never by palette.
@@ -1138,9 +1141,10 @@ Render conventions worth knowing before editing `render.py`:
 - `render_weight` has no batch axis: it pins every axis not assigned to
   X/Y/tile, then funnels through the same tile machinery; `default_weight_dims`
   gives the conv-kernel / matrix / row defaults.
-- `render_patch_grid` (the MIN/MAX galleries) is the same column model: a
-  `PatchColumn` per channel (its top-N patches stacked vertically) captioned
-  `CHANNEL n`, rather than one concatenated grid image.
+- `render_patch_grid` (the MIN/MAX galleries) is a 2-D grid of separate cell
+  images: a `PatchColumn` per channel, each holding one image per top-N sample
+  (`cells`), under a `CHANNEL n` header bar — the UI/recording stack the cells
+  with a `PATCH_CELL_GAP` gutter so the grid reads as discrete cells.
 - Image encoding is governed by `STRIP_FORMAT` — BMP by default (near-memcpy,
   the right trade for a localhost socket; flip to PNG for an SSH-forwarded UI).
 

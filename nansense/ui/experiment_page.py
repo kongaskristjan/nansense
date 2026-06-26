@@ -725,7 +725,7 @@ def _build_experiment_page(
 
     def _strip_widget(strip: StripRender | None) -> None:
         with ui.element("div").classes("max-w-full overflow-x-auto"):
-            ui.html(_strip_html(strip))
+            ui.html(_strip_html(strip, show_labels=True))
 
     def _captioned_cells(cells: list[tuple[str, Callable[[], None]]]) -> None:
         """A horizontal, scrollable row of captioned cells (caption over body),

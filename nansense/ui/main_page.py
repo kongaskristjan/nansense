@@ -665,7 +665,8 @@ def _compute_frame(
                         _zeros_like(snap.activations.get(name)),
                         sample_idx,
                         input_hw=input_hw,
-                    )
+                    ),
+                    show_labels=True,
                 ),
             )
         else:
@@ -675,7 +676,8 @@ def _compute_frame(
                 lambda: _strip_html(
                     render_strip(
                         snap.activations.get(name), sample_idx, input_hw=input_hw
-                    )
+                    ),
+                    show_labels=True,
                 ),
             )
         grad = cache.get_or_render(
@@ -743,7 +745,8 @@ def _compute_probe_frame(
                     probe_act_tensor(probe, name, compare=compare),
                     sample_idx,
                     input_hw=input_hw,
-                )
+                ),
+                show_labels=True,
             ),
         )
         return act, _PROBE_NO_GRADIENTS_HTML

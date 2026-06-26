@@ -519,12 +519,12 @@ def _strip_section(strip: object) -> Image.Image | None:
 def _patch_grid_section(grid: object) -> Image.Image | None:
     """Decode a `PatchGridRender` to one display-resolution PIL image.
 
-    Each channel column is nearest-upscaled to its CSS display size and laid
-    out after the optional heat legend by `_compose_captioned_columns`, with
-    its "CHANNEL N" caption above it — the recording mirror of the MIN/MAX
-    view's captioned columns.
+    Each channel's cells are nearest-upscaled to their CSS square and stacked
+    with a `PATCH_CELL_GAP` gutter into a column image, then laid out after the
+    optional heat legend by `_compose_captioned_columns` under a "CHANNEL N"
+    caption — the recording mirror of the MIN/MAX view's captioned cell grid.
     """
-    from nansense.ui.render import PatchGridRender
+    from nansense.ui.render import PATCH_CELL_GAP, PatchGridRender
 
     if not isinstance(grid, PatchGridRender) or not grid.columns:
         return None
@@ -533,15 +533,24 @@ def _patch_grid_section(grid: object) -> Image.Image | None:
         if grid.heat_legend is not None
         else None
     )
-    columns: list[tuple[Image.Image, str]] = [
-        (
-            Image.open(io.BytesIO(column.image))
+    columns: list[tuple[Image.Image, str]] = []
+    for column in grid.columns:
+        size = column.cell_size
+        cell_imgs = [
+            Image.open(io.BytesIO(cell))
             .convert("RGB")
-            .resize((column.width, column.height), Image.Resampling.NEAREST),
-            column.label,
-        )
-        for column in grid.columns
-    ]
+            .resize((size, size), Image.Resampling.NEAREST)
+            for cell in column.cells
+        ]
+        if not cell_imgs:
+            continue
+        height = len(cell_imgs) * size + (len(cell_imgs) - 1) * PATCH_CELL_GAP
+        stack = Image.new("RGB", (size, height), (255, 255, 255))
+        y = 0
+        for cell_img in cell_imgs:
+            stack.paste(cell_img, (0, y))
+            y += size + PATCH_CELL_GAP
+        columns.append((stack, column.label))
     return _compose_captioned_columns(legend, columns)
 
 

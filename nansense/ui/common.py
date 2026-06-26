@@ -176,16 +176,34 @@ def _b64_img_src(image: bytes, *, mime: str | None = None) -> str:
     return f"data:{mime or image_mime()};base64,{encoded}"
 
 
-def _strip_tile_html(tile: StripTile) -> str:
-    """One captioned tile column: the caption above a native-res `<img>`.
+def _column_header_bar(label: str, width: int) -> str:
+    """A `CHANNEL n` column header — a slate bar matching the row markers.
+
+    Mirrors the `_strip_marker` row labels (rounded colored bar, white bold
+    text) but laid horizontally above a tile column. An empty label (single-tile
+    strips, or a header-less row) reserves the same height so the legend and
+    images below still line up.
+    """
+    if not label:
+        return f'<div style="height:{LABEL_HEIGHT}px;"></div>'
+    return (
+        f'<div title="{html.escape(label)}" style="width:{width}px; '
+        f"height:{LABEL_HEIGHT}px; line-height:{LABEL_HEIGHT}px; "
+        "background:#64748b; color:white; font:bold 10px monospace; "
+        "letter-spacing:0.04em; text-align:center; border-radius:3px; "
+        'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">'
+        f"{html.escape(label)}</div>"
+    )
+
+
+def _strip_tile_html(tile: StripTile, *, show_label: bool) -> str:
+    """One tile column: an optional `CHANNEL n` header bar above a native `<img>`.
 
     Explicit CSS width/height plus `image-rendering: pixelated` make the
     browser do the nearest-neighbour upscale the renderer used to do
     server-side; `flex:none` keeps the scroll container from squishing the
-    image. The caption is a fixed-height monospace row (`LABEL_HEIGHT`),
-    centered and clipped to the tile's width so a long label can't widen the
-    column; single-tile strips (1D rows, 2D images) carry an empty caption and
-    just reserve the row so their image still lines up with the legend.
+    image. The header bar is drawn only when `show_label` (the first strip of a
+    card carries the shared column headers; the rows below it reuse them).
 
     The img sits over a fixed display-resolution gray checkerboard
     (`_STRIP_CHECKERBOARD_STYLE`): an all-finite tile is fully opaque and
@@ -193,19 +211,10 @@ def _strip_tile_html(tile: StripTile) -> str:
     `tile.mime`) reveals the checkerboard through them — so the bad cells read
     as "no value here" instead of a misleading color or white.
     """
-    if tile.label:
-        caption = (
-            f'<div title="{html.escape(tile.label)}" style="'
-            f"height:{LABEL_HEIGHT}px; line-height:{LABEL_HEIGHT}px; "
-            "font:11px monospace; color:#475569; text-align:center; "
-            'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">'
-            f"{html.escape(tile.label)}</div>"
-        )
-    else:
-        caption = f'<div style="height:{LABEL_HEIGHT}px;"></div>'
+    header = _column_header_bar(tile.label, tile.width) if show_label else ""
     return (
         f'<div style="display:flex; flex-direction:column; flex:none; '
-        f'width:{tile.width}px;">{caption}'
+        f'width:{tile.width}px;">{header}'
         f'<img src="{_b64_img_src(tile.image, mime=tile.mime)}" '
         f'style="width:{tile.width}px; height:{tile.height}px; '
         f"image-rendering:pixelated; display:block; flex:none; max-width:none; "
@@ -213,25 +222,31 @@ def _strip_tile_html(tile: StripTile) -> str:
     )
 
 
-def _strip_html(strip: StripRender | None) -> str:
-    """HTML for one strip: a crisp legend `<img>` plus a row of captioned tiles.
+def _strip_html(strip: StripRender | None, *, show_labels: bool = False) -> str:
+    """HTML for one strip: a crisp legend `<img>` plus a row of tile columns.
 
-    Each channel/tile is its own column (`_strip_tile_html`) so per-channel
-    captions sit directly above their tile. The legend image (already at
-    display resolution, shown 1:1) leads the row under a blank caption-height
-    spacer so it lines up with the tile images, not the captions. A small
-    `gap` spaces the columns in place of the white separators the renderer used
-    to bake between tiles.
+    Each channel/tile is its own column (`_strip_tile_html`). With `show_labels`
+    the strip carries a row of `CHANNEL n` header bars above its tiles (and a
+    blank spacer above the legend so it lines up below the bars). A card renders
+    its first strip with `show_labels=True` and the strips stacked below it
+    without — their columns share the same widths and so sit under the same
+    headers, reading as one table. A small `gap` spaces the columns in place of
+    the white separators the renderer used to bake between tiles.
     """
     if strip is None or not strip.tiles:
         return ""
+    legend_spacer = (
+        f'<div style="height:{LABEL_HEIGHT}px;"></div>' if show_labels else ""
+    )
     legend_col = (
         '<div style="display:flex; flex-direction:column; flex:none;">'
-        f'<div style="height:{LABEL_HEIGHT}px;"></div>'
+        f"{legend_spacer}"
         f'<img src="{_b64_img_src(strip.legend_image)}" '
         'style="display:block; flex:none; max-width:none;" /></div>'
     )
-    tiles_html = "".join(_strip_tile_html(tile) for tile in strip.tiles)
+    tiles_html = "".join(
+        _strip_tile_html(tile, show_label=show_labels) for tile in strip.tiles
+    )
     return (
         '<div style="display:flex; align-items:flex-start; gap:2px;">'
         f"{legend_col}{tiles_html}</div>"

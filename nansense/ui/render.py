@@ -81,6 +81,9 @@ LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
 # overlay opacity, the fill for never-filled slots, and the grids' fixed
 # encoding (see `PatchGridRender` for why it isn't `STRIP_FORMAT`).
 PATCH_CELL_SIZE: int = 132
+# Gutter (CSS px) between patch-grid cells; the UI/recording space the cells by
+# it, and the heat legend's height accounts for it so it spans the column.
+PATCH_CELL_GAP: int = 2
 HEAT_MAX_ALPHA: float = 0.825
 _EMPTY_CELL_GRAY: int = 235
 PATCH_GRID_FORMAT: str = "PNG"
@@ -353,39 +356,32 @@ def render_weight(
         yx = selected.permute(pos[y_dim], pos[x_dim]).contiguous()
         return _render_chw(yx.unsqueeze(0))
     chw = selected.permute(pos[tile_dim], pos[y_dim], pos[x_dim]).contiguous()
-    # Tiles are slices along the chosen tile axis, so the caption names that
-    # dimension (e.g. `DIM 1: 3`) — it tracks whichever axis the user picks as
-    # the tiling axis rather than assuming activation-style channels.
-    return _render_chw(chw, label_prefix=(f"DIM {tile_dim}:", f"D{tile_dim}:"))
+    # Tiles are slices along the chosen tile axis; caption them as channels
+    # (`CHANNEL n`) like the activation strips — the conv default tiles across
+    # the input-channel axis, and "channel" reads clearer than a raw dim index.
+    return _render_chw(chw)
 
 
-def _tile_labels(prefix: tuple[str, str], count: int, tile_w: int) -> list[str]:
-    """Column captions for `count` tiles shown `tile_w` CSS px wide.
+def _tile_labels(count: int, tile_w: int) -> list[str]:
+    """Per-channel column captions for `count` tiles shown `tile_w` CSS px wide.
 
-    `prefix` is the `(full, short)` caption stem (e.g. `("CHANNEL", "CH")`);
-    each tile's caption is `"<stem> <index>"`. The longest form whose widest
-    label (the highest index) fits `tile_w` is chosen for the whole strip, so
-    captions stay uniform: full `"CHANNEL 12"`, short `"CH 12"`, or bare `"12"`
-    when even the short form overflows. A single tile has no column to name and
-    gets an empty caption.
+    Each tile's caption names its channel; the longest form whose widest label
+    (the highest index) fits `tile_w` is chosen for the whole strip, so captions
+    stay uniform: full `"CHANNEL 12"`, short `"CH 12"`, or bare `"12"` when even
+    the short form overflows. A single tile has no column to name and gets an
+    empty caption.
     """
     if count <= 1:
         return [""]
-    full_stem, short_stem = prefix
     last = str(count - 1)
     budget = tile_w - 2  # leave a hair of horizontal padding
-    for stem in (full_stem, short_stem):
-        if stem and len(f"{stem} {last}") * LABEL_CHAR_PX <= budget:
+    for stem in ("CHANNEL", "CH"):
+        if len(f"{stem} {last}") * LABEL_CHAR_PX <= budget:
             return [f"{stem} {i}" for i in range(count)]
     return [str(i) for i in range(count)]
 
 
-def _render_chw(
-    tensor: Tensor,
-    *,
-    tile_px: int = TILE_SIZE,
-    label_prefix: tuple[str, str] = ("CHANNEL", "CH"),
-) -> StripRender | None:
+def _render_chw(tensor: Tensor, *, tile_px: int = TILE_SIZE) -> StripRender | None:
     data = tensor.detach().float()
     # An empty tile (any zero-length dim) has no pixels to colormap, encode,
     # or lay out — the reductions and PIL encode below would raise. The
@@ -407,7 +403,7 @@ def _render_chw(
     # upscales its native map to fill it), matching the legend's tile_px height.
     # One mime covers the whole strip — if any tile carries NaN/±Inf, all encode
     # as RGBA PNG.
-    labels = _tile_labels(label_prefix, n, tile_px)
+    labels = _tile_labels(n, tile_px)
     tiles = tuple(
         StripTile(
             image=_encode_strip_data(rgb[i], mime),
@@ -522,7 +518,7 @@ def render_attribution_overlay(
         blend_signed_heat(rgb, _nearest_resize(channel, h, w), vmax=vmax)
         for channel in heat
     ]
-    labels = _tile_labels(("CHANNEL", "CH"), len(blended), tile_px)
+    labels = _tile_labels(len(blended), tile_px)
     tiles = tuple(
         StripTile(
             image=_encode_image(tile),
@@ -542,30 +538,31 @@ def render_attribution_overlay(
 class PatchColumn:
     """One channel's column of the extreme-patch grid: its top-N samples.
 
-    `image` stacks the channel's top-N sample patches top (best) to bottom at
-    native patch resolution; the UI shows it at `width × height` CSS pixels
-    (`PATCH_CELL_SIZE` wide) with `image-rendering: pixelated`. `label` is the
-    column caption (`"CHANNEL 3"`, collapsed to fit like the strip captions).
+    `cells` is one image per top-N sample (best first, top to bottom), each at
+    native patch resolution; the UI shows each as a `cell_size` square with
+    `image-rendering: pixelated`, stacked with a small gutter so the grid reads
+    as separate cells. `label` is the column caption (`"CHANNEL 3"`, collapsed
+    to fit like the strip captions).
     """
 
-    image: bytes
-    width: int
-    height: int
+    cells: tuple[bytes, ...]
+    cell_size: int
     label: str
 
 
 @dataclass(frozen=True)
 class PatchGridRender:
-    """One extreme-patch grid: a captioned column per channel, top-N down.
+    """One extreme-patch grid: a captioned column per channel, top-N cells down.
 
-    Each channel is its own `PatchColumn` image rather than one concatenated
-    grid, so the UI lays them out as separate captioned columns (matching the
-    activation strips). Columns are always PNG (`PATCH_GRID_FORMAT`, mime in
-    `mime`): a wide layer's BMP cells reach multiple MB per refresh message,
-    enough to pause the websocket transport — concurrent drains then trip a
-    known `websockets`-legacy keepalive assertion and kill the connection. PNG
-    keeps the messages ~10× under that regime for a few ms of (worker thread)
-    encode time.
+    The grid is a 2-D array of separate cell images — one `PatchColumn` per
+    channel, each holding one image per sample — rather than a single
+    concatenated picture, so the UI / recording lay it out as a captioned grid
+    (columns are channels, rows are samples). Cells are always PNG
+    (`PATCH_GRID_FORMAT`, mime in `mime`): a wide layer's BMP cells reach
+    multiple MB per refresh message, enough to pause the websocket transport —
+    concurrent drains then trip a known `websockets`-legacy keepalive assertion
+    and kill the connection. PNG keeps the messages ~10× under that regime for a
+    few ms of (worker thread) encode time.
     """
 
     columns: tuple[PatchColumn, ...]
@@ -582,7 +579,7 @@ def render_patch_grid(
     std: tuple[float, ...] | None = None,
     heatmap: bool = False,
 ) -> PatchGridRender | None:
-    """Render one patch type's double grid as `STRIP_FORMAT` bytes.
+    """Render one patch type as a grid of `PATCH_GRID_FORMAT` cell images.
 
     Columns are activation channels, rows the per-channel top samples
     (best first). Patches are denormalized like `render_image`. With
@@ -600,39 +597,33 @@ def render_patch_grid(
     cells = _denormalized_cells(tp, mean=mean, std=std)
     if cells is None:
         return None
-    c, n, ph, pw, _ = cells.shape
+    c, n = cells.shape[:2]
     vmax = _heat_vmax(tp) if heatmap else 0.0
     if vmax > 0.0:
         cells = _blend_heat(cells, tp, vmax=vmax)
     cells[~valid] = _EMPTY_CELL_GRAY
 
-    # One image per channel: its top-N patches stacked top (best) to bottom.
-    # Each cell shows as a PATCH_CELL_SIZE square, so the column is one cell
-    # wide and its display height scales the stack by the same cell-height
-    # factor (the heat legend, rendered that tall, then lines up).
-    gap = 1
-    col_height = n * ph + (n - 1) * gap
-    disp_height = round(col_height * PATCH_CELL_SIZE / ph)
-    labels = _tile_labels(("CHANNEL", "CH"), c, PATCH_CELL_SIZE)
-    columns: list[PatchColumn] = []
-    for col in range(c):
-        stacked = np.full((col_height, pw, 3), 255, dtype=np.uint8)
-        for row in range(n):
-            y = row * (ph + gap)
-            stacked[y : y + ph] = cells[col, row]
-        columns.append(
-            PatchColumn(
-                image=_encode_image(stacked, fmt=PATCH_GRID_FORMAT),
-                width=PATCH_CELL_SIZE,
-                height=disp_height,
-                label=labels[col],
-            )
+    # One image per (channel, sample) cell, each shown as a PATCH_CELL_SIZE
+    # square; the UI/recording stack a column's cells with a PATCH_CELL_GAP
+    # gutter. The heat legend spans the full column height (cells + gutters).
+    labels = _tile_labels(c, PATCH_CELL_SIZE)
+    columns = tuple(
+        PatchColumn(
+            cells=tuple(
+                _encode_image(cells[col, row], fmt=PATCH_GRID_FORMAT)
+                for row in range(n)
+            ),
+            cell_size=PATCH_CELL_SIZE,
+            label=labels[col],
         )
+        for col in range(c)
+    )
+    legend_height = n * PATCH_CELL_SIZE + (n - 1) * PATCH_CELL_GAP
     return PatchGridRender(
-        columns=tuple(columns),
+        columns=columns,
         mime=_MIME_TYPES[PATCH_GRID_FORMAT],
         heat_legend=(
-            _encode_image(_render_legend(disp_height, abs_max=vmax))
+            _encode_image(_render_legend(legend_height, abs_max=vmax))
             if vmax > 0.0
             else None
         ),

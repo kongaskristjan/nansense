@@ -15,16 +15,24 @@ from nansense.ui.static import _PANEL_RESIZE_CSS, _PANEL_RESIZE_JS
 def test_strip_html_scales_native_data_and_keeps_legend_crisp() -> None:
     strip = render_strip(torch.randn(1, 2, 8, 8), sample_idx=0)
     assert strip is not None
-    html = _strip_html(strip)
-    # One legend <img> (shown 1:1, no pixelated scaling) + one captioned <img>
-    # per channel tile.
+    html = _strip_html(strip, show_labels=True)
+    # One legend <img> (shown 1:1, no pixelated scaling) + one <img> per channel
+    # tile; the channel headers are bars (divs), not images.
     assert html.count("<img") == 1 + len(strip.tiles)
     assert html.count("image-rendering:pixelated") == len(strip.tiles)
     assert html.count(f"data:{image_mime()};base64,") == 1 + len(strip.tiles)
     assert f"width:{strip.tiles[0].width}px" in html
     assert f"height:{strip.tiles[0].height}px" in html
-    # Each tile carries its channel caption.
-    assert "CHANNEL 0" in html and "CHANNEL 1" in html
+
+
+def test_strip_html_headers_only_with_show_labels() -> None:
+    # The first strip of a card carries the shared CHANNEL header bars; the rows
+    # stacked below it (gradients, optimizer strips) render without their own.
+    strip = render_strip(torch.randn(1, 2, 8, 8), sample_idx=0)
+    assert strip is not None
+    assert "CHANNEL 0" in _strip_html(strip, show_labels=True)
+    assert "CHANNEL 1" in _strip_html(strip, show_labels=True)
+    assert "CHANNEL" not in _strip_html(strip)
 
 
 def test_strip_html_carries_checkerboard_background() -> None:

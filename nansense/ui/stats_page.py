@@ -20,6 +20,7 @@ from nansense.session import BatchSnapshot, Session
 from nansense.ui.bin_samples import sample_bin
 from nansense.ui.common import (
     _b64_img_src,
+    _column_header_bar,
     _defer_value_write,
     _install_panel_resize,
     _notice_banner,
@@ -51,6 +52,7 @@ from nansense.ui.histograms import (
 )
 from nansense.ui.render import (
     LABEL_HEIGHT,
+    PATCH_CELL_GAP,
     PatchColumn,
     PatchGridRender,
     render_image,
@@ -1461,30 +1463,25 @@ def _patch_grids_html(
 
 
 def _patch_column_html(column: PatchColumn, mime: str, label: str) -> str:
-    """One captioned channel column of a patch grid (caption above the image).
+    """One channel column of a patch grid: a `CHANNEL n` header over its cells.
 
-    Mirrors the activation strips' captioned tiles: a fixed-height monospace
-    caption (`"CHANNEL 3"`, already collapsed to fit by the renderer) clipped
-    to the column width, above the channel's stacked top-N patches.
+    Mirrors the activation strips' table layout — a slate header bar
+    (`_column_header_bar`) over the channel's top-N sample cells, each a
+    separate `cell_size` square stacked with a `PATCH_CELL_GAP` gutter so the
+    grid reads as discrete cells rather than one merged column.
     """
-    col_w, col_h, col_label = column.width, column.height, column.label
-    if col_label:
-        caption = (
-            f'<div title="{html.escape(col_label)}" style="'
-            f"height:{LABEL_HEIGHT}px; line-height:{LABEL_HEIGHT}px; "
-            "font:11px monospace; color:#475569; text-align:center; "
-            'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">'
-            f"{html.escape(col_label)}</div>"
-        )
-    else:
-        caption = f'<div style="height:{LABEL_HEIGHT}px;"></div>'
+    size = column.cell_size
+    header = _column_header_bar(column.label, size)
+    cells = "".join(
+        f'<img src="{_b64_img_src(cell, mime=mime)}" '
+        f"style=\"width:{size}px; height:{size}px; image-rendering:pixelated; "
+        f'display:block; max-width:none;" title="{html.escape(label)} — '
+        f'{html.escape(column.label)}, sample {i} (best first)" />'
+        for i, cell in enumerate(column.cells)
+    )
     return (
         f'<div style="display:flex; flex-direction:column; flex:none; '
-        f'width:{col_w}px;">{caption}'
-        f'<img src="{_b64_img_src(column.image, mime=mime)}" '
-        f"style=\"width:{col_w}px; height:{col_h}px; image-rendering:pixelated; "
-        f'display:block; max-width:none;" title="{html.escape(label)} — '
-        f'{html.escape(col_label)}, top samples (best first)" /></div>'
+        f'gap:{PATCH_CELL_GAP}px; width:{size}px;">{header}{cells}</div>'
     )
 
 

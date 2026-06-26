@@ -231,7 +231,7 @@ def test_compute_probe_frame_diff_without_perturbations_renders_zeros() -> None:
         input_std=None,
         cache=_RenderCache(),
     )
-    expected = _strip_html(render_strip(torch.zeros_like(base), 0))
+    expected = _strip_html(render_strip(torch.zeros_like(base), 0), show_labels=True)
     assert rendered["conv"][0] == expected
 
 
@@ -251,7 +251,7 @@ def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
         cache=_RenderCache(),
     )
     act_expected = _strip_html(
-        render_strip(torch.zeros_like(snap.activations["conv"]), 0)
+        render_strip(torch.zeros_like(snap.activations["conv"]), 0), show_labels=True
     )
     grad_expected = _strip_html(
         render_strip(snap.activation_gradients["conv"], 0)
