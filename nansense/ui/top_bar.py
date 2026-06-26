@@ -30,7 +30,7 @@ _TOP_BAR_CLASSES: str = (
 
 _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
 _STAR_TOOLTIP: str = (
-    "Like nansense? A GitHub star means a lot and keeps me hacking on it. ★"
+    "Like nansense? A GitHub ★ star ★ means a lot and keeps me hacking."
 )
 _LOGO_PATH: Path = (
     Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
