@@ -6,6 +6,10 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from nicegui.elements.interactive_image import InteractiveImage
+from nicegui.elements.label import Label
+from nicegui.elements.row import Row
+from nicegui.elements.switch import Switch
 
 from nansense.session import Session
 from nansense.ui.input_panel import InputPanel, normalized_color
@@ -80,3 +84,135 @@ def test_compare_active_iff_perturbed(
         Session, SimpleNamespace(perturbations=perturbations)
     )
     assert panel.compare is expected
+
+
+PerturbMap = dict[tuple[int, int, int], tuple[float, ...]]
+
+
+class _FakeSwitch:
+    def __init__(self, value: bool = False) -> None:
+        self.value = value
+
+    def set_value(self, value: bool) -> None:
+        self.value = value
+
+
+class _FakeText:
+    def __init__(self) -> None:
+        self.text = ""
+
+
+class _FakeVisible:
+    def __init__(self, visible: bool = False) -> None:
+        self.visible = visible
+
+    def set_visibility(self, visible: bool) -> None:
+        self.visible = visible
+
+
+class _FakeImage:
+    """Tracks only whether the crosshair class is present."""
+
+    def __init__(self, cursor: bool = False) -> None:
+        self.cursor = cursor
+
+    def classes(self, add: str | None = None, remove: str | None = None) -> None:
+        if add and "cursor-crosshair" in add:
+            self.cursor = True
+        if remove and "cursor-crosshair" in remove:
+            self.cursor = False
+
+
+class _FakeSession:
+    """The slice of `Session` `refresh_status` / `_on_clear` touch."""
+
+    def __init__(self, perturbations: PerturbMap) -> None:
+        self.is_pinned = False
+        self.perturbations = perturbations
+        self.pinned_position = None
+        self.probe_error = ""
+        self.clears = 0
+
+    def clear_perturbations(self) -> None:
+        self.clears += 1
+        self.perturbations = {}
+
+
+class _Wired:
+    """A bare `InputPanel` wired with fakes, keeping handles for asserting."""
+
+    def __init__(
+        self, *, perturbations: PerturbMap, armed: bool, switch_value: bool
+    ) -> None:
+        self.switch = _FakeSwitch(switch_value)
+        # The build keeps the cursor matching the switch, so start them aligned.
+        self.image = _FakeImage(cursor=switch_value)
+        self.session = _FakeSession(dict(perturbations))
+        panel = InputPanel.__new__(InputPanel)
+        panel._session = cast(Session, self.session)
+        panel._syncing_pin = False
+        panel._syncing_perturb = False
+        panel._perturb_armed = armed
+        panel._pin_switch = cast(Switch, _FakeSwitch(False))
+        panel._perturb_switch = cast(Switch, self.switch)
+        panel._image = cast(InteractiveImage, self.image)
+        panel._pinned_caption = cast(Label, _FakeText())
+        panel._perturb_caption = cast(Label, _FakeText())
+        panel._clear_row = cast(Row, _FakeVisible(bool(perturbations)))
+        panel._compare_caption = cast(Label, _FakeVisible(bool(perturbations)))
+        panel._error_label = cast(Label, _FakeText())
+        panel._on_change = lambda: None
+        self.panel = panel
+
+
+@pytest.mark.parametrize(
+    "perturbations, armed, switch_value, expected",
+    [
+        # A perturbation made elsewhere (another tab, or one surviving a
+        # rebuild after navigating back from /stats) turns the switch on.
+        ({(0, 1, 2): (0.5, 0.5, 0.5)}, False, False, True),
+        # An external clear turns it back off in a tab that didn't arm it.
+        ({}, False, True, False),
+        # A tab armed locally (toggled on, nothing clicked yet) stays on.
+        ({}, True, True, True),
+        # Armed and perturbed: already consistent, stays on.
+        ({(0, 1, 2): (0.5, 0.5, 0.5)}, True, True, True),
+    ],
+)
+def test_refresh_status_syncs_perturb_switch(
+    perturbations: PerturbMap,
+    armed: bool,
+    switch_value: bool,
+    expected: bool,
+) -> None:
+    """The switch mirrors `armed or perturbations`; the cursor follows it."""
+    wired = _Wired(
+        perturbations=perturbations, armed=armed, switch_value=switch_value
+    )
+    wired.panel.refresh_status()
+    assert wired.switch.value is expected
+    assert wired.image.cursor is expected
+
+
+def test_on_perturb_change_ignores_programmatic_sync() -> None:
+    """A guarded (mirrored) write must not re-arm or clear perturbations."""
+    wired = _Wired(perturbations={}, armed=False, switch_value=True)
+    wired.panel._syncing_perturb = True
+    wired.panel._on_perturb_change(SimpleNamespace(value=True))
+    assert wired.panel._perturb_armed is False
+    assert wired.session.clears == 0
+
+
+def test_on_perturb_change_arms_then_disarms() -> None:
+    """A real toggle updates the local armed intent, cursor, and edits."""
+    wired = _Wired(perturbations={}, armed=False, switch_value=False)
+
+    wired.panel._on_perturb_change(SimpleNamespace(value=True))
+    assert wired.panel._perturb_armed is True
+    assert wired.image.cursor is True
+    assert wired.session.clears == 0  # arming keeps any edits
+
+    wired.panel._on_perturb_change(SimpleNamespace(value=False))
+    assert wired.panel._perturb_armed is False
+    assert wired.image.cursor is False
+    assert wired.session.clears == 1  # disarming discards them

@@ -93,6 +93,14 @@ class InputPanel:
         # mirror shared session state (a pin from another tab) — otherwise the
         # programmatic write would re-fire pin/unpin.
         self._syncing_pin = False
+        # Same guard for the perturb switch, which `refresh_status` mirrors
+        # from the shared perturbations (another tab, or a rebuild after
+        # navigating back from /stats). `_perturb_armed` is this connection's
+        # local "perturb mode entered but nothing clicked yet" intent, kept
+        # separate so the switch can stay on before the first perturbation and
+        # so an external clear only switches off tabs that didn't arm it.
+        self._syncing_perturb = False
+        self._perturb_armed = False
         self._build()
 
     def _build(self) -> None:
@@ -159,6 +167,10 @@ class InputPanel:
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 self._perturb_switch = ui.switch(
                     "Click to perturb",
+                    # On a rebuild (navigating back from /stats) the shared
+                    # perturbations survive, so the switch must come up on to
+                    # match the perturbed image/strips the page still renders.
+                    value=bool(self._session.perturbations),
                     on_change=self._on_perturb_change,
                 ).props("dense").tooltip(
                     "Clicking the input image paints the swatch color into "
@@ -199,6 +211,14 @@ class InputPanel:
             self._compare_caption.set_visibility(
                 bool(self._session.perturbations)
             )
+            self._set_perturb_cursor(self._perturb_switch.value)
+
+    def _set_perturb_cursor(self, active: bool) -> None:
+        """Show the crosshair cursor on the image exactly while perturbing."""
+        if active:
+            self._image.classes(add="cursor-crosshair")
+        else:
+            self._image.classes(remove="cursor-crosshair")
 
     @property
     def compare(self) -> bool:
@@ -274,14 +294,26 @@ class InputPanel:
 
         Also mirrors shared session state into this connection's controls so
         a pin / perturbation made in another tab shows up here immediately:
-        the pin switch follows `is_pinned`, and the perturbation count / clear
-        row / compare note follow `perturbations` (the perturbed image itself
-        rides along on the shared probe result the page tick re-renders).
+        the pin switch follows `is_pinned`, the perturb switch follows
+        `perturbations` (or the local armed intent), and the perturbation
+        count / clear row / compare note follow `perturbations` (the perturbed
+        image itself rides along on the shared probe result the page tick
+        re-renders).
         """
         if self._pin_switch.value != self._session.is_pinned:
             self._syncing_pin = True
             self._pin_switch.set_value(self._session.is_pinned)
             self._syncing_pin = False
+        # The switch is on while this tab is armed or any perturbation exists,
+        # so a perturbation made elsewhere (another tab, or surviving a rebuild
+        # after navigating back from /stats) turns the switch on, and an
+        # external clear turns it back off in tabs that didn't arm it.
+        perturb_on = self._perturb_armed or bool(self._session.perturbations)
+        if self._perturb_switch.value != perturb_on:
+            self._syncing_perturb = True
+            self._perturb_switch.set_value(perturb_on)
+            self._syncing_perturb = False
+            self._set_perturb_cursor(perturb_on)
         pos = self._session.pinned_position
         self._pinned_caption.text = (
             f"pinned at epoch {pos.epoch} | {pos.phase} batch {pos.batch_idx}"
@@ -348,14 +380,16 @@ class InputPanel:
         self._on_change()  # drop the diff view now, not on the next probe
 
     def _on_perturb_change(self, e: object) -> None:
-        if getattr(e, "value", False):
-            self._image.classes(add="cursor-crosshair")
-        else:
+        if self._syncing_perturb:
+            return  # programmatic mirror of shared perturbations, not a click
+        value = bool(getattr(e, "value", False))
+        self._perturb_armed = value
+        self._set_perturb_cursor(value)
+        if not value:
             # Leaving editing mode discards the edits and the diff view: the
             # image and strips revert to the unperturbed input (clearing the
             # perturbations also deactivates `compare`, which derives from
             # them).
-            self._image.classes(remove="cursor-crosshair")
             self._on_clear()
 
     def _on_image_click(self, e: object) -> None:
