@@ -98,6 +98,11 @@ uv run --group [group] examples/standard/main.py --nansense-port 8080
 uv run --group [group] examples/game_of_life/main.py --nansense-port 8080
 uv run --group [group] examples/audio_keywords/main.py --nansense-port 8080
 uv run --group [group] examples/depth_make3d/main.py --nansense-port 8080
+
+# Multi-input demo: a 5-channel image + a flat stats vector. Shows the input
+# pane's input picker, the `input_transform` for non-RGB images, and the
+# flat-input strip.
+uv run --group [group] examples/multimodal/main.py --nansense-port 8080
 ```
 
 A focused browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar. See the [UI tutorial](#ui-tutorial) for more info.
@@ -144,8 +149,12 @@ card per input sample.
 
 ### Select visualization inputs
 
-The right sidebar controls which input the layer views are computed from.
-**Select sample in batch** picks which sample of the current batch to show. The
+The right sidebar controls which input the layer views are computed from. A
+model with several inputs gets an **Input** dropdown to choose which one the
+pane shows and perturbs; a non-RGB image needs an `input_transform` to display
+(see the [Python API](#python-api)), and a flat `(N, C)` input shows as a
+clickable per-feature strip. **Select sample in batch** picks which sample of
+the current batch to show. The
 views follow the live training batch by default; **Pin** freezes the current
 batch as a fixed input that nansense re-runs at every update, so you can watch
 one input's activations evolve as training proceeds and across time travel, and
