@@ -271,7 +271,7 @@ class _WeightPanel:
                 # the whole scroll range.
                 with ui.element("div").classes("w-max min-w-full"):
                     with ui.element("div").classes("flex no-wrap items-stretch"):
-                        _strip_marker("bg-sky-500", "WEIGHT")
+                        _strip_marker("bg-sky-500", "WEIGHT", header_gap=True)
                         self._img = ui.html("")
                     ui.element("div").classes("h-1")
                     with ui.element("div").classes("flex no-wrap items-stretch"):

@@ -140,7 +140,7 @@ def _refuse_unwatch_while_recording(session: Session) -> bool:
     return True
 
 
-def _strip_marker(color_class: str, label: str) -> None:
+def _strip_marker(color_class: str, label: str, *, header_gap: bool = False) -> None:
     """A labelled colored bar marking which kind of strip sits next to it.
 
     Stretches to the strip's height via the flex row (and collapses to
@@ -155,11 +155,20 @@ def _strip_marker(color_class: str, label: str) -> None:
     of an empty row. On strips too short to fit it the label is hidden via
     the container query in `_STRIP_MARKER_CSS`; the tooltip carries the
     full name regardless.
+
+    `header_gap` offsets the marker down past the strip's `CHANNEL n` header
+    row (the height of a header bar plus its `LABEL_GAP`): the first strip of a
+    card carries the shared headers, so without the offset its stretched marker
+    would also span the header band and stand taller than the markers on the
+    header-less rows below it. With it, every marker lines up with the tiles.
     """
-    with ui.element("div").classes(
+    marker = ui.element("div").classes(
         f"nansense-marker w-5 shrink-0 rounded mr-2 sticky left-0 z-10 "
         f"overflow-hidden {color_class}"
-    ).tooltip(label.capitalize()):
+    ).tooltip(label.capitalize())
+    if header_gap:
+        marker.style(f"margin-top: {LABEL_HEIGHT + LABEL_GAP}px")
+    with marker:
         ui.label(label).classes(
             "nansense-marker-label absolute text-white font-bold select-none"
         ).style(

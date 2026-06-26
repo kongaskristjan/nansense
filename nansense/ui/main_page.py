@@ -884,7 +884,9 @@ class _LayerView:
                 # view once the strips are scrolled past that width.
                 with ui.element("div").classes("w-max min-w-full"):
                     with ui.element("div").classes("flex no-wrap items-stretch"):
-                        _strip_marker("bg-emerald-500", "ACTIVATIONS")
+                        _strip_marker(
+                            "bg-emerald-500", "ACTIVATIONS", header_gap=True
+                        )
                         self.act_html = ui.html("")
                     ui.element("div").classes("h-1")
                     with ui.element("div").classes("flex no-wrap items-stretch"):
