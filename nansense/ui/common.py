@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import html
 from collections.abc import Callable, Sequence
 from typing import Literal
 
@@ -10,7 +11,7 @@ from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
 
 from nansense.session import Session
-from nansense.ui.render import StripRender, image_mime
+from nansense.ui.render import LABEL_HEIGHT, StripRender, StripTile, image_mime
 from nansense.ui.static import (
     _PANEL_RESIZE_CSS,
     _PANEL_RESIZE_JS,
@@ -175,33 +176,63 @@ def _b64_img_src(image: bytes, *, mime: str | None = None) -> str:
     return f"data:{mime or image_mime()};base64,{encoded}"
 
 
-def _strip_html(strip: StripRender | None) -> str:
-    """HTML for one strip: a crisp legend `<img>` plus one native-res data `<img>`.
+def _strip_tile_html(tile: StripTile) -> str:
+    """One captioned tile column: the caption above a native-res `<img>`.
 
-    The data image holds every tile (with native-resolution separators) at
-    the tensor's native resolution; explicit CSS width/height plus
-    `image-rendering: pixelated` make the browser do the nearest-neighbour
-    upscale the renderer used to do server-side. The legend image is already
-    at display resolution and renders 1:1, so its labels stay sharp.
-    `flex:none` keeps the scroll container from squishing the images.
+    Explicit CSS width/height plus `image-rendering: pixelated` make the
+    browser do the nearest-neighbour upscale the renderer used to do
+    server-side; `flex:none` keeps the scroll container from squishing the
+    image. The caption is a fixed-height monospace row (`LABEL_HEIGHT`),
+    centered and clipped to the tile's width so a long label can't widen the
+    column; single-tile strips (1D rows, 2D images) carry an empty caption and
+    just reserve the row so their image still lines up with the legend.
 
-    The data img sits over a fixed display-resolution gray checkerboard
-    (`_STRIP_CHECKERBOARD_STYLE`): an all-finite strip is fully opaque and
-    hides it, while a strip carrying transparent NaN/±Inf cells (RGBA PNG,
-    `strip.data_mime`) reveals the checkerboard through them — so the bad
-    cells read as "no value here" instead of a misleading color or white.
-    The data image uses `strip.data_mime` (RGB `STRIP_FORMAT` or RGBA PNG),
-    not the global `image_mime()` the legend keeps.
+    The img sits over a fixed display-resolution gray checkerboard
+    (`_STRIP_CHECKERBOARD_STYLE`): an all-finite tile is fully opaque and
+    hides it, while a tile carrying transparent NaN/±Inf cells (RGBA PNG,
+    `tile.mime`) reveals the checkerboard through them — so the bad cells read
+    as "no value here" instead of a misleading color or white.
     """
-    if strip is None:
-        return ""
+    if tile.label:
+        caption = (
+            f'<div title="{html.escape(tile.label)}" style="'
+            f"height:{LABEL_HEIGHT}px; line-height:{LABEL_HEIGHT}px; "
+            "font:11px monospace; color:#475569; text-align:center; "
+            'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">'
+            f"{html.escape(tile.label)}</div>"
+        )
+    else:
+        caption = f'<div style="height:{LABEL_HEIGHT}px;"></div>'
     return (
-        '<div style="display:flex; align-items:flex-start;">'
-        f'<img src="{_b64_img_src(strip.legend_image)}" '
-        'style="display:block; flex:none; max-width:none;" />'
-        f'<img src="{_b64_img_src(strip.data_image, mime=strip.data_mime)}" '
-        f'style="width:{strip.width}px; height:{strip.height}px; '
+        f'<div style="display:flex; flex-direction:column; flex:none; '
+        f'width:{tile.width}px;">{caption}'
+        f'<img src="{_b64_img_src(tile.image, mime=tile.mime)}" '
+        f'style="width:{tile.width}px; height:{tile.height}px; '
         f"image-rendering:pixelated; display:block; flex:none; max-width:none; "
-        f'{_STRIP_CHECKERBOARD_STYLE}" />'
-        "</div>"
+        f'{_STRIP_CHECKERBOARD_STYLE}" /></div>'
+    )
+
+
+def _strip_html(strip: StripRender | None) -> str:
+    """HTML for one strip: a crisp legend `<img>` plus a row of captioned tiles.
+
+    Each channel/tile is its own column (`_strip_tile_html`) so per-channel
+    captions sit directly above their tile. The legend image (already at
+    display resolution, shown 1:1) leads the row under a blank caption-height
+    spacer so it lines up with the tile images, not the captions. A small
+    `gap` spaces the columns in place of the white separators the renderer used
+    to bake between tiles.
+    """
+    if strip is None or not strip.tiles:
+        return ""
+    legend_col = (
+        '<div style="display:flex; flex-direction:column; flex:none;">'
+        f'<div style="height:{LABEL_HEIGHT}px;"></div>'
+        f'<img src="{_b64_img_src(strip.legend_image)}" '
+        'style="display:block; flex:none; max-width:none;" /></div>'
+    )
+    tiles_html = "".join(_strip_tile_html(tile) for tile in strip.tiles)
+    return (
+        '<div style="display:flex; align-items:flex-start; gap:2px;">'
+        f"{legend_col}{tiles_html}</div>"
     )

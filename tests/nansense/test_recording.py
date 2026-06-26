@@ -138,7 +138,7 @@ def test_strip_section_bakes_checkerboard_behind_nan_cells() -> None:
     assert _CHECKER_LIGHT in colors
     assert _CHECKER_DARK in colors
     # No fully-white data region (the old whitewash bug) over the NaN cells.
-    nan_region = arr[:, strip.width // 2 :]  # right of the legend
+    nan_region = arr[:, arr.shape[1] // 2 :]  # right of the legend, in the tile
     assert not (nan_region == 255).all()
 
 

@@ -437,41 +437,112 @@ def _render_view_frames(
     raise ValueError(f"unknown recorded view page {view.page!r}")
 
 
+def _compose_captioned_columns(
+    legend: Image.Image | None, columns: list[tuple[Image.Image, str]]
+) -> Image.Image | None:
+    """Lay out a legend plus captioned column images into one PIL frame.
+
+    Shared by the activation strips (`_strip_section`) and the MIN/MAX patch
+    grids (`_patch_grid_section`): the optional `legend` leads the row under a
+    blank caption-height band, then each column image is placed left to right
+    with its caption (already collapsed to fit) centered above it. Columns are
+    accumulated until the row would exceed `MAX_FRAME_SIZE`, the same width cap
+    the old single-image path used.
+    """
+    from nansense.ui.render import LABEL_HEIGHT
+
+    if not columns:
+        return None
+    gap = 2
+    x = legend.width + gap if legend is not None else 0
+    body_height = legend.height if legend is not None else 0
+    placements: list[tuple[Image.Image, str, int]] = []
+    for img, label in columns:
+        if x >= MAX_FRAME_SIZE:
+            break
+        placements.append((img, label, x))
+        body_height = max(body_height, img.height)
+        x += img.width + gap
+    total_width = min(x, MAX_FRAME_SIZE)
+    canvas = Image.new("RGB", (total_width, LABEL_HEIGHT + body_height), (255, 255, 255))
+    if legend is not None:
+        canvas.paste(legend, (0, LABEL_HEIGHT))
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+    for img, label, col_x in placements:
+        if label:
+            text_w = draw.textlength(label, font=font)
+            draw.text(
+                (col_x + max(0, (img.width - text_w) / 2), 1),
+                label,
+                fill=_LABEL_COLOR,
+                font=font,
+            )
+        canvas.paste(img, (col_x, LABEL_HEIGHT))
+    return canvas
+
+
 def _strip_section(strip: object) -> Image.Image | None:
     """Decode a `StripRender` to one display-resolution PIL image.
 
-    The data image is nearest-upscaled to its CSS display size (matching
-    the browser's `image-rendering: pixelated`) and pasted next to the
-    crisp legend, reproducing what the page shows.
+    Each tile is nearest-upscaled to its CSS display size (matching the
+    browser's `image-rendering: pixelated`) and laid out left to right after
+    the crisp legend by `_compose_captioned_columns`, with its column caption
+    drawn above it — reproducing the captioned columns the page shows.
 
-    An RGBA data image carries transparent NaN/±Inf cells: it is composited
-    over a baked gray checkerboard the same size as the upscaled strip
-    (`_checkerboard`), so recorded frames show the same GIMP-style backdrop
-    the live UI paints with CSS. Opaque RGB strips keep the plain path.
+    An RGBA tile carries transparent NaN/±Inf cells: it is composited over a
+    baked gray checkerboard the same size as the upscaled tile (`_checkerboard`),
+    so recorded frames show the same GIMP-style backdrop the live UI paints
+    with CSS. Opaque RGB tiles keep the plain path.
     """
     from nansense.ui.render import StripRender
 
-    if not isinstance(strip, StripRender):
+    if not isinstance(strip, StripRender) or not strip.tiles:
         return None
     legend = Image.open(io.BytesIO(strip.legend_image)).convert("RGB")
-    decoded = Image.open(io.BytesIO(strip.data_image))
-    width = min(strip.width, MAX_FRAME_SIZE)
-    if decoded.mode == "RGBA":
-        data = decoded.resize((strip.width, strip.height), Image.Resampling.NEAREST)
-        backdrop = _checkerboard(strip.width, strip.height)
-        data = Image.alpha_composite(backdrop, data).convert("RGB")
-    else:
-        data = decoded.convert("RGB").resize(
-            (strip.width, strip.height), Image.Resampling.NEAREST
-        )
-    canvas = Image.new(
-        "RGB",
-        (legend.width + width, max(legend.height, strip.height)),
-        (255, 255, 255),
+    columns: list[tuple[Image.Image, str]] = []
+    for tile in strip.tiles:
+        decoded = Image.open(io.BytesIO(tile.image))
+        if decoded.mode == "RGBA":
+            up = decoded.resize((tile.width, tile.height), Image.Resampling.NEAREST)
+            up = Image.alpha_composite(
+                _checkerboard(tile.width, tile.height), up
+            ).convert("RGB")
+        else:
+            up = decoded.convert("RGB").resize(
+                (tile.width, tile.height), Image.Resampling.NEAREST
+            )
+        columns.append((up, tile.label))
+    return _compose_captioned_columns(legend, columns)
+
+
+def _patch_grid_section(grid: object) -> Image.Image | None:
+    """Decode a `PatchGridRender` to one display-resolution PIL image.
+
+    Each channel column is nearest-upscaled to its CSS display size and laid
+    out after the optional heat legend by `_compose_captioned_columns`, with
+    its "CHANNEL N" caption above it — the recording mirror of the MIN/MAX
+    view's captioned columns.
+    """
+    from nansense.ui.render import PatchGridRender
+
+    if not isinstance(grid, PatchGridRender) or not grid.columns:
+        return None
+    legend = (
+        Image.open(io.BytesIO(grid.heat_legend)).convert("RGB")
+        if grid.heat_legend is not None
+        else None
     )
-    canvas.paste(legend, (0, 0))
-    canvas.paste(data.crop((0, 0, width, strip.height)), (legend.width, 0))
-    return canvas
+    columns: list[tuple[Image.Image, str]] = [
+        (
+            Image.open(io.BytesIO(column.image))
+            .convert("RGB")
+            .resize((column.width, column.height), Image.Resampling.NEAREST),
+            column.label,
+        )
+        for column in grid.columns
+    ]
+    return _compose_captioned_columns(legend, columns)
 
 
 def _checkerboard(width: int, height: int) -> Image.Image:
@@ -830,12 +901,9 @@ def _render_minmax_frames(
             grid = render_patch_grid(tp, mean=mean, std=std, heatmap=heatmap)
             if grid is None:
                 continue
-            img = Image.open(io.BytesIO(grid.image)).convert("RGB")
-            width = min(grid.width, MAX_FRAME_SIZE)
-            height = min(grid.height, MAX_FRAME_SIZE)
-            img = img.resize((grid.width, grid.height), Image.Resampling.NEAREST).crop(
-                (0, 0, width, height)
-            )
+            img = _patch_grid_section(grid)
+            if img is None:
+                continue
             group = _PATCH_GROUPS[ptype]
             sections.setdefault(group, []).append(
                 (f"{layer} — {ptype} · {phase} (ep {stats.epoch})", img)

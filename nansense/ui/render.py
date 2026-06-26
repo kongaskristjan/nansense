@@ -5,13 +5,15 @@ slice and produces one horizontal strip per layer for the right pane of the
 UI. Conv-style activations become a row of square channel tiles; 1D
 activations become a single short heatmap row.
 
-A strip is returned as a `StripRender`: one data image holding every tile at
-the tensor's *native* resolution (downsampled server-side only when larger
-than the display tile), upscaled by the browser via CSS sizing plus
+A strip is returned as a `StripRender`: a row of `StripTile`s (one per
+channel) plus a shared legend. Each tile is its own image at the tensor's
+*native* resolution (downsampled server-side only when larger than the
+display tile), upscaled by the browser via CSS sizing plus
 `image-rendering: pixelated` — equivalent to nearest-neighbour, but without
 inflating an 8×8 feature map to 128×128 pixels before colormapping and
-encoding. Tiles are separated by white spacers `max(1, tile_width //
-TILE_GAP_DIVISOR)` native pixels wide, so the gap scales with the tiles.
+encoding. Tiles render as separate captioned columns (the caption naming the
+channel / weight axis index), so the UI / recordings space them with a small
+gutter rather than baking white separators into one concatenated picture.
 The legend (vertical colorbar with `+x` / `0` / `-x` labels) is the
 exception to native-resolution encoding: it is rendered at display
 resolution into its own image so its text stays crisp.
@@ -33,9 +35,9 @@ strip (indistinguishable from all-zero — the very divergence the tool exists
 to surface). Now the symmetric scale is computed over finite values only,
 and a strip that actually contains NaN/±Inf is encoded as RGBA PNG with
 those cells fully transparent (alpha 0); the UI and recordings paint a fixed
-display-resolution gray checkerboard behind the data image so the bad cells
-read as "no value here", not a misleading color. All-finite strips keep the
-byte-for-byte RGB `STRIP_FORMAT` path (`StripRender.data_mime` says which).
+display-resolution gray checkerboard behind the tile so the bad cells
+read as "no value here", not a misleading color. All-finite tiles keep the
+byte-for-byte RGB `STRIP_FORMAT` path (`StripTile.mime` says which).
 """
 
 from __future__ import annotations
@@ -54,11 +56,17 @@ from nansense.patches import TypePatches
 from nansense.probe import ProbeResult
 
 TILE_SIZE: int = 128
-TILE_GAP_DIVISOR: int = 48
 LINEAR_TILE_HEIGHT: int = 32
 LINEAR_MAX_BINS: int = 256
 LINEAR_BIN_WIDTH: int = 16
 INPUT_IMAGE_SIZE: int = 256
+# Per-tile column labels ("CHANNEL 0", weight axis indices, …). Tiles render
+# as separate images, each captioned above with the longest label form that
+# fits its display width. The label is shown in a monospace font (HTML and the
+# PIL-drawn recordings alike), so one char-width estimate picks the form for
+# both; `LABEL_HEIGHT` is the caption row's height in CSS/recording pixels.
+LABEL_CHAR_PX: float = 6.5
+LABEL_HEIGHT: int = 14
 # Encoding for every rendered image: "BMP" (fastest encode, ~2x payload) or
 # "PNG" (compressed; for byte-constrained links like an SSH port forward).
 STRIP_FORMAT: str = "BMP"
@@ -84,29 +92,42 @@ def image_mime() -> str:
 
 
 @dataclass(frozen=True)
+class StripTile:
+    """One channel/tile of a strip: its own image plus a column caption.
+
+    `image` is the tile at native (or server-downsampled) resolution; the UI
+    and recordings show it at `width × height` CSS pixels with nearest-
+    neighbour upscaling (`image-rendering: pixelated`). `label` is the caption
+    drawn above the tile — already collapsed to the longest form that fits
+    `width` (e.g. `"CHANNEL 3"`, `"CH 3"`, or `"3"`), and empty for single-tile
+    renders (1D heatmap rows, 2D images) that have no column to name.
+
+    `mime` is the tile image's MIME type: the common all-finite tile is RGB
+    encoded per `STRIP_FORMAT` (the fast `image_mime()` path), but a tile
+    containing NaN/±Inf cells is RGBA PNG instead — those cells are fully
+    transparent so the UI / recording can show a checkerboard behind them.
+    """
+
+    image: bytes
+    width: int
+    height: int
+    label: str
+    mime: str = _MIME_TYPES[STRIP_FORMAT]
+
+
+@dataclass(frozen=True)
 class StripRender:
-    """One rendered strip: a native-resolution data image plus a crisp legend.
+    """One rendered strip: a row of captioned tiles plus a shared legend.
 
-    `data_image` holds every tile in a single image at native (or
-    server-downsampled) resolution, with white separators `_tile_gap(w)`
-    native pixels wide between tiles; the UI displays it at `width × height`
-    CSS pixels with `image-rendering: pixelated`, so the separators scale
-    together with the tiles. `legend_image` is already at display resolution
-    and is shown 1:1.
-
-    `data_mime` is the data image's MIME type: the common all-finite strip
-    is RGB encoded per `STRIP_FORMAT` (the fast `image_mime()` path), but a
-    strip containing NaN/±Inf cells is RGBA PNG instead — those cells are
-    fully transparent so the UI / recording can show a checkerboard behind
-    them. Consumers must use `data_mime` (not the global `image_mime()`) for
-    the data image's data-URI; the `legend_image` is always `STRIP_FORMAT`.
+    Every channel/tile is its own `StripTile` image rather than one
+    concatenated picture, so the UI lays them out as separate captioned
+    columns. `legend_image` is the strip-wide colorbar (already at display
+    resolution, shown 1:1); the symmetric `±x` scale it labels is shared by
+    every tile.
     """
 
     legend_image: bytes
-    data_image: bytes
-    width: int
-    height: int
-    data_mime: str = _MIME_TYPES[STRIP_FORMAT]
+    tiles: tuple[StripTile, ...]
 
 
 def render_strip(
@@ -332,18 +353,39 @@ def render_weight(
         yx = selected.permute(pos[y_dim], pos[x_dim]).contiguous()
         return _render_chw(yx.unsqueeze(0))
     chw = selected.permute(pos[tile_dim], pos[y_dim], pos[x_dim]).contiguous()
-    return _render_chw(chw)
+    # Tiles are slices along the chosen tile axis, so the caption names that
+    # dimension (e.g. `DIM 1: 3`) — it tracks whichever axis the user picks as
+    # the tiling axis rather than assuming activation-style channels.
+    return _render_chw(chw, label_prefix=(f"DIM {tile_dim}:", f"D{tile_dim}:"))
 
 
-def _tile_gap(tile_width: int) -> int:
-    """White separator width between tiles, in native pixels.
+def _tile_labels(prefix: tuple[str, str], count: int, tile_w: int) -> list[str]:
+    """Column captions for `count` tiles shown `tile_w` CSS px wide.
 
-    Proportional to the tile so the gap stays ~2% of a tile's width after
-    the browser upscales the strip; floors at one pixel."""
-    return max(1, tile_width // TILE_GAP_DIVISOR)
+    `prefix` is the `(full, short)` caption stem (e.g. `("CHANNEL", "CH")`);
+    each tile's caption is `"<stem> <index>"`. The longest form whose widest
+    label (the highest index) fits `tile_w` is chosen for the whole strip, so
+    captions stay uniform: full `"CHANNEL 12"`, short `"CH 12"`, or bare `"12"`
+    when even the short form overflows. A single tile has no column to name and
+    gets an empty caption.
+    """
+    if count <= 1:
+        return [""]
+    full_stem, short_stem = prefix
+    last = str(count - 1)
+    budget = tile_w - 2  # leave a hair of horizontal padding
+    for stem in (full_stem, short_stem):
+        if stem and len(f"{stem} {last}") * LABEL_CHAR_PX <= budget:
+            return [f"{stem} {i}" for i in range(count)]
+    return [str(i) for i in range(count)]
 
 
-def _render_chw(tensor: Tensor, *, tile_px: int = TILE_SIZE) -> StripRender | None:
+def _render_chw(
+    tensor: Tensor,
+    *,
+    tile_px: int = TILE_SIZE,
+    label_prefix: tuple[str, str] = ("CHANNEL", "CH"),
+) -> StripRender | None:
     data = tensor.detach().float()
     # An empty tile (any zero-length dim) has no pixels to colormap, encode,
     # or lay out — the reductions and PIL encode below would raise. The
@@ -359,17 +401,26 @@ def _render_chw(tensor: Tensor, *, tile_px: int = TILE_SIZE) -> StripRender | No
         # non-finite mask sharp by interpolating finite values and the mask
         # separately (the colormap re-derives the mask after downsampling).
         data = _interpolate_preserving_nonfinite(data, size=tile_px)
-    _, h, w = data.shape
+    n, _, _ = data.shape
     rgb, mime = _apply_colormap(data.numpy(), abs_max=abs_max)
-    strip = _concat_tiles_with_gaps(list(rgb), _tile_gap(w))
-    # Each tile spans tile_px × tile_px CSS px, so the whole strip scales by
-    # tile_px/w horizontally and tile_px/h vertically.
+    # Each tile is shown as a tile_px × tile_px square (the browser nearest-
+    # upscales its native map to fill it), matching the legend's tile_px height.
+    # One mime covers the whole strip — if any tile carries NaN/±Inf, all encode
+    # as RGBA PNG.
+    labels = _tile_labels(label_prefix, n, tile_px)
+    tiles = tuple(
+        StripTile(
+            image=_encode_strip_data(rgb[i], mime),
+            width=tile_px,
+            height=tile_px,
+            label=labels[i],
+            mime=mime,
+        )
+        for i in range(n)
+    )
     return StripRender(
         legend_image=_encode_image(_render_legend(tile_px, abs_max=abs_max)),
-        data_image=_encode_strip_data(strip, mime),
-        width=round(strip.shape[1] * tile_px / w),
-        height=tile_px,
-        data_mime=mime,
+        tiles=tiles,
     )
 
 
@@ -391,21 +442,6 @@ def _interpolate_preserving_nonfinite(data: Tensor, *, size: int = TILE_SIZE) ->
         (~finite).float().unsqueeze(0), size=(size, size), mode="nearest"
     )[0]
     return torch.where(mask > 0, torch.full_like(down, float("nan")), down)
-
-
-def _concat_tiles_with_gaps(tiles: list[np.ndarray], gap: int) -> np.ndarray:
-    if len(tiles) <= 1:
-        return tiles[0]
-    h, channels = tiles[0].shape[0], tiles[0].shape[2]
-    # Separators are opaque white in RGB strips and opaque-white in RGBA
-    # ones too (alpha 255) — only the data's non-finite cells go transparent.
-    spacer = np.full((h, gap, channels), 255, dtype=np.uint8)
-    pieces: list[np.ndarray] = []
-    for i, tile in enumerate(tiles):
-        if i > 0:
-            pieces.append(spacer)
-        pieces.append(tile)
-    return np.concatenate(pieces, axis=1)
 
 
 def render_image(
@@ -482,37 +518,57 @@ def render_attribution_overlay(
     heat = attribution_sample.detach().float().cpu().numpy()  # [C_a, h, w]
     if heat.ndim != 3 or heat.size == 0:
         return None
-    tiles = [
+    blended = [
         blend_signed_heat(rgb, _nearest_resize(channel, h, w), vmax=vmax)
         for channel in heat
     ]
-    strip = _concat_tiles_with_gaps(tiles, _tile_gap(w))
+    labels = _tile_labels(("CHANNEL", "CH"), len(blended), tile_px)
+    tiles = tuple(
+        StripTile(
+            image=_encode_image(tile),
+            width=tile_px,
+            height=tile_px,
+            label=labels[i],
+        )
+        for i, tile in enumerate(blended)
+    )
     return StripRender(
         legend_image=_encode_image(_render_legend(tile_px, abs_max=vmax)),
-        data_image=_encode_strip_data(strip, image_mime()),
-        width=round(strip.shape[1] * tile_px / w),
-        height=tile_px,
+        tiles=tiles,
     )
 
 
 @dataclass(frozen=True)
-class PatchGridRender:
-    """One extreme-patch grid: channels across, top-N samples down.
+class PatchColumn:
+    """One channel's column of the extreme-patch grid: its top-N samples.
 
-    `image` is encoded at native patch resolution; the UI shows it at
-    `width × height` CSS pixels (`PATCH_CELL_SIZE` per cell) with
-    `image-rendering: pixelated`, like the activation strips. Unlike the
-    strips, grids are always PNG (`PATCH_GRID_FORMAT`, mime in `mime`):
-    a wide layer's BMP grids reach multiple MB per refresh message, enough
-    to pause the websocket transport — concurrent drains then trip a known
-    `websockets`-legacy keepalive assertion and kill the connection. PNG
-    keeps grid messages ~10× under that regime for a few ms of (worker
-    thread) encode time.
+    `image` stacks the channel's top-N sample patches top (best) to bottom at
+    native patch resolution; the UI shows it at `width × height` CSS pixels
+    (`PATCH_CELL_SIZE` wide) with `image-rendering: pixelated`. `label` is the
+    column caption (`"CHANNEL 3"`, collapsed to fit like the strip captions).
     """
 
     image: bytes
     width: int
     height: int
+    label: str
+
+
+@dataclass(frozen=True)
+class PatchGridRender:
+    """One extreme-patch grid: a captioned column per channel, top-N down.
+
+    Each channel is its own `PatchColumn` image rather than one concatenated
+    grid, so the UI lays them out as separate captioned columns (matching the
+    activation strips). Columns are always PNG (`PATCH_GRID_FORMAT`, mime in
+    `mime`): a wide layer's BMP cells reach multiple MB per refresh message,
+    enough to pause the websocket transport — concurrent drains then trip a
+    known `websockets`-legacy keepalive assertion and kill the connection. PNG
+    keeps the messages ~10× under that regime for a few ms of (worker thread)
+    encode time.
+    """
+
+    columns: tuple[PatchColumn, ...]
     mime: str
     # Display-resolution colorbar for the heatmap overlay (`±vmax` labels),
     # encoded in `STRIP_FORMAT`; `None` when the heatmap is off or flat.
@@ -550,22 +606,33 @@ def render_patch_grid(
         cells = _blend_heat(cells, tp, vmax=vmax)
     cells[~valid] = _EMPTY_CELL_GRAY
 
+    # One image per channel: its top-N patches stacked top (best) to bottom.
+    # Each cell shows as a PATCH_CELL_SIZE square, so the column is one cell
+    # wide and its display height scales the stack by the same cell-height
+    # factor (the heat legend, rendered that tall, then lines up).
     gap = 1
-    grid = np.full(
-        (n * ph + (n - 1) * gap, c * pw + (c - 1) * gap, 3), 255, dtype=np.uint8
-    )
+    col_height = n * ph + (n - 1) * gap
+    disp_height = round(col_height * PATCH_CELL_SIZE / ph)
+    labels = _tile_labels(("CHANNEL", "CH"), c, PATCH_CELL_SIZE)
+    columns: list[PatchColumn] = []
     for col in range(c):
+        stacked = np.full((col_height, pw, 3), 255, dtype=np.uint8)
         for row in range(n):
-            y, x = row * (ph + gap), col * (pw + gap)
-            grid[y : y + ph, x : x + pw] = cells[col, row]
-    height = round(grid.shape[0] * PATCH_CELL_SIZE / ph)
+            y = row * (ph + gap)
+            stacked[y : y + ph] = cells[col, row]
+        columns.append(
+            PatchColumn(
+                image=_encode_image(stacked, fmt=PATCH_GRID_FORMAT),
+                width=PATCH_CELL_SIZE,
+                height=disp_height,
+                label=labels[col],
+            )
+        )
     return PatchGridRender(
-        image=_encode_image(grid, fmt=PATCH_GRID_FORMAT),
-        width=round(grid.shape[1] * PATCH_CELL_SIZE / pw),
-        height=height,
+        columns=tuple(columns),
         mime=_MIME_TYPES[PATCH_GRID_FORMAT],
         heat_legend=(
-            _encode_image(_render_legend(height, abs_max=vmax))
+            _encode_image(_render_legend(disp_height, abs_max=vmax))
             if vmax > 0.0
             else None
         ),
@@ -718,15 +785,21 @@ def _render_1d(tensor: Tensor) -> StripRender | None:
         values = pooled
         f = LINEAR_MAX_BINS
     rgb_row, mime = _apply_colormap(values.numpy(), abs_max=abs_max)
-    # A 1-px-tall row; the browser stretches it to the display height.
+    # A 1-px-tall row stretched to the display height; the bins aren't channels,
+    # so the single tile carries no column caption.
     return StripRender(
         legend_image=_encode_image(
             _render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)
         ),
-        data_image=_encode_strip_data(rgb_row[None, :, :], mime),
-        width=f * LINEAR_BIN_WIDTH,
-        height=LINEAR_TILE_HEIGHT,
-        data_mime=mime,
+        tiles=(
+            StripTile(
+                image=_encode_strip_data(rgb_row[None, :, :], mime),
+                width=f * LINEAR_BIN_WIDTH,
+                height=LINEAR_TILE_HEIGHT,
+                label="",
+                mime=mime,
+            ),
+        ),
     )
 
 

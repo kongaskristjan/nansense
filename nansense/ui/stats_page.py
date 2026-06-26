@@ -49,7 +49,13 @@ from nansense.ui.histograms import (
     trace_heights,
     use_density,
 )
-from nansense.ui.render import PatchGridRender, render_image, render_patch_grid
+from nansense.ui.render import (
+    LABEL_HEIGHT,
+    PatchColumn,
+    PatchGridRender,
+    render_image,
+    render_patch_grid,
+)
 from nansense.ui.top_bar import (
     _add_error_banner,
     _add_repo_logo,
@@ -1457,25 +1463,58 @@ def _patch_grids_html(
     return '<div class="flex flex-col gap-4 w-full">' + "".join(blocks) + "</div>"
 
 
-def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) -> str:
-    """One labeled grid: channels as columns, top samples as rows.
+def _patch_column_html(column: PatchColumn, mime: str, label: str) -> str:
+    """One captioned channel column of a patch grid (caption above the image).
 
-    The axes are labeled explicitly: a "N channels (one channel per
-    column)" caption runs along the grid's top edge and a rotated "top
-    samples (best first)" caption
-    down its left edge, aligned by a CSS grid whose first row holds only
-    the caption. With the heatmap enabled the second row also starts with
-    the crisp display-resolution colorbar (the overlay's `±vmax` scale),
-    which sits outside the scroll container so it stays visible on wide
-    grids; without it that auto column collapses to zero width.
-    `max-width:none` opts the images out of the preflight `max-width:100%`
-    so wide grids scroll horizontally instead of being squashed.
+    Mirrors the activation strips' captioned tiles: a fixed-height monospace
+    caption (`"CHANNEL 3"`, already collapsed to fit by the renderer) clipped
+    to the column width, above the channel's stacked top-N patches.
+    """
+    col_w, col_h, col_label = column.width, column.height, column.label
+    if col_label:
+        caption = (
+            f'<div title="{html.escape(col_label)}" style="'
+            f"height:{LABEL_HEIGHT}px; line-height:{LABEL_HEIGHT}px; "
+            "font:11px monospace; color:#475569; text-align:center; "
+            'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">'
+            f"{html.escape(col_label)}</div>"
+        )
+    else:
+        caption = f'<div style="height:{LABEL_HEIGHT}px;"></div>'
+    return (
+        f'<div style="display:flex; flex-direction:column; flex:none; '
+        f'width:{col_w}px;">{caption}'
+        f'<img src="{_b64_img_src(column.image, mime=mime)}" '
+        f"style=\"width:{col_w}px; height:{col_h}px; image-rendering:pixelated; "
+        f'display:block; max-width:none;" title="{html.escape(label)} — '
+        f'{html.escape(col_label)}, top samples (best first)" /></div>'
+    )
+
+
+def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) -> str:
+    """One labeled grid: a captioned column per channel, top samples down.
+
+    The axes are labeled explicitly: a "N channels (one channel per column)"
+    caption runs along the grid's top edge and a rotated "top samples (best
+    first)" caption down its left edge, aligned by a CSS grid whose first row
+    holds only the caption. Each channel column carries its own "CHANNEL N"
+    caption (`_patch_column_html`). With the heatmap enabled the second row
+    also starts with the crisp display-resolution colorbar (the overlay's
+    `±vmax` scale), which sits outside the scroll container so it stays visible
+    on wide grids; without it that auto column collapses to zero width.
+    `max-width:none` opts the images out of the preflight `max-width:100%` so
+    wide grids scroll horizontally instead of being squashed.
     """
     legend = (
+        '<div style="display:flex; flex-direction:column;">'
+        f'<div style="height:{LABEL_HEIGHT}px;"></div>'
         f'<img src="{_b64_img_src(grid.heat_legend)}" '
-        'style="display:block; max-width:none;" />'
+        'style="display:block; max-width:none;" /></div>'
         if grid.heat_legend is not None
         else "<div></div>"
+    )
+    columns = "".join(
+        _patch_column_html(column, grid.mime, label) for column in grid.columns
     )
     axis_cls = "text-[15px] font-mono text-slate-600"
     return (
@@ -1492,11 +1531,7 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) ->
         f'<div class="{axis_cls}" '
         'style="writing-mode:vertical-rl; padding-right:3px;">'
         "top samples (best first) &rarr;</div>"
-        '<div class="overflow-x-auto">'
-        f'<img src="{_b64_img_src(grid.image, mime=grid.mime)}" '
-        f'style="width:{grid.width}px; height:{grid.height}px; '
-        'image-rendering:pixelated; display:block; max-width:none;" '
-        f'title="{label} — columns: channels, rows: top samples '
-        '(best first)" />'
+        '<div class="overflow-x-auto" style="display:flex; gap:2px;">'
+        f"{columns}"
         "</div></div></div>"
     )

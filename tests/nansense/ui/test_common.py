@@ -16,12 +16,15 @@ def test_strip_html_scales_native_data_and_keeps_legend_crisp() -> None:
     strip = render_strip(torch.randn(1, 2, 8, 8), sample_idx=0)
     assert strip is not None
     html = _strip_html(strip)
-    # One legend <img> (shown 1:1, no pixelated scaling) + one data <img>.
-    assert html.count("<img") == 2
-    assert html.count("image-rendering:pixelated") == 1
-    assert html.count(f"data:{image_mime()};base64,") == 2
-    assert f"width:{strip.width}px" in html
-    assert f"height:{strip.height}px" in html
+    # One legend <img> (shown 1:1, no pixelated scaling) + one captioned <img>
+    # per channel tile.
+    assert html.count("<img") == 1 + len(strip.tiles)
+    assert html.count("image-rendering:pixelated") == len(strip.tiles)
+    assert html.count(f"data:{image_mime()};base64,") == 1 + len(strip.tiles)
+    assert f"width:{strip.tiles[0].width}px" in html
+    assert f"height:{strip.tiles[0].height}px" in html
+    # Each tile carries its channel caption.
+    assert "CHANNEL 0" in html and "CHANNEL 1" in html
 
 
 def test_strip_html_carries_checkerboard_background() -> None:
@@ -40,9 +43,9 @@ def test_strip_html_uses_data_mime_for_nonfinite_strip() -> None:
     tensor = torch.tensor([[float("nan"), float("inf"), 0.5, -0.5]])
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
-    assert strip.data_mime == "image/png"
+    assert strip.tiles[0].mime == "image/png"
     html = _strip_html(strip)
-    assert "data:image/png;base64," in html  # data img
+    assert "data:image/png;base64," in html  # tile img
     assert f"data:{image_mime()};base64," in html  # legend
 
 

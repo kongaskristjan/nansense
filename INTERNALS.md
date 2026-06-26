@@ -1116,20 +1116,31 @@ between the UI and recording — keep them stable.
 
 Render conventions worth knowing before editing `render.py`:
 
-- Data images are encoded at the tensor's **native** resolution and upscaled
-  client-side with `image-rendering: pixelated` — an 8×8 feature map ships as
-  64 px, not a server-upscaled blob. Legends are the exception (rendered at
-  display resolution so their text stays crisp).
+- A `StripRender` is a row of `StripTile`s (one image per channel) plus a
+  shared legend — **not** one concatenated picture. Each tile image is encoded
+  at the tensor's **native** resolution and upscaled client-side with
+  `image-rendering: pixelated` (an 8×8 feature map ships as 64 px, not a
+  server-upscaled blob), shown as a `tile_px` square. Legends are the exception
+  (rendered at display resolution so their text stays crisp).
+- Each tile carries a column caption (`StripTile.label`) drawn above it by both
+  the UI (`_strip_tile_html`) and recordings (`_compose_captioned_columns`):
+  activation/gradient tiles read `CHANNEL n`, weight tiles `DIM d: n` for the
+  tiled axis `d`. `_tile_labels` picks the longest form that fits the tile
+  width (full → short `CH n` → bare index), uniformly across the strip.
 - Every strip (activations, gradients, weights) uses one diverging
   blue-white-red colormap; strips are told apart by a labelled colored marker
   bar, never by palette.
 - `render_strip` handles `[C,H,W]`, `[F]`, and 2D token shapes
   (`[tokens, dim]`, unflattened onto the input patch grid when `input_hw` is
   threaded in, assuming row-major ViT token order); 4D-and-beyond per-sample
-  shapes return `None` and the UI hides them.
+  shapes return `None` and the UI hides them. `[F]` and single 2D heatmaps are
+  one uncaptioned tile (bins/pixels aren't channels).
 - `render_weight` has no batch axis: it pins every axis not assigned to
   X/Y/tile, then funnels through the same tile machinery; `default_weight_dims`
   gives the conv-kernel / matrix / row defaults.
+- `render_patch_grid` (the MIN/MAX galleries) is the same column model: a
+  `PatchColumn` per channel (its top-N patches stacked vertically) captioned
+  `CHANNEL n`, rather than one concatenated grid image.
 - Image encoding is governed by `STRIP_FORMAT` — BMP by default (near-memcpy,
   the right trade for a localhost socket; flip to PNG for an SSH-forwarded UI).
 
