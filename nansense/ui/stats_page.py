@@ -129,7 +129,6 @@ def _build_stats_page(
     layer_names: list[str],
     selected_layer: str = "",
     *,
-    start_current_batch: bool = False,
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
@@ -146,9 +145,10 @@ def _build_stats_page(
     stats computed directly from the last captured `BatchSnapshot` rather than
     the running watch aggregates, so it works for *any* layer whether or not
     it is watched — and the Layer dropdown then offers every layer, not just
-    the watched ones. `start_current_batch` opens the page already on it (the
-    watch menu's per-layer "Current batch" links). The view and phase apply in
-    both views, one at a time:
+    the watched ones. The page opens on "Current batch" by default (it needs no
+    watched aggregates, so a freshly opened Stats view always has something to
+    show); the user can switch to a recorded phase from the dropdown. The view
+    and phase apply in both views, one at a time:
 
     - HISTOGRAM (the default) — one plotly figure per tensor kind for the
       selected phase's latest epoch, with the "Log x" / "Log y" axis
@@ -182,13 +182,10 @@ def _build_stats_page(
 
     ui.on(_HOVER_EVENT, _dispatch_hover)
     state = _WatchPageState(
-        # "Current batch" when the caller asked for it (the watch menu's
-        # per-layer links), else the schedule's first phase.
-        selected_phase=(
-            _PHASE_CURRENT_BATCH
-            if start_current_batch
-            else (phase_names[0] if phase_names else "")
-        ),
+        # Default to "Current batch": it reads the last captured snapshot
+        # directly, so the page shows data immediately for any layer without
+        # waiting for watch aggregates to fill.
+        selected_phase=_PHASE_CURRENT_BATCH,
         # Seed the layer picked by the caller (e.g. a `?layer=` link from the
         # main page's watch menu). Reconciliation drops it back to the first
         # watched layer if it isn't currently watched.

@@ -290,8 +290,7 @@ def _build_page(
                                 ):
                                     for name in layer_names:
                                         ui.menu_item(name).props(
-                                            f'href="/stats?layer={quote(name)}'
-                                            '&phase=current"'
+                                            f'href="/stats?layer={quote(name)}"'
                                         ).classes("font-mono text-sm")
                         ui.separator()
                         watch_list_container = ui.element("div").classes("py-1")
