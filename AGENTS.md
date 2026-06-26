@@ -13,6 +13,10 @@
   - `README.md` - How to run examples and the nansense library API usage
   - `INTERNALS.md` - High level overview of nansense library internals
 
+## Prompts
+
+- If the user request is unclear, ask questions instead of proceeding to implement
+
 ## Worktrees
 
 - When running in agents mode, branch every new change request `main` using a git worktree.
