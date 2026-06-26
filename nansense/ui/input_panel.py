@@ -23,7 +23,11 @@ from nicegui import ui
 from torch import Tensor
 
 from nansense.session import Session
-from nansense.ui.common import _defer_value_write, _set_controls_enabled
+from nansense.ui.common import (
+    _defer_value_write,
+    _label_bar_html,
+    _set_controls_enabled,
+)
 
 _PROBE_MODE_OPTIONS: dict[str, str] = {
     "unchanged": "Unchanged",
@@ -108,6 +112,10 @@ class InputPanel:
         # acts on), then its sample selector, then the "Pin", "Forward mode"
         # and "Perturb" control sections.
         with ui.column().classes("w-full items-center gap-2"):
+            # A green "INPUT" banner (matching the experiment view's input
+            # label / the activation markers) names the image — without it the
+            # bare picture can be mistaken for an output or an activation map.
+            ui.html(_label_bar_html("INPUT", color="#10b981")).classes("w-full")
             # Full pane width, so the image scales with the (resizable)
             # pane; clicks stay in native pixel space regardless of CSS size.
             self._image = ui.interactive_image(
