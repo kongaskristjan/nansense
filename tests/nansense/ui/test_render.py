@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -23,7 +24,9 @@ from nansense.ui.render import (
     default_weight_dims,
     dims_from_roles,
     image_mime,
+    input_blank_warning,
     render_image,
+    render_input_image,
     render_patch_grid,
     render_strip,
     render_weight,
@@ -372,6 +375,85 @@ def test_input_image_returns_none_for_out_of_range_sample() -> None:
 def test_input_image_returns_none_when_mean_std_size_mismatched() -> None:
     tensor = torch.rand(1, 3, 8, 8)
     assert render_image(tensor, sample_idx=0, mean=(0.5,), std=(0.2,)) is None
+
+
+def test_render_input_image_succeeds_without_warning() -> None:
+    out = render_input_image(torch.rand(1, 3, 8, 8), sample_idx=0)
+    assert out.png is not None and out.warning is None
+    assert _decode(out.png).size == (8, 8)
+
+
+def test_render_input_image_no_input_yet_is_blank_and_silent() -> None:
+    # No snapshot / non-image / out-of-range: blank pane, but no warning.
+    assert render_input_image(None, sample_idx=0) == render_input_image(None, 0)
+    for out in (
+        render_input_image(None, sample_idx=0),
+        render_input_image(torch.rand(3, 8, 8), sample_idx=0),  # 2D handled elsewhere
+        render_input_image(torch.rand(1, 3, 8, 8), sample_idx=9),  # out of range
+    ):
+        assert out.png is None and out.warning is None
+
+
+def test_render_input_image_warns_on_unsupported_channels() -> None:
+    out = render_input_image(torch.rand(1, 5, 8, 8), sample_idx=0, name="img")
+    assert out.png is None
+    assert out.warning is not None
+    assert "5 channels" in out.warning and "input_transform" in out.warning
+    assert "img" in out.warning
+
+
+def test_render_input_image_warns_on_mean_std_mismatch() -> None:
+    out = render_input_image(
+        torch.rand(1, 3, 8, 8), sample_idx=0, mean=(0.5,), std=(0.2,)
+    )
+    assert out.png is None
+    assert out.warning is not None and "input_mean" in out.warning
+
+
+def test_input_transform_renders_non_rgb_input() -> None:
+    # A 5-channel input mapped to 3 channels renders, keeping H×W.
+    def pick_rgb(x: torch.Tensor) -> torch.Tensor:
+        return x[:, :3].clamp(0, 1)
+
+    out = render_input_image(torch.rand(2, 5, 12, 12), sample_idx=0, transform=pick_rgb)
+    assert out.png is not None and out.warning is None
+    assert _decode(out.png).size == (12, 12)
+
+
+@pytest.mark.parametrize(
+    "transform, expected",
+    [
+        (lambda x: x[:, :2], "1 or 3 channels"),  # wrong channel count out
+        (lambda x: x.mean(dim=(2, 3)), "4D"),  # collapses spatial dims
+        (lambda x: x[:, :3, :4, :4], "H × W"),  # changes H×W
+        (lambda x: x[:1, :3], "batch size"),  # changes batch size
+    ],
+)
+def test_input_transform_bad_output_warns(
+    transform: Callable[[torch.Tensor], torch.Tensor], expected: str
+) -> None:
+    out = render_input_image(
+        torch.rand(2, 5, 8, 8), sample_idx=0, name="x", transform=transform
+    )
+    assert out.png is None
+    assert out.warning is not None and expected in out.warning
+
+
+def test_input_transform_error_is_surfaced_not_raised() -> None:
+    def boom(_x: torch.Tensor) -> torch.Tensor:
+        raise ValueError("nope")
+
+    out = render_input_image(torch.rand(1, 5, 8, 8), sample_idx=0, transform=boom)
+    assert out.png is None
+    assert out.warning is not None and "ValueError" in out.warning
+
+
+def test_input_blank_warning_mirrors_render() -> None:
+    # The warning-only path agrees with render_input_image's warning.
+    ok = torch.rand(1, 3, 8, 8)
+    assert input_blank_warning(ok, 0) is None
+    bad = torch.rand(1, 5, 8, 8)
+    assert input_blank_warning(bad, 0) == render_input_image(bad, 0).warning
 
 
 def test_blend_signed_heat_colors_by_sign() -> None:

@@ -52,6 +52,7 @@ from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 from torch.nn import functional as F
 
+from nansense.input_config import InputTransform
 from nansense.patches import TypePatches
 from nansense.probe import ProbeResult
 
@@ -440,32 +441,152 @@ def _interpolate_preserving_nonfinite(data: Tensor, *, size: int = TILE_SIZE) ->
     return torch.where(mask > 0, torch.full_like(down, float("nan")), down)
 
 
+@dataclass(frozen=True)
+class InputImage:
+    """A rendered input-pane image plus an optional blank-reason warning.
+
+    `png` is `None` exactly when the pane can't show an image; `warning` then
+    holds a short, human-readable reason and fix. When there is simply no input
+    to show yet (no snapshot, out-of-range sample) both are `None`.
+    """
+
+    png: bytes | None
+    warning: str | None
+
+
+def render_input_image(
+    tensor: Tensor | None,
+    sample_idx: int,
+    *,
+    name: str | None = None,
+    mean: tuple[float, ...] | None = None,
+    std: tuple[float, ...] | None = None,
+    transform: InputTransform | None = None,
+) -> InputImage:
+    """Render one input sample as an `(png, warning)` pair for the input pane.
+
+    A `[B, C, H, W]` input with `C in (1, 3)` renders directly (denormalized
+    as `x * std + mean` when both stats are given, else assumed to be in
+    `[0, 1]`). For any other channel count, pass `transform`: a callable
+    mapping the whole `[B, C, H, W]` batch to a displayable `[B, 1|3, H, W]`
+    tensor in `[0, 1]`, keeping the batch size and `H × W` (so a pane click
+    still maps to a pixel of the original input). A given `transform` takes
+    over rendering even for `C in (1, 3)`, and `mean`/`std` are then left to it.
+
+    `png` is `None` with a `warning` when the pane can't render — an
+    unsupported channel count and no transform, a transform that errors or
+    returns the wrong shape, or `mean`/`std` whose length doesn't match the
+    input. With no input yet (None tensor, non-4D, out-of-range sample) both
+    are `None`. `name` only personalizes the warning.
+    """
+    if tensor is None or tensor.ndim != 4 or not 0 <= sample_idx < tensor.shape[0]:
+        return InputImage(None, None)
+    display, enc_mean, enc_std, problem = _input_display(tensor, name, mean, std, transform)
+    if display is None:
+        return InputImage(None, problem)
+    return InputImage(_encode_input_sample(display, sample_idx, enc_mean, enc_std), None)
+
+
 def render_image(
     tensor: Tensor | None,
     sample_idx: int,
     *,
     mean: tuple[float, ...] | None = None,
     std: tuple[float, ...] | None = None,
+    transform: InputTransform | None = None,
 ) -> bytes | None:
-    """Render a per-sample input image as `STRIP_FORMAT` bytes.
+    """Per-sample input image as `STRIP_FORMAT` bytes, or `None` if not shown.
 
-    Expects a `[B, C, H, W]` tensor with `C in (1, 3)`. Values are assumed
-    to lie in `[0, 1]` unless both `mean` and `std` are provided, in which
-    case the sample is denormalized as `x * std + mean` before being
-    clamped and scaled to 8-bit. The image keeps the sample's native
-    `H × W`; the UI scales it to the input pane's width with CSS
-    nearest-neighbour (recordings scale to `INPUT_IMAGE_SIZE`). Returns
-    `None` for unsupported shapes, out-of-range `sample_idx`, or a None
-    tensor.
+    The plain-bytes form of `render_input_image` for callers (recordings, the
+    stats/experiment panes) that don't surface the blank-reason warning.
     """
-    if tensor is None or tensor.ndim != 4:
+    return render_input_image(
+        tensor, sample_idx, mean=mean, std=std, transform=transform
+    ).png
+
+
+def input_blank_warning(
+    tensor: Tensor | None,
+    sample_idx: int,
+    *,
+    name: str | None = None,
+    mean: tuple[float, ...] | None = None,
+    std: tuple[float, ...] | None = None,
+    transform: InputTransform | None = None,
+) -> str | None:
+    """Why the input pane is blank for this 4D input, or `None` if it renders.
+
+    The validation half of `render_input_image` without the PNG encode, so the
+    page can keep a blank-reason hint in sync without re-encoding the image.
+    `None` when the image renders, or when there is just no input to show yet
+    (None tensor, non-4D, out-of-range sample).
+    """
+    if tensor is None or tensor.ndim != 4 or not 0 <= sample_idx < tensor.shape[0]:
         return None
-    if not 0 <= sample_idx < tensor.shape[0]:
-        return None
-    sample = tensor[sample_idx]
-    c, _, _ = sample.shape
+    return _input_display(tensor, name, mean, std, transform)[3]
+
+
+def _input_display(
+    tensor: Tensor,
+    name: str | None,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+    transform: InputTransform | None,
+) -> tuple[Tensor | None, tuple[float, ...] | None, tuple[float, ...] | None, str | None]:
+    """Resolve a 4D input to `(display_tensor, enc_mean, enc_std, problem)`.
+
+    On success exactly one of `display_tensor` / `problem` is set: the tensor
+    to encode plus the stats to denormalize it with (both `None` when a
+    transform already produced display values), or a short reason the pane
+    stays blank.
+    """
+    label = f"input {name!r}" if name else "the input"
+    if transform is not None:
+        try:
+            shown = transform(tensor)
+        except Exception as e:  # noqa: BLE001 — surfaced as a pane warning, not raised
+            return None, None, None, (
+                f"input_transform for {label} raised {type(e).__name__}: {e}"
+            )
+        problem = _transform_output_problem(tensor, shown)
+        if problem is not None:
+            return None, None, None, f"input_transform for {label} {problem}"
+        return shown, None, None, None
+    c = int(tensor.shape[1])
     if c not in (1, 3):
-        return None
+        return None, None, None, (
+            f"{label.capitalize()} has {c} channels — pass input_transform to map "
+            "it to a 1- or 3-channel image to display it."
+        )
+    if mean is not None and std is not None and (len(mean) != c or len(std) != c):
+        return None, None, None, (
+            f"input_mean / input_std for {label} must have {c} values to match it."
+        )
+    return tensor, mean, std, None
+
+
+def _transform_output_problem(orig: Tensor, shown: object) -> str | None:
+    """Why a transform's output can't be shown, or `None` when it's valid."""
+    if not isinstance(shown, Tensor) or shown.ndim != 4:
+        return "must return a 4D [B, C, H, W] tensor"
+    if int(shown.shape[0]) != int(orig.shape[0]):
+        return "must keep the batch size"
+    if int(shown.shape[1]) not in (1, 3):
+        return f"must return 1 or 3 channels, got {int(shown.shape[1])}"
+    if shown.shape[2:] != orig.shape[2:]:
+        return "must keep the input's H × W"
+    return None
+
+
+def _encode_input_sample(
+    tensor: Tensor,
+    sample_idx: int,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+) -> bytes | None:
+    """Encode one `[C, H, W]` (C in 1/3) sample of `tensor` as image bytes."""
+    sample = tensor[sample_idx]
+    c = int(sample.shape[0])
     arr = _denormalize_uint8(
         sample.detach().float().cpu().numpy(), mean, std, channel_axis=0
     )

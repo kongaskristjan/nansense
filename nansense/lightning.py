@@ -48,6 +48,7 @@ except ImportError as e:  # pragma: no cover - exercised only without lightning
     ) from e
 
 import nansense
+from nansense.input_config import InputTransform, MeanStd
 from nansense.restore import (
     DEFAULT_CACHE_DIR,
     EpochCache,
@@ -91,8 +92,9 @@ class NansenseCallback(Callback):
         host: str = "127.0.0.1",
         open_browser: bool = True,
         model: str | None = None,
-        input_mean: tuple[float, ...] | None = None,
-        input_std: tuple[float, ...] | None = None,
+        input_mean: MeanStd | dict[str, MeanStd] | None = None,
+        input_std: MeanStd | dict[str, MeanStd] | None = None,
+        input_transform: InputTransform | dict[str, InputTransform] | None = None,
         enabled: bool = True,
     ) -> None:
         self._port = port
@@ -101,6 +103,7 @@ class NansenseCallback(Callback):
         self._model_attr = model
         self._input_mean = input_mean
         self._input_std = input_std
+        self._input_transform = input_transform
         self._enabled = enabled
         self._session: Session | None = None
         self._restorer: LightningRestorer | None = None
@@ -147,6 +150,7 @@ class NansenseCallback(Callback):
             open_browser=self._open_browser,
             input_mean=self._input_mean,
             input_std=self._input_std,
+            input_transform=self._input_transform,
         )
         if self._restorer is not None:
             self._session.attach_restorer(self._restorer)

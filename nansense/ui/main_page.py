@@ -32,7 +32,14 @@ from nansense.ui.common import (
 )
 from nansense.ui.graph import slug_map
 from nansense.ui.input_panel import InputPanel
-from nansense.ui.render import probe_act_tensor, render_image, render_strip, tensor_hw
+from nansense.input_config import InputTransform, MeanStd, resolve_per_input
+from nansense.ui.render import (
+    input_blank_warning,
+    probe_act_tensor,
+    render_image,
+    render_strip,
+    tensor_hw,
+)
 from nansense.ui.static import (
     _ARCHITECTURE_CLICK_CSS,
     _ARCHITECTURE_CLICK_JS,
@@ -141,11 +148,15 @@ def _build_page(
     mermaid_src: str,
     layer_names: list[str],
     *,
-    input_name: str | None,
-    input_mean: tuple[float, ...] | None,
-    input_std: tuple[float, ...] | None,
+    input_names: list[str],
+    input_mean: MeanStd | dict[str, MeanStd] | None,
+    input_std: MeanStd | dict[str, MeanStd] | None,
+    input_transform: InputTransform | dict[str, InputTransform] | None,
     render_cache: _RenderCache,
 ) -> None:
+    # The primary input drives the token grid (its H×W); the user can view any
+    # input in the pane via the dropdown, with its own resolved display config.
+    input_name = input_names[0] if input_names else None
     state = _PageState()
     state.last_watched = session.watched_layers
     layer_views: dict[str, _LayerView] = {}
@@ -164,6 +175,9 @@ def _build_page(
             return None
         watched = [n for n in layer_names if n in session.watched_layers]
         plural = "" if len(watched) == 1 else "s"
+        # Record exactly the input the pane is showing, with its resolved
+        # display config (a same-process dict, so the transform travels too).
+        selected = input_panel.selected_input
         return RecordedView(
             key="main",
             page="main",
@@ -174,9 +188,10 @@ def _build_page(
             params={
                 "layers": tuple(watched),
                 "sample_idx": input_panel.sample_idx,
-                "input_name": input_name or "",
-                "input_mean": input_mean,
-                "input_std": input_std,
+                "input_name": selected or "",
+                "input_mean": resolve_per_input(input_mean, selected),
+                "input_std": resolve_per_input(input_std, selected),
+                "input_transform": resolve_per_input(input_transform, selected),
             },
         )
 
@@ -445,9 +460,10 @@ def _build_page(
 
                 input_panel = InputPanel(
                     session=session,
-                    input_name=input_name,
+                    input_names=input_names,
                     input_mean=input_mean,
                     input_std=input_std,
+                    input_transform=input_transform,
                     on_change=mark_dirty,
                 )
 
@@ -539,6 +555,12 @@ def _build_page(
             state.rendering = True
             try:
                 sample_idx = input_panel.sample_idx
+                # Resolve the display config for whichever input the pane shows
+                # (a per-input dict collapses to this one input's values).
+                selected = input_panel.selected_input
+                sel_mean = resolve_per_input(input_mean, selected)
+                sel_std = resolve_per_input(input_std, selected)
+                sel_transform = resolve_per_input(input_transform, selected)
                 # Only the visible (= watched) layers render; hidden cards
                 # keep whatever stale content they had, which is invisible
                 # and re-rendered (cache-assisted) when they reappear.
@@ -551,15 +573,26 @@ def _build_page(
                     sample_idx,
                     compare=input_panel.compare,
                     input_name=input_name,
-                    selected_input=input_panel.selected_input,
-                    input_mean=input_mean,
-                    input_std=input_std,
+                    selected_input=selected,
+                    input_mean=sel_mean,
+                    input_std=sel_std,
+                    input_transform=sel_transform,
                     cache=render_cache,
                 )
             finally:
                 state.rendering = False
             _apply_all(layer_views, rendered)
             input_panel.set_image(input_src)
+            input_panel.set_input_warning(
+                input_blank_warning(
+                    _selected_input_tensor(snap, probe, selected),
+                    sample_idx,
+                    name=selected,
+                    mean=sel_mean,
+                    std=sel_std,
+                    transform=sel_transform,
+                )
+            )
 
     ui.timer(0.2, tick)
 
@@ -573,6 +606,19 @@ def _snapshot_batch_size(snap: BatchSnapshot) -> int | None:
 
 def _zeros_like(tensor: Tensor | None) -> Tensor | None:
     return torch.zeros_like(tensor) if tensor is not None else None
+
+
+def _selected_input_tensor(
+    snap: BatchSnapshot | None, probe: ProbeResult | None, name: str | None
+) -> Tensor | None:
+    """The selected input's tensor as currently shown (probe wins over snap)."""
+    if name is None:
+        return None
+    if probe is not None:
+        return probe.shown_input(name)
+    if snap is not None:
+        return snap.activations.get(name)
+    return None
 
 
 def _display_batch_size(
@@ -631,6 +677,7 @@ def _compute_frame(
     selected_input: str | None = None,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
+    input_transform: InputTransform | None = None,
     cache: _RenderCache,
 ) -> tuple[dict[str, tuple[str, str]], str]:
     """Render every layer's strip pair plus the input image source.
@@ -656,6 +703,7 @@ def _compute_frame(
             selected_input=selected_input,
             input_mean=input_mean,
             input_std=input_std,
+            input_transform=input_transform,
             cache=cache,
         )
     assert snap is not None  # tick only renders when at least one source exists
@@ -712,6 +760,7 @@ def _compute_frame(
                 sample_idx,
                 mean=input_mean,
                 std=input_std,
+                transform=input_transform,
             )
         ),
     )
@@ -728,6 +777,7 @@ def _compute_probe_frame(
     selected_input: str | None,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
+    input_transform: InputTransform | None,
     cache: _RenderCache,
 ) -> tuple[dict[str, tuple[str, str]], str]:
     """The probe-sourced equivalent of the snapshot frame.
@@ -770,7 +820,13 @@ def _compute_probe_frame(
         probe,
         (selected_input or "", "probe-input", sample_idx),
         lambda: _input_img_src(
-            render_image(shown_input, sample_idx, mean=input_mean, std=input_std)
+            render_image(
+                shown_input,
+                sample_idx,
+                mean=input_mean,
+                std=input_std,
+                transform=input_transform,
+            )
         ),
     )
     return rendered, input_src

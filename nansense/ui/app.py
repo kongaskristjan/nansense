@@ -46,6 +46,7 @@ import uvicorn
 from fastapi import FastAPI
 from nicegui import ui
 
+from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
 from nansense.ui.graph import build_mermaid
@@ -201,8 +202,9 @@ def serve(
     host: str = "127.0.0.1",
     log_level: str = "warning",
     open_browser: bool = True,
-    input_mean: tuple[float, ...] | None = None,
-    input_std: tuple[float, ...] | None = None,
+    input_mean: MeanStd | dict[str, MeanStd] | None = None,
+    input_std: MeanStd | dict[str, MeanStd] | None = None,
+    input_transform: InputTransform | dict[str, InputTransform] | None = None,
 ) -> threading.Thread | None:
     """Start the NiceGUI app on a background thread and return that thread.
 
@@ -229,6 +231,11 @@ def serve(
     `input_mean` / `input_std` are passed to the input-image pane so the
     sample is denormalized (`x * std + mean`) before display. When either
     is `None`, the renderer assumes the input is already in `[0, 1]`.
+    `input_transform` maps a non-RGB input to a displayable 1-/3-channel
+    image. Each of the three is either a single value applied to every input,
+    or a `dict` keyed by input name for a multi-input model (see
+    `nansense.input_config`); the stats and experiment panes use the primary
+    input's resolved values.
     """
     if not session.enabled:
         return None
@@ -242,7 +249,13 @@ def serve(
     session.mark_served()
     mermaid_src = build_mermaid(session.model)
     layer_names = session.layer_names
-    input_name = session.input_names[0] if session.input_names else None
+    input_names = session.input_names
+    input_name = input_names[0] if input_names else None
+    # The stats and experiment panes render only the primary input's plain
+    # image, so resolve its stats once; the main page resolves per selected
+    # input and is the one place `input_transform` is applied.
+    primary_mean = resolve_per_input(input_mean, input_name)
+    primary_std = resolve_per_input(input_std, input_name)
 
     fastapi_app = FastAPI()
     favicon_path = (
@@ -258,9 +271,10 @@ def serve(
             session,
             mermaid_src,
             layer_names,
-            input_name=input_name,
+            input_names=input_names,
             input_mean=input_mean,
             input_std=input_std,
+            input_transform=input_transform,
             render_cache=render_cache,
         )
 
@@ -270,8 +284,8 @@ def serve(
             session,
             layer_names,
             layer,
-            input_mean=input_mean,
-            input_std=input_std,
+            input_mean=primary_mean,
+            input_std=primary_std,
         )
 
     @ui.page("/weights", favicon=str(favicon_path))
@@ -281,7 +295,7 @@ def serve(
     @ui.page("/experiment", favicon=str(favicon_path))
     def experiment_page(layer: str = "") -> None:
         _build_experiment_page(
-            session, layer, input_mean=input_mean, input_std=input_std
+            session, layer, input_mean=primary_mean, input_std=primary_std
         )
 
     ui.run_with(fastapi_app, storage_secret="nansense")

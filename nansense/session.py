@@ -63,6 +63,7 @@ from torch.utils.hooks import RemovableHandle
 
 from nansense import capture, debugger, distributed, experiments, probe
 from nansense.debugger import DebugError, DebugSettings
+from nansense.input_config import InputTransform, MeanStd
 from nansense.experiments import (
     ExperimentRequest,
     ExperimentResult,
@@ -2092,8 +2093,9 @@ def start(
     port: int | None = None,
     host: str = "127.0.0.1",
     open_browser: bool = True,
-    input_mean: tuple[float, ...] | None = None,
-    input_std: tuple[float, ...] | None = None,
+    input_mean: MeanStd | dict[str, MeanStd] | None = None,
+    input_std: MeanStd | dict[str, MeanStd] | None = None,
+    input_transform: InputTransform | dict[str, InputTransform] | None = None,
 ) -> Session:
     """Create a `Session` for `model` (and optionally serve the UI).
 
@@ -2123,10 +2125,14 @@ def start(
     `port` is optional: when given, the UI is served immediately on that
     port (equivalent to a separate `nansense.serve(session, port=...)`
     call, which remains available for finer control). `host`,
-    `open_browser`, `input_mean`, and `input_std` are forwarded to `serve`;
-    once the port binds, the address is printed in a box and (unless
-    `open_browser=False`) opened in a focused browser tab. If a concurrent
-    session already holds the port, both are suppressed.
+    `open_browser`, `input_mean`, `input_std`, and `input_transform` are
+    forwarded to `serve`; once the port binds, the address is printed in a box
+    and (unless `open_browser=False`) opened in a focused browser tab. If a
+    concurrent session already holds the port, both are suppressed.
+    `input_mean` / `input_std` / `input_transform` each take a single value
+    applied to every input, or a dict keyed by input name for multi-input
+    models (see `nansense.input_config`); `input_transform` maps a non-RGB
+    input to a displayable 1-/3-channel image.
 
     Distributed (DDP) runs need no special wiring: call `start()` on every
     rank (a `DistributedDataParallel`-wrapped model is unwrapped
@@ -2156,5 +2162,6 @@ def start(
             open_browser=open_browser,
             input_mean=input_mean,
             input_std=input_std,
+            input_transform=input_transform,
         )
     return session

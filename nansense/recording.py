@@ -49,7 +49,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import av
 import numpy as np
@@ -59,6 +59,7 @@ from matplotlib.figure import Figure
 from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 
+from nansense.input_config import InputTransform
 from nansense.params import float_tuple, int_param, str_tuple
 from nansense.patches import PATCH_TYPES, PatchType
 from nansense.schedule import BatchPosition, format_position
@@ -629,6 +630,7 @@ def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | Non
     sample_idx = int_param(view.params, "sample_idx")
     mean = float_tuple(view.params.get("input_mean"))
     std = float_tuple(view.params.get("input_std"))
+    transform = cast(InputTransform | None, view.params.get("input_transform"))
     input_name = str(view.params.get("input_name") or "") or None
     compare = bool(session.perturbations)
 
@@ -642,7 +644,9 @@ def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | Non
             snap.activations.get(input_name) if input_name is not None else None
         )
         input_hw = tensor_hw(shown_input)
-    input_img = render_image(shown_input, sample_idx, mean=mean, std=std)
+    input_img = render_image(
+        shown_input, sample_idx, mean=mean, std=std, transform=transform
+    )
     if input_img is not None:
         img = Image.open(io.BytesIO(input_img)).convert("RGB")
         from nansense.ui.render import INPUT_IMAGE_SIZE

@@ -22,6 +22,7 @@ from collections.abc import Callable
 from nicegui import ui
 from torch import Tensor
 
+from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
 from nansense.ui.common import (
     _defer_value_write,
@@ -79,18 +80,26 @@ class InputPanel:
         self,
         *,
         session: Session,
-        input_name: str | None,
-        input_mean: tuple[float, ...] | None,
-        input_std: tuple[float, ...] | None,
+        input_names: list[str],
+        input_mean: MeanStd | dict[str, MeanStd] | None,
+        input_std: MeanStd | dict[str, MeanStd] | None,
+        input_transform: InputTransform | dict[str, InputTransform] | None,
         on_change: Callable[[], None],
     ) -> None:
         self._session = session
-        self._input_name = input_name
+        self._input_names = list(input_names)
+        # Raw (possibly per-input-name) display config; resolved for whichever
+        # input is selected by `_resolve_selected`.
+        self._input_mean_cfg = input_mean
+        self._input_std_cfg = input_std
+        self._input_transform_cfg = input_transform
         # The input shown in the pane and targeted by perturbations. Equal to
         # the primary input until the (multi-input) dropdown changes it.
-        self._selected_input = input_name
-        self._input_mean = input_mean
-        self._input_std = input_std
+        self._selected_input = self._input_names[0] if self._input_names else None
+        self._input_mean: MeanStd | None = None
+        self._input_std: MeanStd | None = None
+        self._input_transform: InputTransform | None = None
+        self._resolve_selected()
         self._on_change = on_change
         self.sample_idx = 0
         self._color = "#000000"
@@ -124,6 +133,13 @@ class InputPanel:
             self._image = ui.interactive_image(
                 on_mouse=self._on_image_click, events=["mousedown"]
             ).style("width:100%; image-rendering:pixelated")
+            # Shown in place of a blank image when the input can't be rendered
+            # (e.g. an unsupported channel count needing an `input_transform`);
+            # the text names the cause and the fix.
+            self._input_warning_label = ui.label("").classes(
+                "text-xs text-amber-600 self-start"
+            )
+            self._input_warning_label.set_visibility(False)
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 # The batch size is filled in once known (see
                 # `sync_spinner_max`); the sample index itself is 0-based.
@@ -236,6 +252,13 @@ class InputPanel:
         """The input name the pane shows and perturbations target."""
         return self._selected_input
 
+    def _resolve_selected(self) -> None:
+        """Refresh the resolved display config for the selected input."""
+        name = self._selected_input
+        self._input_mean = resolve_per_input(self._input_mean_cfg, name)
+        self._input_std = resolve_per_input(self._input_std_cfg, name)
+        self._input_transform = resolve_per_input(self._input_transform_cfg, name)
+
     @property
     def compare(self) -> bool:
         """Whether the tick loop should render the diff view.
@@ -289,6 +312,15 @@ class InputPanel:
 
     def set_image(self, src: str) -> None:
         self._image.set_source(src)
+
+    def set_input_warning(self, text: str | None) -> None:
+        """Show or hide the blank-input hint under the image (no-op if same)."""
+        new = text or ""
+        if self._input_warning_label.text != new:
+            self._input_warning_label.text = new
+        visible = bool(new)
+        if self._input_warning_label.visible != visible:
+            self._input_warning_label.set_visibility(visible)
 
     def sync_spinner_max(self, batch_size: int | None) -> None:
         """Clamp the sample spinner to the displayed batch's size."""
