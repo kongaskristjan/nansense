@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from bisect import bisect_right
 from collections.abc import Callable
+from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote
 
 import torch
@@ -23,6 +26,14 @@ from nansense.watch import DEFAULT_CHANNEL_LIMIT
 _TOP_BAR_CLASSES: str = (
     "w-full items-center gap-x-3 gap-y-0 px-3 py-2 shrink-0 "
     "border-b-2 border-slate-300 bg-slate-100 shadow-sm z-10"
+)
+
+_REPO_URL: str = "https://github.com/kongaskristjan/nansense"
+_STAR_TOOLTIP: str = (
+    "Like nansense? A GitHub star means a lot and keeps me hacking on it. ★"
+)
+_LOGO_PATH: Path = (
+    Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
 )
 
 _DEBUG_DESCRIPTION: str = (
@@ -100,6 +111,31 @@ def _debug_pct(frac: float) -> str:
 def _top_bar_row() -> ui.row:
     """The shared top-bar row container used by every page."""
     return ui.row().classes(_TOP_BAR_CLASSES)
+
+
+@lru_cache(maxsize=1)
+def _logo_data_uri() -> str:
+    """The nansense mark as a base64 data URI (read once, then cached).
+
+    Inlined rather than served from a static route — the mark is ~3 KB and this
+    matches the data-URI pattern the strip images already use (see
+    `common._b64_img_src`), so it needs no extra media route.
+    """
+    encoded = base64.b64encode(_LOGO_PATH.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _add_repo_logo() -> None:
+    """The far-left nansense brand mark, linking to the GitHub repo.
+
+    Sits at the very start of every page's top bar as the app's brand anchor.
+    Rendered as a native link opening in a new tab (so middle/ctrl-click works,
+    like the nav buttons) with a hover tooltip nudging a repo star.
+    """
+    with ui.link(target=_REPO_URL, new_tab=True).classes(
+        "shrink-0 flex items-center"
+    ).tooltip(_STAR_TOOLTIP):
+        ui.image(_logo_data_uri()).classes("h-7 w-7").props("no-spinner")
 
 
 def _back_button() -> None:

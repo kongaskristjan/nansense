@@ -11,11 +11,14 @@ from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
+    _REPO_URL,
+    _STAR_TOOLTIP,
     _at_last_batch,
     _best_effort_ui_update,
     _current_position,
     _debug_banner_summary,
     _debug_pct,
+    _logo_data_uri,
     _summarize_epoch_ranges,
     _time_travel_default_index,
     _under_over_band_lines,
@@ -345,3 +348,19 @@ def test_under_over_band_lines_one_per_distinct_dtype() -> None:
 )
 def test_debug_pct(frac: float, expected: str) -> None:
     assert _debug_pct(frac) == expected
+
+
+def test_logo_data_uri_is_a_cached_png() -> None:
+    """The brand mark inlines as a real PNG data URI and is read only once."""
+    import base64
+
+    uri = _logo_data_uri()
+    assert uri.startswith("data:image/png;base64,")
+    payload = base64.b64decode(uri.split(",", 1)[1])
+    assert payload[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic
+    assert _logo_data_uri() is uri  # lru_cache hands back the same string
+
+
+def test_repo_logo_links_repo_and_nudges_a_star() -> None:
+    assert _REPO_URL == "https://github.com/kongaskristjan/nansense"
+    assert "star" in _STAR_TOOLTIP.lower()

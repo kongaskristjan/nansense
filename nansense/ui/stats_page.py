@@ -52,6 +52,7 @@ from nansense.ui.histograms import (
 from nansense.ui.render import PatchGridRender, render_image, render_patch_grid
 from nansense.ui.top_bar import (
     _add_error_banner,
+    _add_repo_logo,
     _add_settings_button,
     _add_step_controls,
     _back_button,
@@ -280,6 +281,7 @@ def _build_stats_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
+            _add_repo_logo()
             _back_button()
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")

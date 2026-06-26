@@ -23,6 +23,7 @@ from nansense.ui.render import default_weight_dims, dims_from_roles, render_weig
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_error_banner,
+    _add_repo_logo,
     _add_settings_button,
     _add_step_controls,
     _back_button,
@@ -107,6 +108,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
+            _add_repo_logo()
             _back_button()
             _refresh_button(session)
             ui.label(title).classes(

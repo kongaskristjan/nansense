@@ -40,6 +40,7 @@ from nansense.ui.static import (
 )
 from nansense.ui.top_bar import (
     _add_error_banner,
+    _add_repo_logo,
     _add_settings_button,
     _add_step_controls,
     _build_step_until_custom_dialog,
@@ -222,6 +223,7 @@ def _build_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
+            _add_repo_logo()
             architecture_toggle = ui.button(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
