@@ -25,6 +25,7 @@ from torch import Tensor
 
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
+from nansense.ui.render import transform_preview_color
 from nansense.ui.common import (
     _defer_value_write,
     _label_bar_html,
@@ -118,6 +119,16 @@ class InputPanel:
         # so an external clear only switches off tabs that didn't arm it.
         self._syncing_perturb = False
         self._perturb_armed = False
+        # The perturb value control adapts to the selected input: an RGB color
+        # picker (`"color"`), one numeric field per channel for a non-RGB image
+        # (`"channels"`), or nothing usable yet (`"none"`). `_sync_perturb_control`
+        # rebuilds it when the kind / channel count changes.
+        self._perturb_kind = "none"
+        self._perturb_n = 0
+        self._value_inputs: list[ui.number] = []
+        self._value_preview: ui.element | None = None
+        # Controls disabled while recording, refreshed by each rebuild.
+        self._value_controls: list[DisableableElement] = []
         self._build()
 
     def _build(self) -> None:
@@ -213,19 +224,14 @@ class InputPanel:
                     value=bool(self._session.perturbations),
                     on_change=self._on_perturb_change,
                 ).props("dense").tooltip(
-                    "Clicking the input image paints the swatch color into "
+                    "Clicking the input image writes the value(s) below into "
                     "that pixel of the viewed sample on every probe input"
                 )
-                # A compact color swatch that opens the picker on click; the
-                # button's background *is* the current color.
-                self._color_button = ui.button().props("dense unelevated").style(
-                    self._swatch_style()
-                ).tooltip("Perturb color — click to change")
-                with self._color_button:
-                    picker = ui.color_picker(on_pick=self._on_pick_color)
-                    # Hex only: normalized_color expects #rrggbb, so don't let
-                    # the picker emit rgba()/hsl() strings.
-                    picker.q_color.props("format-model=hex")
+                # The value control (color swatch or per-channel fields) is
+                # built lazily for the selected input by `_sync_perturb_control`.
+                self._perturb_value_slot = ui.row().classes(
+                    "items-center gap-1 justify-end"
+                )
             # The count/clear row and the compare note only make sense once a
             # pixel has actually been perturbed (`refresh_status` keeps both
             # in sync).
@@ -314,6 +320,110 @@ class InputPanel:
             self._color = color
             self._color_button.style(self._swatch_style())
 
+    def _desired_perturb_control(self, tensor: Tensor | None) -> tuple[str, int]:
+        """The `(kind, n)` value control the selected input needs.
+
+        `("color", c)` for an RGB/grayscale image with no transform,
+        `("channels", c)` for any other 4D input (the pixel's `c` model-space
+        values are edited directly), or `("none", 0)` when nothing is shown.
+        """
+        if tensor is None or tensor.ndim != 4:
+            return ("none", 0)
+        c = int(tensor.shape[1])
+        if c in (1, 3) and self._input_transform is None:
+            return ("color", c)
+        return ("channels", c)
+
+    def _sync_perturb_control(self) -> None:
+        """Rebuild the perturb value control when the input's kind changes.
+
+        Cheap when unchanged (the common per-tick case); the field-value
+        preview updates on edit, not here.
+        """
+        kind, n = self._desired_perturb_control(self._current_input())
+        if (kind, n) == (self._perturb_kind, self._perturb_n):
+            return
+        self._perturb_kind, self._perturb_n = kind, n
+        self._value_inputs = []
+        self._value_preview = None
+        self._value_controls = []
+        self._perturb_value_slot.clear()
+        with self._perturb_value_slot:
+            if kind == "color":
+                self._build_color_control()
+            elif kind == "channels":
+                self._build_value_inputs(n)
+        # Freshly built controls default to enabled; match the freeze state.
+        if self._value_controls:
+            _set_controls_enabled(self._value_controls, not self._frozen)
+
+    def _build_color_control(self) -> None:
+        # A compact color swatch that opens the picker on click; the button's
+        # background *is* the current color.
+        self._color_button = ui.button().props("dense unelevated").style(
+            self._swatch_style()
+        ).tooltip("Perturb color — click to change")
+        with self._color_button:
+            picker = ui.color_picker(on_pick=self._on_pick_color)
+            # Hex only: normalized_color expects #rrggbb, so don't let the
+            # picker emit rgba()/hsl() strings.
+            picker.q_color.props("format-model=hex")
+        self._value_controls = [self._color_button]
+
+    def _build_value_inputs(self, n: int) -> None:
+        # A swatch previewing the color these values map to via the transform
+        # (only when a transform exists to compute one), then one field per
+        # channel. Fields wrap so a high channel count stays usable.
+        if self._input_transform is not None:
+            self._value_preview = ui.element("div").style(
+                self._preview_style("#888888")
+            ).tooltip("Preview: the color these channel values map to")
+        with ui.row().classes("items-center gap-1 flex-wrap justify-end"):
+            for i in range(n):
+                field = ui.number(
+                    value=0.0,
+                    on_change=lambda _e: self._update_value_preview(),
+                ).props("dense").classes("w-14").tooltip(f"Channel {i} value")
+                self._value_inputs.append(field)
+        self._value_controls = list(self._value_inputs)
+        self._update_value_preview()
+
+    @staticmethod
+    def _preview_style(color: str) -> str:
+        return (
+            f"background-color: {color}; width: 24px; height: 24px; "
+            "border: 1px solid #cbd5e1; border-radius: 3px"
+        )
+
+    def _update_value_preview(self) -> None:
+        """Repaint the preview swatch from the current channel field values."""
+        if self._value_preview is None or self._input_transform is None:
+            return
+        values = self._value_tuple()
+        color = transform_preview_color(self._input_transform, values)
+        self._value_preview.style(self._preview_style(color or "#888888"))
+
+    def _value_tuple(self) -> tuple[float, ...]:
+        """The current per-channel field values (missing/blank read as 0)."""
+        return tuple(
+            float(inp.value if inp.value is not None else 0.0)
+            for inp in self._value_inputs
+        )
+
+    def _perturb_values(self, channels: int) -> tuple[float, ...] | None:
+        """The model-space values a click writes, or `None` if not ready.
+
+        Color picks back-transform via `input_mean`/`input_std`; numeric
+        fields are already in model-input space.
+        """
+        if self._perturb_kind == "color":
+            return normalized_color(
+                self._color, channels, self._input_mean, self._input_std
+            )
+        if self._perturb_kind == "channels" and len(self._value_inputs) == channels:
+            return self._value_tuple()
+        return None
+
     def set_frozen(self, frozen: bool) -> None:
         """Disable every control while the main view is being recorded.
 
@@ -329,8 +439,8 @@ class InputPanel:
             self._pin_switch,
             self._mode_toggle,
             self._perturb_switch,
-            self._color_button,
             self._clear_button,
+            *self._value_controls,
         ]
         if self._input_select is not None:
             controls.append(self._input_select)
@@ -372,8 +482,10 @@ class InputPanel:
         `perturbations` (or the local armed intent), and the perturbation
         count / clear row / compare note follow `perturbations` (the perturbed
         image itself rides along on the shared probe result the page tick
-        re-renders).
+        re-renders). The perturb value control is rebuilt here when the
+        selected input's channel kind changes.
         """
+        self._sync_perturb_control()
         if self._pin_switch.value != self._session.is_pinned:
             self._syncing_pin = True
             self._pin_switch.set_value(self._session.is_pinned)
@@ -478,12 +590,7 @@ class InputPanel:
         tensor = self._current_input()
         if tensor is None or tensor.ndim != 4:
             return
-        values = normalized_color(
-            self._color,
-            int(tensor.shape[1]),
-            self._input_mean,
-            self._input_std,
-        )
+        values = self._perturb_values(int(tensor.shape[1]))
         if values is None:
             return
         h, w = int(tensor.shape[2]), int(tensor.shape[3])

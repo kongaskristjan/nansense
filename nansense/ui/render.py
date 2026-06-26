@@ -526,6 +526,35 @@ def input_blank_warning(
     return _input_display(tensor, name, mean, std, transform)[3]
 
 
+def transform_preview_color(
+    transform: InputTransform, values: tuple[float, ...]
+) -> str | None:
+    """The `#rrggbb` color a length-`C` model-space pixel maps to via transform.
+
+    Runs `transform` on a `(1, C, 1, 1)` tensor of `values` and reads the
+    single output pixel back (grayscale repeated to RGB). `None` when the
+    transform errors or doesn't return a 1-pixel 1-/3-channel image — so the
+    perturb swatch can fall back to a neutral color.
+    """
+    if not values:
+        return None
+    x = torch.tensor(values, dtype=torch.float32).reshape(1, len(values), 1, 1)
+    try:
+        out = transform(x)
+    except Exception:  # noqa: BLE001 — preview only; a bad transform shows neutral
+        return None
+    if not isinstance(out, Tensor) or out.ndim != 4 or int(out.shape[0]) != 1:
+        return None
+    c = int(out.shape[1])
+    if c not in (1, 3) or tuple(out.shape[2:]) != (1, 1):
+        return None
+    channels = out.clamp(0.0, 1.0).reshape(c).tolist()
+    if c == 1:
+        channels = channels * 3
+    r, g, b = (int(round(v * 255)) for v in channels)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def _input_display(
     tensor: Tensor,
     name: str | None,

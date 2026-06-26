@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
+import torch
 from nicegui.elements.interactive_image import InteractiveImage
 from nicegui.elements.label import Label
 from nicegui.elements.row import Row
 from nicegui.elements.switch import Switch
 
 from nansense.session import Session
+from nansense.input_config import InputTransform
 from nansense.ui.input_panel import InputPanel, normalized_color
 
 CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
@@ -50,6 +52,46 @@ def test_normalized_color_back_transforms_with_stats() -> None:
     assert values is not None
     expected = tuple((1.0 - m) / s for m, s in zip(CIFAR_MEAN, CIFAR_STD))
     assert values == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "transform, tensor, expected",
+    [
+        (None, torch.rand(1, 3, 4, 4), ("color", 3)),  # RGB image -> color picker
+        (None, torch.rand(1, 1, 4, 4), ("color", 1)),  # grayscale -> color picker
+        (None, torch.rand(1, 5, 4, 4), ("channels", 5)),  # non-RGB -> channel fields
+        (None, torch.rand(2, 4), ("none", 0)),  # flat input (handled elsewhere)
+        (None, None, ("none", 0)),  # nothing shown yet
+        (lambda x: x[:, :3], torch.rand(1, 3, 4, 4), ("channels", 3)),  # transform wins
+    ],
+)
+def test_desired_perturb_control(
+    transform: object, tensor: torch.Tensor | None, expected: tuple[str, int]
+) -> None:
+    panel = InputPanel.__new__(InputPanel)
+    panel._input_transform = cast("InputTransform | None", transform)
+    assert panel._desired_perturb_control(tensor) == expected
+
+
+def test_perturb_values_from_color_picker() -> None:
+    panel = InputPanel.__new__(InputPanel)
+    panel._perturb_kind = "color"
+    panel._color = "#ff0000"
+    panel._input_mean = None
+    panel._input_std = None
+    assert panel._perturb_values(3) == pytest.approx((1.0, 0.0, 0.0))
+
+
+def test_perturb_values_from_channel_fields() -> None:
+    panel = InputPanel.__new__(InputPanel)
+    panel._perturb_kind = "channels"
+    panel._value_inputs = [
+        cast(Any, SimpleNamespace(value=1.5)),
+        cast(Any, SimpleNamespace(value=None)),  # blank reads as 0
+        cast(Any, SimpleNamespace(value=-2.0)),
+    ]
+    assert panel._perturb_values(3) == pytest.approx((1.5, 0.0, -2.0))
+    assert panel._perturb_values(2) is None  # channel-count mismatch -> no write
 
 
 @pytest.mark.parametrize(
@@ -162,6 +204,12 @@ class _Wired:
         panel._compare_caption = cast(Label, _FakeVisible(bool(perturbations)))
         panel._error_label = cast(Label, _FakeText())
         panel._on_change = lambda: None
+        # No input selected -> `_sync_perturb_control` (called by refresh_status)
+        # sees no input and stays a no-op, leaving the switch-sync under test.
+        panel._selected_input = None
+        panel._input_transform = None
+        panel._perturb_kind = "none"
+        panel._perturb_n = 0
         self.panel = panel
 
 

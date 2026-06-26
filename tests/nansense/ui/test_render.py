@@ -30,6 +30,7 @@ from nansense.ui.render import (
     render_patch_grid,
     render_strip,
     render_weight,
+    transform_preview_color,
 )
 
 
@@ -454,6 +455,40 @@ def test_input_blank_warning_mirrors_render() -> None:
     assert input_blank_warning(ok, 0) is None
     bad = torch.rand(1, 5, 8, 8)
     assert input_blank_warning(bad, 0) == render_input_image(bad, 0).warning
+
+
+def test_transform_preview_color_maps_channel_values_to_hex() -> None:
+    # Pick the first 3 channels of a 5-channel pixel as RGB.
+    color = transform_preview_color(
+        lambda x: x[:, :3].clamp(0, 1), (1.0, 0.0, 0.0, 0.5, 0.2)
+    )
+    assert color == "#ff0000"
+
+
+def test_transform_preview_color_grayscale_repeats_to_rgb() -> None:
+    color = transform_preview_color(lambda x: x[:, :1].clamp(0, 1), (1.0, 0.25))
+    assert color == "#ffffff"
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        lambda x: x[:, :2],  # 2 channels out — not 1/3
+        lambda x: x[:, :3].expand(1, 3, 2, 2),  # not a single pixel
+        lambda x: x.mean(),  # scalar, not 4D
+    ],
+)
+def test_transform_preview_color_none_on_bad_output(
+    transform: Callable[[torch.Tensor], torch.Tensor],
+) -> None:
+    assert transform_preview_color(transform, (0.5, 0.5, 0.5, 0.5)) is None
+
+
+def test_transform_preview_color_none_when_transform_raises() -> None:
+    def boom(_x: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError("nope")
+
+    assert transform_preview_color(boom, (0.1, 0.2, 0.3)) is None
 
 
 def test_blend_signed_heat_colors_by_sign() -> None:
