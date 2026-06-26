@@ -37,6 +37,7 @@ from nansense.ui.render import (
     input_blank_warning,
     probe_act_tensor,
     render_image,
+    render_input_legend,
     render_strip,
     tensor_hw,
 )
@@ -583,15 +584,19 @@ def _build_page(
                 state.rendering = False
             _apply_all(layer_views, rendered)
             input_panel.set_image(input_src)
+            selected_tensor = _selected_input_tensor(snap, probe, selected)
             input_panel.set_input_warning(
                 input_blank_warning(
-                    _selected_input_tensor(snap, probe, selected),
+                    selected_tensor,
                     sample_idx,
                     name=selected,
                     mean=sel_mean,
                     std=sel_std,
                     transform=sel_transform,
                 )
+            )
+            input_panel.set_input_legend(
+                _input_img_src(render_input_legend(selected_tensor, sample_idx))
             )
 
     ui.timer(0.2, tick)

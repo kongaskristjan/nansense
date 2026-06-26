@@ -473,18 +473,51 @@ def render_input_image(
     still maps to a pixel of the original input). A given `transform` takes
     over rendering even for `C in (1, 3)`, and `mean`/`std` are then left to it.
 
-    `png` is `None` with a `warning` when the pane can't render — an
-    unsupported channel count and no transform, a transform that errors or
+    A flat `[B, C]` input renders instead as a one-row `1 × C` colormapped
+    strip (no warning) — its native width is `C`, so a pane click's `image_x`
+    maps straight to a channel; `render_input_legend` gives its scale bar.
+
+    `png` is `None` with a `warning` when the pane can't render a 4D input —
+    an unsupported channel count and no transform, a transform that errors or
     returns the wrong shape, or `mean`/`std` whose length doesn't match the
-    input. With no input yet (None tensor, non-4D, out-of-range sample) both
-    are `None`. `name` only personalizes the warning.
+    input. With no input yet (None tensor, unsupported rank, out-of-range
+    sample) both are `None`. `name` only personalizes the warning.
     """
-    if tensor is None or tensor.ndim != 4 or not 0 <= sample_idx < tensor.shape[0]:
+    if tensor is None or not 0 <= sample_idx < tensor.shape[0]:
+        return InputImage(None, None)
+    if tensor.ndim == 2:
+        return InputImage(_encode_input_row(tensor[sample_idx]), None)
+    if tensor.ndim != 4:
         return InputImage(None, None)
     display, enc_mean, enc_std, problem = _input_display(tensor, name, mean, std, transform)
     if display is None:
         return InputImage(None, problem)
     return InputImage(_encode_input_sample(display, sample_idx, enc_mean, enc_std), None)
+
+
+def render_input_legend(tensor: Tensor | None, sample_idx: int) -> bytes | None:
+    """The scale colorbar for a flat `[B, C]` input's strip, else `None`.
+
+    Shares the strip's symmetric `±|x|max` scale (red `+`, blue `−`), so the
+    pane shows the same legend a flat layer's activation strip does.
+    """
+    if tensor is None or tensor.ndim != 2 or not 0 <= sample_idx < tensor.shape[0]:
+        return None
+    sample = tensor[sample_idx].detach().float().cpu()
+    if sample.numel() == 0:
+        return None
+    return _encode_image(_render_legend(LINEAR_TILE_HEIGHT, abs_max=_finite_abs_max(sample)))
+
+
+def _encode_input_row(sample: Tensor) -> bytes | None:
+    """A flat `[C]` sample as a `1 × C` colormapped row (native width `C`)."""
+    values = sample.detach().float().cpu()
+    if values.numel() == 0:
+        return None
+    rgb, _ = _apply_colormap(values.numpy(), abs_max=_finite_abs_max(values))
+    # Drop any alpha (inputs rarely carry NaN) so the row encodes as plain RGB,
+    # matching the input pane's `image_mime()` data-URI.
+    return _pil_to_bytes(Image.fromarray(rgb[None, :, :3], mode="RGB"))
 
 
 def render_image(

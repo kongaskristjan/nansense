@@ -27,6 +27,7 @@ from nansense.ui.render import (
     input_blank_warning,
     render_image,
     render_input_image,
+    render_input_legend,
     render_patch_grid,
     render_strip,
     render_weight,
@@ -489,6 +490,26 @@ def test_transform_preview_color_none_when_transform_raises() -> None:
         raise RuntimeError("nope")
 
     assert transform_preview_color(boom, (0.1, 0.2, 0.3)) is None
+
+
+def test_flat_input_renders_as_strip_at_native_channel_width() -> None:
+    # A [B, C] input renders as a 1xC row (native width C) so a click's
+    # image_x maps straight to a channel; no warning, no transform needed.
+    out = render_input_image(torch.rand(2, 7), sample_idx=0)
+    assert out.png is not None and out.warning is None
+    assert _decode(out.png).size == (7, 1)
+
+
+def test_flat_input_out_of_range_sample_is_blank() -> None:
+    out = render_input_image(torch.rand(2, 7), sample_idx=5)
+    assert out.png is None and out.warning is None
+
+
+def test_render_input_legend_only_for_flat_inputs() -> None:
+    assert render_input_legend(torch.rand(2, 7), sample_idx=0) is not None
+    assert render_input_legend(torch.rand(1, 3, 8, 8), sample_idx=0) is None  # image
+    assert render_input_legend(None, sample_idx=0) is None
+    assert render_input_legend(torch.rand(2, 7), sample_idx=9) is None  # out of range
 
 
 def test_blend_signed_heat_colors_by_sign() -> None:

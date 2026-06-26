@@ -127,6 +127,9 @@ class InputPanel:
         self._perturb_n = 0
         self._value_inputs: list[ui.number] = []
         self._value_preview: ui.element | None = None
+        # Whether the pane currently shows a flat-input strip (vs an image),
+        # which drives the image's fixed height and the legend's visibility.
+        self._strip_mode = False
         # Controls disabled while recording, refreshed by each rebuild.
         self._value_controls: list[DisableableElement] = []
         self._build()
@@ -152,11 +155,17 @@ class InputPanel:
                 ).props("dense outlined").classes("w-full").tooltip(
                     "Which model input to show and perturb"
                 )
-            # Full pane width, so the image scales with the (resizable)
-            # pane; clicks stay in native pixel space regardless of CSS size.
-            self._image = ui.interactive_image(
-                on_mouse=self._on_image_click, events=["mousedown"]
-            ).style("width:100%; image-rendering:pixelated")
+            # The image grows to the pane width; a flat (1D) input renders as a
+            # colormapped strip with the scale bar beside it (hidden for image
+            # inputs). Clicks stay in native pixel space regardless of CSS size.
+            with ui.row().classes("w-full items-start no-wrap gap-1"):
+                self._image = ui.interactive_image(
+                    on_mouse=self._on_image_click, events=["mousedown"]
+                ).classes("grow min-w-0").style("image-rendering:pixelated")
+                self._input_legend = ui.image().classes("shrink-0").style(
+                    "image-rendering:pixelated; height:48px; width:18px"
+                )
+                self._input_legend.set_visibility(False)
             # Shown in place of a blank image when the input can't be rendered
             # (e.g. an unsupported channel count needing an `input_transform`);
             # the text names the cause and the fix.
@@ -325,9 +334,15 @@ class InputPanel:
 
         `("color", c)` for an RGB/grayscale image with no transform,
         `("channels", c)` for any other 4D input (the pixel's `c` model-space
-        values are edited directly), or `("none", 0)` when nothing is shown.
+        values are edited directly), `("scalar", 1)` for a flat `[B, C]` input
+        (a click writes one value to the clicked channel), or `("none", 0)`
+        when nothing is shown.
         """
-        if tensor is None or tensor.ndim != 4:
+        if tensor is None:
+            return ("none", 0)
+        if tensor.ndim == 2:
+            return ("scalar", 1)
+        if tensor.ndim != 4:
             return ("none", 0)
         c = int(tensor.shape[1])
         if c in (1, 3) and self._input_transform is None:
@@ -352,7 +367,9 @@ class InputPanel:
             if kind == "color":
                 self._build_color_control()
             elif kind == "channels":
-                self._build_value_inputs(n)
+                self._build_value_inputs(n, preview=self._input_transform is not None)
+            elif kind == "scalar":
+                self._build_value_inputs(1, preview=False)
         # Freshly built controls default to enabled; match the freeze state.
         if self._value_controls:
             _set_controls_enabled(self._value_controls, not self._frozen)
@@ -370,20 +387,22 @@ class InputPanel:
             picker.q_color.props("format-model=hex")
         self._value_controls = [self._color_button]
 
-    def _build_value_inputs(self, n: int) -> None:
-        # A swatch previewing the color these values map to via the transform
-        # (only when a transform exists to compute one), then one field per
-        # channel. Fields wrap so a high channel count stays usable.
-        if self._input_transform is not None:
+    def _build_value_inputs(self, n: int, *, preview: bool) -> None:
+        # An optional swatch previewing the color these values map to via the
+        # transform, then one field per channel (just one for a flat input,
+        # whose clicked channel is chosen by the click). Fields wrap so a high
+        # channel count stays usable.
+        if preview:
             self._value_preview = ui.element("div").style(
                 self._preview_style("#888888")
             ).tooltip("Preview: the color these channel values map to")
         with ui.row().classes("items-center gap-1 flex-wrap justify-end"):
             for i in range(n):
+                tip = "Value to write" if n == 1 else f"Channel {i} value"
                 field = ui.number(
                     value=0.0,
                     on_change=lambda _e: self._update_value_preview(),
-                ).props("dense").classes("w-14").tooltip(f"Channel {i} value")
+                ).props("dense").classes("w-14").tooltip(tip)
                 self._value_inputs.append(field)
         self._value_controls = list(self._value_inputs)
         self._update_value_preview()
@@ -448,6 +467,25 @@ class InputPanel:
 
     def set_image(self, src: str) -> None:
         self._image.set_source(src)
+
+    def set_input_legend(self, src: str | None) -> None:
+        """Show/hide the flat-input scale bar and set the pane's strip mode.
+
+        A non-empty `src` means the pane shows a flat-input strip: the image is
+        stretched to a fixed strip height and the colorbar appears beside it.
+        An empty `src` is an image input: natural height, legend hidden.
+        """
+        is_strip = bool(src)
+        if is_strip != self._strip_mode:
+            self._strip_mode = is_strip
+            self._image.style(
+                "image-rendering:pixelated; height:48px; object-fit:fill"
+                if is_strip
+                else "image-rendering:pixelated; height:auto; object-fit:contain"
+            )
+            self._input_legend.set_visibility(is_strip)
+        if is_strip:
+            self._input_legend.set_source(src)
 
     def set_input_warning(self, text: str | None) -> None:
         """Show or hide the blank-input hint under the image (no-op if same)."""
@@ -588,14 +626,29 @@ class InputPanel:
         if name is None:
             return
         tensor = self._current_input()
-        if tensor is None or tensor.ndim != 4:
+        if tensor is None:
             return
-        values = self._perturb_values(int(tensor.shape[1]))
-        if values is None:
+        click_x = int(getattr(e, "image_x", 0))
+        click_y = int(getattr(e, "image_y", 0))
+        if tensor.ndim == 4:
+            values = self._perturb_values(int(tensor.shape[1]))
+            if values is None:
+                return
+            h, w = int(tensor.shape[2]), int(tensor.shape[3])
+            index: tuple[int, ...] = (
+                min(max(click_y, 0), h - 1),
+                min(max(click_x, 0), w - 1),
+            )
+        elif tensor.ndim == 2:
+            # The strip's native width is C, so image_x is the channel; the
+            # single field holds the scalar written there.
+            if self._perturb_kind != "scalar" or not self._value_inputs:
+                return
+            channel = min(max(click_x, 0), int(tensor.shape[1]) - 1)
+            index = (channel,)
+            values = self._value_tuple()
+        else:
             return
-        h, w = int(tensor.shape[2]), int(tensor.shape[3])
-        x = min(max(int(getattr(e, "image_x", 0)), 0), w - 1)
-        y = min(max(int(getattr(e, "image_y", 0)), 0), h - 1)
         self._session.add_perturbation(
-            input_name=name, sample=self.sample_idx, index=(y, x), values=values
+            input_name=name, sample=self.sample_idx, index=index, values=values
         )

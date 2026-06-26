@@ -60,7 +60,7 @@ def test_normalized_color_back_transforms_with_stats() -> None:
         (None, torch.rand(1, 3, 4, 4), ("color", 3)),  # RGB image -> color picker
         (None, torch.rand(1, 1, 4, 4), ("color", 1)),  # grayscale -> color picker
         (None, torch.rand(1, 5, 4, 4), ("channels", 5)),  # non-RGB -> channel fields
-        (None, torch.rand(2, 4), ("none", 0)),  # flat input (handled elsewhere)
+        (None, torch.rand(2, 4), ("scalar", 1)),  # flat input -> one value field
         (None, None, ("none", 0)),  # nothing shown yet
         (lambda x: x[:, :3], torch.rand(1, 3, 4, 4), ("channels", 3)),  # transform wins
     ],
