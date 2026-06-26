@@ -124,17 +124,17 @@ def test_patch_grids_html_placeholder_without_patches() -> None:
 
 
 def test_patch_grids_html_labels_axes() -> None:
-    # The fixture activations have 2 channels; the caption shows the count.
+    # The grid is a table: CHANNEL n column headers and SAMPLE n row labels.
+    # The fixture has 2 channels and 5 samples per channel.
     per_phase = {"train": _layer_snap_with_patches("train")}
     html = _patch_grids_html(
         per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
     )
-    assert "2 channels (one channel per column) &rarr;" in html
-    assert "top samples (best first) &rarr;" in html
-    assert "writing-mode:vertical-rl" in html
-    assert "text-[15px] font-mono text-slate-600" in html
-    # Each channel column is captioned with its index.
     assert "CHANNEL 0" in html and "CHANNEL 1" in html
+    assert "SAMPLE 0" in html and "SAMPLE 4" in html
+    # The old free-text axis captions are gone.
+    assert "one channel per column" not in html
+    assert "top samples (best first)" not in html
 
 
 def test_patch_grids_signature_tracks_toggles_and_values() -> None:

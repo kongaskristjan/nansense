@@ -176,6 +176,49 @@ def _b64_img_src(image: bytes, *, mime: str | None = None) -> str:
     return f"data:{mime or image_mime()};base64,{encoded}"
 
 
+# Vertical gap between a column header bar and the image beneath it; the legend
+# spacer matches it so images still line up under the headers.
+LABEL_GAP: int = 4
+# Default header / marker bar color (slate-500); INPUT/ATTRIBUTION etc. override.
+_LABEL_BAR_COLOR: str = "#64748b"
+
+
+def _label_bar_html(text: str, *, color: str = _LABEL_BAR_COLOR, width: int | None = None) -> str:
+    """A rounded colored label bar (white bold text), matching the row markers.
+
+    Shared look for every filled label: the `CHANNEL n` column headers, the
+    MIN/MAX `SAMPLE n` row labels, and the experiment cell captions. `width`
+    pins the bar (column headers); omit it to fill the parent (cell captions).
+    """
+    sizing = f"width:{width}px; " if width is not None else "width:100%; "
+    return (
+        f'<div title="{html.escape(text)}" style="{sizing}'
+        f"height:{LABEL_HEIGHT}px; line-height:{LABEL_HEIGHT}px; "
+        f"background:{color}; color:white; font:bold 10px monospace; "
+        "letter-spacing:0.04em; text-align:center; border-radius:3px; "
+        'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">'
+        f"{html.escape(text)}</div>"
+    )
+
+
+def _row_label_bar_html(text: str, *, height: int, color: str = _LABEL_BAR_COLOR) -> str:
+    """A vertical label bar reading bottom-up, for a grid's `SAMPLE n` row labels.
+
+    The vertical counterpart of `_label_bar_html` / the `_strip_marker` row
+    markers: a thin colored bar `height` tall with the label rotated to read
+    bottom-up, pinned left of a row of cells.
+    """
+    return (
+        f'<div title="{html.escape(text)}" style="width:{LABEL_HEIGHT}px; '
+        f"height:{height}px; background:{color}; color:white; "
+        "font:bold 10px monospace; letter-spacing:0.04em; border-radius:3px; "
+        "display:flex; align-items:center; justify-content:center; "
+        "writing-mode:vertical-rl; transform:rotate(180deg); "
+        'overflow:hidden; white-space:nowrap;">'
+        f"{html.escape(text)}</div>"
+    )
+
+
 def _column_header_bar(label: str, width: int) -> str:
     """A `CHANNEL n` column header — a slate bar matching the row markers.
 
@@ -186,14 +229,7 @@ def _column_header_bar(label: str, width: int) -> str:
     """
     if not label:
         return f'<div style="height:{LABEL_HEIGHT}px;"></div>'
-    return (
-        f'<div title="{html.escape(label)}" style="width:{width}px; '
-        f"height:{LABEL_HEIGHT}px; line-height:{LABEL_HEIGHT}px; "
-        "background:#64748b; color:white; font:bold 10px monospace; "
-        "letter-spacing:0.04em; text-align:center; border-radius:3px; "
-        'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">'
-        f"{html.escape(label)}</div>"
-    )
+    return _label_bar_html(label, width=width)
 
 
 def _strip_tile_html(tile: StripTile, *, show_label: bool) -> str:
@@ -203,7 +239,8 @@ def _strip_tile_html(tile: StripTile, *, show_label: bool) -> str:
     browser do the nearest-neighbour upscale the renderer used to do
     server-side; `flex:none` keeps the scroll container from squishing the
     image. The header bar is drawn only when `show_label` (the first strip of a
-    card carries the shared column headers; the rows below it reuse them).
+    card carries the shared column headers; the rows below it reuse them), with a
+    `LABEL_GAP` gutter separating it from the image.
 
     The img sits over a fixed display-resolution gray checkerboard
     (`_STRIP_CHECKERBOARD_STYLE`): an all-finite tile is fully opaque and
@@ -212,8 +249,9 @@ def _strip_tile_html(tile: StripTile, *, show_label: bool) -> str:
     as "no value here" instead of a misleading color or white.
     """
     header = _column_header_bar(tile.label, tile.width) if show_label else ""
+    gap = f" gap:{LABEL_GAP}px;" if show_label else ""
     return (
-        f'<div style="display:flex; flex-direction:column; flex:none; '
+        f'<div style="display:flex; flex-direction:column; flex:none;{gap} '
         f'width:{tile.width}px;">{header}'
         f'<img src="{_b64_img_src(tile.image, mime=tile.mime)}" '
         f'style="width:{tile.width}px; height:{tile.height}px; '
@@ -235,11 +273,14 @@ def _strip_html(strip: StripRender | None, *, show_labels: bool = False) -> str:
     """
     if strip is None or not strip.tiles:
         return ""
+    # When the headers show, the legend gets a matching spacer + LABEL_GAP so it
+    # lines up with the tile images below the header bars.
     legend_spacer = (
         f'<div style="height:{LABEL_HEIGHT}px;"></div>' if show_labels else ""
     )
+    legend_gap = f" gap:{LABEL_GAP}px;" if show_labels else ""
     legend_col = (
-        '<div style="display:flex; flex-direction:column; flex:none;">'
+        f'<div style="display:flex; flex-direction:column; flex:none;{legend_gap}">'
         f"{legend_spacer}"
         f'<img src="{_b64_img_src(strip.legend_image)}" '
         'style="display:block; flex:none; max-width:none;" /></div>'

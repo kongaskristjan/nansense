@@ -1144,7 +1144,14 @@ Render conventions worth knowing before editing `render.py`:
 - `render_patch_grid` (the MIN/MAX galleries) is a 2-D grid of separate cell
   images: a `PatchColumn` per channel, each holding one image per top-N sample
   (`cells`), under a `CHANNEL n` header bar — the UI/recording stack the cells
-  with a `PATCH_CELL_GAP` gutter so the grid reads as discrete cells.
+  with a `PATCH_CELL_GAP` gutter so the grid reads as discrete cells. In the UI
+  the grid is a table: `CHANNEL n` column headers across, `SAMPLE n` row labels
+  (vertical bars, `_row_label_bar_html`) down the left.
+- Every filled label bar (`CHANNEL n` headers, `SAMPLE n` row labels, the
+  experiment cell captions) shares `_label_bar_html` / `_row_label_bar_html` —
+  white bold mono on a rounded bar, the look of the `_strip_marker` row markers.
+  Color carries meaning where it can: experiment `INPUT` is green and
+  `ATTRIBUTION` / `OVERLAY` purple, echoing the activation/gradient markers.
 - Image encoding is governed by `STRIP_FORMAT` — BMP by default (near-memcpy,
   the right trade for a localhost socket; flip to PNG for an SSH-forwarded UI).
 

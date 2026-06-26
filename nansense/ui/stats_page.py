@@ -23,6 +23,7 @@ from nansense.ui.common import (
     _column_header_bar,
     _defer_value_write,
     _install_panel_resize,
+    _row_label_bar_html,
     _notice_banner,
     _page_scaffold,
     _refuse_unwatch_while_recording,
@@ -1442,13 +1443,7 @@ def _patch_grids_html(
             grid = render_patch_grid(tp, mean=mean, std=std, heatmap=heatmap)
             if grid is None:
                 continue
-            rows.append(
-                _patch_grid_row_html(
-                    _PATCH_TYPE_LABELS[ptype],
-                    grid,
-                    channels=tp.values.shape[0],
-                )
-            )
+            rows.append(_patch_grid_row_html(_PATCH_TYPE_LABELS[ptype], grid))
         if not rows:
             continue
         color = phase_color(phase, i)
@@ -1485,46 +1480,45 @@ def _patch_column_html(column: PatchColumn, mime: str, label: str) -> str:
     )
 
 
-def _patch_grid_row_html(label: str, grid: PatchGridRender, *, channels: int) -> str:
-    """One labeled grid: a captioned column per channel, top samples down.
+def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
+    """One labeled grid: `CHANNEL n` columns across, `SAMPLE n` rows down.
 
-    The axes are labeled explicitly: a "N channels (one channel per column)"
-    caption runs along the grid's top edge and a rotated "top samples (best
-    first)" caption down its left edge, aligned by a CSS grid whose first row
-    holds only the caption. Each channel column carries its own "CHANNEL N"
-    caption (`_patch_column_html`). With the heatmap enabled the second row
-    also starts with the crisp display-resolution colorbar (the overlay's
-    `±vmax` scale), which sits outside the scroll container so it stays visible
-    on wide grids; without it that auto column collapses to zero width.
-    `max-width:none` opts the images out of the preflight `max-width:100%` so
-    wide grids scroll horizontally instead of being squashed.
+    A `SAMPLE n` row-label column (vertical bars, `_row_label_bar_html`) and —
+    with the heatmap enabled — the crisp display-resolution colorbar (the
+    overlay's `±vmax` scale) sit fixed to the left of the channel columns, which
+    scroll horizontally on their own. The row labels and legend each lead with a
+    header-height spacer so they line up below the columns' `CHANNEL n` headers,
+    and share the cells' `PATCH_CELL_GAP` vertical rhythm. `max-width:none` opts
+    the images out of the preflight `max-width:100%` so wide grids scroll
+    horizontally instead of being squashed.
     """
+    cell = grid.columns[0].cell_size
+    n_samples = len(grid.columns[0].cells)
+    sample_labels = "".join(
+        _row_label_bar_html(f"SAMPLE {i}", height=cell) for i in range(n_samples)
+    )
+    sample_col = (
+        f'<div style="display:flex; flex-direction:column; flex:none; '
+        f'gap:{PATCH_CELL_GAP}px;"><div style="height:{LABEL_HEIGHT}px;"></div>'
+        f"{sample_labels}</div>"
+    )
     legend = (
-        '<div style="display:flex; flex-direction:column;">'
-        f'<div style="height:{LABEL_HEIGHT}px;"></div>'
+        '<div style="display:flex; flex-direction:column; flex:none; '
+        f'gap:{PATCH_CELL_GAP}px;"><div style="height:{LABEL_HEIGHT}px;"></div>'
         f'<img src="{_b64_img_src(grid.heat_legend)}" '
         'style="display:block; max-width:none;" /></div>'
         if grid.heat_legend is not None
-        else "<div></div>"
+        else ""
     )
     columns = "".join(
         _patch_column_html(column, grid.mime, label) for column in grid.columns
     )
-    axis_cls = "text-[15px] font-mono text-slate-600"
     return (
         '<div class="flex flex-col gap-0.5 w-full">'
         '<div class="text-base font-bold uppercase tracking-widest '
         f'text-slate-800 font-mono">{label}</div>'
-        '<div class="w-full" style="display:grid; '
-        'grid-template-columns:auto auto minmax(0,1fr); '
-        'align-items:start;">'
-        "<div></div><div></div>"
-        f'<div class="{axis_cls}">{channels} channels '
-        "(one channel per column) &rarr;</div>"
-        f"{legend}"
-        f'<div class="{axis_cls}" '
-        'style="writing-mode:vertical-rl; padding-right:3px;">'
-        "top samples (best first) &rarr;</div>"
+        '<div style="display:flex; gap:2px; align-items:flex-start;">'
+        f"{sample_col}{legend}"
         '<div class="overflow-x-auto" style="display:flex; gap:2px;">'
         f"{columns}"
         "</div></div></div>"
