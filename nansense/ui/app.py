@@ -245,7 +245,9 @@ def serve(
     input_name = session.input_names[0] if session.input_names else None
 
     fastapi_app = FastAPI()
-    favicon_path = Path(__file__).resolve().parents[2] / "assets" / "logo_small.png"
+    favicon_path = (
+        Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
+    )
     # One cache for all connections: two tabs on the same session share
     # rendered strips instead of re-rendering them per connection.
     render_cache = _RenderCache()
