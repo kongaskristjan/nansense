@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from nicegui import ui
+from nicegui.elements.mixins.disableable_element import DisableableElement
 from torch import Tensor
 
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
@@ -128,6 +129,18 @@ class InputPanel:
             # label / the activation markers) names the image — without it the
             # bare picture can be mistaken for an output or an activation map.
             ui.html(_label_bar_html("INPUT", color="#10b981")).classes("w-full")
+            # Multi-input models get a picker for which input the pane shows
+            # (and perturbations target); single-input models show no clutter.
+            self._input_select = None
+            if len(self._input_names) > 1:
+                self._input_select = ui.select(
+                    self._input_names,
+                    value=self._selected_input,
+                    label="Input",
+                    on_change=self._on_input_select,
+                ).props("dense outlined").classes("w-full").tooltip(
+                    "Which model input to show and perturb"
+                )
             # Full pane width, so the image scales with the (resizable)
             # pane; clicks stay in native pixel space regardless of CSS size.
             self._image = ui.interactive_image(
@@ -259,6 +272,19 @@ class InputPanel:
         self._input_std = resolve_per_input(self._input_std_cfg, name)
         self._input_transform = resolve_per_input(self._input_transform_cfg, name)
 
+    def _on_input_select(self, e: object) -> None:
+        value = getattr(e, "value", None)
+        if value is None:
+            return
+        name = str(value)
+        if name == self._selected_input:
+            return
+        self._selected_input = name
+        self._resolve_selected()
+        # The viewed input changed: re-render the pane (and its strips/diff)
+        # against the new input on the next tick.
+        self._on_change()
+
     @property
     def compare(self) -> bool:
         """Whether the tick loop should render the diff view.
@@ -298,17 +324,17 @@ class InputPanel:
         if frozen == self._frozen:
             return
         self._frozen = frozen
-        _set_controls_enabled(
-            (
-                self._sample_input,
-                self._pin_switch,
-                self._mode_toggle,
-                self._perturb_switch,
-                self._color_button,
-                self._clear_button,
-            ),
-            not frozen,
-        )
+        controls: list[DisableableElement] = [
+            self._sample_input,
+            self._pin_switch,
+            self._mode_toggle,
+            self._perturb_switch,
+            self._color_button,
+            self._clear_button,
+        ]
+        if self._input_select is not None:
+            controls.append(self._input_select)
+        _set_controls_enabled(controls, not frozen)
 
     def set_image(self, src: str) -> None:
         self._image.set_source(src)

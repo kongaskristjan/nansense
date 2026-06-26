@@ -472,6 +472,79 @@ def test_failing_probe_publishes_error_not_crash() -> None:
         assert session.wait_until_paused(after_pauses=1, timeout=5)
 
 
+class TwoInputNet(nn.Module):
+    """An image + a flat vector input: exercises multi-input probe forwards."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(3, 4, kernel_size=3, padding=1)
+        self.fc = nn.Linear(4 * 4 * 4 + 2, 2)
+
+    def forward(self, img: Tensor, vec: Tensor) -> Tensor:
+        h = torch.relu(self.conv(img)).flatten(1)
+        return self.fc(torch.cat([h, vec], dim=1))
+
+
+def _two_input_step(model: TwoInputNet) -> None:
+    img = torch.randn(2, 3, 4, 4)
+    vec = torch.randn(2, 2)
+    y = torch.randint(0, 2, (2,))
+    model.zero_grad(set_to_none=True)
+    nn.functional.cross_entropy(model(img, vec), y).backward()
+
+
+def test_pin_captures_and_reforwards_every_input() -> None:
+    with paused_session(TwoInputNet(), _two_input_step) as session:
+        assert session.input_names == ["img", "vec"]
+        snap = session.snapshot
+        assert snap is not None
+        assert session.pin_current_batch() is True
+        assert session.wait_for_probe(timeout=5)
+        probe = session.probe_result
+        assert probe is not None and session.probe_error is None
+        # Both inputs are pinned and re-forwarded (the whole model runs).
+        assert set(probe.inputs) == {"img", "vec"}
+        torch.testing.assert_close(probe.inputs["img"], snap.activations["img"])
+        torch.testing.assert_close(probe.inputs["vec"], snap.activations["vec"])
+
+
+def test_perturb_one_input_reforwards_whole_multi_input_model() -> None:
+    with paused_session(TwoInputNet(), _two_input_step) as session:
+        session.add_perturbation(
+            input_name="img", sample=0, index=(1, 2), values=(5.0, 5.0, 5.0)
+        )
+        assert session.wait_for_probe(timeout=5)
+        probe = session.probe_result
+        assert probe is not None and session.probe_error is None
+        assert probe.perturbed_inputs is not None
+        # Only the targeted input is cloned/edited; the other is shared.
+        assert probe.perturbed_inputs["vec"] is probe.inputs["vec"]
+        torch.testing.assert_close(
+            probe.perturbed_inputs["img"][0, :, 1, 2], torch.tensor([5.0, 5.0, 5.0])
+        )
+        # The full forward saw the edit: some layer's activation changed.
+        assert probe.perturbed_activations is not None
+        assert any(
+            not torch.equal(probe.perturbed_activations[n], probe.activations[n])
+            for n in probe.activations
+            if n in probe.perturbed_activations
+        )
+
+
+def test_perturb_flat_input_writes_single_channel() -> None:
+    with paused_session(TwoInputNet(), _two_input_step) as session:
+        session.add_perturbation(
+            input_name="vec", sample=1, index=(0,), values=(9.0,)
+        )
+        assert session.wait_for_probe(timeout=5)
+        probe = session.probe_result
+        assert probe is not None and session.probe_error is None
+        assert probe.perturbed_inputs is not None
+        assert float(probe.perturbed_inputs["vec"][1, 0]) == 9.0
+        # The image input is untouched (shared by reference).
+        assert probe.perturbed_inputs["img"] is probe.inputs["img"]
+
+
 def test_failing_probe_publishes_error_when_still_current(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
