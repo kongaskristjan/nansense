@@ -281,7 +281,6 @@ def _build_stats_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            _add_repo_logo()
             _back_button()
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
@@ -290,6 +289,7 @@ def _build_stats_page(
                 on_click=lambda: refresh(),
                 color="slate-500",
             ).props("dense size=md flat").tooltip("Refresh now")
+            _add_repo_logo()
 
         _add_error_banner(session)
 

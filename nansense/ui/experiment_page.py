@@ -345,8 +345,8 @@ def _build_experiment_page(
     if not selectable_layers:
         with ui.column().classes("w-full h-screen no-wrap gap-0"):
             with _top_bar_row():
-                _add_repo_logo()
                 _back_button()
+                _add_repo_logo().classes("ml-auto")
             _weights_placeholder("No layers available to experiment on.")
         return
     initial_layer = layer if layer in selectable_layers else selectable_layers[0]
@@ -471,10 +471,10 @@ def _build_experiment_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            _add_repo_logo()
             _back_button()
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
+            _add_repo_logo()
 
         _add_error_banner(session)
 

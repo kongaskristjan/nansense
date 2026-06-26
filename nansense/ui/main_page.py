@@ -223,7 +223,6 @@ def _build_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            _add_repo_logo()
             architecture_toggle = ui.button(
                 icon="account_tree", color="slate-500"
             ).props("dense size=md").tooltip("Toggle architecture pane")
@@ -302,6 +301,7 @@ def _build_page(
             ).props("dense size=md").tooltip(
                 "Toggle input selection pane"
             )
+            _add_repo_logo()
 
         _add_error_banner(session)
 

@@ -125,17 +125,24 @@ def _logo_data_uri() -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _add_repo_logo() -> None:
-    """The far-left nansense brand mark, linking to the GitHub repo.
+def _add_repo_logo() -> ui.link:
+    """The nansense brand mark at the far-right end of the top bar.
 
-    Sits at the very start of every page's top bar as the app's brand anchor.
-    Rendered as a native link opening in a new tab (so middle/ctrl-click works,
-    like the nav buttons) with a hover tooltip nudging a repo star.
+    Sits last in every page's top bar — after the right-aligned controls — as a
+    quiet star call-to-action. Rendered as a native link opening in a new tab
+    (so middle/ctrl-click works, like the nav buttons) with a hover tooltip
+    nudging a repo star. Returned so a top bar with no `ml-auto` control of its
+    own can right-align it directly.
     """
-    with ui.link(target=_REPO_URL, new_tab=True).classes(
+    link = ui.link(target=_REPO_URL, new_tab=True).classes(
         "shrink-0 flex items-center"
-    ).tooltip(_STAR_TOOLTIP):
+    )
+    with link:
         ui.image(_logo_data_uri()).classes("h-7 w-7").props("no-spinner")
+        # Right-anchored so the tooltip grows leftward and stays on-screen at
+        # the top bar's right edge.
+        ui.tooltip(_STAR_TOOLTIP).props('anchor="bottom right" self="top right"')
+    return link
 
 
 def _back_button() -> None:
