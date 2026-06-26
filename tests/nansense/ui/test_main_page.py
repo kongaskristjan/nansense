@@ -129,7 +129,7 @@ def test_compute_frame_reuses_cache_within_a_snapshot() -> None:
 
 def _frame_probe() -> ProbeResult:
     return ProbeResult(
-        input=torch.rand(2, 3, 4, 4),
+        inputs={"x": torch.rand(2, 3, 4, 4)},
         activations={"x": torch.rand(2, 3, 4, 4), "conv": torch.rand(2, 2, 4, 4)},
         mode="eval",
     )
@@ -160,10 +160,10 @@ def _frame_probe_perturbed() -> ProbeResult:
     perturbed = base.clone()
     perturbed[0, :, 1, 1] = 5.0
     return ProbeResult(
-        input=base,
+        inputs={"x": base},
         activations={"x": base, "conv": torch.rand(2, 2, 4, 4)},
         mode="eval",
-        perturbed_input=perturbed,
+        perturbed_inputs={"x": perturbed},
         perturbed_activations={"x": perturbed, "conv": torch.rand(2, 2, 4, 4)},
     )
 
@@ -216,7 +216,7 @@ def test_compute_probe_frame_diff_without_perturbations_renders_zeros() -> None:
     an all-zero diff (a white strip), not a fallback to the base view."""
     base = torch.rand(2, 2, 4, 4)
     probe = ProbeResult(
-        input=torch.rand(2, 3, 4, 4),
+        inputs={"x": torch.rand(2, 3, 4, 4)},
         activations={"conv": base},
         mode="eval",
     )
@@ -263,7 +263,7 @@ def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
 def test_display_batch_size_prefers_probe() -> None:
     snap = _frame_snapshot()  # batch size 2
     probe = ProbeResult(
-        input=torch.rand(5, 3, 4, 4), activations={}, mode="eval"
+        inputs={"x": torch.rand(5, 3, 4, 4)}, activations={}, mode="eval"
     )
     assert _display_batch_size(snap, probe) == 5
     assert _display_batch_size(snap, None) == 2

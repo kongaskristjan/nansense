@@ -551,6 +551,7 @@ def _build_page(
                     sample_idx,
                     compare=input_panel.compare,
                     input_name=input_name,
+                    selected_input=input_panel.selected_input,
                     input_mean=input_mean,
                     input_std=input_std,
                     cache=render_cache,
@@ -579,7 +580,7 @@ def _display_batch_size(
 ) -> int | None:
     """Batch size of whatever the page is currently rendering."""
     if probe is not None:
-        return int(probe.input.shape[0]) if probe.input.ndim > 0 else None
+        return probe.batch_size()
     if snap is not None:
         return _snapshot_batch_size(snap)
     return None
@@ -627,6 +628,7 @@ def _compute_frame(
     *,
     compare: bool = False,
     input_name: str | None,
+    selected_input: str | None = None,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
     cache: _RenderCache,
@@ -637,14 +639,21 @@ def _compute_frame(
     perturbed view, see `_compute_probe_frame`); otherwise the snapshot is.
     Layers render concurrently on `_RENDER_POOL`; each strip goes through
     `cache`, so only strips not already rendered for this source cost
-    anything.
+    anything. `input_name` is the primary image input (its `H × W` sets the
+    token grid for 2D activations); `selected_input` is the input shown in the
+    pane — it defaults to `input_name` (the same one unless the user picked
+    another from the multi-input dropdown).
     """
+    if selected_input is None:
+        selected_input = input_name
     if probe is not None:
         return _compute_probe_frame(
             layer_names,
             probe,
             sample_idx,
             compare=compare,
+            input_name=input_name,
+            selected_input=selected_input,
             input_mean=input_mean,
             input_std=input_std,
             cache=cache,
@@ -696,10 +705,10 @@ def _compute_frame(
     rendered = _render_layers(layer_names, strips)
     input_src = cache.get_or_render(
         snap,
-        (input_name or "", "input", sample_idx),
+        (selected_input or "", "input", sample_idx),
         lambda: _input_img_src(
             render_image(
-                snap.activations.get(input_name) if input_name else None,
+                snap.activations.get(selected_input) if selected_input else None,
                 sample_idx,
                 mean=input_mean,
                 std=input_std,
@@ -715,6 +724,8 @@ def _compute_probe_frame(
     sample_idx: int,
     *,
     compare: bool,
+    input_name: str | None,
+    selected_input: str | None,
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
     cache: _RenderCache,
@@ -727,14 +738,16 @@ def _compute_probe_frame(
     extent traces how far the edit propagates (receptive field). The diff
     view renders even with nothing perturbed: an all-zero diff draws as a
     white strip, signalling "no differences" rather than falling back to a
-    non-diff view. The input image shows the perturbed input whenever one
-    exists, so the edit is visible. Probe runs are forward-only, so every
-    gradient strip shows a placeholder note instead of an image.
+    non-diff view. The input pane shows the perturbed copy of the selected
+    input whenever one exists, so the edit is visible. Probe runs are
+    forward-only, so every gradient strip shows a placeholder note instead of
+    an image. `input_name` (the primary image input) sets the token grid;
+    `selected_input` is the input shown in the pane.
     """
     kind = "probe-diff" if compare else (
         "probe-perturbed" if probe.perturbed_activations is not None else "probe-act"
     )
-    input_hw = tensor_hw(probe.input)
+    input_hw = tensor_hw(probe.base_input(input_name))
 
     def strips(name: str) -> tuple[str, str]:
         act = cache.get_or_render(
@@ -752,12 +765,10 @@ def _compute_probe_frame(
         return act, _PROBE_NO_GRADIENTS_HTML
 
     rendered = _render_layers(layer_names, strips)
-    shown_input = (
-        probe.perturbed_input if probe.perturbed_input is not None else probe.input
-    )
+    shown_input = probe.shown_input(selected_input)
     input_src = cache.get_or_render(
         probe,
-        ("", "probe-input", sample_idx),
+        (selected_input or "", "probe-input", sample_idx),
         lambda: _input_img_src(
             render_image(shown_input, sample_idx, mean=input_mean, std=input_std)
         ),

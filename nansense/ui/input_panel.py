@@ -86,6 +86,9 @@ class InputPanel:
     ) -> None:
         self._session = session
         self._input_name = input_name
+        # The input shown in the pane and targeted by perturbations. Equal to
+        # the primary input until the (multi-input) dropdown changes it.
+        self._selected_input = input_name
         self._input_mean = input_mean
         self._input_std = input_std
         self._on_change = on_change
@@ -229,6 +232,11 @@ class InputPanel:
             self._image.classes(remove="cursor-crosshair")
 
     @property
+    def selected_input(self) -> str | None:
+        """The input name the pane shows and perturbations target."""
+        return self._selected_input
+
+    @property
     def compare(self) -> bool:
         """Whether the tick loop should render the diff view.
 
@@ -340,14 +348,17 @@ class InputPanel:
         self._error_label.text = self._session.probe_error or ""
 
     def _current_input(self) -> Tensor | None:
-        """The input batch the displayed image was rendered from."""
+        """The selected input batch the displayed image was rendered from."""
+        name = self._selected_input
+        if name is None:
+            return None
         probe = self._session.probe_result
         if probe is not None:
-            return probe.input
+            return probe.shown_input(name)
         snap = self._session.snapshot
-        if snap is None or self._input_name is None:
+        if snap is None:
             return None
-        return snap.activations.get(self._input_name)
+        return snap.activations.get(name)
 
     def _on_sample_change(self, e: object) -> None:
         value = getattr(e, "value", None)
@@ -403,6 +414,9 @@ class InputPanel:
     def _on_image_click(self, e: object) -> None:
         if self._frozen or not self._perturb_switch.value:
             return
+        name = self._selected_input
+        if name is None:
+            return
         tensor = self._current_input()
         if tensor is None or tensor.ndim != 4:
             return
@@ -418,5 +432,5 @@ class InputPanel:
         x = min(max(int(getattr(e, "image_x", 0)), 0), w - 1)
         y = min(max(int(getattr(e, "image_y", 0)), 0), h - 1)
         self._session.add_perturbation(
-            sample=self.sample_idx, y=y, x=x, values=values
+            input_name=name, sample=self.sample_idx, index=(y, x), values=values
         )

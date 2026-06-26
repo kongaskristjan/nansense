@@ -72,7 +72,7 @@ def test_pin_while_paused_runs_probe_without_stepping() -> None:
         # The probe ran on the paused training thread: no extra pause happened.
         assert session.pause_count == 1
         # The pinned input is the snapshot's input batch, position included.
-        torch.testing.assert_close(probe.input, snap.activations["x"])
+        torch.testing.assert_close(probe.inputs["x"], snap.activations["x"])
         assert session.pinned_position == snap.position
         # Default mode is unchanged.
         assert probe.mode == "unchanged"
@@ -98,7 +98,7 @@ def test_probe_reruns_on_every_capture_while_pinned() -> None:
         second = session.probe_result
         assert second is not None and second is not first
         # Same pinned input, fresh activations against the stepped weights.
-        torch.testing.assert_close(second.input, first.input)
+        torch.testing.assert_close(second.inputs["x"], first.inputs["x"])
 
 
 @pytest.mark.parametrize(
@@ -199,9 +199,9 @@ def test_probe_runs_after_batch_activations_are_freed(
         seen: list[int] = []
         original = session._capture_forward  # type: ignore[reportPrivateUsage]
 
-        def spy(inp: Tensor) -> dict[str, Tensor]:
+        def spy(inputs: list[Tensor]) -> dict[str, Tensor]:
             seen.append(len(session._activations))  # type: ignore[reportPrivateUsage]
-            return original(inp)
+            return original(inputs)
 
         monkeypatch.setattr(session, "_capture_forward", spy)
 
@@ -263,7 +263,7 @@ def test_set_mode_without_pin_probes_snapshot_input(mode: str) -> None:
         assert session.is_pinned is False
         assert probe.mode == mode
         # The base is the snapshot's (unpinned) input batch.
-        torch.testing.assert_close(probe.input, snap.activations["x"])
+        torch.testing.assert_close(probe.inputs["x"], snap.activations["x"])
 
 
 def test_mode_back_to_unchanged_clears_result_when_not_pinned() -> None:
@@ -322,33 +322,65 @@ def test_set_probe_mode_rejects_unknown_mode() -> None:
 def test_apply_perturbations_writes_pixels_and_skips_bad_entries() -> None:
     base = torch.zeros(2, 3, 4, 4)
     perturbed = apply_perturbations(
-        base,
+        {"x": base},
         {
-            (0, 1, 2): (1.0, 2.0, 3.0),
-            (1, 3, 0): (4.0, 5.0, 6.0),
-            (9, 0, 0): (7.0, 7.0, 7.0),  # sample out of range — skipped
-            (0, 0, 0): (8.0, 8.0),  # wrong channel count — skipped
+            ("x", 0, (1, 2)): (1.0, 2.0, 3.0),
+            ("x", 1, (3, 0)): (4.0, 5.0, 6.0),
+            ("x", 9, (0, 0)): (7.0, 7.0, 7.0),  # sample out of range — skipped
+            ("x", 0, (0, 0)): (8.0, 8.0),  # wrong channel count — skipped
+            ("missing", 0, (0, 0)): (1.0, 1.0, 1.0),  # absent input — skipped
         },
     )
     assert perturbed is not None
-    torch.testing.assert_close(perturbed[0, :, 1, 2], torch.tensor([1.0, 2.0, 3.0]))
-    torch.testing.assert_close(perturbed[1, :, 3, 0], torch.tensor([4.0, 5.0, 6.0]))
-    assert float(perturbed.abs().sum()) == pytest.approx(21.0)  # nothing else
+    out = perturbed["x"]
+    torch.testing.assert_close(out[0, :, 1, 2], torch.tensor([1.0, 2.0, 3.0]))
+    torch.testing.assert_close(out[1, :, 3, 0], torch.tensor([4.0, 5.0, 6.0]))
+    assert float(out.abs().sum()) == pytest.approx(21.0)  # nothing else
     assert float(base.abs().sum()) == 0.0  # the base is untouched
 
 
+def test_apply_perturbations_writes_flat_channels_and_skips_bad_entries() -> None:
+    base = torch.zeros(2, 4)
+    perturbed = apply_perturbations(
+        {"x": base},
+        {
+            ("x", 0, (2,)): (5.0,),
+            ("x", 1, (9,)): (1.0,),  # channel out of range — skipped
+            ("x", 0, (0, 0)): (1.0,),  # wrong index rank for a flat input — skipped
+        },
+    )
+    assert perturbed is not None
+    out = perturbed["x"]
+    assert float(out[0, 2]) == 5.0
+    assert float(out.abs().sum()) == pytest.approx(5.0)
+    assert float(base.abs().sum()) == 0.0
+
+
+def test_apply_perturbations_only_clones_perturbed_inputs() -> None:
+    """Inputs without any in-range entry are shared by reference, not cloned."""
+    img = torch.zeros(2, 3, 4, 4)
+    other = torch.zeros(2, 5)
+    perturbed = apply_perturbations(
+        {"img": img, "other": other}, {("img", 0, (0, 0)): (1.0, 2.0, 3.0)}
+    )
+    assert perturbed is not None
+    assert perturbed["img"] is not img  # cloned and edited
+    assert perturbed["other"] is other  # untouched — same object
+
+
 @pytest.mark.parametrize(
-    "base, perturbations",
+    "bases, perturbations",
     [
-        (torch.zeros(2, 4), {(0, 0, 0): (1.0,)}),  # non-image base
-        (torch.zeros(2, 3, 4, 4), {}),  # nothing to apply
-        (torch.zeros(2, 3, 4, 4), {(9, 0, 0): (1.0, 1.0, 1.0)}),  # all skipped
+        ({"x": torch.zeros(2, 3, 4, 4)}, {}),  # nothing to apply
+        ({"x": torch.zeros(2, 3, 4, 4)}, {("x", 9, (0, 0)): (1.0, 1.0, 1.0)}),  # all skipped
+        ({"x": torch.zeros(2, 3, 4, 4)}, {("y", 0, (0, 0)): (1.0, 1.0, 1.0)}),  # absent
     ],
 )
 def test_apply_perturbations_returns_none_when_nothing_applies(
-    base: Tensor, perturbations: dict[tuple[int, int, int], tuple[float, ...]]
+    bases: dict[str, Tensor],
+    perturbations: dict[tuple[str, int, tuple[int, ...]], tuple[float, ...]],
 ) -> None:
-    assert apply_perturbations(base, perturbations) is None
+    assert apply_perturbations(bases, perturbations) is None
 
 
 def test_perturbation_without_pin_probes_snapshot_input() -> None:
@@ -356,20 +388,22 @@ def test_perturbation_without_pin_probes_snapshot_input() -> None:
         snap = session.snapshot
         assert snap is not None
 
-        session.add_perturbation(sample=0, y=1, x=2, values=(5.0, 5.0, 5.0))
+        session.add_perturbation(
+            input_name="x", sample=0, index=(1, 2), values=(5.0, 5.0, 5.0)
+        )
         assert session.wait_for_probe(timeout=5)
         probe = session.probe_result
         assert probe is not None
         assert session.is_pinned is False
-        torch.testing.assert_close(probe.input, snap.activations["x"])
-        assert probe.perturbed_input is not None
-        torch.testing.assert_close(
-            probe.perturbed_input[0, :, 1, 2], torch.tensor([5.0, 5.0, 5.0])
-        )
+        base = probe.inputs["x"]
+        torch.testing.assert_close(base, snap.activations["x"])
+        assert probe.perturbed_inputs is not None
+        pert = probe.perturbed_inputs["x"]
+        torch.testing.assert_close(pert[0, :, 1, 2], torch.tensor([5.0, 5.0, 5.0]))
         # Only the clicked pixel differs from the base input.
-        mask = torch.ones_like(probe.input, dtype=torch.bool)
+        mask = torch.ones_like(base, dtype=torch.bool)
         mask[0, :, 1, 2] = False
-        torch.testing.assert_close(probe.perturbed_input[mask], probe.input[mask])
+        torch.testing.assert_close(pert[mask], base[mask])
         # The second forward saw the edit: downstream activations differ.
         assert probe.perturbed_activations is not None
         assert not torch.equal(
@@ -379,7 +413,9 @@ def test_perturbation_without_pin_probes_snapshot_input() -> None:
 
 def test_clear_perturbations_without_pin_clears_result() -> None:
     with paused_session(BnDropNet(), _bn_drop_step) as session:
-        session.add_perturbation(sample=0, y=0, x=0, values=(1.0, 1.0, 1.0))
+        session.add_perturbation(
+            input_name="x", sample=0, index=(0, 0), values=(1.0, 1.0, 1.0)
+        )
         assert session.wait_for_probe(timeout=5)
         assert session.probe_result is not None
 
@@ -391,7 +427,9 @@ def test_clear_perturbations_without_pin_clears_result() -> None:
 def test_unpin_with_perturbations_keeps_probing() -> None:
     with paused_session(BnDropNet(), _bn_drop_step) as session:
         assert session.pin_current_batch() is True
-        session.add_perturbation(sample=0, y=0, x=0, values=(1.0, 1.0, 1.0))
+        session.add_perturbation(
+            input_name="x", sample=0, index=(0, 0), values=(1.0, 1.0, 1.0)
+        )
         assert session.wait_for_probe(timeout=5)
         count = session.probe_count
 
@@ -400,16 +438,18 @@ def test_unpin_with_perturbations_keeps_probing() -> None:
         probe = session.probe_result
         assert probe is not None  # perturbations keep the probe alive
         assert session.is_pinned is False
-        assert probe.perturbed_input is not None
+        assert probe.perturbed_inputs is not None
 
 
 def test_out_of_range_perturbation_publishes_base_only() -> None:
     with paused_session(BnDropNet(), _bn_drop_step) as session:
-        session.add_perturbation(sample=99, y=0, x=0, values=(1.0, 1.0, 1.0))
+        session.add_perturbation(
+            input_name="x", sample=99, index=(0, 0), values=(1.0, 1.0, 1.0)
+        )
         assert session.wait_for_probe(timeout=5)
         probe = session.probe_result
         assert probe is not None
-        assert probe.perturbed_input is None
+        assert probe.perturbed_inputs is None
         assert probe.perturbed_activations is None
 
 
@@ -420,7 +460,7 @@ def test_failing_probe_publishes_error_not_crash() -> None:
 
         # Sabotage the pinned input with an incompatible shape; the next probe
         # must fail gracefully into `probe_error` instead of killing the worker.
-        session._pinned_input = torch.randn(2, 3, 9, 9)  # type: ignore[reportPrivateUsage]
+        session._pinned_inputs = {"x": torch.randn(2, 3, 9, 9)}  # type: ignore[reportPrivateUsage]
         count = session.probe_count
         with session._cv:  # type: ignore[reportPrivateUsage]
             request_probe_locked(session)

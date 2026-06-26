@@ -634,12 +634,8 @@ def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | Non
 
     sections: list[tuple[str, Image.Image | None]] = []
     if probe is not None:
-        shown_input = (
-            probe.perturbed_input
-            if probe.perturbed_input is not None
-            else probe.input
-        )
-        input_hw = tensor_hw(probe.input)
+        shown_input = probe.shown_input(input_name)
+        input_hw = tensor_hw(probe.base_input(input_name))
     else:
         assert snap is not None
         shown_input = (

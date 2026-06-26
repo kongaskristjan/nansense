@@ -44,8 +44,12 @@ if TYPE_CHECKING:
 
 PROBE_MODES: tuple[str, ...] = ("unchanged", "eval", "train")
 
-# (sample, y, x) -> per-channel values in model-input (normalized) space.
-PerturbationMap = dict[tuple[int, int, int], tuple[float, ...]]
+# (input_name, sample, index) -> values in model-input (normalized) space.
+# `index` is (y, x) for an image input `[B, C, H, W]` and `values` has length
+# C (the whole channel vector of that pixel); `index` is (channel,) for a flat
+# input `[B, C]` and `values` is a single scalar.
+PerturbationKey = tuple[str, int, tuple[int, ...]]
+PerturbationMap = dict[PerturbationKey, tuple[float, ...]]
 
 
 @dataclass(frozen=True)
@@ -53,48 +57,104 @@ class ProbeResult:
     """One probe run's outputs, fully resident on CPU.
 
     Same thread contract as `BatchSnapshot`: all tensors are independent CPU
-    clones, so the UI can hold the result for as long as it wants. `input` is
-    the batch the probe ran on (the pinned input, or the snapshot's input
-    when only perturbations are active), `activations` carries every layer
-    output keyed like `Session.layer_names`, and `mode` records which
-    train/eval mode the forward ran under ("unchanged", "eval", or "train").
+    clones, so the UI can hold the result for as long as it wants. `inputs`
+    maps every model input name to the tensor the probe ran on (the pinned
+    batch, or the snapshot's inputs when only perturbations are active);
+    `activations` carries every layer output keyed like `Session.layer_names`,
+    and `mode` records which train/eval mode the forward ran under
+    ("unchanged", "eval", or "train").
 
-    With perturbations applied, `perturbed_input` is the edited copy of
-    `input` and `perturbed_activations` its layer outputs from a second
+    With perturbations applied, `perturbed_inputs` is the per-input mapping
+    with the edited input(s) substituted (unperturbed inputs share the base
+    tensor), and `perturbed_activations` its layer outputs from a second
     forward in the same isolation scope; both stay `None` otherwise. Probes
     are forward-only: there are no activation gradients.
     """
 
-    input: Tensor
+    inputs: dict[str, Tensor]
     activations: dict[str, Tensor]
     mode: str
-    perturbed_input: Tensor | None = None
+    perturbed_inputs: dict[str, Tensor] | None = None
     perturbed_activations: dict[str, Tensor] | None = None
+
+    def shown_input(self, name: str | None) -> Tensor | None:
+        """The (perturbed if edited, else base) tensor for input `name`."""
+        if name is None:
+            return None
+        if self.perturbed_inputs is not None and name in self.perturbed_inputs:
+            return self.perturbed_inputs[name]
+        return self.inputs.get(name)
+
+    def base_input(self, name: str | None) -> Tensor | None:
+        """The unperturbed base tensor for input `name`."""
+        return self.inputs.get(name) if name is not None else None
+
+    def batch_size(self) -> int | None:
+        """Batch size `B`, read off whichever input has a batch axis."""
+        for tensor in self.inputs.values():
+            if tensor.ndim > 0:
+                return int(tensor.shape[0])
+        return None
 
 
 def apply_perturbations(
-    base: Tensor, perturbations: PerturbationMap
-) -> Tensor | None:
-    """Clone `base` and write per-channel values at each (sample, y, x) pixel.
+    bases: dict[str, Tensor], perturbations: PerturbationMap
+) -> dict[str, Tensor] | None:
+    """Substitute edited copies of the perturbed inputs into a new mapping.
 
-    Returns `None` when there is nothing to apply: no perturbations, a
-    non-image base (not `[B, C, H, W]`), or no entry in range. Entries out
-    of bounds or with a mismatched channel count are skipped individually —
-    the base batch may have changed shape since the click was recorded.
+    Every input carrying at least one in-range perturbation is cloned and
+    edited; the rest reuse their base tensor (the returned dict shares those
+    objects). Returns `None` when nothing applies: no perturbations, or no
+    entry lands in any base. Per input shape:
+
+    - image `[B, C, H, W]`: index `(y, x)` writes the length-`C` `values`
+      across the channel axis of pixel `(y, x)`.
+    - flat `[B, C]`: index `(channel,)` writes the single `values[0]` scalar.
+
+    Entries out of bounds, naming an absent input, or with a value/channel
+    count that doesn't fit the base are skipped individually — the base batch
+    may have changed shape since the click was recorded.
     """
-    if not perturbations or base.ndim != 4:
+    if not perturbations:
         return None
-    b, c, h, w = base.shape
-    perturbed = base.clone()
+    result: dict[str, Tensor] = dict(bases)
     applied = False
-    for (sample, y, x), values in perturbations.items():
+    for (name, sample, index), values in perturbations.items():
+        base = bases.get(name)
+        if base is None:
+            continue
+        # Clone lazily on the first hit for an input; later hits edit in place.
+        current = result[name]
+        target = current if current is not base else base.clone()
+        if _write_perturbation(target, sample, index, values):
+            result[name] = target
+            applied = True
+    return result if applied else None
+
+
+def _write_perturbation(
+    target: Tensor, sample: int, index: tuple[int, ...], values: tuple[float, ...]
+) -> bool:
+    """Write one perturbation into `target` in place; `False` if it doesn't fit."""
+    if target.ndim == 4:
+        b, c, h, w = target.shape
+        if len(index) != 2 or len(values) != c:
+            return False
+        y, x = index
         if not (0 <= sample < b and 0 <= y < h and 0 <= x < w):
-            continue
-        if len(values) != c:
-            continue
-        perturbed[sample, :, y, x] = torch.tensor(values, dtype=perturbed.dtype)
-        applied = True
-    return perturbed if applied else None
+            return False
+        target[sample, :, y, x] = torch.tensor(values, dtype=target.dtype)
+        return True
+    if target.ndim == 2:
+        b, c = target.shape
+        if len(index) != 1 or len(values) != 1:
+            return False
+        (channel,) = index
+        if not (0 <= sample < b and 0 <= channel < c):
+            return False
+        target[sample, channel] = values[0]
+        return True
+    return False
 
 
 def pin_current_batch(session: Session) -> bool:
@@ -102,14 +162,13 @@ def pin_current_batch(session: Session) -> bool:
     if not session._enabled:
         return False
     snap = session._snapshot
-    input_name = session._input_names[0] if session._input_names else None
-    if snap is None or input_name is None:
+    if snap is None:
         return False
-    pinned = snap.activations.get(input_name)
-    if pinned is None:
+    pinned = session._snapshot_inputs()
+    if not pinned:
         return False
     with session._cv:
-        session._pinned_input = pinned
+        session._pinned_inputs = pinned
         session._pinned_position = snap.position
         request_probe_locked(session)
     return True
@@ -118,9 +177,9 @@ def pin_current_batch(session: Session) -> bool:
 def unpin_batch(session: Session) -> None:
     """Implementation of `Session.unpin_batch`."""
     with session._cv:
-        if session._pinned_input is None:
+        if session._pinned_inputs is None:
             return
-        session._pinned_input = None
+        session._pinned_inputs = None
         session._pinned_position = None
         if _probe_active_locked(session):
             # Perturbations or an "eval"/"train" mode keep probing, now
@@ -131,13 +190,18 @@ def unpin_batch(session: Session) -> None:
 
 
 def add_perturbation(
-    session: Session, *, sample: int, y: int, x: int, values: tuple[float, ...]
+    session: Session,
+    *,
+    input_name: str,
+    sample: int,
+    index: tuple[int, ...],
+    values: tuple[float, ...],
 ) -> None:
     """Implementation of `Session.add_perturbation`."""
     if not session._enabled:
         return
     with session._cv:
-        session._perturbations[(sample, y, x)] = tuple(values)
+        session._perturbations[(input_name, sample, tuple(index))] = tuple(values)
         request_probe_locked(session)
 
 
@@ -194,7 +258,7 @@ def _probe_active_locked(session: Session) -> bool:
     pin or perturbation gives it something to re-run.
     """
     return (
-        session._pinned_input is not None
+        session._pinned_inputs is not None
         or bool(session._perturbations)
         or session._probe_mode != "unchanged"
     )
@@ -245,34 +309,39 @@ def run_probe_guarded(session: Session) -> None:
 
 
 def _run_probe(session: Session) -> None:
-    """One probe run: isolated forwards on the base (and perturbed) input.
+    """One probe run: isolated forwards on the base (and perturbed) inputs.
 
     Training-thread only. Reads the probe config under `_cv`, runs the
     forwards without the lock, and publishes the result only if the
     config is still current — a config change mid-run (re-pin, mode flip,
     new perturbation) wins and its own request re-runs the probe. The
-    base input is the pinned batch, or the snapshot's input when only
-    perturbations are active.
+    base inputs are the pinned batch, or the snapshot's inputs when only
+    perturbations are active; a perturbed forward re-runs the *whole* model
+    with the edited input(s) substituted, so multi-input models work.
     """
     with session._cv:
         version = session._probe_version
-        pinned = session._pinned_input
+        pinned = session._pinned_inputs
         mode = session._probe_mode
         perturbations = dict(session._perturbations)
     if pinned is None and not perturbations and mode == "unchanged":
         return
-    base = pinned if pinned is not None else session._snapshot_input()
-    if base is None:
+    bases = pinned if pinned is not None else session._snapshot_inputs()
+    if not bases:
         return
-    perturbed = apply_perturbations(base, perturbations)
-    inputs = [base] if perturbed is None else [base, perturbed]
-    captures = _probe_forwards(session, inputs, mode=mode)
+    perturbed = apply_perturbations(bases, perturbations)
+    base_caps = _probe_forward(session, bases, mode=mode)
+    pert_caps = (
+        _probe_forward(session, perturbed, mode=mode)
+        if perturbed is not None
+        else None
+    )
     result = ProbeResult(
-        input=base,
-        activations=captures[0],
+        inputs=bases,
+        activations=base_caps,
         mode=mode,
-        perturbed_input=perturbed,
-        perturbed_activations=captures[1] if perturbed is not None else None,
+        perturbed_inputs=perturbed,
+        perturbed_activations=pert_caps,
     )
     with session._cv:
         if session._probe_version != version:
@@ -321,9 +390,15 @@ def isolated_model(session: Session, mode: str) -> Iterator[torch.device]:
                 buffer.copy_(saved)
 
 
-def _probe_forwards(
-    session: Session, inputs: list[Tensor], *, mode: str
-) -> list[dict[str, Tensor]]:
-    """Run isolated no-grad forwards, capturing every layer's output."""
+def _probe_forward(
+    session: Session, inputs: dict[str, Tensor], *, mode: str
+) -> dict[str, Tensor]:
+    """Run one isolated no-grad forward of the full model, capturing outputs.
+
+    `inputs` is keyed by model input name; the tensors are passed positionally
+    in `Session.input_names` (= forward / fx-placeholder) order, so a model
+    with several inputs — positional or keyword — is re-run with all of them.
+    """
+    ordered = [inputs[n] for n in session._input_names if n in inputs]
     with isolated_model(session, mode) as device, torch.no_grad():
-        return [session._capture_forward(inp.to(device)) for inp in inputs]
+        return session._capture_forward([t.to(device) for t in ordered])

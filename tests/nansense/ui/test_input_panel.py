@@ -17,6 +17,9 @@ from nansense.ui.input_panel import InputPanel, normalized_color
 CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR_STD = (0.2470, 0.2435, 0.2616)
 
+# (input_name, sample, index) -> values, matching `probe.PerturbationMap`.
+PerturbMap = dict[tuple[str, int, tuple[int, ...]], tuple[float, ...]]
+
 
 @pytest.mark.parametrize(
     "hex_color, channels, mean, std, expected",
@@ -71,11 +74,11 @@ def test_normalized_color_rejects_bad_input(
     "perturbations, expected",
     [
         ({}, False),
-        ({(0, 1, 2): (0.5, 0.5, 0.5)}, True),
+        ({("x", 0, (1, 2)): (0.5, 0.5, 0.5)}, True),
     ],
 )
 def test_compare_active_iff_perturbed(
-    perturbations: dict[tuple[int, int, int], tuple[float, ...]],
+    perturbations: PerturbMap,
     expected: bool,
 ) -> None:
     """`compare` is not a toggle: it derives from the perturbation map."""
@@ -84,9 +87,6 @@ def test_compare_active_iff_perturbed(
         Session, SimpleNamespace(perturbations=perturbations)
     )
     assert panel.compare is expected
-
-
-PerturbMap = dict[tuple[int, int, int], tuple[float, ...]]
 
 
 class _FakeSwitch:
@@ -170,13 +170,13 @@ class _Wired:
     [
         # A perturbation made elsewhere (another tab, or one surviving a
         # rebuild after navigating back from /stats) turns the switch on.
-        ({(0, 1, 2): (0.5, 0.5, 0.5)}, False, False, True),
+        ({("x", 0, (1, 2)): (0.5, 0.5, 0.5)}, False, False, True),
         # An external clear turns it back off in a tab that didn't arm it.
         ({}, False, True, False),
         # A tab armed locally (toggled on, nothing clicked yet) stays on.
         ({}, True, True, True),
         # Armed and perturbed: already consistent, stays on.
-        ({(0, 1, 2): (0.5, 0.5, 0.5)}, True, True, True),
+        ({("x", 0, (1, 2)): (0.5, 0.5, 0.5)}, True, True, True),
     ],
 )
 def test_refresh_status_syncs_perturb_switch(

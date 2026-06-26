@@ -397,8 +397,11 @@ class _CaptureInterpreter(fx.Interpreter):
         return result
 
 
-def capture_forward(session: Session, inp: Tensor) -> dict[str, Tensor]:
+def capture_forward(session: Session, inputs: list[Tensor]) -> dict[str, Tensor]:
     """One forward pass capturing every layer output as a fresh CPU clone.
+
+    `inputs` are passed positionally in placeholder / forward-parameter order,
+    so the model is re-run with all of its inputs (single- or multi-input).
 
     Never touches the batch path's state (`session._activations`,
     `session._hook_handles`, the patched forward): in fx mode the
@@ -414,7 +417,7 @@ def capture_forward(session: Session, inp: Tensor) -> dict[str, Tensor]:
     """
     capture: dict[str, Tensor] = {}
     if session._fx_graph is not None:
-        _CaptureInterpreter(session._fx_graph, capture, to_cpu=True).run(inp)
+        _CaptureInterpreter(session._fx_graph, capture, to_cpu=True).run(*inputs)
     else:
         handles = [
             session.model.register_forward_pre_hook(
@@ -427,7 +430,7 @@ def capture_forward(session: Session, inp: Tensor) -> dict[str, Tensor]:
             if module is not session.model
         ]
         try:
-            session.model(inp)
+            session.model(*inputs)
         finally:
             for handle in handles:
                 handle.remove()

@@ -313,7 +313,7 @@ class Session:
         # thread (also under `_cv`, so a stale in-flight run can be detected
         # via `_probe_version` and dropped instead of overwriting newer
         # config's result).
-        self._pinned_input: Tensor | None = None
+        self._pinned_inputs: dict[str, Tensor] | None = None
         self._pinned_position: BatchPosition | None = None
         self._perturbations: PerturbationMap = {}
         self._probe_mode: str = "unchanged"
@@ -714,7 +714,7 @@ class Session:
     @property
     def is_pinned(self) -> bool:
         with self._cv:
-            return self._pinned_input is not None
+            return self._pinned_inputs is not None
 
     @property
     def pinned_position(self) -> BatchPosition | None:
@@ -740,24 +740,33 @@ class Session:
 
     @property
     def perturbations(self) -> PerturbationMap:
-        """Copy of the active perturbations: (sample, y, x) -> channel values."""
+        """Copy of the active perturbations: (input, sample, index) -> values."""
         with self._cv:
             return dict(self._perturbations)
 
     def add_perturbation(
-        self, *, sample: int, y: int, x: int, values: tuple[float, ...]
+        self,
+        *,
+        input_name: str,
+        sample: int,
+        index: tuple[int, ...],
+        values: tuple[float, ...],
     ) -> None:
-        """Pin pixel `(y, x)` of `sample` to per-channel `values` on probe inputs.
+        """Pin `index` of `sample` in input `input_name` to `values` on probes.
 
-        `values` are in the model's input space (i.e. already normalized by
+        `index` is `(y, x)` for an image input (`values` is its length-`C`
+        channel vector) or `(channel,)` for a flat input (`values` is a single
+        scalar). `values` are in the model's input space (already normalized by
         the caller — the UI back-transforms the picked display color with the
         `input_mean` / `input_std` it was given). Perturbations apply to the
-        probe's base input — the pinned batch, or the current snapshot's
-        input when nothing is pinned — and trigger a probe re-run that also
+        probe's base inputs — the pinned batch, or the current snapshot's
+        inputs when nothing is pinned — and trigger a probe re-run that also
         captures the perturbed activations. Entries that don't fit the base
-        (out of range, wrong channel count) are skipped at apply time.
+        (out of range, wrong count, absent input) are skipped at apply time.
         """
-        probe.add_perturbation(self, sample=sample, y=y, x=x, values=values)
+        probe.add_perturbation(
+            self, input_name=input_name, sample=sample, index=index, values=values
+        )
 
     def clear_perturbations(self) -> None:
         """Drop all perturbations (and the probe result, when not pinned)."""
@@ -1829,20 +1838,42 @@ class Session:
                 experiments.run_experiment_guarded(self, experiment)
 
     def _snapshot_input(self) -> Tensor | None:
-        """The last snapshot's input tensor (the probe base when unpinned)."""
+        """The last snapshot's primary input tensor (the first model input).
+
+        The experiment/attribution path works on a single image input; the
+        probe instead re-forwards every input via `_snapshot_inputs`.
+        """
         snap = self._snapshot
         input_name = self._input_names[0] if self._input_names else None
         if snap is None or input_name is None:
             return None
         return snap.activations.get(input_name)
 
-    def _capture_forward(self, inp: Tensor) -> dict[str, Tensor]:
+    def _snapshot_inputs(self) -> dict[str, Tensor]:
+        """Every input tensor of the last snapshot, keyed by input name.
+
+        The probe base: a mapping of all of the model's inputs (each captured
+        under its placeholder / forward-parameter name) so a probe can re-run
+        the whole forward. Empty before the first snapshot.
+        """
+        snap = self._snapshot
+        if snap is None:
+            return {}
+        inputs: dict[str, Tensor] = {}
+        for name in self._input_names:
+            tensor = snap.activations.get(name)
+            if isinstance(tensor, Tensor):
+                inputs[name] = tensor
+        return inputs
+
+    def _capture_forward(self, inputs: list[Tensor]) -> dict[str, Tensor]:
         """One isolated forward, every layer output as a fresh CPU clone.
 
         Thin wrapper over `capture.capture_forward` so probe runs go
-        through the session (tests intercept probe forwards here).
+        through the session (tests intercept probe forwards here). `inputs`
+        are passed positionally in `input_names` order.
         """
-        return capture.capture_forward(self, inp)
+        return capture.capture_forward(self, inputs)
 
 
 class _BatchContext:
