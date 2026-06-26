@@ -249,6 +249,13 @@ serves the UI. The arguments worth knowing:
   control.
 - `input_mean` / `input_std` — the input normalization, so images display in
   their original colors.
+- `input_transform` — a callable mapping a non-RGB image input
+  `(N, C, H, W)` to a displayable `(N, 1|3, H, W)` image in `[0, 1]` (keeping
+  `H × W`); without it, an input whose channel count isn't 1 or 3 shows a hint
+  to add one. A flat `(N, C)` input needs none — it renders as a colormapped
+  strip. For a multi-input model, `input_mean` / `input_std` / `input_transform`
+  each take either one value for all inputs or a `dict` keyed by input name, and
+  the input pane gains a dropdown to pick which input to view and perturb.
 
 Iterate each phase with `session.batches(loader, phase=...)`, and call
 `session.close()` when training finishes (the served page stays up for
@@ -265,7 +272,8 @@ optional up-front declaration (it's what the PyTorch Lightning integration uses)
 For **PyTorch Lightning**, attach a `NansenseCallback(model="<attr path to the
 network>", ...)` to your trainer and run the fit through `fit_with_time_travel`,
 which owns the jump-and-replay loop. Both accept the same `port` / `host` /
-`open_browser` / `enabled` / `input_mean` / `input_std` arguments as `start`.
+`open_browser` / `enabled` / `input_mean` / `input_std` / `input_transform`
+arguments as `start`.
 
 **Distributed (DDP)** needs no special wiring: call `nansense.start()` on every
 rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and

@@ -653,10 +653,13 @@ followers blocked at their next batch start until the collective timeout.
 A probe is a nansense-internal forward pass on a *pinned* input batch, run
 between batches so the UI can show the network's response to one fixed
 input across stepping and time travel. `Session.pin_current_batch()` pins
-the last snapshot's input tensor (already a CPU clone); from then on every
-capture re-runs the model on it right after `_publish_snapshot` and
-publishes a `ProbeResult` — CPU clones of the input and of every layer
-output, keyed like `layer_names`. Probes are forward-only: no gradients.
+*every* input tensor of the last snapshot (already CPU clones, keyed by input
+name); from then on each capture re-runs the whole model on them right after
+`_publish_snapshot` and publishes a `ProbeResult` — CPU clones of the inputs
+(`inputs`) and of every layer output, keyed like `layer_names`. Re-forwarding
+all inputs (positional or keyword, ordered by `input_names`) is what makes
+multi-input models work; the UI's input pane picks which input to view.
+Probes are forward-only: no gradients.
 The probe config lives on the `Session` (under `_cv`), but every state
 transition and the runs themselves are module functions in
 `nansense.probe` that the thin `Session` methods delegate to.
@@ -684,8 +687,9 @@ in place); the RNG is forked (`torch.random.fork_rng`, CUDA/MPS-aware) so
 e.g. train-mode dropout doesn't perturb the global stream that time-travel
 replays depend on; and the whole run sits under `torch.no_grad()`.
 
-**Capture reuse without interference** (`capture.capture_forward`): in fx
-mode the probe runs `_CaptureInterpreter` against a fresh local dict — the
+**Capture reuse without interference** (`capture.capture_forward`): takes the
+inputs as an ordered list and runs `interpreter.run(*inputs)` / `model(*inputs)`.
+In fx mode the probe runs `_CaptureInterpreter` against a fresh local dict — the
 original `model.forward` is never patched, since the interpreter is
 invoked directly. In the hook fallback, temporary pre/forward hooks write
 into the local dict and are removed in a `finally`. Neither path touches
@@ -701,19 +705,21 @@ live GPU activations and retained grads) right after `_publish_snapshot`
 CPU-clones them, before any probe runs — so a pinned probe never stacks a
 second batch's activations on top of the training step's own.
 
-**Perturbations.** `Session.add_perturbation(sample=, y=, x=, values=)`
-records per-pixel edits (`(sample, y, x) -> per-channel values` in
-model-input space; the UI back-transforms the picked display color via
-`input_panel.normalized_color`). When any exist, `apply_perturbations`
-clones the base input, writes the in-range entries (out-of-range or
-channel-mismatched ones are skipped — the base may have changed shape since
-the click), and the probe runs a *second* forward on the copy inside the
-same isolation scope. `ProbeResult` then carries `perturbed_input` /
-`perturbed_activations` next to the base pair, and the UI renders the
-per-layer diff against the original whenever any perturbation exists.
-Perturbations alone keep probing active without a pin — the base falls
-back to the snapshot's input (`_snapshot_input`), so edits track the
-current training batch.
+**Perturbations.** `Session.add_perturbation(input_name=, sample=, index=, values=)`
+records edits keyed by `(input_name, sample, index) -> values` in model-input
+space — `index` is `(y, x)` for an image input (`values` is its `C`-vector; the
+UI back-transforms a picked color via `input_panel.normalized_color`, or reads
+per-channel fields directly) and `(channel,)` for a flat `[B, C]` input
+(`values` is one scalar). When any exist, `apply_perturbations` clones only the
+edited inputs (others are shared by reference) and writes the in-range entries
+(out-of-range, count-mismatched, or absent-input ones are skipped — the base
+may have changed shape since the click), and the probe runs a *second* full
+forward on the substituted inputs inside the same isolation scope. `ProbeResult`
+then carries `perturbed_inputs` / `perturbed_activations` next to the base pair,
+and the UI renders the per-layer diff against the original whenever any
+perturbation exists. Perturbations alone keep probing active without a pin — the
+bases fall back to the snapshot's inputs (`_snapshot_inputs`), so edits track
+the current training batch.
 
 **Mode activates probing too.** `_probe_active_locked` treats a
 non-`"unchanged"` forward mode as active on its own, alongside a pin or any
@@ -1200,15 +1206,24 @@ dialog), *Clear all watched layers*, *Toggle collecting stats*
 layer (each a `/stats?layer=…&phase=current` anchor), and the watched-layer
 list (each a plain-phase `/stats?layer=…` anchor).
 
-The right sidebar (`InputPanel`) shows the input image plus the Pin /
-probe-mode / Perturb controls. Two non-obvious points: NiceGUI delivers click
-coordinates in the image's **native** pixel space (the handler clamps into
-`H×W` and back-transforms the picked color through `mean`/`std`), and
+The right sidebar (`InputPanel`) shows the selected input plus the Pin /
+probe-mode / Perturb controls, and (for a multi-input model) a dropdown
+choosing which input to view and perturb — its per-input `mean` / `std` /
+`transform` are resolved from the possibly-per-input config via
+`resolve_per_input`. The pane renders the selected input through
+`render_input_image`: a `C in (1, 3)` image directly, any other `(N, C, H, W)`
+through `input_transform` (else a hint names the missing transform), and a flat
+`(N, C)` input as a one-row `C`-wide colormapped strip with a scale legend. The
+Perturb value control rebuilds to match (`_sync_perturb_control`): a color
+picker, one numeric field per channel (with a transform-preview swatch), or a
+single value for a flat input. Three non-obvious points: NiceGUI delivers click
+coordinates in the image's **native** pixel space (so a flat strip's `image_x`
+*is* the channel), perturbations are keyed by `(input_name, sample, index)`, and
 "Comparing with original" is **not** a user toggle — `panel.compare` derives
-from whether any pixel is perturbed, so the diff view is active exactly while
-perturbations exist and the all-zero no-edit diff is unreachable. Pin / mode /
-perturb changes call into the session, which republishes a `ProbeResult` the
-tick loop picks up like a new snapshot.
+from whether any perturbation exists, so the diff view is active exactly while
+they do and the all-zero no-edit diff is unreachable. Pin / mode / perturb
+changes call into the session, which republishes a `ProbeResult` the tick loop
+picks up like a new snapshot.
 
 The top-bar position label has its own 200 ms timer reading
 `session.live_position` (recorded on every batch `__enter__`, independent of
