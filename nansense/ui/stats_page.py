@@ -7,6 +7,7 @@ import html
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from urllib.parse import quote
 
 import plotly.graph_objects as go
 from nicegui import ui
@@ -132,6 +133,7 @@ def _build_stats_page(
     layer_names: list[str],
     selected_layer: str = "",
     *,
+    view: str = "",
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
@@ -184,11 +186,15 @@ def _build_stats_page(
             await view._on_hover(e)
 
     ui.on(_HOVER_EVENT, _dispatch_hover)
+    # A `?view=minmax` link (e.g. "Compare with MIN/MAX" on the experiment
+    # page) opens straight on the MIN/MAX grids instead of the histograms.
+    initial_minmax = view.strip().lower() == "minmax"
     state = _WatchPageState(
         # Default to "Current batch": it reads the last captured snapshot
         # directly, so the page shows data immediately for any layer without
         # waiting for watch aggregates to fill.
         selected_phase=_PHASE_CURRENT_BATCH,
+        view_minmax=initial_minmax,
         # Seed the layer picked by the caller (e.g. a `?layer=` link from the
         # main page's watch menu). Reconciliation drops it back to the first
         # watched layer if it isn't currently watched.
@@ -244,6 +250,17 @@ def _build_stats_page(
     async def set_heat(value: bool) -> None:
         state.heat_on = value
         await refresh()
+
+    def open_deep_dream() -> None:
+        # Carry the currently shown layer to its Deep Dream experiment; with
+        # "all" selected (or nothing watched) fall back to the first visible
+        # layer so the link always lands somewhere sensible.
+        ordered = _selectable_layers(
+            state.selected_phase, layer_names, session.watched_layers
+        )
+        visible = _visible_layers(state.selected_layer, ordered)
+        target = visible[0] if visible else state.selected_layer
+        ui.navigate.to(f"/experiment?layer={quote(target)}")
 
     step_until_custom = _build_step_until_custom_dialog(session)
 
@@ -313,7 +330,7 @@ def _build_stats_page(
                 ui.select(
                     [_VIEW_HISTOGRAM, _VIEW_MINMAX],
                     label="View",
-                    value=_VIEW_HISTOGRAM,
+                    value=_VIEW_MINMAX if state.view_minmax else _VIEW_HISTOGRAM,
                     on_change=lambda e: set_mode(e.value),
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
@@ -422,7 +439,21 @@ def _build_stats_page(
                             "next to each grid"
                         )
                     )
-                minmax_controls.set_visibility(False)
+                    # Jump to the same layer's Deep Dream experiment — the
+                    # synthesized counterpart to these real-input extremes
+                    # (point 3). Lives at the foot of the MIN/MAX controls.
+                    ui.separator().classes("mt-1")
+                    ui.button(
+                        "Compare with Deep Dream",
+                        icon="science",
+                        color="yellow-8",
+                        on_click=open_deep_dream,
+                    ).props("dense no-caps size=sm").classes("w-full").tooltip(
+                        "Open this layer's Deep Dream experiment — the inputs "
+                        "synthesized to excite the same channels"
+                    )
+                hist_controls.set_visibility(not state.view_minmax)
+                minmax_controls.set_visibility(state.view_minmax)
 
             _resize_handle("watch-controls", "left")
             body_container = ui.column().classes(
@@ -1517,9 +1548,17 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
         '<div class="flex flex-col gap-0.5 w-full">'
         '<div class="text-base font-bold uppercase tracking-widest '
         f'text-slate-800 font-mono">{label}</div>'
-        '<div style="display:flex; gap:2px; align-items:flex-start;">'
+        # `width:100%; max-width:100%` pins this row to the card width: as a
+        # nested flex row it otherwise sizes to its content, so the scroll
+        # child below never gets a bounded width to scroll within.
+        '<div style="display:flex; gap:2px; align-items:flex-start; '
+        'width:100%; max-width:100%; min-width:0;">'
         f"{sample_col}{legend}"
-        '<div class="overflow-x-auto" style="display:flex; gap:2px;">'
+        # `min-width:0; flex:1 1 0` lets this flex child shrink below the
+        # channel columns' intrinsic width so `overflow-x-auto` yields a
+        # scrollbar instead of the columns spilling out of the layer card.
+        '<div class="overflow-x-auto" '
+        'style="display:flex; gap:2px; min-width:0; flex:1 1 0;">'
         f"{columns}"
         "</div></div></div>"
     )

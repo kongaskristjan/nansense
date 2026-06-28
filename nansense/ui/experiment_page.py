@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from urllib.parse import quote
 from uuid import uuid4
 
 import torch
@@ -87,6 +88,16 @@ _CHANNELS_PARAM = _ExperimentParam(
     tooltip=(
         "Dream on this many of the layer's first channels — one synthesized "
         "sample per channel (capped at the layer's channel count)"
+    ),
+)
+_MINIMIZE_PARAM = _ExperimentParam(
+    "minimize",
+    "Minimize activations",
+    "bool",
+    False,
+    tooltip=(
+        "Descend the objective instead of ascending it — synthesize an input "
+        "that suppresses each channel rather than excites it"
     ),
 )
 _SAMPLE_PARAM = _ExperimentParam(
@@ -173,6 +184,7 @@ _ZOOM_PARAM = _ExperimentParam(
 _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
     "deep_dream": [
         _CHANNELS_PARAM,
+        _MINIMIZE_PARAM,
         _START_PARAM,
         _SAMPLE_PARAM,
         _ExperimentParam("steps", "Steps", "int", 300, minimum=1),
@@ -463,6 +475,7 @@ def _build_experiment_page(
         rebuild_params()
         update_description()
         overlay_switch.set_visibility(state.kind != "deep_dream")
+        compare_button.set_visibility(state.kind == "deep_dream")
         schedule_run()
 
     def on_layer_change(e: object) -> None:
@@ -486,6 +499,11 @@ def _build_experiment_page(
         state.overlay = bool(getattr(e, "value", False))
         if state.last_result is not None and state.last_result.error is None:
             render_result(state.last_result)
+
+    def open_minmax() -> None:
+        # Carry the current layer to its MIN/MAX stats view (point 3); `?view`
+        # opens straight on the grids rather than the histogram default.
+        ui.navigate.to(f"/stats?layer={quote(state.layer)}&view=minmax")
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
@@ -559,6 +577,24 @@ def _build_experiment_page(
                 )
                 overlay_switch.set_visibility(state.kind != "deep_dream")
                 ui.space()
+                # Deep-dream only: jump to the same layer's MIN/MAX stats — the
+                # real-input extremes that complement the synthesized dreams
+                # (point 3). Sits just above the kind description.
+                compare_button = (
+                    ui.button(
+                        "Compare with MIN/MAX",
+                        icon="bar_chart",
+                        color="teal",
+                        on_click=open_minmax,
+                    )
+                    .props("dense no-caps size=sm")
+                    .classes("w-full")
+                    .tooltip(
+                        "Open this layer's MIN/MAX stats — the real inputs that "
+                        "most excite the same channels"
+                    )
+                )
+                compare_button.set_visibility(state.kind == "deep_dream")
                 description_label = ui.label("").classes(
                     "text-xs text-slate-600 whitespace-normal leading-snug "
                     "border-t border-slate-300 pt-2 mt-1"

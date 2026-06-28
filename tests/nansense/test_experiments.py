@@ -118,6 +118,40 @@ def test_deep_dream_publishes_done_result_with_image() -> None:
         assert isinstance(result.objective, float)
 
 
+def test_deep_dream_minimize_lands_below_maximize() -> None:
+    """The minimize toggle flips the step direction: from an identical
+    (jitter-free, no-clamp) start, minimizing the channel objective lands below
+    maximizing it."""
+    common: dict[str, object] = {
+        "start": "sample",
+        "jitter": 0,
+        "diffusion": 0.0,
+        "clamp": False,
+        "steps": 8,
+        "lr": 0.2,
+    }
+    with _paused_session() as (session, _):
+        session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params=_dream_params(minimize=False, **common),
+        )
+        assert session.wait_for_experiment(timeout=10)
+        maximized = session.experiment_result
+        assert maximized is not None and maximized.objective is not None
+
+        session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params=_dream_params(minimize=True, **common),
+        )
+        assert session.wait_for_experiment(timeout=10)
+        minimized = session.experiment_result
+        assert minimized is not None and minimized.objective is not None
+
+    assert minimized.objective < maximized.objective
+
+
 def test_deep_dream_clips_channels_to_layer_count() -> None:
     with _paused_session(batch_size=10) as (session, _):
         session.request_experiment(

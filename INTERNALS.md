@@ -780,6 +780,8 @@ channels: the batch and channel axes are matched on the diagonal, so sample i
 maximizes channel i's mean activation (`_channels_objective`), read via
 `_target_activation` (the fx interpreter against a local dict, so any name in
 `layer_names` is a valid target; a single temporary hook in the fallback). The
+`minimize` knob flips the step's sign, descending the same objective to
+synthesize an input that *suppresses* each channel instead of exciting it. The
 batch is sized to the `channels` knob and clipped to the layer's channel count
 by a one-shot probe forward, so there are never empty trailing samples. The
 starting batch is built from the network's real input (`_dream_start` — any
@@ -821,10 +823,13 @@ graying out layers the current kind can't run; switching to a shorter layer
 clips the channel selectors (deep dream's Channels count to the channel
 count, Captum's Channel index to one less). The rest of each kind's knobs are
 declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
-number/switch/select widgets) ordered, for deep dream, Channels → Start from →
-Sample → method knobs (Sample shows only for the current-batch start) and, for
-Captum, Channel/Target → Inputs → method knobs; values persist across kind
-switches via a shared `state.values`. A 200 ms timer streams the page's *own* request via
+number/switch/select widgets) ordered, for deep dream, Channels → Minimize →
+Start from → Sample → method knobs (Sample shows only for the current-batch
+start) and, for Captum, Channel/Target → Inputs → method knobs; values persist
+across kind switches via a shared `state.values`. Beneath the description, a
+deep-dream-only **"Compare with MIN/MAX"** button jumps to the same layer's
+`/stats?view=minmax` grids (the MIN/MAX view carries a symmetric "Compare with
+Deep Dream" button at the foot of its controls). A 200 ms timer streams the page's *own* request via
 `session.experiment_result_for(seq)`, drives **auto-run** (re-register on
 init and on any parameter / layer change, buffered to one run per tick;
 `register_auto_experiment` drops a superseded queued request so the pause

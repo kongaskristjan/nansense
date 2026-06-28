@@ -528,7 +528,9 @@ def _run_deep_dream(
 
     The batch is sized to the `channels` knob and clipped to the layer's
     channel count, so sample i maximizes channel i's mean activation
-    (`_channels_objective`). The starting batch comes from the network's real
+    (`_channels_objective`) — or minimizes it when the `minimize` knob is on,
+    descending the same objective to synthesize an input that suppresses each
+    channel. The starting batch comes from the network's real
     input (`_dream_start`): fresh per-request noise by default, or the chosen
     sample of the current input batch replicated across the channels. The
     classic bag of regularizers, each optional and image-only (applied when
@@ -548,6 +550,10 @@ def _run_deep_dream(
     zoom = max(1.0, float_param(p, "zoom", 1.0))
     n_channels = max(1, int_param(p, "channels", _DEFAULT_DREAM_BATCH))
     clamp = bool_param(p, "clamp", True)
+    # Minimize descends the same objective instead of ascending it, so the step
+    # direction simply flips sign (the reported objective stays the signed
+    # channel mean, which then falls over the run).
+    direction = -1.0 if bool_param(p, "minimize", False) else 1.0
     from_sample = str(p.get("start", "noise")) != "noise"
 
     rng = torch.Generator().manual_seed(request.seq)
@@ -607,7 +613,7 @@ def _run_deep_dream(
             objective_value = float(objective.detach())
             sample_dims = tuple(range(1, grad.ndim))
             norm = grad.abs().mean(dim=sample_dims, keepdim=True)
-            x = x_step.detach() + lr * grad / (norm + 1e-8)
+            x = x_step.detach() + direction * lr * grad / (norm + 1e-8)
             if spatial and jitter > 0:
                 x = torch.roll(x, shifts=(-dy, -dx), dims=(2, 3))
             if spatial and diffusion > 0:

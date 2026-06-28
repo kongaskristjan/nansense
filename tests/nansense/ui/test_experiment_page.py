@@ -29,13 +29,24 @@ def test_experiment_param_order_targeting_then_inputs() -> None:
     for kind, specs in _EXPERIMENT_PARAMS.items():
         keys = [s.key for s in specs]
         if kind == "deep_dream":
-            # Channels first, then Start from with Sample directly below it.
+            # Channels first; Start from with Sample directly below it (Sample's
+            # visibility follows Start). The Minimize toggle sits in between.
             assert keys[0] == "channels", kind
-            assert keys[1] == "start" and keys[2] == "sample", kind
+            start_idx = keys.index("start")
+            assert keys[start_idx + 1] == "sample", kind
         else:
             # Captum: the targeting knob first, Inputs directly below it.
             assert keys[0] in ("channel", "target"), kind
             assert keys[1] == "batch", kind
+
+
+def test_deep_dream_exposes_minimize_toggle() -> None:
+    from nansense.ui.experiment_page import _EXPERIMENT_PARAMS
+
+    specs = {s.key: s for s in _EXPERIMENT_PARAMS["deep_dream"]}
+    assert "minimize" in specs
+    minimize = specs["minimize"]
+    assert minimize.kind == "bool" and minimize.default is False
 
 
 def test_experiment_descriptions_cover_every_kind() -> None:

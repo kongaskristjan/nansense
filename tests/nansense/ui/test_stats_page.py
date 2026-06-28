@@ -123,6 +123,18 @@ def test_patch_grids_html_placeholder_without_patches() -> None:
     )
 
 
+def test_patch_grids_html_channels_scroll_within_card() -> None:
+    # Many channels must scroll horizontally inside the layer card rather than
+    # spill out of it: the channel columns sit in an `overflow-x-auto` flex
+    # child made shrinkable below its content width with `min-width:0`.
+    per_phase = {"train": _layer_snap_with_patches("train")}
+    html = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
+    )
+    assert "overflow-x-auto" in html
+    assert "min-width:0" in html
+
+
 def test_patch_grids_html_labels_axes() -> None:
     # The grid is a table: CHANNEL n column headers and SAMPLE n row labels.
     # The fixture has 2 channels and 5 samples per channel.
