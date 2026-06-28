@@ -823,9 +823,9 @@ graying out layers the current kind can't run; switching to a shorter layer
 clips the channel selectors (deep dream's Channels count to the channel
 count, Captum's Channel index to one less). The rest of each kind's knobs are
 declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
-number/switch/select widgets) ordered, for deep dream, Channels → Minimize →
-Start from → Sample → method knobs (Sample shows only for the current-batch
-start) and, for Captum, Channel/Target → Inputs → method knobs; values persist
+number/switch/select widgets) ordered, for deep dream, Channels → Start from →
+Sample → method knobs (Minimize sits just above Clamp; Sample shows only for the
+current-batch start) and, for Captum, Channel/Target → Inputs → method knobs; values persist
 across kind switches via a shared `state.values`. Beneath the description, a
 deep-dream-only **"Compare with MIN/MAX"** button jumps to the same layer's
 `/stats?view=minmax` grids (the MIN/MAX view carries a symmetric "Compare with

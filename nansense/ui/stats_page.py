@@ -228,6 +228,7 @@ def _build_stats_page(
         state.view_minmax = value == _VIEW_MINMAX
         hist_controls.set_visibility(not state.view_minmax)
         minmax_controls.set_visibility(state.view_minmax)
+        compare_deep_dream.set_visibility(state.view_minmax)
         await refresh()
 
     async def set_phase(value: object) -> None:
@@ -439,21 +440,28 @@ def _build_stats_page(
                             "next to each grid"
                         )
                     )
-                    # Jump to the same layer's Deep Dream experiment — the
-                    # synthesized counterpart to these real-input extremes
-                    # (point 3). Lives at the foot of the MIN/MAX controls.
-                    ui.separator().classes("mt-1")
+                hist_controls.set_visibility(not state.view_minmax)
+                minmax_controls.set_visibility(state.view_minmax)
+                # Pinned to the very bottom of the sidebar (below a flexible
+                # spacer): jump to the same layer's Deep Dream experiment, the
+                # synthesized counterpart to these real-input extremes (point 3).
+                # Shown only in the MIN/MAX view, like the controls above.
+                ui.space()
+                compare_deep_dream = (
                     ui.button(
                         "Compare with Deep Dream",
                         icon="science",
                         color="yellow-8",
                         on_click=open_deep_dream,
-                    ).props("dense no-caps size=sm").classes("w-full").tooltip(
+                    )
+                    .props("dense no-caps size=sm")
+                    .classes("w-full")
+                    .tooltip(
                         "Open this layer's Deep Dream experiment — the inputs "
                         "synthesized to excite the same channels"
                     )
-                hist_controls.set_visibility(not state.view_minmax)
-                minmax_controls.set_visibility(state.view_minmax)
+                )
+                compare_deep_dream.set_visibility(state.view_minmax)
 
             _resize_handle("watch-controls", "left")
             body_container = ui.column().classes(

@@ -184,7 +184,6 @@ _ZOOM_PARAM = _ExperimentParam(
 _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
     "deep_dream": [
         _CHANNELS_PARAM,
-        _MINIMIZE_PARAM,
         _START_PARAM,
         _SAMPLE_PARAM,
         _ExperimentParam("steps", "Steps", "int", 300, minimum=1),
@@ -192,6 +191,8 @@ _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
         _DIFFUSION_PARAM,
         _JITTER_PARAM,
         _ZOOM_PARAM,
+        # The objective-direction toggle sits with the value-range knob below it.
+        _MINIMIZE_PARAM,
         _CLAMP_PARAM,
     ],
     "gradcam": [_TARGET_PARAM, _BATCH_PARAM],

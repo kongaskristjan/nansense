@@ -30,10 +30,11 @@ def test_experiment_param_order_targeting_then_inputs() -> None:
         keys = [s.key for s in specs]
         if kind == "deep_dream":
             # Channels first; Start from with Sample directly below it (Sample's
-            # visibility follows Start). The Minimize toggle sits in between.
+            # visibility follows Start). Minimize sits directly above Clamp.
             assert keys[0] == "channels", kind
             start_idx = keys.index("start")
             assert keys[start_idx + 1] == "sample", kind
+            assert keys[keys.index("clamp") - 1] == "minimize", kind
         else:
             # Captum: the targeting knob first, Inputs directly below it.
             assert keys[0] in ("channel", "target"), kind
