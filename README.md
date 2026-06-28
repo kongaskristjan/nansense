@@ -6,13 +6,14 @@
 
 ![UI](assets/docs/ui.png)
 
+<p align="center"><em>Figure 1. The main nansense UI, with the architecture, activation/gradient maps, and the sample image that produced these activations. It's a debugger - you can step through the training process.</em></p>
+
 *Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 
 Here's how *nansense* can help:
 
-- **Deepen your intuition** — [visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
-- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons) and [discover padding artifacts](#padding-jump-target)
-- **Investigate failure modes** — [spot gradient underflow](#spot-gradient-underflow)
+- **See what is actually going on** — [visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
+- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons), [discover padding artifacts](#padding-jump-target) and [spot gradient underflow](#spot-gradient-underflow)
 
 You can easily try out the [examples](#run-examples) yourself. Or wire it into your own training loop. Adding nansense support is just a few lines of code. Here's an example for integrating with [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and with [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
@@ -28,43 +29,55 @@ Persisting all this data on disk is infeasible, as a single batch of activations
 
 A layer's activations (top row) and gradients (bottom row) for a single input. Here, an image of a paraglider passes through an intermediate batch normalization layer. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
 
-![Activations and gradients of an image of a paraglider.](assets/docs/activations_gradients.png)
+![](assets/docs/activations_gradients.png)
+
+<p align="center"><em>Figure 2. Intermediate layer's activations and gradient from an image of a golf ball. Each column is a separate channel. Due to the next layer being a ReLU, the gradient exists only where the activation is positive.</em></p>
 
 <a id="padding-jump-target"></a>
 
-Here's another example: Activations of a CIFAR10 layer, with the augmented input shown at the far right. The augmentation zero-pads the image, and that hard border lights up as strong edge activations ringing every channel — an artifact baked in by the padding. Maybe use reflection padding next time?
+![](assets/docs/augmented_activation.png)
 
-![Activations of a CIFAR10 based neural network's layer. The zero-padded, augmented initial image is visible as the rightmost item. Zero-padded augmentation clearly produced artifacts inside the neural network.](assets/docs/augmented_activation.png)
+<p align="center"><em>Figure 3. Activations of a CIFAR10 trained network layer, with the input shown for comparison as the rightmost image. The augmentation used here zero-pads on the left and bottom of the image, which lights up as strong edge activations ringing every channel — an artifact baked in by the padding. Maybe use reflection padding next time?</em></p>
 
 ### Min/max activation patches
 
-For any channel, nansense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a specific neuron has learned to detect. Here, we have 5 examples (each column is a neuron/channel) of what causes it to fire maximally.
+For any channel, nansense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a specific neuron has learned to detect.
 
-![Patches that maximally activate a resnet-style network's certain hidden layer](assets/docs/max_activations.png)
+![Patches that maximally activate a resnet-style network's certain hidden layer](assets/docs/max_activations_imagenette.png)
+
+<p align="center"><em>Figure 4. For each of the 6 first channels/neurons in a specific layer, the 4 strongest activating patches from the training set have been collected. The heatmap coloring shows the activation strength. As an example, both `CHANNEL 1` and `CHANNEL 4` both seem to be optimized for detecting french horns, however `CHANNEL 1` is more centered on the instrument itself, while `CHANNEL 4` seems to also be activated by human faces. See also Figure 5.</em></p>
 
 ### Simulate what a neuron is searching for (deep dream)
 
-Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for. Any layer can be visualized this way, but here we use the network's final output layer, where the result is easiest to interpret. On MNIST, it produces ghostly digits between 0 and 9.
-
-![Deep dream images for each of the 10 MNIST output classes.](assets/docs/deep_dream_mnist.png)
-
-Why do those numbers look so strange? Deep dream does not necessarily make the features realistic — it maximizes them. A good example is the number 4. There are many ways to read this digit out of the strokes of the image, which is why it excites the neuron more than a typical 4 would.
-
-The next picture has 5 columns corresponding to 5 of the 10 output channels of the Imagenette dataset. Here, the top row shows the deep dream images, and two maximally activating patches have been added as the bottom rows for comparison.
+Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for.
 
 ![](assets/docs/deep_dream_imagenette.png)
 
+<p align="center"><em>Figure 5. Deep dream on exactly the same channels/neurons that were used to select maximally activating patches for Figure 4. `CHANNEL 0` creates a lot of vertical red structures, loosely resembling the typical gas station presented in figure 4. In `CHANNEL 1` we can yellowish curved structures, picked up from french horns. `3` and `5` have circular structures with dots inside, analogous to golf balls.</em></p>
+
+Any layer can be visualized this way, but here we use the network's final output layer, where the result is easiest to interpret. On MNIST, it produces ghostly digits between 0 and 9.
+
+![Deep dream images for each of the 10 MNIST output classes.](assets/docs/deep_dream_mnist.png)
+
+<p align="center"><em>Figure 6. Deep dream on the final layer of a lenet network on the mnist dataset.</em></p>
+
+Why do those numbers look so strange? Deep dream does not necessarily make the features realistic — it maximizes them. A good example is the number 4. There are many different ways you could combine these strokes into a 4, which is why it excites the neuron even more than a typical 4 would.
+
 ### Measure receptive field of a neuron
 
-To measure the receptive field of a neuron, *nansense* has support for perturbing a single pixel, and watching the diff between the original propagate through the neural network. Here's an animation of such a diff spreading through layers. In this case, most of the input size gets covered, which indicates that the network is reasonably strided and deep.
+To measure the receptive field of a neuron, *nansense* has support for perturbing a single pixel, and watching the diff between the original propagate through the neural network. 
 
 ![A single pixel is perturbed, and the difference in the layer's successive activations are shown.](assets/docs/receptive_field.gif)
 
+<p align="center"><em>Figure 7. Here we perturb a single pixel of an image, and visualize how the perturbation transmits through the network. As we go deeper down the layers, the diff spreads throughout most of the image, which indicates a reasonably healthy receptive field (at least some part of the network can see the whole image).</em></p>
+
 ### Investigate dead neurons
 
-*Nansense* can measure each channel's activation and gradient distribution over a full epoch. With this particular channel, the entire distribution is negative, so the ReLU clamps every value to zero — the neuron is dead and contributes nothing downstream.
+*Nansense* can measure each channel's activation and gradient distribution over a full epoch. This makes it easy to discover optimization problems, such as some neurons being driven to zero.
 
 ![A layer whose all activations are below 0, just before going through relu](assets/docs/dead_neuron_histogram.png)
+
+<p align="center"><em>Figure 7. The activation histogram of a dead channel in a layer. Apparently all activations are negative, which causes the next ReLU layer to clamp everything to zero. Because this eliminates any gradients, the channel will likely never recover from this state.</em></p>
 
 ### Spot gradient underflow
 
@@ -112,6 +125,8 @@ If you hit out-of-memory errors, lower `--batch-size`. If training is slow and y
 ## UI tutorial
 
 ![UI](assets/docs/ui_with_elements.png)
+
+<p align="center"><em>Figure 8. Main view of the UI, with stepping controls, architecture, individual activations/gradients, inputs and input controls. Each layer in the architecture can be clicked to open the respective layer card.</em></p>
 
 When a session starts, nansense serves a web page and pauses on the first batch.
 You drive the run from the top bar: **Step Batch** advances one batch, **Run**
