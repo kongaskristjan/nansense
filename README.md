@@ -12,14 +12,14 @@
 
 Here's how *nansense* can help:
 
-- **See what is actually going on** — [visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
-- **Spot optimization bottlenecks** — [discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons), [discover padding artifacts](#padding-jump-target) and [spot gradient underflow](#spot-gradient-underflow)
+- **See what is actually going on**. [Visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream)
+- **Spot optimization bottlenecks**. [Discover insufficient receptive fields](#measure-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons), [discover padding artifacts](#padding-jump-target) and [spot gradient underflow](#spot-gradient-underflow)
 
 You can easily try out the [examples](#run-examples) yourself. Or wire it into your own training loop. Adding nansense support is just a few lines of code. Here's an example for integrating with [raw PyTorch](#wire-it-into-your-loop-raw-pytorch) and with [Lightning](#wire-it-into-your-loop-pytorch-lightning).
 
 ## How is this different from wandb or TensorBoard?
 
-Loggers like Weights & Biases and TensorBoard answer *what* your metrics did — they record scalar curves of loss and accuracy that you scroll through after the run. Nansense tries to answer *why*: it pauses inside the live training loop and lets you step batch-by-batch and time-travel while inspecting the activations, gradients, weights and optimizer state of every layer. You can even run experiments on the paused model — deep dream, or Captum attributions like Grad-CAM — to probe what a given neuron has learned.
+Loggers like Weights & Biases and TensorBoard record scalar curves of loss and accuracy that you scroll through after the run. Nansense works inside the live training loop instead: it pauses so you can step batch-by-batch and time-travel while inspecting the activations, gradients, weights and optimizer state of every layer. You can even run experiments like deep dream or Grad-CAM on the paused model to probe what a given neuron has learned.
 
 Persisting all this data on disk is infeasible, as a single batch of activations and gradients can easily be several gigabytes. Nansense sidesteps that by pausing and inspecting the tensors on demand, instead of writing everything to disk.
 
@@ -37,7 +37,7 @@ A layer's activations (top row) and gradients (bottom row) for a single input. H
 
 ![](assets/docs/augmented_activation.png)
 
-<p align="center"><em>Figure 3. Activations of a CIFAR10 trained network layer, with the input shown for comparison as the rightmost image. The augmentation used here zero-pads on the left and bottom of the image, which lights up as strong edge activations ringing every channel — an artifact baked in by the padding. Maybe use reflection padding next time?</em></p>
+<p align="center"><em>Figure 3. Activations of a CIFAR10 trained network layer, with the input shown for comparison as the rightmost image. The augmentation used here zero-pads on the left and bottom of the image, which lights up as strong edge activations on every channel. Maybe use reflection padding next time?</em></p>
 
 ### Min/max activation patches
 
@@ -61,7 +61,7 @@ Any layer can be visualized this way, but here we use the network's final output
 
 <p align="center"><em>Figure 6. Deep dream on the final layer of a lenet network on the mnist dataset.</em></p>
 
-Why do those numbers look so strange? Deep dream does not necessarily make the features realistic — it maximizes them. A good example is the number 4. There are many different ways you could combine these strokes into a 4, which is why it excites the neuron even more than a typical 4 would.
+Those numbers look strange because deep dream does not necessarily make the features realistic; it maximizes them. A good example is the number 4: there are many different ways you could combine these strokes into a 4, which is why it excites the neuron even more than a typical 4 would.
 
 ### Measure receptive field of a neuron
 
@@ -81,7 +81,7 @@ To measure the receptive field of a neuron, *nansense* has support for perturbin
 
 ### Spot gradient underflow
 
-In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range — below the dtype's smallest normal value — where precision drains toward zero and the layer's learning quality quietly drops. *nansense* checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there — so you catch the issue.
+In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range (below the dtype's smallest normal value) where precision drains toward zero and the layer's learning quality quietly drops. *nansense* checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there.
 
 ## Run examples
 
@@ -96,7 +96,7 @@ Pick the dependency group that matches your hardware and pass it as `--group`:
 
 | Group | Hardware |
 | --- | --- |
-| `cpu` | No GPU — CPU-only, any platform |
+| `cpu` | No GPU, CPU-only, any platform |
 | `cuda-legacy` | Older NVIDIA GPUs: Maxwell, Pascal, Volta (CUDA 12.6) |
 | `cuda` | Current NVIDIA GPUs: Turing through Blackwell (CUDA 13.0) |
 | `rocm` | AMD GPUs (ROCm 7.2) |
@@ -147,7 +147,7 @@ refresh on every pause and, while training runs, on the cadence set under
 
 Watching slows down the training and consumes memory, so
 it's generally better to watch only a number of layers at a
-time. Open a watched layer's **stats view** for the deep dive:
+time. Open a watched layer's **stats view** for a closer look:
 a histogram of its activation and gradient values over the epoch (down to a
 single channel), and a gallery of the input patches that drove each channel to
 its most extreme responses. Its **Current batch** phase shows the last captured
@@ -157,8 +157,8 @@ button pauses or resumes collection without hiding the cards.
 ### Running experiments
 
 Each layer card has an **Experiment** button. On the experiment page, pick a
-method — deep dream, or a Captum attribution (Grad-CAM, Neuron Gradient, Neuron
-Integrated Gradients, Occlusion) — set its parameters, and run it on the layer.
+method (deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron
+Integrated Gradients, Occlusion), set its parameters, and run it on the layer.
 Experiments run between batches, so training must be paused; results show one
 card per input sample.
 
@@ -182,7 +182,7 @@ through the network.
 
 ### Recording videos
 
-The settings dialog records any view to an MP4 — one frame per visualization
+The settings dialog records any view to an MP4, one frame per visualization
 update, written under `nansense_recordings/`. Start a recording with a layer
 watched or an experiment open, then save or discard it from the same dialog.
 
@@ -211,7 +211,7 @@ optimizer = ...
 criterion = ...
 train_dl, val_dl = ...
 
-# Setup UI — the schedule is discovered as you train (phase names and batch
+# Setup UI. The schedule is discovered as you train (phase names and batch
 # counts are learned from the loop below); no need to declare them up front.
 session = nansense.start(model, optimizer=optimizer, port=8080, enabled=True)
 
@@ -262,21 +262,21 @@ See the [Python API](#python-api) for more information.
 `nansense.start(model, ...)` creates the `Session` and, when `port=` is given,
 serves the UI. The arguments worth knowing:
 
-- `optimizer` (optional) — adds per-parameter optimizer state and live
+- `optimizer` (optional): adds per-parameter optimizer state and live
   hyperparameters to the weights page.
-- `scheduler` (optional) — lets time-travel checkpoints restore the LR schedule.
-- `enabled` — `False` makes the session a near-zero-overhead no-op, so you can
+- `scheduler` (optional): lets time-travel checkpoints restore the LR schedule.
+- `enabled`: `False` makes the session a near-zero-overhead no-op, so you can
   leave the wiring in place and switch the UI off with one flag.
-- `port` / `host` / `open_browser` — serve the UI immediately (the banner and
+- `port` / `host` / `open_browser`: serve the UI immediately (the banner and
   auto-opened tab are skipped if a concurrent session already holds the port);
   omit `port` and call `nansense.serve(session, port=...)` separately for finer
   control.
-- `input_mean` / `input_std` — the input normalization, so images display in
+- `input_mean` / `input_std`: the input normalization, so images display in
   their original colors.
-- `input_transform` — a callable mapping a non-RGB image input
+- `input_transform`: a callable mapping a non-RGB image input
   `(N, C, H, W)` to a displayable `(N, 1|3, H, W)` image in `[0, 1]` (keeping
   `H × W`); without it, an input whose channel count isn't 1 or 3 shows a hint
-  to add one. A flat `(N, C)` input needs none — it renders as a colormapped
+  to add one. A flat `(N, C)` input needs none; it renders as a colormapped
   strip. For a multi-input model, `input_mean` / `input_std` / `input_transform`
   each take either one value for all inputs or a `dict` keyed by input name, and
   the input pane gains a dropdown to pick which input to view and perturb.
@@ -287,11 +287,7 @@ post-mortem browsing). For time travel, drive the epoch loop with
 `for epoch in session.epochs(N, cache_dir=...)` (default `.nansense_cache`) and
 wrap each iteration's body in `with session.restore_point():` as shown above.
 
-The schedule is discovered as you go: phase names and per-phase batch counts are
-learned while you iterate `session.batches`, so the UI's per-phase progress and
-boundary stops become exact after the first epoch. Pass `phases={"train": a,
-"val": b}` to `start()` if you want that precision from the very first epoch — an
-optional up-front declaration (it's what the PyTorch Lightning integration uses).
+The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate `session.batches`, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass `phases={"train": a, "val": b}` to `start()` if you want that precision from the very first epoch, an optional up-front declaration (it's what the PyTorch Lightning integration uses).
 
 For **PyTorch Lightning**, attach a `NansenseCallback(model="<attr path to the
 network>", ...)` to your trainer and run the fit through `fit_with_time_travel`,
@@ -302,7 +298,6 @@ arguments as `start`.
 **Distributed (DDP)** needs no special wiring: call `nansense.start()` on every
 rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and
 drives pausing and stepping; the other ranks follow its pace and fold their data
-shard into the watch-page statistics. Time travel works too — drive every rank's
-epoch loop with `session.epochs()`. See `examples/standard/main.py --distributed`. Keep in mind that DDP support is currently **experimental**.
+shard into the watch-page statistics. See `examples/standard/main.py --distributed`. Keep in mind that DDP support is currently **experimental**.
 
 See [`INTERNALS.md`](INTERNALS.md) for how it works under the hood (it's long).
