@@ -375,7 +375,7 @@ def _add_time_travel_button(session: Session) -> None:
                 initial = _time_travel_default_index(
                     cached, position.epoch if position is not None else None
                 )
-                ui.label("Jump back to the start of a cached epoch:").classes(
+                ui.label("Jump to the start of a cached epoch:").classes(
                     "text-sm"
                 )
                 with ui.row().classes("w-full items-center gap-4 no-wrap"):

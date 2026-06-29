@@ -4,9 +4,9 @@
 
 <p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
 
-![UI](assets/docs/ui.png)
+https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44
 
-<p align="center"><em>Figure 1. The main nansense UI, with the architecture, activation/gradient maps, and the sample image that produced these activations. It's a debugger - you can step through the training process.</em></p>
+<p align="center"><em>Video 1. The main nansense UI. Clicking the layers in the architecture shows activation/gradient maps. The size of the receptive field can be measured by perturbing the input image and measuring the diff. Watched layers collect histograms and min/max activating pixel statistics for interpretability. You can even run deep dream at any point during the training run to visualize what exactly each neuron is looking for.</em></p>
 
 *Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 
@@ -31,13 +31,13 @@ A layer's activations (top row) and gradients (bottom row) for a single input. H
 
 ![](assets/docs/activations_gradients.png)
 
-<p align="center"><em>Figure 2. Intermediate layer's activations and gradient from an image of a golf ball. Each column is a separate channel. Due to the next layer being a ReLU, the gradient exists only where the activation is positive.</em></p>
+<p align="center"><em>Figure 1. Intermediate layer's activations and gradient from an image of a golf ball. Each column is a separate channel. Due to the next layer being a ReLU, the gradient exists only where the activation is positive.</em></p>
 
 <a id="padding-jump-target"></a>
 
 ![](assets/docs/augmented_activation.png)
 
-<p align="center"><em>Figure 3. Activations of a CIFAR10 trained network layer, with the input shown for comparison as the rightmost image. The augmentation used here zero-pads on the left and bottom of the image, which lights up as strong edge activations on every channel. Maybe use reflection padding next time?</em></p>
+<p align="center"><em>Figure 2. Activations of a CIFAR10 trained network layer, with the input shown for comparison as the rightmost image. The augmentation used here zero-pads on the left and bottom of the image, which lights up as strong edge activations on every channel. Maybe use reflection padding next time?</em></p>
 
 ### Min/max activation patches
 
@@ -45,7 +45,7 @@ For any channel, nansense collects the input patches that drove it to its strong
 
 ![Patches that maximally activate a resnet-style network's certain hidden layer](assets/docs/max_activations_imagenette.png)
 
-<p align="center"><em>Figure 4. For each of the 6 first channels/neurons in a specific layer, the 4 strongest activating patches from the training set have been collected. The heatmap coloring shows the activation strength. As an example, both `CHANNEL 1` and `CHANNEL 4` both seem to be optimized for detecting french horns, however `CHANNEL 1` is more centered on the instrument itself, while `CHANNEL 4` seems to also be activated by human faces. See also Figure 5.</em></p>
+<p align="center"><em>Figure 3. For each of the 6 first channels/neurons in a specific layer, the 4 strongest activating patches from the training set have been collected. The heatmap coloring shows the activation strength. As an example, both `CHANNEL 1` and `CHANNEL 4` both seem to be optimized for detecting french horns, however `CHANNEL 1` is more centered on the instrument itself, while `CHANNEL 4` seems to also be activated by human faces. See also Figure 5.</em></p>
 
 ### Simulate what a neuron is searching for (deep dream)
 
@@ -53,15 +53,19 @@ Deep dream optimizes the input itself to maximally excite a chosen neuron, synth
 
 ![](assets/docs/deep_dream_imagenette.png)
 
-<p align="center"><em>Figure 5. Deep dream on exactly the same channels/neurons that were used to select maximally activating patches for Figure 4. `CHANNEL 0` creates a lot of vertical red structures, loosely resembling the typical gas station presented in figure 4. In `CHANNEL 1` we can yellowish curved structures, picked up from french horns. `3` and `5` have circular structures with dots inside, analogous to golf balls.</em></p>
+<p align="center"><em>Figure 4. Deep dream on exactly the same channels/neurons that were used to select maximally activating patches for Figure 4. `CHANNEL 0` creates a lot of vertical red structures, loosely resembling the typical gas station presented in figure 4. In `CHANNEL 1` we can yellowish curved structures, picked up from french horns. `3` and `5` have circular structures with dots inside, analogous to golf balls.</em></p>
 
 Any layer can be visualized this way, but here we use the network's final output layer, where the result is easiest to interpret. On MNIST, it produces ghostly digits between 0 and 9.
 
 ![Deep dream images for each of the 10 MNIST output classes.](assets/docs/deep_dream_mnist.png)
 
-<p align="center"><em>Figure 6. Deep dream on the final layer of a lenet network on the mnist dataset.</em></p>
+<p align="center"><em>Figure 5. Deep dream on the final layer of a lenet network on the mnist dataset.</em></p>
 
 Those numbers look strange because deep dream does not necessarily make the features realistic; it maximizes them. A good example is the number 4: there are many different ways you could combine these strokes into a 4, which is why it excites the neuron even more than a typical 4 would.
+
+Here's a visualization of other layers:
+
+https://github.com/user-attachments/assets/b8c419c5-b510-4a85-a431-1d19190fbdb5
 
 ### Measure receptive field of a neuron
 
@@ -69,7 +73,7 @@ To measure the receptive field of a neuron, *nansense* has support for perturbin
 
 ![A single pixel is perturbed, and the difference in the layer's successive activations are shown.](assets/docs/receptive_field.gif)
 
-<p align="center"><em>Figure 7. Here we perturb a single pixel of an image, and visualize how the perturbation transmits through the network. As we go deeper down the layers, the diff spreads throughout most of the image, which indicates a reasonably healthy receptive field (at least some part of the network can see the whole image).</em></p>
+<p align="center"><em>Figure 6. Here we perturb a single pixel of an image, and visualize how the perturbation transmits through the network. As we go deeper down the layers, the diff spreads throughout most of the image, which indicates a reasonably healthy receptive field (at least some part of the network can see the whole image).</em></p>
 
 ### Investigate dead neurons
 

@@ -233,8 +233,9 @@ class InputPanel:
                     value=bool(self._session.perturbations),
                     on_change=self._on_perturb_change,
                 ).props("dense").tooltip(
-                    "Clicking the input image writes the value(s) below into "
-                    "that pixel of the viewed sample on every probe input"
+                    "Click to modify a single pixel of the input image. "
+                    "A diff compared to original is shown in the activations. "
+                    "Useful for measuring receptive fields."
                 )
                 # The value control (color swatch or per-channel fields) is
                 # built lazily for the selected input by `_sync_perturb_control`.
