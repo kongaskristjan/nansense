@@ -19,7 +19,7 @@ from nansense.ui.stats_page import (
     _PLOTLY_CONFIG,
     _VIEW_HISTOGRAM,
     _VIEW_MINMAX,
-    _VIEW_STATS,
+    _VIEW_GRAPHS,
     _bin_samples_html,
     _figure_payload,
     _filter_phase,
@@ -331,7 +331,7 @@ def test_phase_options_drop_current_batch_in_stats_view() -> None:
         options = _phase_select_options(view, names)
         assert list(options) == ["train", "val", _PHASE_CURRENT_BATCH]
         assert options[_PHASE_CURRENT_BATCH] == _PHASE_CURRENT_BATCH_LABEL
-    assert list(_phase_select_options(_VIEW_STATS, names)) == ["train", "val"]
+    assert list(_phase_select_options(_VIEW_GRAPHS, names)) == ["train", "val"]
 
 
 @pytest.mark.parametrize(
@@ -339,9 +339,9 @@ def test_phase_options_drop_current_batch_in_stats_view() -> None:
     [
         # The stats view swaps "Current batch" (and anything stale) for the
         # first schedule phase — the epoch-aggregating counterpart.
-        (_PHASE_CURRENT_BATCH, _VIEW_STATS, "train"),
-        ("bogus", _VIEW_STATS, "train"),
-        ("val", _VIEW_STATS, "val"),
+        (_PHASE_CURRENT_BATCH, _VIEW_GRAPHS, "train"),
+        ("bogus", _VIEW_GRAPHS, "train"),
+        ("val", _VIEW_GRAPHS, "val"),
         # The other views keep valid picks and fall back to "Current batch".
         (_PHASE_CURRENT_BATCH, _VIEW_HISTOGRAM, _PHASE_CURRENT_BATCH),
         ("train", _VIEW_MINMAX, "train"),
@@ -356,4 +356,4 @@ def test_reconcile_selected_phase(
 
 def test_reconcile_selected_phase_without_known_phases() -> None:
     # A lazy schedule that hasn't observed a phase yet: nothing to swap to.
-    assert _reconcile_selected_phase(_PHASE_CURRENT_BATCH, _VIEW_STATS, []) == ""
+    assert _reconcile_selected_phase(_PHASE_CURRENT_BATCH, _VIEW_GRAPHS, []) == ""

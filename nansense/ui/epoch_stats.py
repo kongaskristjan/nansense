@@ -1,4 +1,4 @@
-"""Value-vs-epoch stat series and figures for the ACTIVATION STATISTICS view.
+"""Value-vs-epoch stat series and figures for the GRAPHS view.
 
 Pure functions over the watch snapshots — no UI state. The `/stats` page
 builds one figure per tensor kind (activations, gradients) with a fixed

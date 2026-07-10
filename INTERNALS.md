@@ -388,7 +388,7 @@ epoch releases only older train buffers; val keeps its own until the next
 val epoch starts). The eviction stores the dropped buffer's final
 dead-channel count as a plain int
 (`collapse_channels(keep_dead_count=True)`), so every past epoch keeps
-its point on the ACTIVATION STATISTICS view's dead-neurons series;
+its point on the GRAPHS view's dead-neurons series;
 `TensorStatsSnapshot.dead_channel_count` reads the live buffer when
 present and falls back to the stored count. The mid-stream collapses (1D
 tensors, a dim-1 size change) store nothing — a partial epoch's count
@@ -1248,12 +1248,12 @@ total until `session.epochs(n)`, and no batch total until the phase's count is
 learned at the end of the first epoch).
 
 **`/stats` page.** One `_WatchLayerPanel` per watched layer, switchable
-between a HISTOGRAM view, a MIN/MAX extreme-patch view, and an ACTIVATION
-STATISTICS view; a 2 s timer feeds `session.watch_snapshot()` to the
+between a HISTOGRAM view, a MIN/MAX extreme-patch view, and a GRAPHS
+view; a 2 s timer feeds `session.watch_snapshot()` to the
 visible view. The HISTOGRAM card leads with a **Statistics** section — one
 framed table per phase with activations and gradients as the two value
 columns (dead channels activation-only) — above the two histogram plots.
-ACTIVATION STATISTICS plots each stat (mean/std/median/min/max, plus dead
+GRAPHS plots each stat (mean/std/median/min/max, plus dead
 channels on a secondary count axis for activations) against epoch from
 `WatchSnapshot.phase_history`, one Plotly line figure per tensor kind with
 legend toggling as the stat selector; its fixed trace set means refreshes
