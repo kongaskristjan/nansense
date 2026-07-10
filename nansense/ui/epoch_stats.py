@@ -89,7 +89,11 @@ def make_epoch_stats_figure(kind: str, title: str) -> go.Figure:
 
     Built once per plot; refreshes restyle the arrays in place (see the
     module docstring). The activation figure carries the dead-channels
-    trace on a secondary count axis on the right.
+    trace on a secondary count axis on the right. Only the mean starts
+    enabled — the axes fit the one series most runs care about instead of
+    being stretched by the extremes — and the rest wait in the legend as
+    `"legendonly"`; the restyle path never writes `visible`, so what the
+    user enables sticks across refreshes.
     """
     fig = go.Figure()
     for stat, color in EPOCH_STAT_SPECS:
@@ -99,6 +103,7 @@ def make_epoch_stats_figure(kind: str, title: str) -> go.Figure:
                 y=[],
                 mode="lines+markers",
                 name=stat,
+                visible=True if stat == "mean" else "legendonly",
                 line=dict(color=color, width=2),
                 marker=dict(size=6),
             )
@@ -110,6 +115,7 @@ def make_epoch_stats_figure(kind: str, title: str) -> go.Figure:
                 y=[],
                 mode="lines+markers",
                 name=DEAD_SERIES,
+                visible="legendonly",
                 yaxis="y2",
                 line=dict(color=_DEAD_COLOR, width=2, dash="dot"),
                 marker=dict(size=6),

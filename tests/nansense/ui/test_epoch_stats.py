@@ -92,3 +92,13 @@ def test_make_epoch_stats_figure_trace_sets() -> None:
     grad = make_epoch_stats_figure("gradient", "t")
     assert [t.name for t in grad.data] == stat_names
     assert all(t.yaxis is None for t in grad.data)
+
+
+@pytest.mark.parametrize("kind", ["activation", "gradient"])
+def test_make_epoch_stats_figure_enables_only_mean(kind: str) -> None:
+    # Everything but the mean starts legend-deselected; a legend click
+    # enables a stat, and refreshes never write `visible`, so it sticks.
+    fig = make_epoch_stats_figure(kind, "t")
+    by_name = {t.name: t.visible for t in fig.data}
+    assert by_name.pop("mean") in (True, None)
+    assert all(v == "legendonly" for v in by_name.values())
