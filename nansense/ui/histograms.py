@@ -61,7 +61,7 @@ def x_tick_layout() -> tuple[list[int], list[str]]:
 
 def _format_stat(value: float) -> str:
     """Format a scalar stat for the card header."""
-    if math.isnan(value):
+    if not math.isfinite(value):
         return "—"
     if value == 0:
         return "0"
@@ -102,33 +102,27 @@ def dead_channels(stats: TensorStatsSnapshot) -> list[int] | None:
     ]
 
 
-def _dead_channels_cells(
-    per_phase: dict[str, LayerStatsSnapshot], phases: list[str]
-) -> str:
-    """One table cell per phase: the dead-channel count, hover for indices.
+def _dead_channels_cell(stats: TensorStatsSnapshot) -> str:
+    """The activation column's dead-channel cell: count, hover for indices.
 
-    Shows "—" when per-channel histograms aren't available for the phase;
+    Shows "—" when per-channel histograms aren't available for the stream;
     a non-zero count gets a dotted underline plus a `title` tooltip listing
     the first `_DEAD_CHANNELS_LISTED` indices ("..." marks truncation).
     """
-    cells: list[str] = []
-    for p in phases:
-        dead = dead_channels(per_phase[p].activations)
-        if dead is None:
-            cells.append(f'<td style="{_STATS_CELL_STYLE};color:#1e293b">—</td>')
-            continue
-        listed = ", ".join(str(c) for c in dead[:_DEAD_CHANNELS_LISTED])
-        if len(dead) > _DEAD_CHANNELS_LISTED:
-            listed += ", ..."
-        hover = (
-            f' title="channels: {listed}"'
-            f' style="{_STATS_CELL_STYLE};color:#1e293b;'
-            'text-decoration:underline dotted;cursor:help"'
-            if dead
-            else f' style="{_STATS_CELL_STYLE};color:#1e293b"'
-        )
-        cells.append(f"<td{hover}>{len(dead)}</td>")
-    return "".join(cells)
+    dead = dead_channels(stats)
+    if dead is None:
+        return f'<td style="{_STATS_CELL_STYLE};color:#1e293b">—</td>'
+    listed = ", ".join(str(c) for c in dead[:_DEAD_CHANNELS_LISTED])
+    if len(dead) > _DEAD_CHANNELS_LISTED:
+        listed += ", ..."
+    hover = (
+        f' title="channels: {listed}"'
+        f' style="{_STATS_CELL_STYLE};color:#1e293b;'
+        'text-decoration:underline dotted;cursor:help"'
+        if dead
+        else f' style="{_STATS_CELL_STYLE};color:#1e293b"'
+    )
+    return f"<td{hover}>{len(dead)}</td>"
 
 _STATS_CELL_STYLE: str = "padding:2px 26px 2px 0;text-align:left"
 
@@ -140,49 +134,57 @@ _STATS_BOX_STYLE: str = (
 )
 
 
-def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot], kind: str) -> str:
-    """Scalar stats as an HTML table: one column per phase, one row per stat.
+def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot]) -> str:
+    """Scalar stats as an HTML table: activations and gradients side by side.
 
-    The header of each phase column ("train ep 0") is tinted with the phase's
-    trace color so it reads against the matching bars in the histogram below,
-    and the whole table sits in a light framed box for visibility. The
-    activation table gets an extra "dead channels" row (count per phase,
-    indices on hover). Returns a plain "no data yet" note while the phase has
-    no samples.
+    One framed table per phase with data, its corner header ("train ep 0")
+    tinted with the phase's trace color so it reads against the matching
+    bars in the histograms below, and one value column per tensor kind. A
+    kind with no samples yet keeps its column ("—" cells) so the shape
+    stays stable — e.g. a val phase collects activations but never
+    gradients. The dead-channels row (count, indices on hover) applies to
+    activations only. Returns a plain "no data yet" note while no phase
+    has samples.
     """
-    phases = _phases_with_data(per_phase, kind)
-    if not phases:
-        return '<span class="text-slate-500">no data yet</span>'
-    header = "".join(
-        f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
-        f"border-bottom:1px solid #e2e8f0;"
-        f'color:{phase_color(p, i)}">'
-        f"{html.escape(p)} ep {per_phase[p].epoch}</th>"
-        for i, p in enumerate(phases)
-    )
-    rows = "".join(
-        f'<tr><td style="{_STATS_CELL_STYLE};color:#64748b">{label}</td>'
-        + "".join(
-            f'<td style="{_STATS_CELL_STYLE};color:#1e293b">'
-            f"{fmt(kind_stats(per_phase[p], kind))}</td>"
-            for p in phases
+    blocks: list[str] = []
+    for i, (phase, snap) in enumerate(per_phase.items()):
+        if snap.activations.n == 0 and snap.gradients.n == 0:
+            continue
+        header = (
+            f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
+            f"border-bottom:1px solid #e2e8f0;"
+            f'color:{phase_color(phase, i)}">'
+            f"{html.escape(phase)} ep {snap.epoch}</th>"
+            + "".join(
+                f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
+                f'border-bottom:1px solid #e2e8f0;color:#334155">{kind}</th>'
+                for kind in ("activations", "gradients")
+            )
         )
-        + "</tr>"
-        for label, fmt in _STAT_ROWS
-    )
-    if kind == "activation":
+        rows = "".join(
+            f'<tr><td style="{_STATS_CELL_STYLE};color:#64748b">{label}</td>'
+            + "".join(
+                f'<td style="{_STATS_CELL_STYLE};color:#1e293b">'
+                f"{fmt(stats)}</td>"
+                for stats in (snap.activations, snap.gradients)
+            )
+            + "</tr>"
+            for label, fmt in _STAT_ROWS
+        )
         rows += (
             f'<tr><td style="{_STATS_CELL_STYLE};color:#64748b">dead channels'
-            f"</td>{_dead_channels_cells(per_phase, phases)}</tr>"
+            f"</td>{_dead_channels_cell(snap.activations)}"
+            f'<td style="{_STATS_CELL_STYLE};color:#1e293b">—</td></tr>'
         )
-    return (
-        f'<div style="{_STATS_BOX_STYLE}">'
-        '<table style="border-collapse:collapse">'
-        "<thead><tr>"
-        f'<th style="border-bottom:1px solid #e2e8f0"></th>{header}'
-        "</tr></thead>"
-        f"<tbody>{rows}</tbody></table></div>"
-    )
+        blocks.append(
+            f'<div style="{_STATS_BOX_STYLE}">'
+            '<table style="border-collapse:collapse">'
+            f"<thead><tr>{header}</tr></thead>"
+            f"<tbody>{rows}</tbody></table></div>"
+        )
+    if not blocks:
+        return '<span class="text-slate-500">no data yet</span>'
+    return '<div class="flex flex-wrap gap-3">' + "".join(blocks) + "</div>"
 
 
 # Plot height in px. Doubled from the original 220 so the distributions are

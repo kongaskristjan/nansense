@@ -1201,12 +1201,15 @@ class _WatchLayerPanel:
             self._no_data.set_visibility(False)
             self._hist_section = ui.column().classes("w-full gap-3")
             with self._hist_section:
+                ui.label("Statistics").classes(
+                    "font-mono text-sm text-slate-600"
+                )
+                self._stats_table = ui.html(
+                    _stats_table_html({})
+                ).classes("font-mono text-sm")
                 ui.label("Activations").classes(
                     "font-mono text-sm text-slate-600"
                 )
-                self._act_stats = ui.html(
-                    _stats_table_html({}, "activation")
-                ).classes("font-mono text-sm")
                 self._act = _HistPlot(
                     "activation",
                     "activations",
@@ -1220,9 +1223,6 @@ class _WatchLayerPanel:
                 ui.label("Gradients").classes(
                     "font-mono text-sm text-slate-600"
                 )
-                self._grad_stats = ui.html(
-                    _stats_table_html({}, "gradient")
-                ).classes("font-mono text-sm")
                 self._grad = _HistPlot(
                     "gradient",
                     "gradients",
@@ -1264,8 +1264,7 @@ class _WatchLayerPanel:
                 self._grid_sig, html = grids
                 self._grids.set_content(html)
             return
-        self._act_stats.set_content(_stats_table_html(per_phase, "activation"))
-        self._grad_stats.set_content(_stats_table_html(per_phase, "gradient"))
+        self._stats_table.set_content(_stats_table_html(per_phase))
         self._act.update(per_phase)
         self._grad.update(per_phase)
 

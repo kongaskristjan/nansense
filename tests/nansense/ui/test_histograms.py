@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 import torch
@@ -771,18 +772,19 @@ def test_make_histogram_figure_band_lines_span_every_phase_row() -> None:
 
 
 def test_stats_table_no_data() -> None:
-    assert "no data yet" in _stats_table_html({}, "activation")
+    assert "no data yet" in _stats_table_html({})
 
 
-def test_stats_table_has_phase_columns_and_stat_rows() -> None:
+def test_stats_table_has_kind_columns_and_stat_rows() -> None:
     per_phase = {
         "train": _layer_snap("train", epoch=2, n=1500),
         "val": _layer_snap("val", epoch=2, n=10),
     }
-    table = _stats_table_html(per_phase, "activation")
+    table = _stats_table_html(per_phase)
     assert "<table" in table
-    assert table.startswith("<div")  # framed box around the table
+    assert table.startswith("<div")  # framed box around each phase's table
     assert "train ep 2" in table and "val ep 2" in table
+    assert ">activations</th>" in table and ">gradients</th>" in table
     for label in ("n", "mean", "std", "median", "min", "max"):
         assert f">{label}</td>" in table
     assert ">1,500</td>" in table  # n is comma-formatted
@@ -790,14 +792,28 @@ def test_stats_table_has_phase_columns_and_stat_rows() -> None:
 
 def test_stats_table_skips_phase_without_data() -> None:
     per_phase = {"train": _layer_snap("train", n=5), "val": _layer_snap("val", n=0)}
-    table = _stats_table_html(per_phase, "activation")
+    table = _stats_table_html(per_phase)
     assert "train ep 0" in table
     assert "val" not in table
 
 
+def test_stats_table_keeps_empty_kind_column() -> None:
+    # Activations but no gradients (e.g. a val phase, which never runs
+    # backward): the gradient column stays, its value cells em-dashes.
+    empty = TensorStatsSnapshot(
+        n=0, sum=0.0, sum_sq=0.0, min=math.inf, max=-math.inf,
+        hist=tuple([0] * N_BINS),
+    )
+    snap = replace(_layer_snap("val", n=7), gradients=empty)
+    table = _stats_table_html({"val": snap})
+    assert ">activations</th>" in table and ">gradients</th>" in table
+    assert ">0</td>" in table  # the gradient column's n
+    assert ">—</td>" in table  # its mean/std/… (inf extremes included)
+
+
 def test_stats_table_escapes_phase_names() -> None:
     per_phase = {"<b>": _layer_snap("<b>")}
-    assert "<b>" not in _stats_table_html(per_phase, "activation")
+    assert "<b>" not in _stats_table_html(per_phase)
 
 
 def _snap_with_channel_hists(
@@ -838,16 +854,20 @@ def test_dead_channels_none_without_channel_hists() -> None:
     assert dead_channels(_layer_snap("train").activations) is None
 
 
-def test_stats_table_dead_channels_row_only_for_activations() -> None:
+def test_stats_table_dead_channels_fill_activation_column_only() -> None:
     per_phase = {"train": _snap_with_channel_hists([{ZERO_BIN: 2}, {3: 1}])}
-    act = _stats_table_html(per_phase, "activation")
-    assert ">dead channels</td>" in act
-    assert 'title="channels: 0"' in act  # hover lists the dead indices
-    assert "dead channels" not in _stats_table_html(per_phase, "gradient")
+    table = _stats_table_html(per_phase)
+    assert ">dead channels</td>" in table
+    assert 'title="channels: 0"' in table  # hover lists the dead indices
+    # Both kinds carry channel hists here, but only the activation column
+    # reports dead channels — the gradient cell stays an em-dash.
+    row = table.split(">dead channels</td>", 1)[1].split("</tr>", 1)[0]
+    assert row.count("title=") == 1
+    assert row.endswith("—</td>")
 
 
 def test_stats_table_dead_channels_placeholder_without_channel_hists() -> None:
-    table = _stats_table_html({"train": _layer_snap("train")}, "activation")
+    table = _stats_table_html({"train": _layer_snap("train")})
     assert ">dead channels</td>" in table
     assert ">—</td>" in table
     assert "title=" not in table
@@ -855,7 +875,7 @@ def test_stats_table_dead_channels_placeholder_without_channel_hists() -> None:
 
 def test_stats_table_dead_channels_hover_truncates_to_ten() -> None:
     per_phase = {"train": _snap_with_channel_hists([{ZERO_BIN: 1}] * 12)}
-    table = _stats_table_html(per_phase, "activation")
+    table = _stats_table_html(per_phase)
     assert ">12</td>" in table
     listed = ", ".join(str(c) for c in range(10))
     assert f'title="channels: {listed}, ..."' in table
