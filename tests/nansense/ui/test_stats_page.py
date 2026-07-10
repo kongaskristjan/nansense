@@ -17,6 +17,7 @@ from nansense.ui.stats_page import (
     _PHASE_CURRENT_BATCH,
     _PHASE_CURRENT_BATCH_LABEL,
     _PLOTLY_CONFIG,
+    _RefreshGate,
     _VIEW_HISTOGRAM,
     _VIEW_MINMAX,
     _VIEW_GRAPHS,
@@ -37,10 +38,12 @@ from nansense.ui.stats_page import (
 )
 from nansense.watch import ZERO_BIN, LayerStatsSnapshot, bin_index
 from tests.nansense.helpers import (
+    TinyNet,
     _layer_snap,
     _make_snapshot,
     _tensor_stats,
     make_position,
+    paused_session,
 )
 
 
@@ -357,3 +360,25 @@ def test_reconcile_selected_phase(
 def test_reconcile_selected_phase_without_known_phases() -> None:
     # A lazy schedule that hasn't observed a phase yet: nothing to swap to.
     assert _reconcile_selected_phase(_PHASE_CURRENT_BATCH, _VIEW_GRAPHS, []) == ""
+
+
+def test_refresh_gate_passes_only_on_new_publish_or_watched_change() -> None:
+    # The page's periodic tick refreshes at the visualization update cadence:
+    # the gate passes once per newly published snapshot (and on watched-set
+    # changes), not merely because time passed while aggregates accumulated.
+    with paused_session(TinyNet(), phases={"train": 4}) as session:
+        gate = _RefreshGate()
+        # The first tick consumes whatever state the page opened on.
+        assert gate.should_refresh(session)
+        assert not gate.should_refresh(session)
+        # Watching a layer (e.g. from the main page) re-syncs the sidebar.
+        assert session.watch("fc1")
+        assert gate.should_refresh(session)
+        assert not gate.should_refresh(session)
+        # Stepping publishes a new snapshot -> exactly one refresh.
+        before = session.snapshot
+        session.step_batch()
+        assert session.wait_until_paused(after_pauses=1, timeout=5.0)
+        assert session.snapshot is not before
+        assert gate.should_refresh(session)
+        assert not gate.should_refresh(session)

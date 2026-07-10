@@ -128,6 +128,41 @@ class _WatchPageState:
     count_label: ui.label = field(init=False)
 
 
+@dataclass
+class _RefreshGate:
+    """Decides when the periodic tick re-renders the page's data.
+
+    The page follows the visualization update cadence (the settings'
+    "Update frequency"): a tick passes only once the session has published
+    a new snapshot — at the configured frequency, on a capture/pause, or on
+    a one-shot UI Refresh — never merely because the running watch
+    aggregates advanced another batch. Watched-set and phase-list changes
+    (e.g. from the main page in another tab) also pass, so the sidebar and
+    cards stay in sync while training runs between updates or sits paused.
+    The sidebar controls and the "Refresh now" button call `refresh`
+    directly, bypassing the gate.
+    """
+
+    last_snapshot: BatchSnapshot | None = None
+    last_watched: frozenset[str] = frozenset()
+    last_phases: tuple[str, ...] = ()
+
+    def should_refresh(self, session: Session) -> bool:
+        """Consume the session's current state; True if it changed."""
+        snapshot = session.snapshot
+        watched = session.watched_layers
+        phases = tuple(session.schedule.phase_order)
+        changed = (
+            snapshot is not self.last_snapshot
+            or watched != self.last_watched
+            or phases != self.last_phases
+        )
+        self.last_snapshot = snapshot
+        self.last_watched = watched
+        self.last_phases = phases
+        return changed
+
+
 def _should_show_bands(error: debugger.DebugError | None) -> bool:
     """Whether to pre-check the histogram under/overflow band on page open.
 
@@ -184,10 +219,14 @@ def _build_stats_page(
       batch has no epoch series): `sync_phase_select` drops the entry and
       swaps such a selection for the first schedule phase.
     Each control group is only visible while its view is selected. A
-    `ui.timer` polls `session.watch_snapshot()` and refreshes the visible
-    view in place. Layers can also be unwatched directly from the card
-    header here, which drops the corresponding accumulator entry — the
-    change is reflected on the main page on next navigation.
+    `ui.timer` re-renders the visible view in place at the visualization
+    update cadence: `_RefreshGate` passes a tick only once a new snapshot
+    was published (the settings' "Update frequency" — per epoch by default —
+    or a pause, a step, a one-shot Refresh), so the page updates in step
+    with the main view instead of tracking the running aggregates live.
+    Layers can also be unwatched directly from the card header here, which
+    drops the corresponding accumulator entry — the change is reflected on
+    the main page on next navigation.
     """
     _page_scaffold("Stats")
     _install_panel_resize()
@@ -654,9 +693,19 @@ def _build_stats_page(
     # Build the initial cards (or the empty-state notice) up front so the
     # body isn't blank until the first refresh tick lands.
     rebuild_cards()
-    ui.timer(0.2, sync_frozen)
+    # Seed the gate with the current session state: the once-timer below
+    # renders exactly that state, so the first periodic tick must not pass
+    # for it again.
+    gate = _RefreshGate()
+    gate.should_refresh(session)
+
+    async def tick() -> None:
+        sync_frozen()
+        if gate.should_refresh(session):
+            await refresh()
+
     ui.timer(0.0, refresh, once=True)
-    ui.timer(2.0, refresh)
+    ui.timer(0.2, tick)
 
 
 def _plotly_restyle(

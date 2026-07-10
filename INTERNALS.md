@@ -1249,8 +1249,11 @@ learned at the end of the first epoch).
 
 **`/stats` page.** One `_WatchLayerPanel` per watched layer, switchable
 between a HISTOGRAM view, a MIN/MAX extreme-patch view, and a GRAPHS
-view; a 2 s timer feeds `session.watch_snapshot()` to the
-visible view. The HISTOGRAM card leads with a **Statistics** section — one
+view; a fast timer feeds `session.watch_snapshot()` to the visible view,
+gated by `_RefreshGate` to the visualization update cadence — a tick
+re-renders only after a new snapshot publish (the settings' "Update
+frequency", a pause/step, a one-shot Refresh) or a watched-set/phase-list
+change, so the page updates in step with the main view. The HISTOGRAM card leads with a **Statistics** section — one
 framed table per phase with activations and gradients as the two value
 columns (dead channels activation-only) — above the two histogram plots.
 GRAPHS plots each stat (mean/std/median/min/max, plus dead
