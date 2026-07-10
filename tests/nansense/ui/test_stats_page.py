@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from nansense import debugger
@@ -14,7 +15,11 @@ from nansense.ui.stats_page import (
     _HOVER_EVENT,
     _LAYER_ALL,
     _PHASE_CURRENT_BATCH,
+    _PHASE_CURRENT_BATCH_LABEL,
     _PLOTLY_CONFIG,
+    _VIEW_HISTOGRAM,
+    _VIEW_MINMAX,
+    _VIEW_STATS,
     _bin_samples_html,
     _figure_payload,
     _filter_phase,
@@ -22,7 +27,9 @@ from nansense.ui.stats_page import (
     _layer_select_options,
     _patch_grids_html,
     _patch_grids_signature,
+    _phase_select_options,
     _reconcile_selected_layer,
+    _reconcile_selected_phase,
     _selectable_layers,
     _should_show_bands,
     _visible_layers,
@@ -313,3 +320,40 @@ def test_should_show_bands_true_when_under_over_tripped() -> None:
 def test_should_show_bands_false_for_nan_only_issue() -> None:
     # A NaN/Inf-only issue isn't about under/overflow, so the band stays off.
     assert _should_show_bands(_err(("nan",), (debugger.NAN_INF,))) is False
+
+
+# --- Phase dropdown: options and reconciliation per view ---------------------
+
+
+def test_phase_options_drop_current_batch_in_stats_view() -> None:
+    names = ["train", "val"]
+    for view in (_VIEW_HISTOGRAM, _VIEW_MINMAX):
+        options = _phase_select_options(view, names)
+        assert list(options) == ["train", "val", _PHASE_CURRENT_BATCH]
+        assert options[_PHASE_CURRENT_BATCH] == _PHASE_CURRENT_BATCH_LABEL
+    assert list(_phase_select_options(_VIEW_STATS, names)) == ["train", "val"]
+
+
+@pytest.mark.parametrize(
+    ("selected", "view", "expected"),
+    [
+        # The stats view swaps "Current batch" (and anything stale) for the
+        # first schedule phase — the epoch-aggregating counterpart.
+        (_PHASE_CURRENT_BATCH, _VIEW_STATS, "train"),
+        ("bogus", _VIEW_STATS, "train"),
+        ("val", _VIEW_STATS, "val"),
+        # The other views keep valid picks and fall back to "Current batch".
+        (_PHASE_CURRENT_BATCH, _VIEW_HISTOGRAM, _PHASE_CURRENT_BATCH),
+        ("train", _VIEW_MINMAX, "train"),
+        ("bogus", _VIEW_HISTOGRAM, _PHASE_CURRENT_BATCH),
+    ],
+)
+def test_reconcile_selected_phase(
+    selected: str, view: str, expected: str
+) -> None:
+    assert _reconcile_selected_phase(selected, view, ["train", "val"]) == expected
+
+
+def test_reconcile_selected_phase_without_known_phases() -> None:
+    # A lazy schedule that hasn't observed a phase yet: nothing to swap to.
+    assert _reconcile_selected_phase(_PHASE_CURRENT_BATCH, _VIEW_STATS, []) == ""

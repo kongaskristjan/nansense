@@ -24,6 +24,7 @@ from nansense.watch import (
     LayerStatsSnapshot,
     TensorStatsSnapshot,
     bin_midpoint,
+    dead_channel_indices,
     histogram_edges,
 )
 
@@ -72,10 +73,12 @@ def _format_stat(value: float) -> str:
 
 
 # Rows of the per-histogram stats table: label and how to format the value.
+# The std guard matches the other rows' "—" on an empty stream (its snapshot
+# property falls back to 0.0 there, where mean/median go nan and min/max ±inf).
 _STAT_ROWS: tuple[tuple[str, Callable[[TensorStatsSnapshot], str]], ...] = (
     ("n", lambda s: f"{s.n:,}"),
     ("mean", lambda s: _format_stat(s.mean)),
-    ("std", lambda s: _format_stat(s.std)),
+    ("std", lambda s: _format_stat(s.std) if s.n > 0 else "—"),
     ("median", lambda s: _format_stat(s.median)),
     ("min", lambda s: _format_stat(s.min)),
     ("max", lambda s: _format_stat(s.max)),
@@ -88,18 +91,12 @@ _DEAD_CHANNELS_LISTED: int = 10
 def dead_channels(stats: TensorStatsSnapshot) -> list[int] | None:
     """Indices of channels whose every observed value landed in the zero bin.
 
-    The zero bin holds exact zeros and sub-`1e-9` magnitudes (NaNs also land
-    there), so this flags channels that never produced a meaningful
-    activation — e.g. dead ReLUs. Returns `None` when per-channel histograms
-    aren't tracked for this stream.
+    See `watch.dead_channel_indices` for the dead notion. Returns `None`
+    when per-channel histograms aren't tracked for this stream.
     """
     if stats.channel_hists is None:
         return None
-    return [
-        c
-        for c, row in enumerate(stats.channel_hists)
-        if sum(row) > 0 and row[ZERO_BIN] == sum(row)
-    ]
+    return dead_channel_indices(stats.channel_hists)
 
 
 def _dead_channels_cell(stats: TensorStatsSnapshot) -> str:

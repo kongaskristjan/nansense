@@ -32,6 +32,11 @@ from nansense.ui.common import (
     _resize_handle,
     _set_controls_enabled,
 )
+from nansense.ui.epoch_stats import (
+    epoch_axis_dtick,
+    epoch_stat_series,
+    make_epoch_stats_figure,
+)
 from nansense.ui.histograms import (
     _BIN_VALUE_LABELS,
     _axis_ranges,
@@ -72,6 +77,13 @@ from nansense.ui.top_bar import (
 from nansense.watch import N_BINS, LayerStatsSnapshot, WatchSnapshot
 
 
+# The View dropdown's three entries; also the values `_WatchPageState.view`
+# takes. HISTOGRAM is the default.
+_VIEW_HISTOGRAM: str = "HISTOGRAM"
+_VIEW_MINMAX: str = "MIN/MAX"
+_VIEW_STATS: str = "ACTIVATION STATISTICS"
+
+
 @dataclass
 class _WatchPageState:
     """Mutable page state shared by the sidebar controls and layer panels."""
@@ -91,10 +103,11 @@ class _WatchPageState:
     # `_should_show_bands` when the page opens with an active subnormal/overflow
     # issue, regardless of how the page was reached.
     show_bands: bool = False
+    # Which of the three views every card shows (a `_VIEW_*` value).
+    view: str = _VIEW_HISTOGRAM
     # MIN/MAX view state: which one of the four grids is shown (a radio
     # group defaulting to "Max pixel") and whether the activation heatmap
-    # is blended over the patches. HISTOGRAM is the default view.
-    view_minmax: bool = False
+    # is blended over the patches.
     grid_type: PatchType = "max_pixel"
     heat_on: bool = False
     # Every card shows one phase at a time, picked by a header dropdown
@@ -140,7 +153,7 @@ def _build_stats_page(
     """The deep-dive page for watched layers.
 
     The top bar carries the shared stepping controls, like the main page.
-    Left-sidebar dropdowns switch every layer card between two views, pick
+    Left-sidebar dropdowns switch every layer card between three views, pick
     which phase (train / val / …) the cards show, and pick which watched
     layer to render — one named layer (the default, which keeps the page
     fast when many layers are watched) or, while fewer than `_ALL_LAYERS_MAX`
@@ -153,16 +166,23 @@ def _build_stats_page(
     the watched ones. The page opens on "Current batch" by default (it needs no
     watched aggregates, so a freshly opened Stats view always has something to
     show); the user can switch to a recorded phase from the dropdown. The view
-    and phase apply in both views, one at a time:
+    and phase apply across views, one at a time:
 
-    - HISTOGRAM (the default) — one plotly figure per tensor kind for the
-      selected phase's latest epoch, with the "Log x" / "Log y" axis
-      checkboxes and a per-histogram "Per channel" switch.
+    - HISTOGRAM (the default) — a merged activations/gradients stats table,
+      then one plotly figure per tensor kind for the selected phase's latest
+      epoch, with the "Log x" / "Log y" axis checkboxes and a per-histogram
+      "Per channel" switch.
     - MIN/MAX — the extreme-activation patch grids
       (channels across, per-channel top samples down), one per patch
       type, picked one at a time by a radio group (defaulting to "Max
       pixel"), plus a heatmap checkbox
       that blends the stored activation maps over the patches.
+    - ACTIVATION STATISTICS — the phase's whole epoch series: per tensor
+      kind, mean/std/median/min/max (and, for activations, dead channels)
+      against epoch, stats toggled through the plotly legend. This view has
+      no "Current batch" (a single batch has no epoch series):
+      `sync_phase_select` drops the entry and swaps such a selection for
+      the first schedule phase.
     Each control group is only visible while its view is selected. A
     `ui.timer` polls `session.watch_snapshot()` and refreshes the visible
     view in place. Layers can also be unwatched directly from the card
@@ -194,7 +214,7 @@ def _build_stats_page(
         # directly, so the page shows data immediately for any layer without
         # waiting for watch aggregates to fill.
         selected_phase=_PHASE_CURRENT_BATCH,
-        view_minmax=initial_minmax,
+        view=_VIEW_MINMAX if initial_minmax else _VIEW_HISTOGRAM,
         # Seed the layer picked by the caller (e.g. a `?layer=` link from the
         # main page's watch menu). Reconciliation drops it back to the first
         # watched layer if it isn't currently watched.
@@ -225,14 +245,22 @@ def _build_stats_page(
         await refresh()
 
     async def set_mode(value: object) -> None:
-        state.view_minmax = value == _VIEW_MINMAX
-        hist_controls.set_visibility(not state.view_minmax)
-        minmax_controls.set_visibility(state.view_minmax)
-        compare_deep_dream.set_visibility(state.view_minmax)
+        state.view = str(value)
+        # The Phase dropdown's options depend on the view (the stats view
+        # has no "Current batch"); reconcile before anything re-renders.
+        sync_phase_select()
+        hist_controls.set_visibility(state.view == _VIEW_HISTOGRAM)
+        minmax_controls.set_visibility(state.view == _VIEW_MINMAX)
+        compare_deep_dream.set_visibility(state.view == _VIEW_MINMAX)
         await refresh()
 
     async def set_phase(value: object) -> None:
-        state.selected_phase = str(value)
+        new = str(value)
+        # Programmatic value writes from `sync_phase_select` re-enter here;
+        # bailing when nothing changed avoids a redundant refresh pass.
+        if new == state.selected_phase:
+            return
+        state.selected_phase = new
         await refresh()
 
     async def set_layer(value: object) -> None:
@@ -268,7 +296,11 @@ def _build_stats_page(
     def record_view() -> RecordedView | None:
         # The recorder renders from the running watch accumulators, which the
         # "Current batch" view doesn't use — so that view isn't recordable.
+        # Neither is the epoch-stats view: it draws the whole epoch series,
+        # not a per-step frame.
         if state.selected_phase == _PHASE_CURRENT_BATCH:
+            return None
+        if state.view == _VIEW_STATS:
             return None
         # Record exactly the cards on screen — the selected layer, or every
         # watched layer while "all" is showing.
@@ -277,7 +309,7 @@ def _build_stats_page(
         if not watched:
             return None
         phase = state.selected_phase
-        if state.view_minmax:
+        if state.view == _VIEW_MINMAX:
             return RecordedView(
                 key="watch_minmax",
                 page="watch_minmax",
@@ -329,21 +361,20 @@ def _build_stats_page(
                     )
                 ui.separator()
                 ui.select(
-                    [_VIEW_HISTOGRAM, _VIEW_MINMAX],
+                    [_VIEW_HISTOGRAM, _VIEW_MINMAX, _VIEW_STATS],
                     label="View",
-                    value=_VIEW_MINMAX if state.view_minmax else _VIEW_HISTOGRAM,
+                    value=state.view,
                     on_change=lambda e: set_mode(e.value),
                 ).props("dense outlined options-dense").classes(
                     "w-full text-sm"
                 ).tooltip("What each layer card shows")
-                # Phases, then "Current batch" as the last entry. A scoped
+                # Phases, then "Current batch" as the last entry (dropped in
+                # the epoch-stats view — see `sync_phase_select`). A scoped
                 # `option` slot draws a divider above it (Quasar has no native
                 # per-option separator) while keeping default selection via
                 # `itemProps`.
-                phase_options = {p: p for p in phase_names}
-                phase_options[_PHASE_CURRENT_BATCH] = _PHASE_CURRENT_BATCH_LABEL
                 phase_select = ui.select(
-                    phase_options,
+                    _phase_select_options(state.view, phase_names),
                     label="Phase",
                     value=state.selected_phase,
                     on_change=lambda e: set_phase(e.value),
@@ -440,8 +471,8 @@ def _build_stats_page(
                             "next to each grid"
                         )
                     )
-                hist_controls.set_visibility(not state.view_minmax)
-                minmax_controls.set_visibility(state.view_minmax)
+                hist_controls.set_visibility(state.view == _VIEW_HISTOGRAM)
+                minmax_controls.set_visibility(state.view == _VIEW_MINMAX)
                 # Pinned to the very bottom of the sidebar (below a flexible
                 # spacer): jump to the same layer's Deep Dream experiment, the
                 # synthesized counterpart to these real-input extremes (point 3).
@@ -461,12 +492,32 @@ def _build_stats_page(
                         "synthesized to excite the same channels"
                     )
                 )
-                compare_deep_dream.set_visibility(state.view_minmax)
+                compare_deep_dream.set_visibility(state.view == _VIEW_MINMAX)
 
             _resize_handle("watch-controls", "left")
             body_container = ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             )
+
+    def sync_phase_select() -> None:
+        """Refresh the Phase dropdown's options/value for the current view.
+
+        The epoch-stats view has no "Current batch" entry (a single batch
+        has no epoch series), and such a selection is swapped for the first
+        schedule phase — the epoch-aggregating counterpart. Options are
+        re-read from the schedule each pass so lazily discovered phases
+        appear without reopening the page. Pushes to the widget only on an
+        actual change (a no-op write would re-enter `set_phase`).
+        """
+        names = list(session.schedule.phase_order)
+        state.selected_phase = _reconcile_selected_phase(
+            state.selected_phase, state.view, names
+        )
+        options = _phase_select_options(state.view, names)
+        if phase_select.options != options:
+            phase_select.set_options(options, value=state.selected_phase)
+        elif phase_select.value != state.selected_phase:
+            phase_select.set_value(state.selected_phase)
 
     def sync_layer_select() -> None:
         """Refresh the layer dropdown's options/value from the watched set.
@@ -541,6 +592,7 @@ def _build_stats_page(
                 state.count_label.text = (
                     f"{n} layer{'' if n == 1 else 's'}"
                 )
+                sync_phase_select()
                 sync_layer_select()
                 ordered = _selectable_layers(
                     state.selected_phase, layer_names, watched
@@ -549,7 +601,7 @@ def _build_stats_page(
                 if list(layer_panels) != desired:
                     rebuild_cards()
                 panels = dict(layer_panels)
-                minmax = state.view_minmax
+                minmax = state.view == _VIEW_MINMAX
                 current_batch = state.selected_phase == _PHASE_CURRENT_BATCH
 
                 def compute(
@@ -1151,6 +1203,34 @@ class _HistPlot:
         return x_range, y_range
 
 
+class _EpochStatsPlot:
+    """One value-vs-epoch Plotly figure that refreshes its data in place.
+
+    The figure's trace set is fixed (see `make_epoch_stats_figure`), so
+    every refresh is a `Plotly.update` of the trace arrays — client-side
+    state (which stats the legend has deselected, zoom/pan) survives. The
+    x-tick spacing rides along in the same call so epoch ticks stay
+    integral as the run grows.
+    """
+
+    def __init__(self, kind: str, title: str) -> None:
+        self._kind = kind
+        fig = make_epoch_stats_figure(kind, title)
+        self.element = ui.plotly(_figure_payload(fig)).classes("w-full")
+
+    def update(self, history: list[LayerStatsSnapshot]) -> None:
+        epochs, series = epoch_stat_series(history, self._kind)
+        update: dict[str, object] = {
+            "x": [epochs for _ in series],
+            "y": list(series.values()),
+        }
+        layout: dict[str, object] = {
+            "xaxis.dtick": epoch_axis_dtick(epochs),
+            "xaxis.tick0": 0,
+        }
+        _plotly_restyle(self.element, update, list(range(len(series))), layout)
+
+
 class _WatchLayerPanel:
     """One card per watched layer — histograms or extreme-patch grids.
 
@@ -1236,8 +1316,23 @@ class _WatchLayerPanel:
             self._patch_section = ui.column().classes("w-full gap-2")
             with self._patch_section:
                 self._grids = ui.html(_NO_PATCHES_HTML).classes("w-full")
-            self._hist_section.set_visibility(not state.view_minmax)
-            self._patch_section.set_visibility(state.view_minmax)
+            self._epochs_section = ui.column().classes("w-full gap-3")
+            with self._epochs_section:
+                ui.label("Activations").classes(
+                    "font-mono text-sm text-slate-600"
+                )
+                self._act_epochs = _EpochStatsPlot(
+                    "activation", "activation statistics by epoch"
+                )
+                ui.label("Gradients").classes(
+                    "font-mono text-sm text-slate-600"
+                )
+                self._grad_epochs = _EpochStatsPlot(
+                    "gradient", "gradient statistics by epoch"
+                )
+            self._hist_section.set_visibility(state.view == _VIEW_HISTOGRAM)
+            self._patch_section.set_visibility(state.view == _VIEW_MINMAX)
+            self._epochs_section.set_visibility(state.view == _VIEW_STATS)
 
     def update(
         self,
@@ -1249,17 +1344,31 @@ class _WatchLayerPanel:
         `grids` is the output of `prepare_grids` (computed off the event
         loop by the page's refresh); `None` means the grids are unchanged.
         """
-        per_phase = self._phase_view(snap)
+        view = self._state.view
+        # The epoch-stats view draws the phase's whole epoch series; the
+        # other two read the latest epoch per phase (`_phase_view`).
+        history = (
+            snap.phase_history(self.name, self._state.selected_phase)
+            if view == _VIEW_STATS
+            else []
+        )
+        per_phase = {} if view == _VIEW_STATS else self._phase_view(snap)
         # No stats accumulated for this layer/phase yet — show the notice and
-        # hide both views (their empty plots/grids are pure clutter here).
-        has_data = bool(per_phase)
+        # hide every view (their empty plots/grids are pure clutter here).
+        has_data = bool(history) if view == _VIEW_STATS else bool(per_phase)
         self._no_data.set_visibility(not has_data)
-        minmax = self._state.view_minmax
-        self._hist_section.set_visibility(has_data and not minmax)
-        self._patch_section.set_visibility(has_data and minmax)
+        self._hist_section.set_visibility(
+            has_data and view == _VIEW_HISTOGRAM
+        )
+        self._patch_section.set_visibility(has_data and view == _VIEW_MINMAX)
+        self._epochs_section.set_visibility(has_data and view == _VIEW_STATS)
         if not has_data:
             return
-        if minmax:
+        if view == _VIEW_STATS:
+            self._act_epochs.update(history)
+            self._grad_epochs.update(history)
+            return
+        if view == _VIEW_MINMAX:
             if grids is not None:
                 self._grid_sig, html = grids
                 self._grids.set_content(html)
@@ -1315,15 +1424,44 @@ def _filter_phase(
     return {p: s for p, s in per_phase.items() if p == phase}
 
 
-_VIEW_HISTOGRAM: str = "HISTOGRAM"
-_VIEW_MINMAX: str = "MIN/MAX"
-
 # Phase dropdown: the sentinel value (and label) of the "Current batch" entry,
 # which shows the last captured batch's stats for any layer instead of a
 # phase's running aggregate. The value is a plain-but-unlikely string (not a
 # control char) so it can be compared in the option slot's Vue template.
 _PHASE_CURRENT_BATCH: str = "::current-batch::"
 _PHASE_CURRENT_BATCH_LABEL: str = "Current batch"
+
+def _phase_select_options(view: str, phase_names: list[str]) -> dict[str, str]:
+    """The Phase dropdown's value→label map for the current view.
+
+    The schedule's phases always; the "Current batch" entry only where the
+    view can render it — the epoch-stats view plots per-epoch aggregates,
+    which a single batch doesn't have.
+    """
+    options = {p: p for p in phase_names}
+    if view != _VIEW_STATS:
+        options[_PHASE_CURRENT_BATCH] = _PHASE_CURRENT_BATCH_LABEL
+    return options
+
+
+def _reconcile_selected_phase(
+    selected: str, view: str, phase_names: list[str]
+) -> str:
+    """A valid Phase selection for the current view.
+
+    The epoch-stats view swaps "Current batch" (or any stale selection) for
+    the first schedule phase, its epoch-aggregating counterpart ("" while
+    no phase has been declared or observed yet). The other views fall back
+    to "Current batch", which always has something to show.
+    """
+    if view == _VIEW_STATS:
+        if selected in phase_names:
+            return selected
+        return phase_names[0] if phase_names else ""
+    if selected == _PHASE_CURRENT_BATCH or selected in phase_names:
+        return selected
+    return _PHASE_CURRENT_BATCH
+
 
 # Layer dropdown: the sentinel value of the "all watched layers" entry (a NUL
 # prefix keeps it distinct from any real layer name) and its display label.

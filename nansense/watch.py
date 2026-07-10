@@ -151,6 +151,11 @@ class TensorStatsSnapshot:
     # `None` when no data has been seen (or after a cross-rank reduction that
     # didn't carry it).
     dtype: torch.dtype | None = None
+    # Dead-channel count carried over from a collapsed per-channel histogram
+    # (an older epoch whose buffers a newer one released). `None` while
+    # `channel_hists` is live — read `dead_channel_count`, which covers both —
+    # or when the count was never knowable (per-channel tracking off).
+    collapsed_dead_count: int | None = None
 
     @property
     def mean(self) -> float:
@@ -181,6 +186,17 @@ class TensorStatsSnapshot:
             if running >= half:
                 return bin_midpoint(i)
         return bin_midpoint(N_BINS - 1)
+
+    @property
+    def dead_channel_count(self) -> int | None:
+        """How many channels only ever hit the zero bin, `None` when unknown.
+
+        Live from `channel_hists` while the per-channel histogram exists;
+        the count stored at collapse time for an evicted older epoch.
+        """
+        if self.channel_hists is not None:
+            return len(dead_channel_indices(self.channel_hists))
+        return self.collapsed_dead_count
 
 
 @dataclass(frozen=True)
@@ -220,6 +236,39 @@ class WatchSnapshot:
             if existing is None or ep > existing.epoch:
                 result[ph] = s
         return result
+
+    def phase_history(self, layer: str, phase: str) -> list[LayerStatsSnapshot]:
+        """`layer`'s buckets for `phase`, ordered by epoch.
+
+        The epoch-by-epoch series behind the value-vs-epoch stats view.
+        Older epochs carry universal-histogram stats only (their per-channel
+        buffers collapsed when a newer epoch started).
+        """
+        return sorted(
+            (
+                s
+                for (l, ph, _), s in self.stats.items()
+                if l == layer and ph == phase
+            ),
+            key=lambda s: s.epoch,
+        )
+
+
+def dead_channel_indices(
+    channel_hists: tuple[tuple[int, ...], ...],
+) -> list[int]:
+    """Indices of channels whose every observed value landed in the zero bin.
+
+    The zero bin holds exact zeros and sub-`1e-9` magnitudes (NaNs also land
+    there), so this flags channels that never produced a meaningful
+    activation — e.g. dead ReLUs. A channel that never saw a value is not
+    reported as dead.
+    """
+    return [
+        c
+        for c, row in enumerate(channel_hists)
+        if sum(row) > 0 and row[ZERO_BIN] == sum(row)
+    ]
 
 
 def bin_midpoint(idx: int) -> float:
@@ -290,6 +339,10 @@ class TensorAccumulator:
         # with a usable channel axis, dropped by `collapse_channels`.
         self._channel_hist: Tensor | None = None
         self._channels_off = False
+        # The buffer's final dead-channel count, kept when an epoch-eviction
+        # collapse drops it (`collapse_channels(keep_dead_count=True)`), so
+        # older epochs keep their point on the dead-neurons timeline.
+        self._collapsed_dead_count: int | None = None
         # The source dtype, recorded on the first non-empty update (before the
         # fp32 reduction cast), so the UI can show the under/overflow band.
         self._dtype: torch.dtype | None = None
@@ -382,13 +435,22 @@ class TensorAccumulator:
             return None
         return channels
 
-    def collapse_channels(self) -> None:
+    def collapse_channels(self, *, keep_dead_count: bool = False) -> None:
         """Drop the per-channel histogram for good, keeping the universal one.
 
         Called by `WatchAccumulator` when a newer epoch starts for the same
         `(layer, phase)` — only the latest epoch renders per-channel — and
-        internally when per-channel binning isn't applicable.
+        internally when per-channel binning isn't applicable. The eviction
+        path passes `keep_dead_count`: there the dropped buffer covers its
+        whole epoch, so its final dead-channel count is stored for the
+        dead-neurons timeline (one small GPU→CPU sync, once per epoch
+        boundary). The mid-stream disables leave the count unset — a
+        partial buffer's count would lie.
         """
+        if keep_dead_count and self._channel_hist is not None:
+            totals = self._channel_hist.sum(dim=1)
+            dead = (totals > 0) & (self._channel_hist[:, ZERO_BIN] == totals)
+            self._collapsed_dead_count = int(dead.sum().item())
         self._channel_hist = None
         self._channels_off = True
 
@@ -483,6 +545,7 @@ class TensorAccumulator:
             hist=tuple(int(c) for c in hist_cpu.tolist()),
             channel_hists=channel_hists,
             dtype=self._dtype,
+            collapsed_dead_count=self._collapsed_dead_count,
         )
 
 
@@ -497,8 +560,8 @@ class _LayerStats:
 
 
 def _evict_channel_hists(stats: _LayerStats) -> None:
-    stats.activations.collapse_channels()
-    stats.gradients.collapse_channels()
+    stats.activations.collapse_channels(keep_dead_count=True)
+    stats.gradients.collapse_channels(keep_dead_count=True)
 
 
 def _evict_patches(stats: _LayerStats) -> None:

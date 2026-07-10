@@ -522,3 +522,70 @@ def test_watch_accumulator_new_epoch_collapses_same_phase_channels_only() -> Non
     assert sum(old_train.activations.hist) == 6
     assert snap.stats[("a", "val", 0)].activations.channel_hists is not None
     assert snap.stats[("a", "train", 1)].activations.channel_hists is not None
+
+
+# --- Dead-channel counts across epoch eviction ------------------------------
+
+
+def _dead_and_alive() -> torch.Tensor:
+    """A (2, 2) batch whose channel 0 is all-zero (dead), channel 1 alive."""
+    return torch.tensor([[0.0, 1.0], [0.0, 2.0]])
+
+
+def test_dead_channel_count_live_from_channel_hists() -> None:
+    acc = TensorAccumulator()
+    acc.update(_dead_and_alive())
+    snap = acc.snapshot()
+    assert snap.channel_hists is not None
+    assert snap.collapsed_dead_count is None
+    assert snap.dead_channel_count == 1
+
+
+def test_collapse_keeps_dead_count_only_on_eviction() -> None:
+    acc = TensorAccumulator()
+    acc.update(_dead_and_alive())
+    acc.collapse_channels(keep_dead_count=True)
+    snap = acc.snapshot()
+    assert snap.channel_hists is None
+    assert snap.dead_channel_count == 1
+
+
+def test_collapse_without_keep_leaves_dead_count_unknown() -> None:
+    """The mid-stream disables can't know an epoch's count — a partial
+    buffer's count would lie — so they leave it `None`."""
+    acc = TensorAccumulator()
+    acc.update(_dead_and_alive())
+    acc.collapse_channels()
+    assert acc.snapshot().dead_channel_count is None
+
+
+def test_watch_accumulator_evicted_epoch_keeps_dead_count() -> None:
+    """A new epoch's eviction stores the older epoch's final dead count."""
+    acc = WatchAccumulator()
+    acc.update(
+        layer="a", phase="train", epoch=0, kind="activation", x=_dead_and_alive()
+    )
+    acc.update(
+        layer="a", phase="train", epoch=1, kind="activation", x=torch.ones(2, 2)
+    )
+    snap = acc.snapshot(include_patches=False)
+    old = snap.stats[("a", "train", 0)].activations
+    assert old.channel_hists is None
+    assert old.dead_channel_count == 1
+    assert snap.stats[("a", "train", 1)].activations.dead_channel_count == 0
+
+
+# --- WatchSnapshot.phase_history ---------------------------------------------
+
+
+def test_watch_snapshot_phase_history_sorted_by_epoch() -> None:
+    acc = WatchAccumulator()
+    x = torch.ones(2, 3)
+    for phase, epoch in [("train", 1), ("val", 0), ("train", 0), ("train", 2)]:
+        acc.update(layer="a", phase=phase, epoch=epoch, kind="activation", x=x)
+    acc.update(layer="b", phase="train", epoch=0, kind="activation", x=x)
+    snap = acc.snapshot(include_patches=False)
+    history = snap.phase_history("a", "train")
+    assert [s.epoch for s in history] == [0, 1, 2]
+    assert all(s.layer == "a" and s.phase == "train" for s in history)
+    assert snap.phase_history("a", "test") == []
