@@ -49,7 +49,9 @@ websocket support (the UI is socket.io-based — this matters), and the free
 
 Create a Space with the Docker SDK. Its configuration is YAML front matter
 at the top of the Space repo's `README.md`, kept here as a single commit on
-an `hf-space` branch (`main` plus this block prepended to the README):
+an `hf-space` branch — `main` plus this block prepended to the README, plus
+the `.gitattributes` written by `git lfs track "*.png" "*.gif"` (needed
+below):
 
 ```yaml
 ---
@@ -76,9 +78,7 @@ Space added as the `space` remote):
 ```bash
 git lfs install                # one-time
 git checkout --orphan space-snapshot hf-space
-git lfs track "*.png" "*.gif"
-git add .gitattributes
-git add --renormalize .        # images become LFS pointers
+git add --renormalize .        # images become LFS pointers per .gitattributes
 git commit -m "nansense playground Space snapshot"
 git push --force space space-snapshot:main
 git checkout hf-space
