@@ -9,8 +9,8 @@ the global settings are disabled. The entrypoint is
 are described in [`INTERNALS.md`](INTERNALS.md#locked-sessions-shared-demos).
 
 Everything that belongs in this repository already lives here: the
-entrypoint, [`deploy/playground/Dockerfile`](deploy/playground/Dockerfile),
-and the root `.dockerignore`. This document covers running it and the pieces
+entrypoint, the root [`Dockerfile`](Dockerfile) (root-level because Docker
+Spaces accept no other location), and the root `.dockerignore`. This document covers running it and the pieces
 that must live *outside* the repository (the Hugging Face Space, scheduled
 restarts).
 
@@ -25,7 +25,7 @@ uv run --group cpu examples/playground/main.py --prepare
 uv run --group cpu examples/playground/main.py
 
 # Or the container, which bakes both steps into the image:
-docker build -f deploy/playground/Dockerfile -t nansense-playground .
+docker build -t nansense-playground .
 docker run --rm -p 7860:7860 nansense-playground
 ```
 
@@ -56,13 +56,16 @@ an `hf-space` branch (`main` plus this block prepended to the README):
 title: Nansense Playground
 emoji: 👁
 sdk: docker
-dockerfile_path: deploy/playground/Dockerfile
 app_port: 7860
 pinned: false
 license: mit
 short_description: A Pytorch debugger playground on a pretrained network
 ---
 ```
+
+(There is no config key for a custom Dockerfile location — the [accepted
+parameters](https://huggingface.co/docs/hub/spaces-config-reference) have
+none — which is why the Dockerfile sits at the repo root.)
 
 The Space is itself a git repo, but the Hub rejects binary files (the
 repo's PNG/GIF assets) committed as plain git blobs — they must be

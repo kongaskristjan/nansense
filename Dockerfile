@@ -1,10 +1,11 @@
 # The hosted nansense playground: a locked, shared MNIST + LeNet demo.
 #
-# Build from the repository root (the build context must be the repo, not
-# this directory), then run — see PLAYGROUND_DEPLOYMENT.md for the hosting
-# side (Hugging Face Spaces or a plain VM):
+# Lives at the repository root because Hugging Face Docker Spaces only look
+# for a root-level Dockerfile (there is no config key for a custom path).
+# See PLAYGROUND_DEPLOYMENT.md for the hosting side (Hugging Face Spaces or
+# a plain VM):
 #
-#     docker build -f deploy/playground/Dockerfile -t nansense-playground .
+#     docker build -t nansense-playground .
 #     docker run --rm -p 7860:7860 nansense-playground
 #
 # The image bakes everything a cold start needs — the MNIST download and the
