@@ -65,7 +65,7 @@ Those numbers look strange because deep dream does not necessarily make the feat
 
 Here's a visualization of other layers:
 
-https://github.com/user-attachments/assets/b8c419c5-b510-4a85-a431-1d19190fbdb5
+https://github.com/user-attachments/assets/327e0f36-4b80-4c6f-8bd0-639606a9338b
 
 ### Measure receptive field of a neuron
 
