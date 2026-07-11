@@ -23,6 +23,7 @@ The public surface of the `nansense` package. Everything here is importable as `
         - live_position
         - mode
         - time_travel_status
+        - lock
 
 ## PyTorch Lightning integration
 
@@ -50,6 +51,8 @@ The public surface of the `nansense` package. Everything here is importable as `
 ::: nansense.BatchSnapshot
 
 ## Watch statistics
+
+::: nansense.StatsScope
 
 ::: nansense.WatchSnapshot
 

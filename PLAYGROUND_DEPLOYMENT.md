@@ -1,0 +1,96 @@
+# Deploying the nansense playground
+
+The playground is a publicly hosted, shared nansense session: LeNet trained
+on MNIST, parked paused on its final training batch with the session locked
+(`Session.lock`). Visitors can show/hide layers per tab, browse statistics,
+pin and perturb inputs, and run experiments; stepping, time travel, and the
+global settings are disabled. The entrypoint is
+[`examples/playground/main.py`](examples/playground/main.py); the mechanics
+are described in [`INTERNALS.md`](INTERNALS.md#locked-sessions-shared-demos).
+
+Everything that belongs in this repository already lives here: the
+entrypoint, [`deploy/playground/Dockerfile`](deploy/playground/Dockerfile),
+and the root `.dockerignore`. This document covers running it and the pieces
+that must live *outside* the repository (the Hugging Face Space, scheduled
+restarts).
+
+## Run it locally
+
+```bash
+# One-time: train and write the epoch-checkpoint cache (~1 min/epoch on CPU).
+uv run --group cpu examples/playground/main.py --prepare
+
+# Serve: resumes at the final epoch, replays it to fill the statistics,
+# then parks locked. Open http://127.0.0.1:7860/.
+uv run --group cpu examples/playground/main.py
+
+# Or the container, which bakes both steps into the image:
+docker build -f deploy/playground/Dockerfile -t nansense-playground .
+docker run --rm -p 7860:7860 nansense-playground
+```
+
+The two invocations must agree on `--epochs`, `--cache-dir`, and the model
+hyperparameters — serving validates the cache against the freshly built
+model and refuses a mismatch.
+
+## Hugging Face Spaces (recommended host)
+
+A [Docker-SDK Space](https://huggingface.co/docs/hub/spaces-sdks-docker) is
+the least-ops option: HF builds the Dockerfile, fronts it with TLS and
+websocket support (the UI is socket.io-based — this matters), and the free
+"CPU basic" tier (2 vCPU / 16 GB) is plenty for the LeNet demo.
+
+Create a Space with the Docker SDK. The Space is itself a git repo; either
+push this repository into it directly, or set up a GitHub Action that
+mirrors `main` to the Space on every push (HF documents the
+[sync-to-hub pattern](https://huggingface.co/docs/hub/spaces-github-actions);
+it needs an `HF_TOKEN` secret on the GitHub side).
+
+Two files exist only in the Space repo, not here:
+
+1. **`README.md` front matter** — the Space's configuration. The container
+   must listen on `app_port`; the playground defaults to 7860 to match.
+   When mirroring this repo, prepend the front matter to the README in the
+   mirror step (or keep a Space-only README commit):
+
+   ```yaml
+   ---
+   title: nansense playground
+   emoji: 🔬
+   sdk: docker
+   dockerfile_path: deploy/playground/Dockerfile
+   app_port: 7860
+   pinned: false
+   ---
+   ```
+
+2. **A scheduled restart** (optional). The container filesystem is
+   ephemeral and a free Space also sleeps after ~48 h idle, so every
+   wake is a fresh boot — which doubles as the reset for whatever pins,
+   perturbations, and experiment results visitors accumulated. A busy
+   Space never sleeps, so for a guaranteed nightly reset add a cron
+   workflow (GitHub Actions or anywhere) calling:
+
+   ```python
+   from huggingface_hub import HfApi
+   HfApi(token=...).restart_space("YOUR_USER/nansense-playground")
+   ```
+
+Notes:
+
+- Build time is dominated by the `--prepare` step (a few CPU minutes for
+  5 MNIST epochs) — well inside HF's build limits, and nothing binary needs
+  to be committed anywhere.
+- No secrets, persistent storage, or GPU are needed. GPU tiers work but are
+  wasted on LeNet.
+- The direct app URL is `https://YOUR-USER-nansense-playground.hf.space`;
+  the Space page embeds it in an iframe and doubles as the landing page.
+
+## Any other Docker host
+
+The image is self-contained, so a small VM with `docker compose` works the
+same way. Put a websocket-capable reverse proxy with TLS in front (Caddy's
+`reverse_proxy 127.0.0.1:7860` handles websockets and certificates with one
+line), set `restart: always`, and schedule a nightly `docker restart` as the
+shared-state reset. Give the container a memory limit (the demo stays well
+under 2 GB) and skip persistent volumes — statelessness is the feature.

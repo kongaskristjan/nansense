@@ -1,0 +1,10 @@
+# Keep the playground image build context lean (deploy/playground/Dockerfile
+# builds from the repo root).
+.git
+.venv*
+.claude
+.nansense_cache
+data
+nansense_recordings
+site
+**/__pycache__
