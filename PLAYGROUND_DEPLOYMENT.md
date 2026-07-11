@@ -33,6 +33,13 @@ The two invocations must agree on `--epochs`, `--cache-dir`, and the model
 hyperparameters — serving validates the cache against the freshly built
 model and refuses a mismatch.
 
+Local `docker build` needs BuildKit (the `docker-buildx-plugin`): Docker's
+deprecated legacy builder, especially under a rootless daemon, writes layers
+the image's non-root `USER` cannot read — the build then dies at the first
+`RUN` after the user switch with `libc.so.6 … Permission denied`. Hugging
+Face builds with BuildKit on its own infrastructure, so this is a
+local-build concern only.
+
 ## Hugging Face Spaces (recommended host)
 
 A [Docker-SDK Space](https://huggingface.co/docs/hub/spaces-sdks-docker) is
