@@ -13,7 +13,7 @@ import math
 
 import plotly.graph_objects as go
 
-from nansense.ui.histograms import kind_stats
+from nansense.ui.histograms import AXIS_EXPONENT_FORMAT, kind_stats
 from nansense.watch import LayerStatsSnapshot, TensorStatsSnapshot
 
 # The scalar stats drawn as value traces, in trace order, with their colors
@@ -156,6 +156,7 @@ def make_epoch_stats_figure(kind: str, title: str) -> go.Figure:
         yaxis=dict(
             title=dict(text="value", font=dict(size=10)),
             tickfont=dict(size=9),
+            exponentformat=AXIS_EXPONENT_FORMAT,
             showgrid=True,
             gridcolor="#e2e8f0",
             zeroline=True,
@@ -167,6 +168,7 @@ def make_epoch_stats_figure(kind: str, title: str) -> go.Figure:
             yaxis2=dict(
                 title=dict(text="dead channels", font=dict(size=10)),
                 tickfont=dict(size=9),
+                exponentformat=AXIS_EXPONENT_FORMAT,
                 overlaying="y",
                 side="right",
                 rangemode="tozero",

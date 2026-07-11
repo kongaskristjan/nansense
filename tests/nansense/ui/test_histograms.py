@@ -1049,3 +1049,17 @@ def test_make_histogram_figure_override_carries_log_y_range() -> None:
     assert fig.layout.yaxis.type == "log"
     assert y_range == [-3.0, 0.0]
     assert tuple(fig.layout.yaxis.range) == (-3.0, 0.0)
+
+
+@pytest.mark.parametrize("log_y", [False, True])
+def test_histogram_axes_use_power_exponents_not_si_prefixes(
+    log_y: bool,
+) -> None:
+    # Plotly's default SI tick suffixes ("100M" densities, "500n" values)
+    # read as units, not scales — exponents render as powers of ten.
+    per_phase = {"train": _layer_snap("train")}
+    fig, _ = _make_histogram_figure(
+        per_phase, "activation", "a", log_y=log_y
+    )
+    assert fig.layout.yaxis.exponentformat == "power"
+    assert fig.layout.xaxis.exponentformat == "power"  # linear value axis

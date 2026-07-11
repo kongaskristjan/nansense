@@ -126,3 +126,13 @@ def test_weight_stat_series_matches_figure_trace_order() -> None:
     assert series["mean"] == [2.0, 4.0]
     assert series["min"] == [1.0, 3.0]
     assert series["max"] == [3.0, 5.0]
+
+
+@pytest.mark.parametrize("kind", ["activation", "gradient", "weight"])
+def test_epoch_figures_use_power_exponents_not_si_prefixes(kind: str) -> None:
+    # Plotly's default SI tick suffixes ("30f" for 3e-14) read as units,
+    # not scales — the value axes label exponents as powers of ten instead.
+    fig = make_epoch_stats_figure(kind, "t")
+    assert fig.layout.yaxis.exponentformat == "power"
+    if kind == "activation":
+        assert fig.layout.yaxis2.exponentformat == "power"

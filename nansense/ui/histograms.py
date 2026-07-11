@@ -188,6 +188,11 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot]) -> str:
 # easier to read.
 _PLOT_HEIGHT: int = 440
 
+# Tick-label exponent style for every Plotly axis in the library: powers of
+# ten, never Plotly's default SI prefix letters — "30f" for 3e-14 reads as a
+# unit, not a scale. Hover values inherit the same exponent style.
+AXIS_EXPONENT_FORMAT: str = "power"
+
 # Linear-space geometry of the signed-log bins, used when the x-axis is
 # switched to a linear scale: each bar is drawn at the centre of its bin and
 # given the bin's true (linear) width so the bars tile the value axis.
@@ -952,6 +957,7 @@ def _make_histogram_figure(
         fig.update_xaxes(
             range=x_range,
             tickfont=dict(size=9),
+            exponentformat=AXIS_EXPONENT_FORMAT,
             showgrid=False,
             zeroline=True,
             zerolinecolor="#cbd5e1",
@@ -965,6 +971,7 @@ def _make_histogram_figure(
         showgrid=True,
         gridcolor="#e2e8f0",
         tickfont=dict(size=9),
+        exponentformat=AXIS_EXPONENT_FORMAT,
         title=dict(
             text="probability density" if density else "probability",
             font=dict(size=10),
