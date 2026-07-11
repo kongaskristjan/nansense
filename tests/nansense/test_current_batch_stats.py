@@ -2,8 +2,8 @@
 
 `single_batch_stats` / `Session.current_batch_stats` compute stats directly
 from the last published snapshot (so any layer works, watched or not), and
-`Session.set_stats_collecting` pauses/resumes the running watch aggregates
-without hiding the watched cards.
+the `"none"` stats scope pauses/resumes the running watch aggregates without
+hiding the watched cards (see `test_stats_scope` for the scope semantics).
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def test_current_batch_stats_empty_before_any_batch() -> None:
 def test_stats_collecting_toggle_pauses_and_resumes() -> None:
     session, model = make_session(epochs=1, phases={"train": 3})
     session.watch("fc1")
-    session.set_stats_collecting(False)
+    session.set_stats_scope("none")
     assert session.stats_collecting is False
     session.detach()
 
@@ -121,7 +121,7 @@ def test_stats_toggle_off_still_publishes_snapshot() -> None:
     """Watched cards stay live (snapshot publishes) even with collection off."""
     session, model = make_session(epochs=1, phases={"train": 1})
     session.watch("fc1")
-    session.set_stats_collecting(False)
+    session.set_stats_scope("none")
 
     def loop() -> None:
         with session.batch(phase="train", epoch=0):

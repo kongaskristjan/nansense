@@ -10,7 +10,7 @@ from nicegui import ui
 from torch import Tensor
 
 from nansense.recording import RecordedView
-from nansense.session import BatchSnapshot, Session
+from nansense.session import BatchSnapshot, Session, StatsScope
 from nansense.ui.common import (
     _defer_value_write,
     _page_scaffold,
@@ -108,11 +108,15 @@ def _build_weights_page(session: Session, layer: str) -> None:
         )
 
     def open_weight_graphs() -> None:
-        # The GRAPHS view renders the running watch aggregates, which only
-        # cover watched layers — watching here makes the jump land on data
-        # (collection starts with the next stepped batch). `scroll=weights`
-        # brings the card's Weights section into view once it renders.
-        session.watch(layer)
+        # The GRAPHS view renders the running watch aggregates; in the
+        # `watched` scope those only cover watched layers, so watching here
+        # makes the jump land on data (collection starts with the next
+        # stepped batch). The other scopes either already collect every
+        # layer or are paused, and the watched set must stay untouched.
+        # `scroll=weights` brings the card's Weights section into view once
+        # it renders.
+        if session.stats_scope is StatsScope.WATCHED:
+            session.watch(layer)
         ui.navigate.to(
             f"/stats?layer={quote(layer)}&view=graphs&scroll=weights"
         )

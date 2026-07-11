@@ -19,7 +19,7 @@ from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL
 from nansense.recording import RecordedView
 from nansense.restore import TimeTravelError
 from nansense.schedule import BatchPosition, format_position
-from nansense.session import BatchSnapshot, Session
+from nansense.session import BatchSnapshot, Session, StatsScope
 from nansense.watch import DEFAULT_CHANNEL_LIMIT
 
 
@@ -451,6 +451,13 @@ _FREQUENCY_UNIT_OPTIONS: dict[str, str] = {
     "batch": "Every nth batch",
 }
 
+# Settings-dialog labels for the stats scope (`Session.set_stats_scope`).
+_STATS_SCOPE_OPTIONS: dict[str, str] = {
+    str(StatsScope.NONE): "No layers (paused)",
+    str(StatsScope.WATCHED): "Watched layers",
+    str(StatsScope.ALL): "All layers",
+}
+
 # Phase-select sentinel for "count batches of every phase".
 _ANY_PHASE: str = "(any phase)"
 
@@ -507,6 +514,24 @@ def _add_settings_button(
                 "open and on every parameter change — instead of clicking Run "
                 "(Run is grayed out while on). Shared across all tabs."
             )
+        )
+        ui.separator()
+        ui.label("Statistics collection").classes("text-lg font-bold")
+        ui.label(
+            "Which layers fold training batches into the running statistics "
+            "(histograms, extreme-input patches, per-epoch graphs). With "
+            "anything other than \"Watched layers\", showing or hiding a "
+            "card on the main page is per-tab and never affects collection."
+        ).classes("text-sm text-slate-600")
+        scope_select = ui.select(
+            _STATS_SCOPE_OPTIONS,
+            label="Collect stats for",
+            value=str(StatsScope.WATCHED),
+            on_change=lambda: apply_stats_scope(),
+        ).props("dense outlined").classes("w-64").tooltip(
+            "\"No layers\" pauses collection but keeps everything collected "
+            "so far; \"All layers\" collects for every layer on every batch "
+            "— bound the memory with the channel limit below"
         )
         ui.separator()
         ui.label("Performance").classes("text-lg font-bold")
@@ -649,6 +674,12 @@ def _add_settings_button(
 
     def sync_phase_visibility() -> None:
         phase_select.set_visibility(unit_select.value == "batch")
+
+    def apply_stats_scope() -> None:
+        """Push the stats-scope select to the session (auto-applied)."""
+        if loading:
+            return
+        session.set_stats_scope(str(scope_select.value))
 
     def apply_frequency() -> None:
         """Push the controls' current values to the session (auto-applied)."""
@@ -870,6 +901,7 @@ def _add_settings_button(
         nonlocal loading
         loading = True
         auto_run_switch.value = session.auto_run_experiments
+        scope_select.value = str(session.stats_scope)
         perf = session.watch_performance
         channel_limit_switch.value = perf.channel_limit_enabled
         channel_limit_input.value = perf.channel_limit
@@ -997,6 +1029,10 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
     magnitudes (`_under_over_band_lines`).
     """
     cols = debugger.columns(error)
+    # Watch actions only exist in the `watched` stats scope; in `all` every
+    # layer already collects, and in `none` collection is paused, so both
+    # get a plain Stats link.
+    offer_watch = session.stats_scope is StatsScope.WATCHED
     watched = session.watched_layers
     with ui.dialog() as dialog, ui.card().classes(
         "min-w-[36rem] max-w-[56rem] p-6 gap-3"
@@ -1051,7 +1087,14 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
                     with ui.element("div").classes(
                         "w-40 shrink-0 flex justify-end"
                     ):
-                        _debug_action_button(session, dialog, error, report, watched)
+                        _debug_action_button(
+                            session,
+                            dialog,
+                            error,
+                            report,
+                            watched,
+                            offer_watch=offer_watch,
+                        )
 
         ui.label(_DEBUG_WATCH_NOTE).classes("text-xs text-slate-500")
         with ui.row().classes("w-full justify-end gap-2"):
@@ -1075,12 +1118,15 @@ def _debug_action_button(
     error: DebugError,
     report: LayerReport,
     watched: frozenset[str],
+    *,
+    offer_watch: bool,
 ) -> None:
     """Per-row actions: a Stats link, plus a Watch button when not yet watched.
 
-    The stats histograms need a watched layer (the watch accumulators feed
-    them). An already-watched layer just gets a Stats link. An unwatched layer
-    gets both: Watch (start collecting and stay in the dialog) and Stats (start
+    The stats histograms need a layer that collects (the watch accumulators
+    feed them). A layer already collecting just gets a Stats link; with
+    `offer_watch` (the `watched` stats scope), an unwatched layer gets both:
+    Watch (start collecting and stay in the dialog) and Stats (start
     collecting *and* jump to the stats view). The stats page pre-checks its
     "Show subnormal/overflow" band from the active issue itself
     (`stats_page._should_show_bands`), so either route opens with the band
@@ -1088,7 +1134,7 @@ def _debug_action_button(
     """
     href = f"/stats?layer={quote(report.layer)}"
     with ui.row().classes("gap-1 no-wrap items-center"):
-        if report.layer not in watched:
+        if offer_watch and report.layer not in watched:
 
             def watch_layer() -> None:
                 session.watch(report.layer)

@@ -326,16 +326,31 @@ between capture and stats-only batches is that capture also publishes
 a snapshot and pauses; stats-only batches just compute stats and let
 the training loop continue.
 
-`Session.set_stats_collecting(False)` (the top bar's stats toggle) pauses
-this without unwatching anything: it gates both `_stats_only` (so a
-non-publishing batch no longer installs hooks just for stats — the
+Which layers feed the accumulators is set by the three-way **stats scope**
+(`Session.set_stats_scope`, a select in the settings dialog): `"watched"`
+(the default) collects for the watched layers, `"all"` for every name in
+`layer_names` regardless of the watched set, and `"none"` collects nothing
+while keeping every already-collected bucket frozen — the pause the top
+bar's stats toggle uses (`toggle_stats_collecting` flips between `"none"`
+and the last collecting scope). Scope `"none"` gates both `_stats_only` (so
+a non-publishing batch no longer installs hooks just for stats — the
 capture-mode cost above disappears) and the `_update_watch_stats` call at
 `__exit__` (so even a capture batch, which installs hooks for its snapshot,
-folds nothing in). Watched cards therefore stay visible and keep rendering
-from the published snapshot while the running aggregates freeze; toggling
-back on resumes adding to the existing buckets. In distributed runs the flag
-also drops the reduce: `sync_batch_control` only sets the leader's reduce
-flag when `publish and watched and _stats_collecting`.
+folds nothing in); cards stay visible and keep rendering from the published
+snapshot while the running aggregates freeze. Narrowing to `"watched"`
+drops the buckets of layers outside the watched set (the same semantics as
+unwatching them); `Session.stats_layers` — the `/stats` page's selectable
+universe — is the collecting set plus every layer with retained buckets, so
+`"none"` keeps previously collected layers browsable. In distributed runs
+the scope rides the per-batch control broadcast (followers mirror it and
+accumulate the same buckets), and `sync_batch_control` only sets the
+leader's reduce flag when `publish` and some layer is collecting.
+
+Outside the `"watched"` scope, the watched set no longer drives collection,
+so the main page decouples card visibility from it: each browser tab keeps
+its own "shown" set (seeded from the watched set when a decoupled scope is
+entered) and diagram/card clicks never touch the session — two tabs can
+show different layers, and hiding a card cannot drop anyone's stats.
 
 This is a deliberate trade: when watching is active, the user is
 already paying capture-mode forward cost on every batch (fx
@@ -607,10 +622,12 @@ watch stats over their own data shard. Two collective touch points, both
 on the training thread:
 
 1. **Per-batch control broadcast** (`sync_batch_control`, at
-   `_BatchContext.__enter__`): a 2-int tensor — "does this batch's
+   `_BatchContext.__enter__`): a 4-int tensor — "does this batch's
    `__exit__` reduce watch stats" (true on the leader's mode captures and
-   frequency updates, when anything is watched) and the watched-set
-   version. On a version change, a follow-up object broadcast carries the
+   frequency updates, when anything is collecting), the watched-set
+   version, the leader's stats scope (mirrored by followers so every rank
+   accumulates the same buckets), and its armed time-travel target. On a
+   version change, a follow-up object broadcast carries the
    watched-layer list; followers apply it, dropping buckets of unwatched
    layers like `Session.unwatch` does. The version advances in lockstep
    on every rank, so "changed since the last batch" is a decision each
@@ -642,7 +659,7 @@ every rank issues the same sequence (control broadcast → forward/backward
 rank must drive the same `session.batch` structure, which
 `DistributedSampler`-sharded loaders give naturally. Time travel works in
 distributed mode: the per-batch control broadcast carries the leader's armed
-jump epoch (a third int, `-1` when none), so a UI-requested jump makes every
+jump epoch (a fourth int, `-1` when none), so a UI-requested jump makes every
 rank raise `TimeTravelJump` at the same batch-start barrier — before any
 forward/backward or reduction, so no collective is left half-issued (a leader
 woken from a pause keeps the jump armed and applies it at the next barrier
@@ -1190,32 +1207,38 @@ flips — the announcer sees the dead thread (or times out), prints nothing and
 opens nothing. No banner promises a URL we don't own, and no tab races to a page
 served by the *other* session. `0.0.0.0`/`::` are shown (and opened) as loopback.
 
-**Main page.** One `_LayerView` card per layer, but a card is visible **iff its
-layer is watched** — visible ≡ watched (`session.watch`), so the center pane
-starts empty and points at the diagram. The diagram is `graph.build_mermaid`,
-which tries `torch.fx.symbolic_trace` for a real data-flow graph and falls back
-to a static module-hierarchy tree when the model isn't traceable. Clicking a
-node toggles the watched state; `sync_watch_ui` diffs the watched set against
-the connection's last-known set and pushes only the changes, so toggles
-propagate across tabs. A 200 ms timer re-renders watched views when
+**Main page.** One `_LayerView` card per layer, but a card is visible only
+while its layer is in the page's **shown** set. In the default `watched`
+stats scope, shown ≡ watched (`session.watch`) — a global set, so toggles
+propagate across tabs; in the decoupled scopes (`none` / `all`) the shown
+set is per-connection state that never touches the session, so each tab
+shows its own cards (seeded from the watched set on entering the scope) and
+the per-card button reads "Hide" instead of "Unwatch". Either way the
+center pane starts empty and points at the diagram. The diagram is
+`graph.build_mermaid`, which tries `torch.fx.symbolic_trace` for a real
+data-flow graph and falls back to a static module-hierarchy tree when the
+model isn't traceable. Clicking a node toggles the shown state;
+`sync_watch_ui` diffs the shown set against the connection's last-known set
+and pushes only the changes. A 200 ms timer re-renders shown views when
 `session.snapshot` or `session.probe_result` changes by identity (a probe
 result takes precedence as the render source; its gradient strips are
-placeholders, since probes are forward-only). Unwatched layers are never
+placeholders, since probes are forward-only). Hidden layers are never
 rendered or shipped — that is what keeps large models responsive. Renders fan
 out over a shared `ThreadPoolExecutor` (the torch/numpy/PIL work releases the
 GIL) into a `_RenderCache` keyed `(name, kind, sample_idx)` and invalidated by
 render-source identity, so re-showing a card or a second tab is a dict hit.
 
-The top-bar watch/stats chip shows the watched-layer count behind an eye icon
+The top-bar watch/stats chip shows the shown-layer count behind an eye icon
 whose glyph and colour reflect `session.stats_collecting`: green `visibility`
-when collecting, red `visibility_off` (the slashed eye of the per-card Unwatch
-button) when paused. `sync_stats_icon` runs on init, on toggle, and on the
-200 ms tick so a toggle in one tab shows in every other — but it rewrites the
-icon only when the state flips (a guard that also avoids re-adding a tooltip
-every tick). Its menu carries *Watch all layers* (behind the perf-warning
-dialog), *Clear all watched layers*, *Toggle collecting stats*
-(`session.toggle_stats_collecting`), a *Current batch* submenu listing every
-layer (each a `/stats?layer=…&phase=current` anchor), and the watched-layer
+when collecting (scope `watched` or `all`), red `visibility_off` (the slashed
+eye of the per-card hide button) when paused (scope `none`).
+`sync_stats_icon` runs on init, on toggle, and on the 200 ms tick so a toggle
+in one tab shows in every other — but it rewrites the icon only when the
+state flips (a guard that also avoids re-adding a tooltip every tick). Its
+menu carries *Show all layers* (behind the perf-warning dialog), *Hide all
+layers*, *Toggle collecting stats* (`session.toggle_stats_collecting`, the
+`none` ↔ previous-scope flip), a *Current batch* submenu listing every
+layer (each a `/stats?layer=…&phase=current` anchor), and the shown-layer
 list (each a plain-phase `/stats?layer=…` anchor).
 
 The right sidebar (`InputPanel`) shows the selected input plus the Pin /

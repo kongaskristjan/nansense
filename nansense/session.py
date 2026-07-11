@@ -132,6 +132,26 @@ class Mode(StrEnum):
     DETACH = "detach"
 
 
+class StatsScope(StrEnum):
+    """Which layers fold their batches into the running statistics.
+
+    - `NONE`: nothing is collected; already-collected stats are kept frozen
+      (the pause the top bar's stats toggle uses).
+    - `WATCHED` (default): the watched layers collect, and watching a layer is
+      also what shows its cards — the classic coupled behaviour.
+    - `ALL`: every layer in `layer_names` collects, independent of the watched
+      set.
+
+    Outside `WATCHED`, the watched set no longer drives collection, so the UI
+    treats showing/hiding a layer's cards as per-tab state that never touches
+    the session (see `main_page`).
+    """
+
+    NONE = "none"
+    WATCHED = "watched"
+    ALL = "all"
+
+
 FREQUENCY_UNITS: tuple[str, ...] = ("batch", "epoch")
 
 # Element type of a loader passed to `Session.batches` (PEP 695 `def batches[T]`
@@ -325,12 +345,13 @@ class Session:
         self._original_forward: object | None = None
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
-        # Whether watched layers fold their batches into the running stats. The
-        # top bar's stats toggle flips it: off, watched cards still render in the
-        # main view, but no batch is accumulated (and non-publishing batches skip
-        # the capture-mode hook install they'd otherwise pay for stats). Existing
-        # stats are kept — toggling back on resumes adding to them.
-        self._stats_collecting = True
+        # Which layers fold their batches into the running stats (see
+        # `StatsScope`). `NONE` collects nothing but keeps existing buckets
+        # frozen (and non-publishing batches skip the capture-mode hook
+        # install they'd otherwise pay for stats); `_prev_stats_scope` is the
+        # last collecting scope, restored by the top bar's stats toggle.
+        self._stats_scope = StatsScope.WATCHED
+        self._prev_stats_scope = StatsScope.WATCHED
         self._watch_accumulator = WatchAccumulator()
         # Per-channel watch caps (GPU VRAM); the accumulator defaults already
         # match, so no initial `configure` flush is needed.
@@ -612,40 +633,113 @@ class Session:
         self._watch_accumulator.forget_layer(layer)
 
     @property
-    def stats_collecting(self) -> bool:
-        """Whether watched layers fold their batches into the running stats."""
-        return self._stats_collecting
-
-    def set_stats_collecting(self, value: bool) -> None:
-        """Enable or disable running-stats collection for watched layers.
-
-        Off, watched layers stay visible in the main view but no batch is
-        accumulated — non-publishing batches also skip the capture-mode hook
-        install they'd otherwise pay just for stats. Already-collected stats
-        are preserved, so toggling back on resumes adding to them.
-        """
+    def stats_scope(self) -> StatsScope:
+        """Which layers fold their batches into the running stats."""
         with self._cv:
-            self._stats_collecting = bool(value)
+            return self._stats_scope
+
+    @property
+    def stats_collecting(self) -> bool:
+        """Whether any running stats are being collected (scope ≠ `NONE`)."""
+        with self._cv:
+            return self._stats_scope is not StatsScope.NONE
+
+    def set_stats_scope(self, scope: StatsScope | str) -> None:
+        """Set which layers fold their batches into the running stats.
+
+        - `"none"` collects nothing but keeps every already-collected bucket
+          frozen — non-publishing batches also skip the capture-mode hook
+          install they'd otherwise pay just for stats, and switching back to a
+          collecting scope resumes adding to the existing buckets.
+        - `"watched"` (the default) collects for the watched layers only.
+          Entering it drops the buckets of layers outside the watched set —
+          the same semantics as unwatching them.
+        - `"all"` collects for every layer regardless of the watched set; the
+          per-channel caps (`set_watch_performance`) bound the memory.
+
+        Raises `ValueError` for an unknown scope.
+        """
+        scope = StatsScope(scope)
+        with self._cv:
+            self._stats_scope = scope
+            if scope is not StatsScope.NONE:
+                self._prev_stats_scope = scope
+            watched = list(self._watched_layers)
+        if scope is StatsScope.WATCHED:
+            # Buckets outside the watched set (collected under a wider scope)
+            # are dropped, mirroring `unwatch`; the training thread's own
+            # `retain_layers` pass covers an update racing this call.
+            self._watch_accumulator.retain_layers(watched)
 
     def toggle_stats_collecting(self) -> bool:
-        """Flip stats collection and return the new state."""
+        """Flip between `NONE` and the last collecting scope; True = collecting.
+
+        The top bar's stats toggle: pausing keeps every collected bucket (and
+        the shown cards) intact; resuming restores the previous scope
+        (`WATCHED` or `ALL`) and continues adding to the existing buckets.
+        """
         with self._cv:
-            self._stats_collecting = not self._stats_collecting
-            return self._stats_collecting
+            if self._stats_scope is StatsScope.NONE:
+                self._stats_scope = self._prev_stats_scope
+            else:
+                self._prev_stats_scope = self._stats_scope
+                self._stats_scope = StatsScope.NONE
+            return self._stats_scope is not StatsScope.NONE
 
-    def watch_snapshot(self, *, include_patches: bool = True) -> WatchSnapshot:
-        """Snapshot of all currently-watched layers' stats.
+    def _stats_collection_layers_locked(self) -> list[str]:
+        """Layers whose batches currently fold into the stats (`_cv` held)."""
+        match self._stats_scope:
+            case StatsScope.NONE:
+                return []
+            case StatsScope.WATCHED:
+                return list(self._watched_layers)
+            case StatsScope.ALL:
+                return list(self._layer_names)
 
-        `include_patches=False` skips the extreme-patch GPU→CPU copies for
-        callers that only need the scalar/histogram stats.
+    def _stats_active(self) -> bool:
+        """Whether batches currently fold stats (some layer is collecting)."""
+        with self._cv:
+            match self._stats_scope:
+                case StatsScope.NONE:
+                    return False
+                case StatsScope.WATCHED:
+                    return bool(self._watched_layers)
+                case StatsScope.ALL:
+                    return bool(self._layer_names)
+
+    @property
+    def stats_layers(self) -> frozenset[str]:
+        """Layers with running stats available or being collected.
+
+        The `/stats` page's selectable universe: the current scope's
+        collecting layers plus any layer whose buckets are still retained —
+        under scope `NONE` collection stops but nothing is dropped, so
+        previously collected layers stay browsable while paused.
+        """
+        with self._cv:
+            layers = set(self._stats_collection_layers_locked())
+        return frozenset(layers | self._watch_accumulator.layers_with_stats())
+
+    def watch_snapshot(
+        self,
+        *,
+        layers: Iterable[str] | None = None,
+        include_patches: bool = True,
+    ) -> WatchSnapshot:
+        """Snapshot of the retained running stats (all buckets by default).
+
+        The accumulator holds buckets for exactly the layers the stats scope
+        retains — the watched set in `WATCHED` scope, every layer in `ALL`,
+        frozen as-is in `NONE` — so the default covers everything browsable;
+        pass `layers` to restrict the (GPU→CPU) copy to a subset.
+        `include_patches=False` skips the extreme-patch copies for callers
+        that only need the scalar/histogram stats.
 
         In a distributed run the leader overlays the last cross-rank
         reduction on its local view: histogram/scalar stats become global
         (refreshed at every snapshot publish), while patches — and any
         bucket the reduction hasn't covered yet — stay rank-local.
         """
-        with self._cv:
-            layers = list(self._watched_layers)
         snap = self._watch_accumulator.snapshot(
             layers=layers, include_patches=include_patches
         )
@@ -1618,17 +1712,19 @@ class Session:
             manager.capture_frames(self)
 
     def _update_watch_stats(self, pos: BatchPosition) -> None:
-        # Iterate a snapshot of the watched set taken under the lock — the UI
-        # thread mutates `_watched_layers` via watch()/unwatch() (and the
-        # "Watch all" / "Clear all" loops), so iterating the live set here on
-        # the training thread would race into a "set changed size during
-        # iteration" RuntimeError. Mirrors `watched_layers` / `watch_snapshot`.
+        # Iterate a snapshot of the stats-eligible set taken under the lock —
+        # the watched set in WATCHED scope, every layer in ALL. The UI thread
+        # mutates `_watched_layers` via watch()/unwatch() (and the "Show all"
+        # / "Hide all" loops), so iterating the live set here on the training
+        # thread would race into a "set changed size during iteration"
+        # RuntimeError.
         with self._cv:
-            watched = list(self._watched_layers)
-        # Reap buckets for layers no longer watched before updating. `unwatch`
-        # forgets on the UI thread, which can race this batch and let an
-        # `update` below resurrect a just-forgotten bucket; doing it here, on
-        # the only `update` caller, makes that leak impossible.
+            watched = self._stats_collection_layers_locked()
+        # Reap buckets for layers no longer in scope before updating.
+        # `unwatch` (and a scope narrowed to WATCHED) forgets on the UI
+        # thread, which can race this batch and let an `update` below
+        # resurrect a just-forgotten bucket; doing it here, on the only
+        # `update` caller, makes that leak impossible.
         self._watch_accumulator.retain_layers(watched)
         # Extreme-input patches stay rank-local in distributed runs: only
         # the leader renders them, so followers skip the buffers entirely.
@@ -2035,11 +2131,7 @@ class _BatchContext:
                 if dist_ctx.is_leader:
                     self._session._take_pending_jump()
                 raise TimeTravelJump(jump_epoch)
-        self._stats_only = (
-            not self._publishes
-            and bool(self._session._watched_layers)
-            and self._session._stats_collecting
-        )
+        self._stats_only = not self._publishes and self._session._stats_active()
         # Publishing, frequency-update, stats-only, and debug-check batches use
         # the same hook installation: full fx interpreter (or full per-module
         # hooks + root pre-hook in hook-mode). That way any name in
@@ -2071,11 +2163,7 @@ class _BatchContext:
             # `remove_hooks` is then a no-op (it is idempotent) — its job is to
             # cover the path where `_update_watch_stats` raised before it ran.
             try:
-                if (
-                    exc is None
-                    and self._session._watched_layers
-                    and self._session._stats_collecting
-                ):
+                if exc is None and self._session._stats_active():
                     self._session._update_watch_stats(self._position)
                 if exc is None and self._dist_reduce:
                     # Collective: every rank folds its shard's accumulated

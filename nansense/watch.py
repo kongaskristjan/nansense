@@ -774,6 +774,18 @@ class WatchAccumulator:
             if l == layer and ph == phase and ep < epoch:
                 evict(other)
 
+    def layers_with_stats(self) -> set[str]:
+        """Layer names holding any retained bucket (stats or weight samples).
+
+        Backs `Session.stats_layers`: under scope `NONE` nothing accumulates
+        but the frozen buckets remain browsable, so availability is defined by
+        the retained buckets rather than the collecting set.
+        """
+        with self._lock:
+            layers = {key[0] for key in self._stats}
+            layers.update(key[0] for key in self._weights)
+            return layers
+
     def forget_layer(self, layer: str) -> None:
         """Drop all stored stats for `layer` (e.g. on unwatch)."""
         with self._lock:

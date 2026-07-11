@@ -17,7 +17,7 @@ from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 from nansense import debugger
 from nansense.patches import PatchType
 from nansense.recording import RecordedView
-from nansense.session import BatchSnapshot, Session
+from nansense.session import BatchSnapshot, Session, StatsScope
 from nansense.ui.bin_samples import sample_bin
 from nansense.ui.common import (
     _b64_img_src,
@@ -149,21 +149,21 @@ class _RefreshGate:
     """
 
     last_snapshot: BatchSnapshot | None = None
-    last_watched: frozenset[str] = frozenset()
+    last_stats_layers: frozenset[str] = frozenset()
     last_phases: tuple[str, ...] = ()
 
     def should_refresh(self, session: Session) -> bool:
         """Consume the session's current state; True if it changed."""
         snapshot = session.snapshot
-        watched = session.watched_layers
+        stats_layers = session.stats_layers
         phases = tuple(session.schedule.phase_order)
         changed = (
             snapshot is not self.last_snapshot
-            or watched != self.last_watched
+            or stats_layers != self.last_stats_layers
             or phases != self.last_phases
         )
         self.last_snapshot = snapshot
-        self.last_watched = watched
+        self.last_stats_layers = stats_layers
         self.last_phases = phases
         return changed
 
@@ -362,7 +362,7 @@ def _build_stats_page(
         # "all" selected (or nothing watched) fall back to the first visible
         # layer so the link always lands somewhere sensible.
         ordered = _selectable_layers(
-            state.selected_phase, layer_names, session.watched_layers
+            state.selected_phase, layer_names, session.stats_layers
         )
         visible = _visible_layers(state.selected_layer, ordered)
         target = visible[0] if visible else state.selected_layer
@@ -380,8 +380,8 @@ def _build_stats_page(
         if state.view == _VIEW_GRAPHS:
             return None
         # Record exactly the cards on screen — the selected layer, or every
-        # watched layer while "all" is showing.
-        ordered = _watched_in_order(layer_names, session.watched_layers)
+        # stats-carrying layer while "all" is showing.
+        ordered = _watched_in_order(layer_names, session.stats_layers)
         watched = _visible_layers(state.selected_layer, ordered)
         if not watched:
             return None
@@ -599,16 +599,16 @@ def _build_stats_page(
             phase_select.set_value(state.selected_phase)
 
     def sync_layer_select() -> None:
-        """Refresh the layer dropdown's options/value from the watched set.
+        """Refresh the layer dropdown's options/value from the stats layers.
 
-        Reconciles the selection (drops "all" once too many layers are
-        watched, replaces an unwatched layer), pushes the options/value to
-        the widget only when they actually changed (a no-op write would
-        re-enter `set_layer`), and disables the dropdown when nothing is
-        watched. Cheap enough to call every refresh tick.
+        Reconciles the selection (drops "all" once too many layers carry
+        stats, replaces a layer that no longer does), pushes the
+        options/value to the widget only when they actually changed (a no-op
+        write would re-enter `set_layer`), and disables the dropdown when no
+        layer carries stats. Cheap enough to call every refresh tick.
         """
         ordered = _selectable_layers(
-            state.selected_phase, layer_names, session.watched_layers
+            state.selected_phase, layer_names, session.stats_layers
         )
         state.selected_layer = _reconcile_selected_layer(
             state.selected_layer, ordered
@@ -629,7 +629,7 @@ def _build_stats_page(
         hover_registry.clear()
         body_container.clear()
         ordered = _selectable_layers(
-            state.selected_phase, layer_names, session.watched_layers
+            state.selected_phase, layer_names, session.stats_layers
         )
         with body_container:
             if not ordered:
@@ -666,15 +666,15 @@ def _build_stats_page(
         try:
             while True:
                 state.refresh_dirty = False
-                watched = session.watched_layers
-                n = len(watched)
+                stats_layers = session.stats_layers
+                n = len(stats_layers)
                 state.count_label.text = (
                     f"{n} layer{'' if n == 1 else 's'}"
                 )
                 sync_phase_select()
                 sync_layer_select()
                 ordered = _selectable_layers(
-                    state.selected_phase, layer_names, watched
+                    state.selected_phase, layer_names, stats_layers
                 )
                 desired = _visible_layers(state.selected_layer, ordered)
                 if list(layer_panels) != desired:
@@ -1379,6 +1379,17 @@ class _WatchLayerPanel:
         self._grid_sig: tuple[object, ...] | None = None
 
         def unwatch() -> None:
+            # Unwatching only exists in the coupled `watched` scope — in the
+            # other scopes the watched set doesn't drive collection, so the
+            # button is not built; this guard covers a stale card after a
+            # scope switch.
+            if session.stats_scope is not StatsScope.WATCHED:
+                ui.notify(
+                    "Layers are only unwatched while stats are collected "
+                    "for watched layers",
+                    type="warning",
+                )
+                return
             if _refuse_unwatch_while_recording(session):
                 return
             session.unwatch(name)
@@ -1387,11 +1398,14 @@ class _WatchLayerPanel:
         with ui.card().classes("w-full p-4 gap-2"):
             with ui.row().classes("w-full items-center gap-2 no-wrap"):
                 ui.label(name).classes("font-mono text-base font-bold grow")
-                ui.button(
-                    icon="visibility_off",
-                    color="amber-600",
-                    on_click=unwatch,
-                ).props("dense size=sm flat round").tooltip("Stop watching")
+                if session.stats_scope is StatsScope.WATCHED:
+                    ui.button(
+                        icon="visibility_off",
+                        color="amber-600",
+                        on_click=unwatch,
+                    ).props("dense size=sm flat round").tooltip(
+                        "Stop watching"
+                    )
             # Shown (with both view sections hidden) until the layer has any
             # collected stats, so an unstepped layer is a single clear notice
             # rather than empty plots and "no data yet" tables.
@@ -1646,28 +1660,31 @@ _ALL_LAYERS_MAX: int = 10
 
 
 def _watched_in_order(
-    layer_names: list[str], watched: frozenset[str]
+    layer_names: list[str], stats_layers: frozenset[str]
 ) -> list[str]:
-    """Currently-watched layers in the page's stable graph order.
+    """The stats-carrying layers in the page's stable graph order.
 
-    `watched` is an unordered set, so order comes from `layer_names` (the
-    architecture order the cards have always rendered in).
+    `stats_layers` is an unordered set (`Session.stats_layers` — the watched
+    set in the `watched` scope, every layer in `all`, the frozen buckets in
+    `none`), so order comes from `layer_names` (the architecture order the
+    cards have always rendered in).
     """
-    return [n for n in layer_names if n in watched]
+    return [n for n in layer_names if n in stats_layers]
 
 
 def _selectable_layers(
-    selected_phase: str, layer_names: list[str], watched: frozenset[str]
+    selected_phase: str, layer_names: list[str], stats_layers: frozenset[str]
 ) -> list[str]:
     """The layers the Layer dropdown offers for the current phase selection.
 
     "Current batch" stats come from the snapshot, which covers every layer, so
-    any layer is selectable there; a real phase only has running stats for the
-    watched layers. Either way the order is the stable graph order.
+    any layer is selectable there; a real phase only has running stats for
+    the layers in `Session.stats_layers`. Either way the order is the stable
+    graph order.
     """
     if selected_phase == _PHASE_CURRENT_BATCH:
         return list(layer_names)
-    return _watched_in_order(layer_names, watched)
+    return _watched_in_order(layer_names, stats_layers)
 
 
 def _all_layers_available(watched_count: int) -> bool:

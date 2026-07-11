@@ -8,7 +8,7 @@ import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import quote
 
 import torch
@@ -18,7 +18,7 @@ from torch import Tensor
 
 from nansense.probe import ProbeResult
 from nansense.recording import RecordedView
-from nansense.session import BatchSnapshot, Session
+from nansense.session import BatchSnapshot, Session, StatsScope
 from nansense.ui.common import (
     _b64_img_src,
     _install_panel_resize,
@@ -63,11 +63,18 @@ class _PageState:
     last_probe: ProbeResult | None = None
     dirty: bool = False
     rendering: bool = False
-    # The watched set this connection last reflected in its DOM (card
-    # visibility, amber classes, chip). The tick compares it against
-    # `session.watched_layers` so changes made elsewhere (another tab)
-    # propagate here too.
+    # The shown set this connection last reflected in its DOM (card
+    # visibility, amber classes, chip). The tick compares it against the
+    # current shown set so changes made elsewhere (another tab, in the
+    # coupled scope) propagate here too.
     last_watched: frozenset[str] = frozenset()
+    # This connection's own shown cards, used in the decoupled stats scopes
+    # (`none` / `all`) where showing a card must not touch the session's
+    # global watched set — so tabs are independent. Seeded from the watched
+    # set when a decoupled scope is entered.
+    shown: set[str] = field(default_factory=set)
+    # The stats scope last seen by the tick, to detect scope switches.
+    last_scope: StatsScope | None = None
 
 
 # Shared pool for strip rendering. Per-layer renders are independent and the
@@ -159,7 +166,25 @@ def _build_page(
     # input in the pane via the dropdown, with its own resolved display config.
     input_name = input_names[0] if input_names else None
     state = _PageState()
-    state.last_watched = session.watched_layers
+
+    def decoupled() -> bool:
+        """Whether card visibility is per-tab (stats scopes `none` / `all`).
+
+        In the `watched` scope, visible ≡ watched — the global, cross-tab set
+        whose members collect stats. In the other scopes the watched set does
+        not drive collection, so clicks only touch this connection's `shown`
+        set and tabs are independent.
+        """
+        return session.stats_scope is not StatsScope.WATCHED
+
+    def shown_layers() -> frozenset[str]:
+        """The layers whose cards this connection currently shows."""
+        return frozenset(state.shown) if decoupled() else session.watched_layers
+
+    state.last_scope = session.stats_scope
+    if decoupled():
+        state.shown = set(session.watched_layers)
+    state.last_watched = shown_layers()
     layer_views: dict[str, _LayerView] = {}
     # One collision-free slug per layer, shared with the Mermaid diagram
     # (`graph.build_mermaid` keys node ids by the same `slug_map`). Using it
@@ -174,7 +199,8 @@ def _build_page(
         # after the page is fully built.
         if session.snapshot is None and session.probe_result is None:
             return None
-        watched = [n for n in layer_names if n in session.watched_layers]
+        shown = shown_layers()
+        watched = [n for n in layer_names if n in shown]
         plural = "" if len(watched) == 1 else "s"
         # Record exactly the input the pane is showing, with its resolved
         # display config (a same-process dict, so the transform travels too).
@@ -206,33 +232,40 @@ def _build_page(
     step_until_custom = _build_step_until_custom_dialog(session)
 
     def watch_all() -> None:
-        for name in layer_names:
-            session.watch(name)
+        if decoupled():
+            state.shown = set(layer_names)
+        else:
+            for name in layer_names:
+                session.watch(name)
         sync_watch_ui()
 
     def clear_all() -> None:
-        if _refuse_unwatch_while_recording(session):
-            return
-        for name in list(session.watched_layers):
-            session.unwatch(name)
+        if decoupled():
+            state.shown.clear()
+        else:
+            if _refuse_unwatch_while_recording(session):
+                return
+            for name in list(session.watched_layers):
+                session.unwatch(name)
         sync_watch_ui()
 
-    # Watching everything turns the lazy-rendering optimization off again:
-    # every card renders on every pause and stats accumulate for every
-    # layer on every batch. Worth an explicit confirmation.
+    # Showing everything turns the lazy-rendering optimization off again:
+    # every card renders on every pause (and in the `watched` scope, stats
+    # accumulate for every layer on every batch). Worth an explicit
+    # confirmation.
     watch_all_dialog = ui.dialog()
     with watch_all_dialog, ui.card().classes("max-w-md"):
-        ui.label("Watch all layers?").classes("text-lg font-medium")
+        ui.label("Show all layers?").classes("text-lg font-medium")
         ui.label(
-            "Every layer card will be rendered on every pause and per-layer "
-            "statistics will accumulate on every batch. On larger models this "
-            "can make the interface very slow and may even crash the browser "
-            "tab."
+            "Every layer card will be rendered on every pause — and, while "
+            "stats are collected for watched layers, per-layer statistics "
+            "will accumulate on every batch. On larger models this can make "
+            "the interface very slow and may even crash the browser tab."
         ).classes("text-sm text-slate-600")
         with ui.row().classes("w-full justify-end gap-2"):
             ui.button("Cancel", on_click=watch_all_dialog.close).props("flat")
             ui.button(
-                "Watch all",
+                "Show all",
                 color="red",
                 on_click=lambda: (watch_all(), watch_all_dialog.close()),
             )
@@ -249,7 +282,7 @@ def _build_page(
             ).classes(
                 "ml-auto text-amber-700 font-mono"
             ).props("dense size=md no-caps").tooltip(
-                "Watched layers — click a layer to open its stats view; "
+                "Shown layers — click a layer to open its stats view; "
                 "use the menu to pause stats collection"
             )
             stats_icon: ui.icon
@@ -263,7 +296,7 @@ def _build_page(
                 # (red, paused) — the slashed eye of the per-card Unwatch button.
                 stats_icon = ui.icon("visibility").classes("text-base")
                 watch_count_label = ui.label(
-                    str(len(session.watched_layers))
+                    str(len(state.last_watched))
                 ).classes("ml-1")
                 with ui.menu().props("anchor='bottom right' self='top right'"):
                     # Plain block container, NOT a flex column: Firefox fails to
@@ -273,20 +306,30 @@ def _build_page(
                     # children stack vertically anyway.
                     with ui.element("div").classes("min-w-64"):
                         ui.menu_item(
-                            "Watch all layers",
+                            "Show all layers",
                             on_click=watch_all_dialog.open,
-                        ).classes("text-sm")
+                        ).classes("text-sm").tooltip(
+                            "Show every layer's card (while stats are "
+                            "collected for watched layers, this also watches "
+                            "them all)"
+                        )
                         ui.menu_item(
-                            "Clear all watched layers",
+                            "Hide all layers",
                             on_click=lambda: clear_all(),
-                        ).classes("text-sm")
+                        ).classes("text-sm").tooltip(
+                            "Hide every card (while stats are collected for "
+                            "watched layers, this also unwatches them and "
+                            "drops their collected stats)"
+                        )
                         ui.menu_item(
                             "Toggle collecting stats",
                             on_click=lambda: toggle_stats(),
                             auto_close=False,
                         ).classes("text-sm").tooltip(
-                            "Pause/resume folding watched layers' batches into "
-                            "the running stats (cards stay visible either way)"
+                            "Pause/resume the running stats — pausing keeps "
+                            "everything collected so far, resuming restores "
+                            "the previous collection scope (see the settings "
+                            "gear). Cards stay visible either way."
                         )
                         ui.separator()
                         # "Current batch" submenu: every layer (watched or not),
@@ -349,12 +392,12 @@ def _build_page(
             sync_stats_icon()
 
         def refresh_chip() -> None:
-            watched = session.watched_layers
-            watch_count_label.text = str(len(watched))
+            shown = shown_layers()
+            watch_count_label.text = str(len(shown))
             watch_list_container.clear()
             with watch_list_container:
-                if not watched:
-                    ui.label("No layers watched").classes(
+                if not shown:
+                    ui.label("No layers shown").classes(
                         "px-3 py-2 text-slate-500 text-sm italic"
                     )
                     return
@@ -365,7 +408,7 @@ def _build_page(
                     "text-slate-400 select-none"
                 )
                 for layer in layer_names:
-                    if layer not in watched:
+                    if layer not in shown:
                         continue
                     # A real anchor (href) instead of a JS navigate: the
                     # browser natively opens middle/ctrl clicks in a new tab
@@ -375,45 +418,55 @@ def _build_page(
                     ).classes("font-mono text-sm")
 
         def sync_watch_ui() -> None:
-            """Reflect `session.watched_layers` in this connection's DOM.
+            """Reflect the shown set in this connection's DOM.
 
-            Visible is synonymous with watched: cards for newly watched
-            layers appear (and get rendered on the next tick via the dirty
-            flag), unwatched ones hide, the diagram's amber classes follow,
-            and the chip menu / empty-pane hint refresh. Diffing against
-            `state.last_watched` keeps the JS push proportional to the
-            change, not the model size.
+            In the `watched` scope, visible is synonymous with watched (the
+            global set); in the decoupled scopes it is this tab's own `shown`
+            set. Either way: cards for newly shown layers appear (and get
+            rendered on the next tick via the dirty flag), hidden ones
+            disappear, the diagram's amber classes follow, and the chip menu /
+            empty-pane hint refresh. Diffing against `state.last_watched`
+            keeps the JS push proportional to the change, not the model size.
             """
-            watched = session.watched_layers
-            added = watched - state.last_watched
-            removed = state.last_watched - watched
-            state.last_watched = watched
+            shown = shown_layers()
+            added = shown - state.last_watched
+            removed = state.last_watched - shown
+            state.last_watched = shown
             for name in added | removed:
                 view = layer_views.get(name)
                 if view is not None:
-                    view.set_visible(name in watched)
+                    view.set_visible(name in shown)
             if added or removed:
                 changes = "; ".join(
                     f"window.nansenseSetWatched({json.dumps(slugs[n])}, "
-                    f"{'true' if n in watched else 'false'})"
+                    f"{'true' if n in shown else 'false'})"
                     for n in added | removed
                 )
                 ui.run_javascript(changes)
                 state.dirty = True
-            empty_hint.set_visibility(not watched)
+            empty_hint.set_visibility(not shown)
             refresh_chip()
 
         def toggle_layer(name: str) -> None:
+            if decoupled():
+                # Per-tab visibility only — the session is never touched, so
+                # other tabs (and the collected stats) are unaffected.
+                if name in state.shown:
+                    state.shown.discard(name)
+                elif name in layer_names:
+                    state.shown.add(name)
+                else:
+                    return
             # Any name in `session.layer_names` is watchable (modules, fx
             # intermediates, graph inputs); False means an unknown name.
-            if name in session.watched_layers:
+            elif name in session.watched_layers:
                 if _refuse_unwatch_while_recording(session):
                     return
                 session.unwatch(name)
             elif not session.watch(name):
                 return
             sync_watch_ui()
-            if name in session.watched_layers:
+            if name in shown_layers():
                 ui.run_javascript(
                     f"window.nansenseScrollToCard({json.dumps(slugs[name])})"
                 )
@@ -445,7 +498,8 @@ def _build_page(
                     layer_views[name] = _LayerView(
                         name,
                         slug=slugs[name],
-                        session=session,
+                        visible=name in state.last_watched,
+                        decoupled=decoupled(),
                         weights=layer_weights.get(name, []),
                         on_toggle_watch=toggle_layer,
                     )
@@ -517,10 +571,26 @@ def _build_page(
         # perturbations, probe mode) are frozen: the recording renders with
         # the live probe state, so the input controls must not change it.
         input_panel.set_frozen(session.recording.is_recording("main"))
-        # Watched-set changes made elsewhere (another tab, the stats page)
-        # propagate here: sync flips card visibility and marks the frame
-        # dirty so newly visible cards render from the current snapshot.
-        if session.watched_layers != state.last_watched:
+        # A stats-scope switch (from the settings gear, possibly in another
+        # tab) re-bases the shown set: entering a decoupled scope seeds this
+        # tab's own set from the global watched set, returning to `watched`
+        # re-syncs to it. Switching between the decoupled scopes (the stats
+        # pause toggle) keeps the tab's cards as they are.
+        scope = session.stats_scope
+        if scope is not state.last_scope:
+            if scope is not StatsScope.WATCHED and (
+                state.last_scope is StatsScope.WATCHED
+            ):
+                state.shown = set(session.watched_layers)
+            state.last_scope = scope
+            for view in layer_views.values():
+                view.set_decoupled(scope is not StatsScope.WATCHED)
+            sync_watch_ui()
+        # Shown-set changes made elsewhere (another tab or the stats page, in
+        # the coupled scope) propagate here: sync flips card visibility and
+        # marks the frame dirty so newly visible cards render from the
+        # current snapshot.
+        elif shown_layers() != state.last_watched:
             sync_watch_ui()
         # Stats-collection state can change from another tab too; keep the
         # icon's colour/strike in sync (cheap class writes, no-op when stable).
@@ -848,10 +918,12 @@ def _apply_all(
 class _LayerView:
     """One card per layer, with activation + activation-gradient strips.
 
-    Cards are built for every layer but shown only while the layer is
-    watched (`set_visible`) — visible is synonymous with watched, so the
-    header carries a permanent "Unwatch" button and hidden cards receive
-    no strip data at all.
+    Cards are built for every layer but shown only while the layer is in the
+    page's shown set (`set_visible`) — the watched set in the coupled
+    `watched` stats scope, the tab's own set otherwise — so the header
+    carries a permanent hide button ("Unwatch" while coupled, since hiding
+    then also drops the layer's stats; "Hide" while decoupled) and hidden
+    cards receive no strip data at all.
 
     The strips are raw `<img>` elements (see `_strip_html`) with fixed CSS
     sizes and `flex:none`, so each strip renders at its display pixel width
@@ -872,7 +944,8 @@ class _LayerView:
         name: str,
         *,
         slug: str,
-        session: Session,
+        visible: bool,
+        decoupled: bool,
         weights: list[str],
         on_toggle_watch: Callable[[str], None],
     ) -> None:
@@ -937,18 +1010,19 @@ class _LayerView:
                     ).tooltip(
                         "Open this layer's stats view (histograms & min/max)"
                     )
-                # Visible is synonymous with watched: this card only shows
-                # while the layer is watched, so the button is always the
-                # "off" direction.
+                # The card only shows while the layer is shown, so the button
+                # is always the "off" direction; its label reflects what
+                # hiding does (see the class docstring) via `set_decoupled`.
                 with ui.element("div").props("data-card-action"):
-                    ui.button(
-                        "Unwatch",
+                    self._hide_button = ui.button(
                         icon="visibility_off",
                         on_click=lambda: on_toggle_watch(name),
                         color="red",
                     ).props("dense no-caps").style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
-                    ).tooltip("Unwatch this layer and hide its card")
+                    )
+                    with self._hide_button:
+                        self._hide_tooltip = ui.tooltip("")
             with ui.element("div").classes("w-full overflow-x-auto p-2"):
                 # The max-content wrapper makes every row span the widest
                 # strip. Without it a row is only as wide as the visible
@@ -965,12 +1039,32 @@ class _LayerView:
                         _strip_marker("bg-violet-500", "GRADIENTS")
                         self.grad_html = ui.html("")
         self._card = card
-        # A page (re)built with layers already in the watched set (e.g.
+        self.set_decoupled(decoupled)
+        # A page (re)built with layers already in the shown set (e.g.
         # after navigating back from `/stats`) shows those cards right away.
-        self.set_visible(name in session.watched_layers)
+        self.set_visible(visible)
 
     def set_visible(self, visible: bool) -> None:
         self._card.set_visibility(visible)
+
+    def set_decoupled(self, decoupled: bool) -> None:
+        """Relabel the hide button for the current stats scope.
+
+        Coupled (`watched` scope): hiding unwatches, which also drops the
+        layer's collected stats — the label says so. Decoupled: hiding is
+        pure per-tab visibility.
+        """
+        if decoupled:
+            self._hide_button.set_text("Hide")
+            self._hide_tooltip.set_text(
+                "Hide this layer's card in this tab (stats are unaffected)"
+            )
+        else:
+            self._hide_button.set_text("Unwatch")
+            self._hide_tooltip.set_text(
+                "Unwatch this layer and hide its card (drops its collected "
+                "stats)"
+            )
 
     def apply(self, act_html: str, grad_html: str) -> None:
         self.act_html.set_content(act_html)
