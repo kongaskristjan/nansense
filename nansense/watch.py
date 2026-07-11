@@ -222,6 +222,12 @@ class WatchSnapshot:
     stats: dict[tuple[str, str, int], LayerStatsSnapshot] = field(
         default_factory=dict
     )
+    # Weight-tensor stats sampled once per (layer, epoch) — at that epoch's
+    # first watched batch — mapping the full parameter name to its stats.
+    # Weights don't vary by phase, so the key has none.
+    weights: dict[tuple[str, int], dict[str, TensorStatsSnapshot]] = field(
+        default_factory=dict
+    )
 
     def latest_per_phase(self, layer: str) -> dict[str, LayerStatsSnapshot]:
         """For `layer`, return `phase -> stats` for the most recent epoch seen.
@@ -252,6 +258,25 @@ class WatchSnapshot:
             ),
             key=lambda s: s.epoch,
         )
+
+    def weight_history(
+        self, layer: str
+    ) -> dict[str, list[tuple[int, TensorStatsSnapshot]]]:
+        """`layer`'s per-epoch weight samples, `param -> [(epoch, stats)]`.
+
+        Each list is ordered by epoch — the series behind the GRAPHS view's
+        weight plots. Empty for layers without parameters (fx
+        intermediates, graph inputs).
+        """
+        out: dict[str, list[tuple[int, TensorStatsSnapshot]]] = {}
+        for (l, epoch), params in sorted(
+            self.weights.items(), key=lambda kv: kv[0][1]
+        ):
+            if l != layer:
+                continue
+            for name, stats in params.items():
+                out.setdefault(name, []).append((epoch, stats))
+        return out
 
 
 def dead_channel_indices(
@@ -584,6 +609,11 @@ class WatchAccumulator:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._stats: dict[tuple[str, str, int], _LayerStats] = {}
+        # Weight-tensor samples, one bucket per (layer, epoch) captured at
+        # that epoch's first watched batch: full param name -> accumulator
+        # fed exactly one tensor. Untouched by `configure` — weights keep no
+        # per-channel data, so the caps don't shape these buffers.
+        self._weights: dict[tuple[str, int], dict[str, TensorAccumulator]] = {}
         # Performance config, applied to every accumulation. `channel_limit`
         # is `None` when the cap is disabled. Held under `_lock` so the read in
         # `update`/`update_patches` and a `configure` flush can't interleave —
@@ -660,6 +690,48 @@ class WatchAccumulator:
             act=act, x=x, channel_limit=channel_limit, n_per_channel=samples
         )
 
+    def weights_pending(self, layer: str, epoch: int) -> bool:
+        """Whether `(layer, epoch)` still needs its weight sample.
+
+        The cheap per-batch check the session makes before materialising
+        the parameter tensors: true only until the epoch's first watched
+        batch captures them.
+        """
+        with self._lock:
+            return (layer, epoch) not in self._weights
+
+    def update_weights(
+        self,
+        *,
+        layer: str,
+        epoch: int,
+        params: list[tuple[str, Tensor]],
+    ) -> None:
+        """Sample `layer`'s weight tensors for `epoch`, once.
+
+        Each tensor folds into its own single-shot accumulator with
+        per-channel tracking off (weights render no per-channel view), so
+        the state stays on the training device — the GPU→CPU sync happens
+        in `snapshot()`, off the training thread. A second call for the
+        same `(layer, epoch)` is a no-op, which is what pins the sample to
+        the epoch's first watched batch.
+        """
+        key = (layer, epoch)
+        with self._lock:
+            if key in self._weights:
+                return
+        bucket: dict[str, TensorAccumulator] = {}
+        for name, tensor in params:
+            acc = TensorAccumulator()
+            acc.collapse_channels()
+            acc.update(tensor)
+            bucket[name] = acc
+        # Built fully before publication so `snapshot` never iterates a
+        # half-filled bucket; the training thread is the sole writer, so
+        # the check above can't race another insert.
+        with self._lock:
+            self._weights[key] = bucket
+
     def _bucket_locked(self, key: tuple[str, str, int]) -> _LayerStats:
         """Get-or-create the (layer, phase, epoch) bucket (lock held).
 
@@ -692,6 +764,9 @@ class WatchAccumulator:
             for key in list(self._stats):
                 if key[0] == layer:
                     del self._stats[key]
+            for wkey in list(self._weights):
+                if wkey[0] == layer:
+                    del self._weights[wkey]
 
     def retain_layers(self, layers: Iterable[str]) -> None:
         """Drop buckets for any layer not in `layers`.
@@ -710,6 +785,9 @@ class WatchAccumulator:
             for key in list(self._stats):
                 if key[0] not in keep:
                     del self._stats[key]
+            for wkey in list(self._weights):
+                if wkey[0] not in keep:
+                    del self._weights[wkey]
 
     def forget_epochs_from(self, epoch: int) -> None:
         """Drop stats for `epoch` and later, across all layers and phases.
@@ -722,6 +800,9 @@ class WatchAccumulator:
             for key in list(self._stats):
                 if key[2] >= epoch:
                     del self._stats[key]
+            for wkey in list(self._weights):
+                if wkey[1] >= epoch:
+                    del self._weights[wkey]
 
     def reduce_meta(
         self, layers: Iterable[str]
@@ -795,6 +876,11 @@ class WatchAccumulator:
         with self._lock:
             keys = [k for k in self._stats if wanted is None or k[0] in wanted]
             stats_refs = [(k, self._stats[k]) for k in keys]
+            weight_refs = [
+                (k, dict(bucket))
+                for k, bucket in self._weights.items()
+                if wanted is None or k[0] in wanted
+            ]
         # Compute snapshots outside the lock — `TensorAccumulator.snapshot`
         # does GPU→CPU syncs that we don't want serialised with updates.
         out: dict[tuple[str, str, int], LayerStatsSnapshot] = {}
@@ -807,7 +893,11 @@ class WatchAccumulator:
                 gradients=stats.gradients.snapshot(),
                 patches=stats.patches.snapshot() if include_patches else None,
             )
-        return WatchSnapshot(stats=out)
+        weights = {
+            key: {name: acc.snapshot() for name, acc in bucket.items()}
+            for key, bucket in weight_refs
+        }
+        return WatchSnapshot(stats=out, weights=weights)
 
 
 def single_batch_stats(

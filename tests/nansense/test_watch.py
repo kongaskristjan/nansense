@@ -589,3 +589,63 @@ def test_watch_snapshot_phase_history_sorted_by_epoch() -> None:
     assert [s.epoch for s in history] == [0, 1, 2]
     assert all(s.layer == "a" and s.phase == "train" for s in history)
     assert snap.phase_history("a", "test") == []
+
+
+# --- Per-epoch weight samples -------------------------------------------------
+
+
+def test_update_weights_samples_once_per_epoch() -> None:
+    acc = WatchAccumulator()
+    assert acc.weights_pending("a", 0)
+    acc.update_weights(
+        layer="a", epoch=0, params=[("a.weight", torch.ones(2, 3))]
+    )
+    assert not acc.weights_pending("a", 0)
+    # A second call in the same epoch is a no-op — the sample stays pinned
+    # to the epoch's first watched batch.
+    acc.update_weights(
+        layer="a", epoch=0, params=[("a.weight", torch.zeros(2, 3))]
+    )
+    history = acc.snapshot(include_patches=False).weight_history("a")
+    assert list(history) == ["a.weight"]
+    ((epoch, stats),) = history["a.weight"]
+    assert epoch == 0
+    assert stats.n == 6 and stats.mean == 1.0
+    assert stats.channel_hists is None  # weights keep no per-channel rows
+
+
+def test_weight_history_ordered_by_epoch_and_layer_scoped() -> None:
+    acc = WatchAccumulator()
+    for epoch, value in [(1, 2.0), (0, 1.0)]:
+        acc.update_weights(
+            layer="a", epoch=epoch, params=[("a.w", torch.full((2,), value))]
+        )
+    acc.update_weights(layer="b", epoch=0, params=[("b.w", torch.ones(2))])
+    snap = acc.snapshot(include_patches=False)
+    history = snap.weight_history("a")
+    assert [e for e, _ in history["a.w"]] == [0, 1]
+    assert [s.mean for _, s in history["a.w"]] == [1.0, 2.0]
+    assert list(snap.weight_history("b")) == ["b.w"]
+    assert snap.weight_history("c") == {}
+
+
+def test_weight_buckets_follow_layer_and_epoch_eviction() -> None:
+    acc = WatchAccumulator()
+    acc.update_weights(layer="a", epoch=0, params=[("a.w", torch.ones(2))])
+    acc.update_weights(layer="a", epoch=1, params=[("a.w", torch.ones(2))])
+    acc.update_weights(layer="b", epoch=0, params=[("b.w", torch.ones(2))])
+    acc.forget_epochs_from(1)  # time travel to epoch 1's start
+    snap = acc.snapshot(include_patches=False)
+    assert [e for e, _ in snap.weight_history("a")["a.w"]] == [0]
+    acc.retain_layers(["b"])
+    assert acc.snapshot(include_patches=False).weight_history("a") == {}
+    acc.forget_layer("b")
+    assert acc.snapshot(include_patches=False).weights == {}
+
+
+def test_snapshot_layers_filter_applies_to_weights() -> None:
+    acc = WatchAccumulator()
+    acc.update_weights(layer="a", epoch=0, params=[("a.w", torch.ones(2))])
+    acc.update_weights(layer="b", epoch=0, params=[("b.w", torch.ones(2))])
+    snap = acc.snapshot(layers=["a"], include_patches=False)
+    assert list(snap.weights) == [("a", 0)]

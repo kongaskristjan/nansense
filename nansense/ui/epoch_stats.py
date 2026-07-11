@@ -73,6 +73,22 @@ def epoch_stat_series(
     return [s.epoch for s in history], series
 
 
+def weight_stat_series(
+    history: list[tuple[int, TensorStatsSnapshot]],
+) -> tuple[list[int], dict[str, list[float | None]]]:
+    """Per-stat series over one weight tensor's per-epoch samples.
+
+    `history` is `WatchSnapshot.weight_history`'s `[(epoch, stats)]` list
+    for a single parameter; the result matches `epoch_stat_series`'s shape
+    so both feed the same figure/restyle path (weights have no
+    dead-channels series).
+    """
+    return [epoch for epoch, _ in history], {
+        stat: [_stat_point(stats, stat) for _, stats in history]
+        for stat, _ in EPOCH_STAT_SPECS
+    }
+
+
 def epoch_axis_dtick(epochs: list[int]) -> int:
     """Integer x-tick spacing so fractional epoch ticks never appear.
 

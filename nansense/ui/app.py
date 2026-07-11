@@ -279,12 +279,13 @@ def serve(
         )
 
     @ui.page("/stats", favicon=str(favicon_path))
-    def stats_page(layer: str = "", view: str = "") -> None:
+    def stats_page(layer: str = "", view: str = "", scroll: str = "") -> None:
         _build_stats_page(
             session,
             layer_names,
             layer,
             view=view,
+            scroll=scroll,
             input_mean=primary_mean,
             input_std=primary_std,
         )

@@ -11,8 +11,14 @@ from nansense.ui.epoch_stats import (
     epoch_axis_dtick,
     epoch_stat_series,
     make_epoch_stats_figure,
+    weight_stat_series,
 )
-from nansense.watch import Kind, LayerStatsSnapshot, WatchAccumulator
+from nansense.watch import (
+    Kind,
+    LayerStatsSnapshot,
+    TensorAccumulator,
+    WatchAccumulator,
+)
 
 
 def _history(
@@ -102,3 +108,21 @@ def test_make_epoch_stats_figure_enables_only_mean(kind: str) -> None:
     by_name = {t.name: t.visible for t in fig.data}
     assert by_name.pop("mean") in (True, None)
     assert all(v == "legendonly" for v in by_name.values())
+
+
+def _weight_stats(*values: float):
+    acc = TensorAccumulator()
+    acc.update(torch.tensor(list(values)))
+    return acc.snapshot()
+
+
+def test_weight_stat_series_matches_figure_trace_order() -> None:
+    history = [(0, _weight_stats(1.0, 3.0)), (2, _weight_stats(3.0, 5.0))]
+    epochs, series = weight_stat_series(history)
+    assert epochs == [0, 2]
+    # Same value stats as the activation/gradient series, no dead channels
+    # — the shape the "weight"-kind figure's traces expect.
+    assert list(series) == [s for s, _ in EPOCH_STAT_SPECS]
+    assert series["mean"] == [2.0, 4.0]
+    assert series["min"] == [1.0, 3.0]
+    assert series["max"] == [3.0, 5.0]

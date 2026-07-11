@@ -36,6 +36,7 @@ from nansense.ui.epoch_stats import (
     epoch_axis_dtick,
     epoch_stat_series,
     make_epoch_stats_figure,
+    weight_stat_series,
 )
 from nansense.ui.histograms import (
     _BIN_VALUE_LABELS,
@@ -117,6 +118,10 @@ class _WatchPageState:
     # for every watched layer at once. Defaults (via reconciliation) to the
     # first watched layer so the page stays fast with many layers watched.
     selected_layer: str = ""
+    # One-shot scroll target from the `?scroll=` query param ("weights"
+    # scrolls to the GRAPHS card's Weights section once it first renders);
+    # cleared after the scroll fires.
+    pending_scroll: str = ""
     # Single-flight refresh flags (see `refresh` in `_build_stats_page`).
     refresh_running: bool = False
     refresh_dirty: bool = False
@@ -199,6 +204,7 @@ def _build_stats_page(
     selected_layer: str = "",
     *,
     view: str = "",
+    scroll: str = "",
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
@@ -262,22 +268,37 @@ def _build_stats_page(
             await view._on_hover(e)
 
     ui.on(_HOVER_EVENT, _dispatch_hover)
-    # A `?view=minmax` link (e.g. "Compare with MIN/MAX" on the experiment
-    # page) opens straight on the MIN/MAX grids instead of the histograms.
-    initial_minmax = view.strip().lower() == "minmax"
+    # A `?view=` link opens straight on that view — "minmax" from the
+    # experiment page's "Compare with MIN/MAX", "graphs" from the weights
+    # page's per-layer jump — instead of the histograms.
+    requested_view = view.strip().lower()
+    initial_view = {
+        "minmax": _VIEW_MINMAX,
+        "graphs": _VIEW_GRAPHS,
+    }.get(requested_view, _VIEW_HISTOGRAM)
     state = _WatchPageState(
         # Default to "Current batch": it reads the last captured snapshot
         # directly, so the page shows data immediately for any layer without
         # waiting for watch aggregates to fill.
         selected_phase=_PHASE_CURRENT_BATCH,
-        view=_VIEW_MINMAX if initial_minmax else _VIEW_HISTOGRAM,
+        view=initial_view,
         # Seed the layer picked by the caller (e.g. a `?layer=` link from the
         # main page's watch menu). Reconciliation drops it back to the first
         # watched layer if it isn't currently watched.
         selected_layer=selected_layer,
+        # A `?scroll=weights` link (the weights page's jump) scrolls to the
+        # GRAPHS card's Weights section once it first renders.
+        pending_scroll=scroll.strip().lower(),
         # Pre-check the under/overflow band whenever the page opens with an
         # active under/overflow issue, regardless of how it was reached.
         show_bands=_should_show_bands(session.debug_error),
+    )
+    # A graphs deep-link opens with "Current batch" seeded but no such
+    # entry in its Phase dropdown — resolve to a real phase before the
+    # dropdown is built rather than flashing an empty selection until the
+    # first refresh reconciles it.
+    state.selected_phase = _reconcile_selected_phase(
+        state.selected_phase, state.view, list(phase_names)
     )
 
     async def set_axis_log_x(value: bool) -> None:
@@ -1275,19 +1296,48 @@ class _EpochStatsPlot:
     """One value-vs-epoch Plotly figure that refreshes its data in place.
 
     The figure's trace set is fixed (see `make_epoch_stats_figure`), so
-    every refresh is a `Plotly.update` of the trace arrays — client-side
-    state (which stats the legend has deselected, zoom/pan) survives. The
-    x-tick spacing rides along in the same call so epoch ticks stay
-    integral as the run grows.
+    refreshes are `Plotly.update`s of the trace arrays — client-side state
+    (which stats the legend has deselected, zoom/pan) survives. The x-tick
+    spacing rides along in the same call so epoch ticks stay integral as
+    the run grows. The *first* data delivery instead replaces the whole
+    figure through the element: a JS restyle silently no-ops while
+    plotly.js is still loading, and with the refresh gate a paused session
+    may not re-render until the next publish — so the initial data must
+    live in the element's own payload, which the client draws whenever it
+    is ready. There is no client state to lose at that point.
     """
 
     def __init__(self, kind: str, title: str) -> None:
         self._kind = kind
+        self._title = title
+        self._has_data = False
         fig = make_epoch_stats_figure(kind, title)
         self.element = ui.plotly(_figure_payload(fig)).classes("w-full")
 
     def update(self, history: list[LayerStatsSnapshot]) -> None:
-        epochs, series = epoch_stat_series(history, self._kind)
+        self.update_series(*epoch_stat_series(history, self._kind))
+
+    def update_series(
+        self, epochs: list[int], series: dict[str, list[float | None]]
+    ) -> None:
+        """Apply an already-extracted `stat -> values` map to the figure.
+
+        `series` must be in the figure's trace order — `epoch_stat_series`
+        and `weight_stat_series` both return it that way.
+        """
+        if not self._has_data:
+            if not epochs:
+                return
+            self._has_data = True
+            fig = make_epoch_stats_figure(self._kind, self._title)
+            for trace, values in zip(
+                fig.data, series.values(), strict=True
+            ):
+                trace.x = epochs
+                trace.y = values
+            fig.layout.xaxis.dtick = epoch_axis_dtick(epochs)
+            self.element.update_figure(_figure_payload(fig))
+            return
         update: dict[str, object] = {
             "x": [epochs for _ in series],
             "y": list(series.values()),
@@ -1398,6 +1448,18 @@ class _WatchLayerPanel:
                 self._grad_epochs = _EpochStatsPlot(
                     "gradient", "gradient statistics by epoch"
                 )
+                # One plot per weight tensor, created lazily once the first
+                # per-epoch sample lands (the parameter set is only known
+                # from the data); hidden entirely for parameter-less layers
+                # (fx intermediates, graph inputs).
+                self._weights_label = ui.label("Weights").classes(
+                    "font-mono text-sm text-slate-600"
+                )
+                self._weights_container = ui.column().classes(
+                    "w-full gap-3"
+                )
+                self._weights_label.set_visibility(False)
+                self._weight_plots: dict[str, _EpochStatsPlot] = {}
             self._hist_section.set_visibility(state.view == _VIEW_HISTOGRAM)
             self._patch_section.set_visibility(state.view == _VIEW_MINMAX)
             self._epochs_section.set_visibility(state.view == _VIEW_GRAPHS)
@@ -1435,6 +1497,7 @@ class _WatchLayerPanel:
         if view == _VIEW_GRAPHS:
             self._act_epochs.update(history)
             self._grad_epochs.update(history)
+            self._update_weight_plots(snap)
             return
         if view == _VIEW_MINMAX:
             if grids is not None:
@@ -1444,6 +1507,47 @@ class _WatchLayerPanel:
         self._stats_table.set_content(_stats_table_html(per_phase))
         self._act.update(per_phase)
         self._grad.update(per_phase)
+
+    def _update_weight_plots(self, snap: WatchSnapshot) -> None:
+        """Refresh the GRAPHS view's per-weight-tensor plots.
+
+        A layer's parameter set is fixed, so plots are keyed by the full
+        parameter name and only ever added — creation happens on the first
+        refresh that has a sample for that parameter. Titles drop the
+        `layer.` prefix (a leaf module's params read as plain "weight" /
+        "bias"); functionally-used params keep their own full name.
+        """
+        per_param = snap.weight_history(self.name)
+        self._weights_label.set_visibility(bool(per_param))
+        for param, history in per_param.items():
+            plot = self._weight_plots.get(param)
+            if plot is None:
+                short = param.removeprefix(f"{self.name}.")
+                with self._weights_container:
+                    plot = _EpochStatsPlot(
+                        "weight", f"{short} statistics by epoch"
+                    )
+                self._weight_plots[param] = plot
+            plot.update_series(*weight_stat_series(history))
+        if per_param and self._state.pending_scroll == "weights":
+            # One-shot `?scroll=weights` deep-link (the weights page's
+            # jump): fires on the first refresh that has weight data, so
+            # the section exists before the viewport moves to it. The
+            # scroll re-runs a couple of times because the plots above are
+            # near-zero-height divs until plotly.js draws them (each then
+            # inflates to its fixed figure height, shifting the target
+            # down); the last pass runs after that layout has settled.
+            self._state.pending_scroll = ""
+            ui.run_javascript(
+                f"const el = getHtmlElement({self._weights_label.id});"
+                "if (el) {"
+                "const go = (b) => el.scrollIntoView("
+                "{behavior: b, block: 'start'});"
+                "go('auto');"
+                "setTimeout(() => go('auto'), 700);"
+                "setTimeout(() => go('smooth'), 1600);"
+                "}"
+            )
 
     def _phase_view(self, snap: WatchSnapshot) -> dict[str, LayerStatsSnapshot]:
         """The layer's stats for the current selection.

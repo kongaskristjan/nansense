@@ -218,3 +218,31 @@ def test_watch_stats_failure_still_removes_hooks(
     # Only the second batch's stats landed (the first raised before updating):
     # one batch × 2 samples × 8 fc1 features.
     assert snap.stats[("fc1", "train", 0)].activations.n == 16
+
+
+def test_weight_stats_sampled_once_per_epoch() -> None:
+    """Weight tensors are sampled at each epoch's first watched batch."""
+    session, model = make_session(epochs=2, phases={"train": 2})
+    session.watch("fc1")
+    session.detach()
+    for epoch in range(2):
+        for _ in range(2):
+            with session.batch(phase="train", epoch=epoch):
+                train_step(model)
+
+    history = session.watch_snapshot().weight_history("fc1")
+    # fc1's own parameters, one sample per epoch each — the epoch's second
+    # batch adds nothing.
+    assert set(history) == {"fc1.weight", "fc1.bias"}
+    assert [e for e, _ in history["fc1.weight"]] == [0, 1]
+    ((_, stats), _) = history["fc1.weight"]
+    assert stats.n == model.fc1.weight.numel()
+
+
+def test_weight_stats_skip_parameterless_layers() -> None:
+    session, model = make_session(epochs=1, phases={"train": 1})
+    session.watch("relu")  # fx intermediate — owns no parameters
+    session.detach()
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+    assert session.watch_snapshot().weight_history("relu") == {}

@@ -643,7 +643,9 @@ class Session:
             )
             for key, layer_snap in snap.stats.items()
         }
-        return WatchSnapshot(stats=stats)
+        # Weight samples need no reduction — DDP replicas hold identical
+        # weights, so the leader's local samples are already global.
+        return WatchSnapshot(stats=stats, weights=snap.weights)
 
     def current_batch_stats(
         self, *, layers: Iterable[str], include_patches: bool = True
@@ -1598,7 +1600,33 @@ class Session:
         # Extreme-input patches stay rank-local in distributed runs: only
         # the leader renders them, so followers skip the buffers entirely.
         source = self._patch_source_input() if self.is_leader else None
+        # Live parameter tensors, resolved at most once per batch — and only
+        # when some watched layer still needs this epoch's weight sample
+        # (every batch after the epoch's first is just the cheap
+        # `weights_pending` check).
+        live_params: dict[str, Tensor] | None = None
         for name in watched:
+            # Weight-tensor stats for the GRAPHS view: sampled at the
+            # epoch's first watched batch. Leader-only, like the patches —
+            # DDP replicas hold identical weights, so one rank's sample is
+            # already global.
+            param_names = self._layer_weights.get(name)
+            if (
+                self.is_leader
+                and param_names
+                and self._watch_accumulator.weights_pending(name, pos.epoch)
+            ):
+                if live_params is None:
+                    live_params = dict(self.model.named_parameters())
+                self._watch_accumulator.update_weights(
+                    layer=name,
+                    epoch=pos.epoch,
+                    params=[
+                        (p, live_params[p])
+                        for p in param_names
+                        if p in live_params
+                    ],
+                )
             tensor = self._activations.get(name)
             if tensor is None:
                 continue

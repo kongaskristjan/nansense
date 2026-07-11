@@ -1264,7 +1264,17 @@ are always in-place restyles, so legend selections and zoom survive. The
 view has no "Current batch" phase (a single batch has no epoch series):
 `sync_phase_select` drops the entry and swaps such a selection for the
 first schedule phase, which also narrows the Layer dropdown back to the
-watched layers. Like Current batch, the view is not recordable. The constraint shaping this
+watched layers. Like Current batch, the view is not recordable. Below
+the two tensor-kind figures, a **Weights** section adds one figure per
+weight tensor from `WatchSnapshot.weight_history` — per-epoch samples the
+accumulator captures at each epoch's first watched batch
+(`weights_pending` / `update_weights`, keyed `(layer, epoch)` since
+weights don't vary by phase; leader-only under DDP, where replicas hold
+identical weights). Plots are created lazily as parameters first report
+data and hidden for parameter-less layers. A
+`/stats?layer=…&view=graphs&scroll=weights` deep-link (the weights page's
+"Weight graphs" button, which also starts watching the layer) opens the
+view directly and scrolls to that section once it renders. The constraint shaping this
 page is the **websocket keepalive budget** (~6 s): snapshotting and rendering
 run in a worker thread (`asyncio.to_thread`) so the event loop keeps answering
 pings, refreshes are single-flight (a toggle landing mid-render marks the pass
@@ -1318,7 +1328,9 @@ band that issue is about.
 
 **`/weights` page** (`?layer=`). One `_WeightPanel` per name in
 `session.layer_weights[layer]`, reading shapes from `model.named_parameters()`
-so the controls exist before any snapshot. Each panel renders the weight, its
+so the controls exist before any snapshot. A top-bar "Weight graphs" button
+watches the layer and jumps to its GRAPHS view's per-epoch weight series
+(the `scroll=weights` deep-link above). Each panel renders the weight, its
 gradient (same shape → same axis layout), and one strip per tensor-valued
 optimizer-state entry when the session has an optimizer (shape-matched entries
 reuse the panel's axis controls; 0-dim entries like Adam's `step` join a scalar
