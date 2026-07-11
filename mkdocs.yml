@@ -1,0 +1,94 @@
+site_name: nansense
+site_description: >-
+  PyTorch debugger: pause training, step batch by batch, and look inside
+  every layer — activations, gradients, weights, optimizer state.
+site_url: https://kongaskristjan.github.io/nansense/
+repo_url: https://github.com/kongaskristjan/nansense
+repo_name: kongaskristjan/nansense
+edit_uri: edit/main/docs/
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - UI guide: ui.md
+  - Wiring guide: wiring.md
+  - API reference: api.md
+
+theme:
+  name: material
+  logo: images/logo_small.png
+  favicon: images/logo_small.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.top
+
+# Promote link problems to warnings so `mkdocs build --strict` fails on
+# broken cross-page links and anchors.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          # Static analysis over the repo source — the docs build never
+          # imports nansense (or torch).
+          paths: [.]
+          options:
+            docstring_style: null
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+  - llmstxt:
+      markdown_description: >-
+        Nansense is a PyTorch debugger that works inside the live training
+        loop: it pauses training so you can step batch by batch, time-travel
+        to earlier epochs, and inspect the activations, gradients, weights and
+        optimizer state of every layer, plus run interpretability experiments
+        (deep dream, Grad-CAM and other attributions) on the paused model.
+        Each page below also exists as plain Markdown at the listed .md URL.
+        For library internals, see
+        https://github.com/kongaskristjan/nansense/blob/main/INTERNALS.md
+      full_output: llms-full.txt
+      sections:
+        Usage:
+          - index.md
+          - getting-started.md
+          - ui.md
+          - wiring.md
+        API:
+          - api.md
+
+extra:
+  version:
+    provider: mike

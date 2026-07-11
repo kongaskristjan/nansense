@@ -44,6 +44,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/kongaskristjan/nansense"
 Repository = "https://github.com/kongaskristjan/nansense"
+Documentation = "https://kongaskristjan.github.io/nansense/"
 
 # The torch variants live in (unpublished) dependency groups rather than
 # extras, so a plain install pulls torch only transitively (via captum) and
@@ -82,6 +83,16 @@ dev = [
     # targets the 3.10 floor even while running on a newer interpreter.
     "tomli",
     "ty>=0.0.38",
+]
+# Docs site build only. mkdocstrings reads the source statically (griffe), so
+# the docs CI job syncs with --only-group docs and never installs torch.
+docs = [
+    "mike>=2.1",
+    "mkdocs-llmstxt>=0.3",
+    "mkdocs-material>=9.6",
+    "mkdocstrings[python]>=0.30",
+    # mkdocstrings uses ruff to format the separate_signature blocks.
+    "ruff>=0.9",
 ]
 
 [tool.uv]

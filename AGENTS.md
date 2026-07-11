@@ -10,7 +10,8 @@
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)
   - `tests/` - Tests for both examples and the nansense library
   - `assets/` - Assets
-  - `README.md` - How to run examples and the nansense library API usage
+  - `docs/` + `mkdocs.yml` - User documentation site (MkDocs Material), published to GitHub Pages
+  - `README.md` - Landing page: pitch, running examples, minimal wiring; deep docs live in `docs/`
   - `INTERNALS.md` - High level overview of nansense library internals
 
 ## Prompts
@@ -53,4 +54,11 @@
 - Before committing: run the code. For UI testing, you can run some of the examples and use the playwright MCP.
   - Use any `--nansense-port [NUMBER]`. If a port has been taken, just try another one. Don't kill sessions on other ports, as they may have been started by the user or other concurrent agents.
 - Keep `README.md` short and lean: only update it when previously documented behaviour becomes invalid, not to advertise every new feature. Keep `INTERNALS.md` up to date.
+
+## Docs site
+
+- `docs/` is the user-facing documentation (usage guides + public API); `INTERNALS.md` stays a repo file and is intentionally not part of the site.
+- `.github/workflows/docs.yml` deploys with `mike`: pushes to `main` update the `dev` version, published releases update `X.Y` + `latest` (the default).
+- The API reference (`docs/api.md`) renders public docstrings via mkdocstrings — keep docstrings of public symbols current when changing them.
+- Verify docs changes with `uv run --only-group docs mkdocs build --strict` (also useful: `mkdocs serve`).
 

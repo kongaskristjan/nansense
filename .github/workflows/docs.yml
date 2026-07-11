@@ -1,0 +1,53 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write # mike commits to the gh-pages branch
+
+# mike rewrites gh-pages history-free; serialize deploys so two runs
+# can't race each other's push.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # mike needs the existing gh-pages branch
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Every push to main updates the `dev` version. The site's default
+      # is normally `latest` (set by the release job below); until the
+      # first release exists, fall back to defaulting `dev` so the site
+      # root isn't a 404.
+      - name: Deploy dev docs
+        if: github.event_name == 'push'
+        run: |
+          uv run --only-group docs mike deploy --push dev
+          if ! git cat-file -e origin/gh-pages:index.html 2>/dev/null; then
+            uv run --only-group docs mike set-default --push dev
+          fi
+
+      # Each release publishes its docs under the minor version (0.2, 0.3,
+      # ...) and moves the `latest` alias (the site default) onto it.
+      - name: Deploy release docs
+        if: github.event_name == 'release'
+        run: |
+          version="${{ github.event.release.tag_name }}" # vX.Y.Z
+          version="${version#v}"
+          minor="${version%.*}"
+          uv run --only-group docs mike deploy --push --update-aliases "$minor" latest
+          uv run --only-group docs mike set-default --push latest
