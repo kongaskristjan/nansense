@@ -47,47 +47,65 @@ the least-ops option: HF builds the Dockerfile, fronts it with TLS and
 websocket support (the UI is socket.io-based — this matters), and the free
 "CPU basic" tier (2 vCPU / 16 GB) is plenty for the LeNet demo.
 
-Create a Space with the Docker SDK. The Space is itself a git repo; either
-push this repository into it directly, or set up a GitHub Action that
-mirrors `main` to the Space on every push (HF documents the
+Create a Space with the Docker SDK. Its configuration is YAML front matter
+at the top of the Space repo's `README.md`, kept here as a single commit on
+an `hf-space` branch (`main` plus this block prepended to the README):
+
+```yaml
+---
+title: Nansense Playground
+emoji: 👁
+sdk: docker
+dockerfile_path: deploy/playground/Dockerfile
+app_port: 7860
+pinned: false
+license: mit
+short_description: A Pytorch debugger playground on a pretrained network
+---
+```
+
+The Space is itself a git repo, but the Hub rejects binary files (the
+repo's PNG/GIF assets) committed as plain git blobs — they must be
+LFS-tracked — and it inspects the whole pushed history. So push a
+single-commit, LFS-tracked snapshot rather than the branch as-is (with the
+Space added as the `space` remote):
+
+```bash
+git lfs install                # one-time
+git checkout --orphan space-snapshot hf-space
+git lfs track "*.png" "*.gif"
+git add .gitattributes
+git add --renormalize .        # images become LFS pointers
+git commit -m "nansense playground Space snapshot"
+git push --force space space-snapshot:main
+git checkout hf-space
+```
+
+HF materializes LFS files both in the Docker build (the runtime logo asset)
+and when rendering the Space README. To update, rebase `hf-space` onto
+`main`, delete `space-snapshot`, and recreate it. The same can be automated
+with a GitHub Action on push (HF documents the
 [sync-to-hub pattern](https://huggingface.co/docs/hub/spaces-github-actions);
-it needs an `HF_TOKEN` secret on the GitHub side).
+it needs an `HF_TOKEN` secret on the GitHub side and the same
+snapshot/LFS treatment).
 
-Two files exist only in the Space repo, not here:
+One piece lives outside the repository entirely — **a scheduled restart**
+(optional). The container filesystem is ephemeral and a free Space also
+sleeps after ~48 h idle, so every wake is a fresh boot — which doubles as
+the reset for whatever experiment results and queue state visitors
+accumulated. A busy Space never sleeps, so for a guaranteed nightly reset
+add a cron workflow (GitHub Actions or anywhere) calling:
 
-1. **`README.md` front matter** — the Space's configuration. The container
-   must listen on `app_port`; the playground defaults to 7860 to match.
-   When mirroring this repo, prepend the front matter to the README in the
-   mirror step (or keep a Space-only README commit):
-
-   ```yaml
-   ---
-   title: nansense playground
-   emoji: 🔬
-   sdk: docker
-   dockerfile_path: deploy/playground/Dockerfile
-   app_port: 7860
-   pinned: false
-   ---
-   ```
-
-2. **A scheduled restart** (optional). The container filesystem is
-   ephemeral and a free Space also sleeps after ~48 h idle, so every
-   wake is a fresh boot — which doubles as the reset for whatever
-   experiment results and queue state visitors accumulated. A busy
-   Space never sleeps, so for a guaranteed nightly reset add a cron
-   workflow (GitHub Actions or anywhere) calling:
-
-   ```python
-   from huggingface_hub import HfApi
-   HfApi(token=...).restart_space("YOUR_USER/nansense-playground")
-   ```
+```python
+from huggingface_hub import HfApi
+HfApi(token=...).restart_space("YOUR_USER/nansense-playground")
+```
 
 Notes:
 
 - Build time is dominated by the `--prepare` step (a few CPU minutes for
-  5 MNIST epochs) — well inside HF's build limits, and nothing binary needs
-  to be committed anywhere.
+  5 MNIST epochs) — well inside HF's build limits; the trained checkpoints
+  live only inside the image, never in git.
 - No secrets, persistent storage, or GPU are needed. GPU tiers work but are
   wasted on LeNet.
 - The direct app URL is `https://YOUR-USER-nansense-playground.hf.space`;
