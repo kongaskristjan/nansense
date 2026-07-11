@@ -10,7 +10,7 @@ import torch
 from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
 from nansense.patches import PATCH_TYPES, PatchAccumulator
-from nansense.session import BatchSnapshot
+from nansense.session import BatchSnapshot, StatsScope
 from nansense.ui.histograms import _make_histogram_figure
 from nansense.ui.stats_page import (
     _ALL_LAYERS_MAX,
@@ -23,7 +23,9 @@ from nansense.ui.stats_page import (
     _VIEW_HISTOGRAM,
     _VIEW_MINMAX,
     _VIEW_GRAPHS,
+    _apply_watch_param,
     _bin_samples_html,
+    _deep_dream_href,
     _figure_payload,
     _filter_phase,
     _hover_attach_js,
@@ -238,6 +240,44 @@ def test_visible_layers_picks_one_or_all() -> None:
     # A stale single selection falls back to the first watched layer.
     assert _visible_layers("gone", ["a", "b"]) == ["a"]
     assert _visible_layers("", []) == []
+
+
+def test_deep_dream_href_targets_the_visible_layer() -> None:
+    # A real `href` (not an `on_click` navigate) keeps the compare button
+    # middle-clickable; the target must track what the page actually shows.
+    watched = frozenset({"a", "c"})
+    # A selected watched layer links straight to it.
+    assert _deep_dream_href("train", _NAMES, watched, "c") == "/experiment?layer=c"
+    # "all" falls back to the first visible layer.
+    assert (
+        _deep_dream_href("train", _NAMES, watched, _LAYER_ALL)
+        == "/experiment?layer=a"
+    )
+    # Nothing watched on a real phase → the stale selection stays the target.
+    assert _deep_dream_href("train", _NAMES, frozenset(), "b") == "/experiment?layer=b"
+    # Layer names are percent-encoded into the link.
+    assert (
+        _deep_dream_href(_PHASE_CURRENT_BATCH, ["odd layer"], frozenset(), "odd layer")
+        == "/experiment?layer=odd%20layer"
+    )
+
+
+def test_apply_watch_param_watches_in_watched_scope_only() -> None:
+    session, _ = make_session()
+    # No flag → the watched set stays untouched.
+    _apply_watch_param(session, "fc1", "")
+    assert "fc1" not in session.watched_layers
+    # `?watch=1` under the (default) watched scope starts collection.
+    _apply_watch_param(session, "fc1", "1")
+    assert "fc1" in session.watched_layers
+    # Unknown layer names are refused rather than crashing the page.
+    _apply_watch_param(session, "nope", "1")
+    assert "nope" not in session.watched_layers
+    # Other scopes already collect every layer (or are deliberately
+    # paused), so the flag must leave the watched set alone there.
+    session.set_stats_scope(StatsScope.ALL)
+    _apply_watch_param(session, "fc2", "1")
+    assert "fc2" not in session.watched_layers
 
 
 def test_filter_phase_narrows_to_selected_phase() -> None:

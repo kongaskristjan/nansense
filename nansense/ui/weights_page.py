@@ -10,7 +10,7 @@ from nicegui import ui
 from torch import Tensor
 
 from nansense.recording import RecordedView
-from nansense.session import BatchSnapshot, Session, StatsScope
+from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _defer_value_write,
     _page_scaffold,
@@ -64,6 +64,19 @@ def _default_roles(ndim: int) -> list[str]:
     return roles
 
 
+def _weight_graphs_href(layer: str) -> str:
+    """Deep-link to `layer`'s GRAPHS view on the Stats page.
+
+    The GRAPHS view renders the running watch aggregates; in the `watched`
+    scope those only cover watched layers, so `watch=1` has the stats page
+    watch the layer on open and the jump lands on data (collection starts
+    with the next stepped batch — the other scopes ignore the flag).
+    `scroll=weights` brings the card's Weights section into view once it
+    renders.
+    """
+    return f"/stats?layer={quote(layer)}&view=graphs&scroll=weights&watch=1"
+
+
 def _build_weights_page(session: Session, layer: str) -> None:
     """Per-layer weight viewer: kernel/image strips with selectable axes.
 
@@ -107,20 +120,6 @@ def _build_weights_page(session: Session, layer: str) -> None:
             },
         )
 
-    def open_weight_graphs() -> None:
-        # The GRAPHS view renders the running watch aggregates; in the
-        # `watched` scope those only cover watched layers, so watching here
-        # makes the jump land on data (collection starts with the next
-        # stepped batch). The other scopes either already collect every
-        # layer or are paused, and the watched set must stay untouched.
-        # `scroll=weights` brings the card's Weights section into view once
-        # it renders.
-        if session.stats_scope is StatsScope.WATCHED:
-            session.watch(layer)
-        ui.navigate.to(
-            f"/stats?layer={quote(layer)}&view=graphs&scroll=weights"
-        )
-
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
             _back_button()
@@ -130,12 +129,15 @@ def _build_weights_page(session: Session, layer: str) -> None:
             )
             _add_step_controls(session, step_until_custom)
             if layer in session.layer_names and weight_names:
+                # A real anchor (href, not an `on_click` navigate) so
+                # middle-click / ctrl-click open the graphs in a new tab.
                 ui.button(
                     "Weight graphs",
                     icon="show_chart",
                     color="yellow-8",
-                    on_click=open_weight_graphs,
-                ).props("dense no-caps size=sm").classes("ml-2").tooltip(
+                ).props(
+                    f'dense no-caps size=sm href="{_weight_graphs_href(layer)}"'
+                ).classes("ml-2").tooltip(
                     "Open this layer's GRAPHS view on the Stats page, "
                     "scrolled to its per-epoch weight statistics (starts "
                     "watching the layer)"

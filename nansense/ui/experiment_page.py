@@ -345,6 +345,13 @@ class _ExperimentPageState:
     cancel_enabled: bool | None = None
 
 
+def _minmax_stats_href(layer: str) -> str:
+    """Deep-link to `layer`'s MIN/MAX stats view — the real-input extremes
+    that complement its synthesized dreams. `?view` opens straight on the
+    grids rather than the histogram default."""
+    return f"/stats?layer={quote(layer)}&view=minmax"
+
+
 def _build_experiment_page(
     session: Session,
     layer: str,
@@ -477,6 +484,7 @@ def _build_experiment_page(
         update_description()
         overlay_switch.set_visibility(state.kind != "deep_dream")
         compare_button.set_visibility(state.kind == "deep_dream")
+        sync_compare_href()
         schedule_run()
 
     def on_layer_change(e: object) -> None:
@@ -492,6 +500,7 @@ def _build_experiment_page(
             )
             return
         state.layer = str(value)
+        sync_compare_href()
         clip_channel()
         schedule_run()
 
@@ -501,10 +510,11 @@ def _build_experiment_page(
         if state.last_result is not None and state.last_result.error is None:
             render_result(state.last_result)
 
-    def open_minmax() -> None:
-        # Carry the current layer to its MIN/MAX stats view (point 3); `?view`
-        # opens straight on the grids rather than the histogram default.
-        ui.navigate.to(f"/stats?layer={quote(state.layer)}&view=minmax")
+    def sync_compare_href() -> None:
+        # Keep the compare link on the current layer. An `href` (not an
+        # `on_click` navigate) renders the button as a real anchor, so
+        # middle-click / ctrl-click open the stats view in a new tab.
+        compare_button.props(f'href="{_minmax_stats_href(state.layer)}"')
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
@@ -586,9 +596,10 @@ def _build_experiment_page(
                         "Compare with MIN/MAX",
                         icon="bar_chart",
                         color="teal",
-                        on_click=open_minmax,
                     )
-                    .props("dense no-caps size=sm")
+                    .props(
+                        f'dense no-caps size=sm href="{_minmax_stats_href(state.layer)}"'
+                    )
                     .classes("w-full")
                     .tooltip(
                         "Open this layer's MIN/MAX stats — the real inputs that "

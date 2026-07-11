@@ -598,7 +598,8 @@ bfloat16 / gradient clipping), and lists the affected layers in a table — one
 column per reason whose check *ran* (so under/overflow columns show even when
 only NaN tripped), percentages per layer, and per-row actions: a **Stats** link
 to `/stats` when the layer is already watched, else a **Watch** button (start
-collecting, stay) plus a **Stats** button (watch *and* jump to the view). The
+collecting, stay) plus a **Stats** link carrying `watch=1` (the stats page
+starts the watch on open, so the jump stays a middle-clickable anchor). The
 gradient histogram fills in once a few watched batches have stepped. The gear
 settings dialog's "Error checks" section edits the `DebugSettings` (enable,
 interval, per-check toggles, threshold %) via `Session.set_debug_settings`.
@@ -853,7 +854,9 @@ current-batch start) and, for Captum, Channel/Target → Inputs → method knobs
 across kind switches via a shared `state.values`. Beneath the description, a
 deep-dream-only **"Compare with MIN/MAX"** button jumps to the same layer's
 `/stats?view=minmax` grids (the MIN/MAX view carries a symmetric "Compare with
-Deep Dream" button at the foot of its controls). A 200 ms timer streams the page's *own* request via
+Deep Dream" button at the foot of its controls). Like every cross-page jump
+button, both are real anchors — an `href` prop kept in sync with the shown
+layer, never an `on_click` navigate — so middle-click opens a new tab. A 200 ms timer streams the page's *own* request via
 `session.experiment_result_for(seq)`, drives **auto-run** (re-register on
 init and on any parameter / layer change, buffered to one run per tick;
 `register_auto_experiment` drops a superseded queued request so the pause
@@ -1309,9 +1312,11 @@ accumulator captures at each epoch's first watched batch
 weights don't vary by phase; leader-only under DDP, where replicas hold
 identical weights). Plots are created lazily as parameters first report
 data and hidden for parameter-less layers. A
-`/stats?layer=…&view=graphs&scroll=weights` deep-link (the weights page's
-"Weight graphs" button, which also starts watching the layer) opens the
-view directly and scrolls to that section once it renders. The constraint shaping this
+`/stats?layer=…&view=graphs&scroll=weights&watch=1` deep-link (the weights
+page's "Weight graphs" button) opens the view directly and scrolls to that
+section once it renders; `watch=1` (`_apply_watch_param`) starts watching the
+layer on page open — under the `watched` scope only — so the jump lands on
+data without the link needing an `on_click` side effect. The constraint shaping this
 page is the **websocket keepalive budget** (~6 s): snapshotting and rendering
 run in a worker thread (`asyncio.to_thread`) so the event loop keeps answering
 pings, refreshes are single-flight (a toggle landing mid-render marks the pass
@@ -1365,9 +1370,9 @@ band that issue is about.
 
 **`/weights` page** (`?layer=`). One `_WeightPanel` per name in
 `session.layer_weights[layer]`, reading shapes from `model.named_parameters()`
-so the controls exist before any snapshot. A top-bar "Weight graphs" button
-watches the layer and jumps to its GRAPHS view's per-epoch weight series
-(the `scroll=weights` deep-link above). Each panel renders the weight, its
+so the controls exist before any snapshot. A top-bar "Weight graphs" link
+jumps to the layer's GRAPHS view per-epoch weight series (the
+`scroll=weights&watch=1` deep-link above). Each panel renders the weight, its
 gradient (same shape → same axis layout), and one strip per tensor-valued
 optimizer-state entry when the session has an optimizer (shape-matched entries
 reuse the panel's axis controls; 0-dim entries like Adam's `step` join a scalar

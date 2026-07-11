@@ -116,3 +116,16 @@ def test_compute_snapshot_renders_runs_off_the_event_loop() -> None:
     assert len(renders) == 1
     assert renders[0].error is None
     assert renders[0].weight_html
+
+
+def test_weight_graphs_href_carries_view_scroll_and_watch() -> None:
+    # A real `href` (not an `on_click` navigate) keeps the button
+    # middle-clickable; `watch=1` moves the "start watching" side effect to
+    # the stats page so the link still lands on data in the watched scope.
+    from nansense.ui.weights_page import _weight_graphs_href
+
+    assert (
+        _weight_graphs_href("fc1")
+        == "/stats?layer=fc1&view=graphs&scroll=weights&watch=1"
+    )
+    assert _weight_graphs_href("odd layer").startswith("/stats?layer=odd%20layer&")

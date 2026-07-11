@@ -1179,7 +1179,9 @@ def _debug_action_button(
     feed them). A layer already collecting just gets a Stats link; with
     `offer_watch` (the `watched` stats scope), an unwatched layer gets both:
     Watch (start collecting and stay in the dialog) and Stats (start
-    collecting *and* jump to the stats view). The stats page pre-checks its
+    collecting *and* jump to the stats view — via the `watch=1` param the
+    stats page honors on open, which keeps the button a real anchor so
+    middle-click opens a new tab). The stats page pre-checks its
     "Show subnormal/overflow" band from the active issue itself
     (`stats_page._should_show_bands`), so either route opens with the band
     marked; the histogram fills in once a few batches have stepped.
@@ -1202,13 +1204,8 @@ def _debug_action_button(
                 "dense size=sm flat no-caps color=primary"
             ).tooltip("Collect this layer's gradient stats (stay here)")
 
-            def watch_and_open() -> None:
-                session.watch(report.layer)
-                dialog.close()
-                ui.navigate.to(href)
-
-            ui.button("Stats", on_click=watch_and_open).props(
-                "dense size=sm flat no-caps color=primary"
+            ui.button("Stats").props(
+                f'href="{href}&watch=1" dense size=sm flat no-caps color=primary'
             ).tooltip("Watch this layer and open its stats view")
         else:
             ui.button("Stats").props(

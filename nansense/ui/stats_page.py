@@ -198,6 +198,26 @@ def _should_show_bands(error: debugger.DebugError | None) -> bool:
     )
 
 
+def _apply_watch_param(session: Session, layer: str, watch: str) -> None:
+    """Honor a `?watch=1` deep link: start collecting stats for `layer`.
+
+    Links that need the layer collecting by the time the page lands (the
+    weights page's GRAPHS jump, the warning dialog's Stats-with-watch row)
+    carry `watch=1` instead of calling `session.watch` in an `on_click` —
+    that keeps them real anchors, so middle-click opens a new tab and still
+    starts collection. Only the `watched` scope needs the watch: the other
+    scopes either already collect every layer or are deliberately paused.
+    Unknown layer names are refused by `Session.watch` itself; an already
+    watched layer is left alone so reloading the link stays a no-op.
+    """
+    if (
+        watch.strip()
+        and session.stats_scope is StatsScope.WATCHED
+        and layer not in session.watched_layers
+    ):
+        session.watch(layer)
+
+
 def _build_stats_page(
     session: Session,
     layer_names: list[str],
@@ -205,6 +225,7 @@ def _build_stats_page(
     *,
     view: str = "",
     scroll: str = "",
+    watch: str = "",
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
@@ -253,6 +274,9 @@ def _build_stats_page(
     """
     _page_scaffold("Stats")
     _install_panel_resize()
+    # A `?watch=1` link starts collecting the seeded layer before anything
+    # renders, so the reconciliation below sees it as watched.
+    _apply_watch_param(session, selected_layer, watch)
 
     layer_panels: dict[str, _WatchLayerPanel] = {}
     # element id -> the histogram plot to forward that element's hovers to.
@@ -357,16 +381,18 @@ def _build_stats_page(
         state.heat_on = value
         await refresh()
 
-    def open_deep_dream() -> None:
-        # Carry the currently shown layer to its Deep Dream experiment; with
-        # "all" selected (or nothing watched) fall back to the first visible
-        # layer so the link always lands somewhere sensible.
-        ordered = _selectable_layers(
-            state.selected_phase, layer_names, session.stats_layers
+    def sync_compare_href() -> None:
+        # Keep the compare link on the currently shown layer. An `href` (not
+        # an `on_click` navigate) renders the button as a real anchor, so
+        # middle-click / ctrl-click open the experiment in a new tab. The
+        # props write is a no-op unless the target actually changed.
+        href = _deep_dream_href(
+            state.selected_phase,
+            layer_names,
+            session.stats_layers,
+            state.selected_layer,
         )
-        visible = _visible_layers(state.selected_layer, ordered)
-        target = visible[0] if visible else state.selected_layer
-        ui.navigate.to(f"/experiment?layer={quote(target)}")
+        compare_deep_dream.props(f'href="{href}"')
 
     step_until_custom = _build_step_until_custom_dialog(session)
 
@@ -562,7 +588,6 @@ def _build_stats_page(
                         "Compare with Deep Dream",
                         icon="science",
                         color="yellow-8",
-                        on_click=open_deep_dream,
                     )
                     .props("dense no-caps size=sm")
                     .classes("w-full")
@@ -572,6 +597,7 @@ def _build_stats_page(
                     )
                 )
                 compare_deep_dream.set_visibility(state.view == _VIEW_MINMAX)
+                sync_compare_href()
 
             _resize_handle("watch-controls", "left")
             body_container = ui.column().classes(
@@ -673,6 +699,7 @@ def _build_stats_page(
                 )
                 sync_phase_select()
                 sync_layer_select()
+                sync_compare_href()
                 ordered = _selectable_layers(
                     state.selected_phase, layer_names, stats_layers
                 )
@@ -1737,6 +1764,24 @@ def _visible_layers(selected: str, ordered: list[str]) -> list[str]:
     if selected in ordered:
         return [selected]
     return ordered[:1]
+
+
+def _deep_dream_href(
+    selected_phase: str,
+    layer_names: list[str],
+    stats_layers: frozenset[str],
+    selected_layer: str,
+) -> str:
+    """Deep-link to the currently shown layer's Deep Dream experiment.
+
+    With "all" selected (or nothing watched) falls back to the first visible
+    layer so the link always lands somewhere sensible.
+    """
+    ordered = _selectable_layers(selected_phase, layer_names, stats_layers)
+    visible = _visible_layers(selected_layer, ordered)
+    target = visible[0] if visible else selected_layer
+    return f"/experiment?layer={quote(target)}"
+
 
 _PATCH_TYPE_LABELS: dict[PatchType, str] = {
     "max_pixel": "Max pixel",

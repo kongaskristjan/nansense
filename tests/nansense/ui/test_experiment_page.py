@@ -99,3 +99,12 @@ def test_layer_channel_count_reads_snapshot_activation() -> None:
     assert _layer_channel_count(snap, "vec") is None
     assert _layer_channel_count(snap, "missing") is None
     assert _layer_channel_count(None, "conv") is None
+
+
+def test_minmax_stats_href_encodes_layer_and_targets_minmax_view() -> None:
+    # A real `href` (not an `on_click` navigate) keeps the compare button
+    # middle-clickable; the link must land on the MIN/MAX grids directly.
+    from nansense.ui.experiment_page import _minmax_stats_href
+
+    assert _minmax_stats_href("fc1") == "/stats?layer=fc1&view=minmax"
+    assert _minmax_stats_href("odd layer") == "/stats?layer=odd%20layer&view=minmax"
