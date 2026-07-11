@@ -51,3 +51,27 @@ jobs:
           minor="${version%.*}"
           uv run --only-group docs mike deploy --push --update-aliases "$minor" latest
           uv run --only-group docs mike set-default --push latest
+
+      # mike deploys every version into its own subdirectory, so the build's
+      # llms.txt lands at /<version>/llms.txt — but the llms.txt convention
+      # expects it at the site root. Mirror the default version's copy there:
+      # the release's on release deploys, dev's only while no release exists
+      # (mirroring the set-default logic above). Skipped on dev pushes once a
+      # release is the default, so root llms.txt keeps describing `latest`.
+      - name: Mirror llms.txt at the site root
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            version="${{ github.event.release.tag_name }}"
+            version="${version#v}"
+            src="${version%.*}"
+          elif git cat-file -e gh-pages:latest/index.html 2>/dev/null; then
+            echo "A release is the site default; leaving root llms.txt on it."
+            exit 0
+          else
+            src="dev"
+          fi
+          git worktree add ../gh-pages-root gh-pages
+          cp "../gh-pages-root/$src/llms.txt" "../gh-pages-root/$src/llms-full.txt" ../gh-pages-root/
+          git -C ../gh-pages-root add llms.txt llms-full.txt
+          git -C ../gh-pages-root commit -m "Mirror $src llms.txt at the site root" || exit 0
+          git -C ../gh-pages-root push origin gh-pages
