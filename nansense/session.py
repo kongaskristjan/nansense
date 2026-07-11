@@ -1400,7 +1400,11 @@ class Session:
         self._set_mode(Mode.DETACH, resume=True)
 
     def epochs(
-        self, n: int | None = None, *, cache_dir: Path = DEFAULT_CACHE_DIR
+        self,
+        n: int | None = None,
+        *,
+        cache_dir: Path = DEFAULT_CACHE_DIR,
+        start_epoch: int = 0,
     ) -> Iterator[int]:
         """Time-travel-aware epoch loop: `for epoch in session.epochs(50): ...`.
 
@@ -1423,10 +1427,20 @@ class Session:
                     for inputs, targets in session.batches(val_dl, phase="val"):
                         ...
 
+        `start_epoch` resumes the run from `cache_dir`'s checkpoint of that
+        epoch instead of training from scratch: the cache directory is
+        adopted as-is (it may come from an earlier process — e.g. one baked
+        into a deployment image), the checkpoint is validated against the
+        live model / optimizer / scheduler up-front (`TimeTravelError` on a
+        mismatch), and the loop yields `start_epoch … n - 1` with the state
+        restored on the training thread before the first batch. Time travel
+        then covers every epoch the directory holds a checkpoint for.
+
         Not iterating this leaves the run a straight pass with the UI's Time
         Travel button disabled; on a disabled session it is inert and nothing
-        touches the disk. Under DDP call it on every rank — a leader jump is
-        broadcast so all ranks re-yield the same epoch in lockstep.
+        touches the disk (`start_epoch` is then ignored). Under DDP call it
+        on every rank — a leader jump is broadcast so all ranks re-yield the
+        same epoch in lockstep.
         """
         if n is not None:
             self._schedule.set_epochs(n)
@@ -1437,6 +1451,8 @@ class Session:
             )
         if self._loop_restorer is None:
             self._loop_restorer = self.training_restorer(cache_dir=cache_dir)
+        if start_epoch and self._enabled:
+            self._loop_restorer.resume_from(start_epoch)
         return self._loop_restorer.iter_epochs()
 
     def restore_point(self) -> contextlib.AbstractContextManager[TrainingRestorer]:

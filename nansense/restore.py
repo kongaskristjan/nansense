@@ -480,6 +480,37 @@ class TrainingRestorer:
             )
         return range(self._start_epoch, total)
 
+    def resume_from(self, epoch: int) -> None:
+        """Start the run at `epoch`, restoring its cached checkpoint.
+
+        Behind `session.epochs(start_epoch=...)`, for resuming from a cache
+        directory written by an earlier process (`cached_epochs` enumerates
+        whatever is on disk, so a pre-baked cache is adopted as-is — this is
+        what lets a hosted playground boot straight into a late epoch). The
+        checkpoint is validated up-front like `Session.request_time_travel`
+        (it must exist, load, and match the live model / optimizer /
+        scheduler; raises `TimeTravelError` otherwise) and then armed like a
+        pending jump: the first `restore_point()` entry — on the training
+        thread, before any forward pass — loads the state back through the
+        exact machinery a UI-requested jump uses.
+        """
+        session = self._require_session()
+        total = session.schedule.epochs
+        if total is not None and not 0 <= epoch < total:
+            raise TimeTravelError(f"epoch {epoch} out of range [0, {total})")
+        # Memory-mapped: only keys and shapes are inspected here; the real
+        # load happens on the training thread in `_restore`.
+        payload = self.cache.load(epoch, mmap=True)
+        for error in (
+            validate_model_state(payload, session.model),
+            validate_optimizer_state(payload, session.optimizer),
+            validate_scheduler_state(payload, session.scheduler),
+        ):
+            if error is not None:
+                raise TimeTravelError(error)
+        self._start_epoch = epoch
+        self._jump_target = epoch
+
     def pending(self) -> bool:
         """Whether another `with restorer:` attempt should run."""
         if not self._finished and not self._entered_since_pending:

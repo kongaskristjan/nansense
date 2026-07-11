@@ -1007,6 +1007,20 @@ timeline's entries persist until the re-run reaches them. Restoring the
 global RNG state is what makes the replay deterministic — the DataLoader
 draws its shuffle seed from the global generator at `iter()` time.
 
+**Resume from a baked cache.** `session.epochs(n, cache_dir=...,
+start_epoch=K)` starts the run at epoch `K` instead of 0, restoring
+`epoch_K.pt` from a cache directory that may have been written by an
+*earlier process* — `EpochCache.cached_epochs` scans the disk, so a
+pre-existing directory (e.g. baked into a deployment image) is adopted
+as-is and immediately feeds the time-travel dialog. The checkpoint is
+validated up-front exactly like a jump request (`TrainingRestorer.
+resume_from`: mmap load + the three `validate_*_state` checks, raising
+`TimeTravelError` on a mismatch) and then armed as a pending jump, so the
+first `restore_point()` entry loads the state on the training thread
+through the same `_apply_pending_jump` → `_restore` machinery. This is
+what lets the hosted playground boot straight into its final epoch in
+seconds.
+
 **Jump flow.** `Session.request_time_travel(epoch)` runs on the UI thread
 and validates everything up-front: the restorer exists and isn't finished,
 the epoch is in range, the checkpoint loads, and its model state matches
