@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 from nicegui import ui
 from torch import Tensor
@@ -106,6 +107,16 @@ def _build_weights_page(session: Session, layer: str) -> None:
             },
         )
 
+    def open_weight_graphs() -> None:
+        # The GRAPHS view renders the running watch aggregates, which only
+        # cover watched layers — watching here makes the jump land on data
+        # (collection starts with the next stepped batch). `scroll=weights`
+        # brings the card's Weights section into view once it renders.
+        session.watch(layer)
+        ui.navigate.to(
+            f"/stats?layer={quote(layer)}&view=graphs&scroll=weights"
+        )
+
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
             _back_button()
@@ -114,6 +125,17 @@ def _build_weights_page(session: Session, layer: str) -> None:
                 "font-mono text-base font-bold ml-2 truncate max-w-64"
             )
             _add_step_controls(session, step_until_custom)
+            if layer in session.layer_names and weight_names:
+                ui.button(
+                    "Weight graphs",
+                    icon="show_chart",
+                    color="yellow-8",
+                    on_click=open_weight_graphs,
+                ).props("dense no-caps size=sm").classes("ml-2").tooltip(
+                    "Open this layer's GRAPHS view on the Stats page, "
+                    "scrolled to its per-epoch weight statistics (starts "
+                    "watching the layer)"
+                )
             _add_settings_button(session, record_view).classes("ml-auto")
             _add_repo_logo()
 
