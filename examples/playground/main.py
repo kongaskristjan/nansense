@@ -13,8 +13,9 @@ collected for *every* layer (`StatsScope.ALL`), so histograms, min/max
 patches, and per-epoch graphs are populated when the first visitor arrives.
 It then parks paused on the run's final train batch with the session locked:
 training sits still forever while visitors show/hide layers per tab, browse
-stats, pin and perturb inputs, and run experiments — stepping, time travel,
-and the global settings are disabled (see `Session.lock`).
+stats, and run experiments — stepping, time travel, the shared probe state
+(pinning/perturbation), and the global settings are disabled (see
+`Session.lock`).
 """
 
 from __future__ import annotations

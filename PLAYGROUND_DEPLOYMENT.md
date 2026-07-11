@@ -3,8 +3,8 @@
 The playground is a publicly hosted, shared nansense session: LeNet trained
 on MNIST, parked paused on its final training batch with the session locked
 (`Session.lock`). Visitors can show/hide layers per tab, browse statistics,
-pin and perturb inputs, and run experiments; stepping, time travel, and the
-global settings are disabled. The entrypoint is
+and run experiments; stepping, time travel, input pinning/perturbation, and
+the global settings are disabled. The entrypoint is
 [`examples/playground/main.py`](examples/playground/main.py); the mechanics
 are described in [`INTERNALS.md`](INTERNALS.md#locked-sessions-shared-demos).
 
@@ -66,8 +66,8 @@ Two files exist only in the Space repo, not here:
 
 2. **A scheduled restart** (optional). The container filesystem is
    ephemeral and a free Space also sleeps after ~48 h idle, so every
-   wake is a fresh boot — which doubles as the reset for whatever pins,
-   perturbations, and experiment results visitors accumulated. A busy
+   wake is a fresh boot — which doubles as the reset for whatever
+   experiment results and queue state visitors accumulated. A busy
    Space never sleeps, so for a guaranteed nightly reset add a cron
    workflow (GitHub Actions or anywhere) calling:
 

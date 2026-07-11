@@ -864,11 +864,22 @@ class Session:
         the network's evolving response to one fixed batch across stepping
         and time travel. Pinning while paused runs the probe immediately on
         the paused training thread (see `_wait_for_proceed`).
+
+        Refused (returning `False`) on a locked session — the pin is shared
+        state every visitor sees. Pin *before* locking to give a demo a
+        fixed probe input.
         """
+        if self._locked:
+            return False
         return probe.pin_current_batch(self)
 
     def unpin_batch(self) -> None:
-        """Drop the pinned input (and the probe result, absent perturbations)."""
+        """Drop the pinned input (and the probe result, absent perturbations).
+
+        No-op on a locked session, so a pin made before locking sticks.
+        """
+        if self._locked:
+            return
         probe.unpin_batch(self)
 
     @property
@@ -896,13 +907,21 @@ class Session:
         inputs when nothing is pinned — and trigger a probe re-run that also
         captures the perturbed activations. Entries that don't fit the base
         (out of range, wrong count, absent input) are skipped at apply time.
+        No-op on a locked session — perturbations are shared state.
         """
+        if self._locked:
+            return
         probe.add_perturbation(
             self, input_name=input_name, sample=sample, index=index, values=values
         )
 
     def clear_perturbations(self) -> None:
-        """Drop all perturbations (and the probe result, when not pinned)."""
+        """Drop all perturbations (and the probe result, when not pinned).
+
+        No-op on a locked session.
+        """
+        if self._locked:
+            return
         probe.clear_perturbations(self)
 
     def set_probe_mode(self, mode: str) -> None:
@@ -919,8 +938,11 @@ class Session:
         forked around it. Selecting `"eval"` or `"train"` itself activates
         probing — the model is re-run on the current snapshot's batch under
         that mode, no pin required — and switching back to `"unchanged"`
-        (with nothing pinned or perturbed) drops the result.
+        (with nothing pinned or perturbed) drops the result. No-op on a
+        locked session — the probe mode is shared state.
         """
+        if self._locked:
+            return
         probe.set_probe_mode(self, mode)
 
     def wait_for_probe(
@@ -1336,20 +1358,22 @@ class Session:
         visitors share one session. Once locked:
 
         - the run-control methods (`stop`, every `step_*`, `detach`),
-          `request_time_travel`, `watch`/`unwatch`, and the global settings
-          (`set_stats_scope`, `set_update_frequency`,
-          `set_watch_performance`, `set_debug_settings`,
-          `disable_debug_check`, `set_auto_run_experiments`) become no-ops
-          (`request_time_travel` raises `TimeTravelError`, so the UI can
-          show why);
+          `request_time_travel`, `watch`/`unwatch`, the probe surface
+          (`pin_current_batch`, `unpin_batch`, `add_perturbation`,
+          `clear_perturbations`, `set_probe_mode` — all shared state every
+          visitor sees), and the global settings (`set_stats_scope`,
+          `set_update_frequency`, `set_watch_performance`,
+          `set_debug_settings`, `disable_debug_check`,
+          `set_auto_run_experiments`) become no-ops (`request_time_travel`
+          raises `TimeTravelError`, so the UI can show why);
         - the stats scope is forced to `ALL` — every layer collects, so the
           UI's per-tab show/hide never touches shared state;
         - experiment requests still run, with their parameters clamped and
           the queue depth capped (see `nansense.experiments`).
 
-        Everything read-only stays available, as do pin/perturb probes and
-        experiments. The lock is one-way by design — arm the wanted mode
-        (e.g. `step_run()`) and settings *before* locking. `close()` is not
+        Everything read-only stays available, as do experiments. The lock is
+        one-way by design — arm the wanted mode (e.g. `step_run()`), the
+        settings, and any demo pin *before* locking. `close()` is not
         locked; it belongs to the hosting script.
         """
         with self._cv:

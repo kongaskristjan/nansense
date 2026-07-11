@@ -111,7 +111,44 @@ def test_locked_experiment_queue_is_capped() -> None:
     assert "queue is full" in result.error
 
 
-def test_locked_session_still_runs_experiments_and_probes() -> None:
+def test_locked_probe_surface_is_refused() -> None:
+    session, model = make_session(epochs=1, phases={"train": 2})
+    session.lock()
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            train_step(model)
+
+    with paused_worker(session, loop):
+        # Pin, perturbations, and the forward mode are shared probe state,
+        # so every mutation is refused.
+        assert session.pin_current_batch() is False
+        session.add_perturbation(
+            input_name="x", sample=0, index=(0,), values=(1.0,)
+        )
+        assert session.perturbations == {}
+        session.set_probe_mode("eval")
+        assert session.probe_mode == "unchanged"
+        session.close()
+
+
+def test_a_pin_made_before_locking_sticks() -> None:
+    session, model = make_session(epochs=1, phases={"train": 2})
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            train_step(model)
+
+    with paused_worker(session, loop):
+        assert session.pin_current_batch() is True
+        session.lock()
+        session.unpin_batch()
+        session.clear_perturbations()
+        assert session.is_pinned is True
+        session.close()
+
+
+def test_locked_session_still_runs_experiments() -> None:
     session, model = make_session(epochs=1, phases={"train": 2})
     session.lock()
 
@@ -122,7 +159,6 @@ def test_locked_session_still_runs_experiments_and_probes() -> None:
     with paused_worker(session, loop):
         # paused_worker's teardown detach() is refused on a locked session,
         # so resume via close() at the end instead.
-        assert session.pin_current_batch() is True
         seq = session.request_experiment(
             kind="deep_dream",
             layer="fc1",

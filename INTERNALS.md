@@ -1412,12 +1412,17 @@ which arms its wanted mode (typically `step_run()`) and settings *before*
 locking.
 
 Everything per-visitor keeps working: browsing, per-tab shown layers,
-pin/perturb probes, and experiments — the latter with their numeric knobs
+and experiments — the latter with their numeric knobs
 clamped (`experiments._LOCKED_PARAM_LIMITS`) and the shared queue capped
 (`_LOCKED_MAX_QUEUE`; an over-cap request gets a queue-full error result
 published under its own seq, which the requesting page polls like any
-outcome). The UI reads `session.locked` to swap the step controls for a
-demo notice, hide the Refresh button and the stats pause toggle, and turn
+outcome). The probe surface (`pin_current_batch`, `add_perturbation`,
+`set_probe_mode`, and their clears) is refused too — the pinned batch,
+perturbations, and forward mode are shared state every visitor sees; a
+hosting script can still pin a demo input *before* locking, and the lock
+then keeps it pinned. The UI reads `session.locked` to swap the step
+controls for a demo notice, hide the Refresh button, the stats pause
+toggle, and the input pane's pin/forward-mode/perturb sections, and turn
 the settings gear into a "settings are locked" note; enforcement lives in
 the `Session` methods, so the UI state is cosmetic.
 `render.set_strip_format("PNG")` is the companion knob for internet-facing

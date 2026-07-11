@@ -190,84 +190,99 @@ class InputPanel:
                 "text-xs text-red-600 self-start"
             )
 
-            ui.separator()
-            self._section_label("Pin")
-            self._pin_switch = ui.switch(
-                "Pin batch",
-                value=self._session.is_pinned,
-                on_change=self._on_pin_change,
-            ).props("dense").classes("self-start").tooltip(
-                "Re-run the model on this fixed batch at every pause (a probe "
-                "run), instead of showing the changing training batch"
-            )
-            self._pinned_caption = ui.label("").classes(
-                "text-xs text-slate-500 font-mono self-start"
-            )
+            # The pin / forward-mode / perturb controls drive *shared* probe
+            # state (every visitor sees the pinned batch, the perturbations,
+            # and the probe mode), so a locked session hides the whole block
+            # — the session refuses the calls anyway (`Session.lock`), the
+            # controls would only mislead. Built either way so the refresh
+            # helpers can touch them unconditionally.
+            probe_sections = ui.column().classes("w-full items-center gap-2")
+            if self._session.locked:
+                probe_sections.set_visibility(False)
+                ui.separator()
+                ui.label(
+                    "Input pinning and perturbation are disabled in this "
+                    "shared demo."
+                ).classes("text-xs text-slate-500 self-start")
+            with probe_sections:
+                ui.separator()
+                self._section_label("Pin")
+                self._pin_switch = ui.switch(
+                    "Pin batch",
+                    value=self._session.is_pinned,
+                    on_change=self._on_pin_change,
+                ).props("dense").classes("self-start").tooltip(
+                    "Re-run the model on this fixed batch at every pause (a probe "
+                    "run), instead of showing the changing training batch"
+                )
+                self._pinned_caption = ui.label("").classes(
+                    "text-xs text-slate-500 font-mono self-start"
+                )
 
-            ui.separator()
-            self._section_label("Forward mode")
-            # Eval/Train re-run the model on the current batch under that mode
-            # on their own (no pin needed); Unchanged only shows a re-run when
-            # a batch is pinned or a pixel is perturbed.
-            self._mode_toggle = ui.toggle(
-                _PROBE_MODE_OPTIONS,
-                value=self._session.probe_mode,
-                on_change=self._on_mode_change,
-            ).props("dense no-caps spread").classes("w-full").tooltip(
-                "Train/eval handling for probe forwards. Unchanged (default) "
-                "runs with whatever modes training left; Eval uses BatchNorm "
-                "running stats and disables dropout; Train uses batch stats "
-                "and dropout. Selecting Eval or Train re-runs the current "
-                "batch under that mode even without a pin; all modes restore "
-                "the model's state afterwards."
-            )
+                ui.separator()
+                self._section_label("Forward mode")
+                # Eval/Train re-run the model on the current batch under that mode
+                # on their own (no pin needed); Unchanged only shows a re-run when
+                # a batch is pinned or a pixel is perturbed.
+                self._mode_toggle = ui.toggle(
+                    _PROBE_MODE_OPTIONS,
+                    value=self._session.probe_mode,
+                    on_change=self._on_mode_change,
+                ).props("dense no-caps spread").classes("w-full").tooltip(
+                    "Train/eval handling for probe forwards. Unchanged (default) "
+                    "runs with whatever modes training left; Eval uses BatchNorm "
+                    "running stats and disables dropout; Train uses batch stats "
+                    "and dropout. Selecting Eval or Train re-runs the current "
+                    "batch under that mode even without a pin; all modes restore "
+                    "the model's state afterwards."
+                )
 
-            ui.separator()
-            self._section_label("Perturb")
-            with ui.row().classes("w-full items-center justify-between no-wrap"):
-                self._perturb_switch = ui.switch(
-                    "Click to perturb",
-                    # On a rebuild (navigating back from /stats) the shared
-                    # perturbations survive, so the switch must come up on to
-                    # match the perturbed image/strips the page still renders.
-                    value=bool(self._session.perturbations),
-                    on_change=self._on_perturb_change,
-                ).props("dense").tooltip(
-                    "Click to modify a single pixel of the input image. "
-                    "A diff compared to original is shown in the activations. "
-                    "Useful for measuring receptive fields."
+                ui.separator()
+                self._section_label("Perturb")
+                with ui.row().classes("w-full items-center justify-between no-wrap"):
+                    self._perturb_switch = ui.switch(
+                        "Click to perturb",
+                        # On a rebuild (navigating back from /stats) the shared
+                        # perturbations survive, so the switch must come up on to
+                        # match the perturbed image/strips the page still renders.
+                        value=bool(self._session.perturbations),
+                        on_change=self._on_perturb_change,
+                    ).props("dense").tooltip(
+                        "Click to modify a single pixel of the input image. "
+                        "A diff compared to original is shown in the activations. "
+                        "Useful for measuring receptive fields."
+                    )
+                    # The value control (color swatch or per-channel fields) is
+                    # built lazily for the selected input by `_sync_perturb_control`.
+                    self._perturb_value_slot = ui.row().classes(
+                        "items-center gap-1 justify-end"
+                    )
+                # The count/clear row and the compare note only make sense once a
+                # pixel has actually been perturbed (`refresh_status` keeps both
+                # in sync).
+                self._clear_row = ui.row().classes(
+                    "w-full items-center justify-between no-wrap"
                 )
-                # The value control (color swatch or per-channel fields) is
-                # built lazily for the selected input by `_sync_perturb_control`.
-                self._perturb_value_slot = ui.row().classes(
-                    "items-center gap-1 justify-end"
+                self._clear_row.set_visibility(bool(self._session.perturbations))
+                with self._clear_row:
+                    self._perturb_caption = ui.label("").classes(
+                        "text-xs text-slate-500 font-mono"
+                    )
+                    self._clear_button = ui.button(
+                        "Clear",
+                        on_click=self._on_clear,
+                        color="slate-500",
+                    ).props("dense size=sm no-caps").tooltip(
+                        "Remove all perturbations"
+                    )
+                self._compare_caption = ui.label(
+                    "Comparing with original: layer strips show the "
+                    "activation diff (perturbed − original)"
+                ).classes("text-xs text-slate-500 self-start")
+                self._compare_caption.set_visibility(
+                    bool(self._session.perturbations)
                 )
-            # The count/clear row and the compare note only make sense once a
-            # pixel has actually been perturbed (`refresh_status` keeps both
-            # in sync).
-            self._clear_row = ui.row().classes(
-                "w-full items-center justify-between no-wrap"
-            )
-            self._clear_row.set_visibility(bool(self._session.perturbations))
-            with self._clear_row:
-                self._perturb_caption = ui.label("").classes(
-                    "text-xs text-slate-500 font-mono"
-                )
-                self._clear_button = ui.button(
-                    "Clear",
-                    on_click=self._on_clear,
-                    color="slate-500",
-                ).props("dense size=sm no-caps").tooltip(
-                    "Remove all perturbations"
-                )
-            self._compare_caption = ui.label(
-                "Comparing with original: layer strips show the "
-                "activation diff (perturbed − original)"
-            ).classes("text-xs text-slate-500 self-start")
-            self._compare_caption.set_visibility(
-                bool(self._session.perturbations)
-            )
-            self._set_perturb_cursor(self._perturb_switch.value)
+                self._set_perturb_cursor(self._perturb_switch.value)
 
     def _set_perturb_cursor(self, active: bool) -> None:
         """Show the crosshair cursor on the image exactly while perturbing."""

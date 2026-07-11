@@ -206,9 +206,9 @@ def _add_step_controls(
             "text-amber-800 text-sm font-medium"
         ).tooltip(
             "This is a shared, hosted playground: training sits paused at a "
-            "trained checkpoint and stepping / time travel are disabled. "
-            "Watch layers, browse stats, perturb inputs, and run experiments "
-            "freely."
+            "trained checkpoint and stepping, time travel, and input "
+            "pinning/perturbation are disabled. Show layers, browse stats, "
+            "and run experiments freely."
         ):
             ui.icon("lock").classes("text-base")
             ui.label("demo — training controls disabled")
@@ -536,9 +536,10 @@ def _add_settings_button(
             ui.label(
                 "This hosted playground is shared by everyone viewing it, so "
                 "the session-wide settings (stats collection, update "
-                "frequency, performance caps, error checks, recording) are "
-                "fixed. Everything per-tab — shown layers, pinned inputs, "
-                "perturbations, experiments — works normally."
+                "frequency, performance caps, error checks, recording) and "
+                "the shared probe state (pinning, perturbations, forward "
+                "mode) are fixed. Everything per-tab — shown layers, "
+                "experiments — works normally."
             ).classes("text-sm text-slate-600")
             with ui.row().classes("w-full justify-end"):
                 ui.button("Close", on_click=locked_dialog.close).props("flat")
