@@ -1421,7 +1421,11 @@ demo notice, hide the Refresh button and the stats pause toggle, and turn
 the settings gear into a "settings are locked" note; enforcement lives in
 the `Session` methods, so the UI state is cosmetic.
 `render.set_strip_format("PNG")` is the companion knob for internet-facing
-deployments — BMP strips are the localhost trade.
+deployments — BMP strips are the localhost trade. `examples/playground`
+is the reference deployment: it bakes an epoch cache with `--prepare`,
+then serves by resuming at the final epoch (`start_epoch`), replaying it
+under the `all` scope, and parking `step_run` + `lock` on the run's last
+train batch.
 
 ## Lifecycle summary
 
