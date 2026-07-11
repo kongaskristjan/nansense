@@ -19,6 +19,16 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class BatchPosition:
+    """Where a batch sits in the run: the `phase` name plus 0-indexed `epoch`
+    and `batch_idx`. This is the position record carried by
+    `BatchSnapshot.position`, `DebugError.position` and `Session.live_position`.
+
+    The `is_last_*` flags mark boundaries — the last batch of the phase, of
+    the epoch, and of the whole run. They are best-effort: with a lazy
+    schedule they stay `False` until the phase's batch count has been learned
+    at the end of the first epoch.
+    """
+
     phase: str
     epoch: int
     batch_idx: int

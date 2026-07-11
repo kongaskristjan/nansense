@@ -208,6 +208,10 @@ def serve(
 ) -> threading.Thread | None:
     """Start the NiceGUI app on a background thread and return that thread.
 
+    `port` / `host` pick the bind address (default `127.0.0.1:8080`).
+    `log_level` is uvicorn's log level — `"warning"` by default, so routine
+    request logging stays out of the training console.
+
     Returns `None` without starting anything when `session` is disabled
     (`nansense.start(..., enabled=False)`), so a training script can call
     `serve()` unconditionally and pay nothing when the UI is turned off —

@@ -134,7 +134,13 @@ def _bin_indices(x: Tensor) -> Tensor:
 
 @dataclass(frozen=True)
 class TensorStatsSnapshot:
-    """Immutable CPU-side view of a single (layer, phase, epoch, kind) accumulator."""
+    """Immutable CPU-side view of a single (layer, phase, epoch, kind) accumulator.
+
+    `n` / `sum` / `sum_sq` / `min` / `max` are running scalars over every
+    tensor element seen so far, feeding the `mean` / `variance` / `std`
+    properties. `hist` is the layer-wide histogram: one count per bin over
+    the fixed symmetric-log bin edges of `histogram_edges()`.
+    """
 
     n: int
     sum: float
@@ -159,10 +165,12 @@ class TensorStatsSnapshot:
 
     @property
     def mean(self) -> float:
+        """Arithmetic mean of all elements seen; `nan` before any data."""
         return self.sum / self.n if self.n > 0 else float("nan")
 
     @property
     def variance(self) -> float:
+        """Population variance; `nan` with fewer than two elements."""
         if self.n < 2:
             return float("nan")
         mean = self.mean
@@ -171,6 +179,7 @@ class TensorStatsSnapshot:
 
     @property
     def std(self) -> float:
+        """Population standard deviation derived from `variance`."""
         v = self.variance
         return math.sqrt(v) if math.isfinite(v) and v > 0 else 0.0
 
@@ -201,6 +210,13 @@ class TensorStatsSnapshot:
 
 @dataclass(frozen=True)
 class LayerStatsSnapshot:
+    """One watched layer's statistics for a (phase, epoch) bucket.
+
+    Bundles the layer's activation and gradient `TensorStatsSnapshot`s with
+    the extreme-input patch gallery; `layer` / `phase` / `epoch` locate the
+    bucket within `WatchSnapshot.stats`.
+    """
+
     layer: str
     phase: str
     epoch: int

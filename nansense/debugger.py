@@ -80,9 +80,11 @@ OVERFLOW_HEADROOM: float = 16.0
 class DebugSettings:
     """User-facing configuration of the debugger (mutated via the gear menu).
 
-    `interval` is the batch cadence (1 = every batch). `threshold` is the
-    underflow/overflow trip fraction (of summed ``|grad|``). Both checks can
-    be toggled independently; `enabled` is the master switch.
+    `interval` is the batch cadence (1 = every batch). `check_nan_inf` scans
+    activations and gradients for NaN/Inf; `check_under_over` watches for
+    gradient underflow/overflow, tripping when more than `threshold` (a
+    fraction of summed ``|grad|``) lands in the dtype's subnormal/overflow
+    band. The two checks toggle independently; `enabled` is the master switch.
     """
 
     enabled: bool = True
@@ -100,6 +102,7 @@ class DebugSettings:
 class LayerReport:
     """Per-layer fractions for one detected error (a row in the dialog table).
 
+    `layer` names the affected layer, as shown in the architecture graph.
     `nan` / `inf` are fractions of *element count*; `underflow` / `overflow`
     are fractions of the layer's summed ``|grad|``. All in ``[0, 1]``. `dtype`
     is the gradient dtype the under/overflow band was measured against (its
@@ -119,6 +122,7 @@ class LayerReport:
 class DebugError:
     """An immutable record of one detected numerical error.
 
+    `position` is the batch the error was detected on.
     `reasons` is the subset of `REASONS` that tripped; `checks_used` is the
     subset of categories that actually ran (so the UI shows only the relevant
     table columns even for an error that tripped just one of them);

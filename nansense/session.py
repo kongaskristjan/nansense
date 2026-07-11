@@ -113,6 +113,17 @@ def _warn_unserved_detach() -> None:
 
 
 class Mode(StrEnum):
+    """How training proceeds after a resume, exposed as `Session.mode`.
+
+    Each mode maps to a top-bar control: `STEP` pauses on every batch (Step
+    Batch; also the initial mode, so the first batch always pauses),
+    `UNTIL_PHASE_CHANGE` / `UNTIL_EPOCH_CHANGE` run to the first batch of the
+    next phase/epoch (Step Phase / Step Epoch), `UNTIL_POSITION` runs to an
+    exact position (the step-until dialog), `UNTIL_END` runs to the run's
+    last batch (Run), and `DETACH` never pauses again — capture overhead
+    drops to near zero until the UI re-engages.
+    """
+
     STEP = "step"
     UNTIL_PHASE_CHANGE = "until_phase_change"
     UNTIL_EPOCH_CHANGE = "until_epoch_change"
@@ -172,6 +183,11 @@ class BatchSnapshot:
     so the snapshot survives subsequent batches freeing the live tensors and
     can be safely read from any thread.
 
+    `position` is where the batch sat in the run. `activations` /
+    `activation_gradients` are keyed by watched-layer name (the names shown
+    in the architecture graph); `weights` / `weight_gradients` by parameter
+    name, matching `model.named_parameters()`.
+
     `optimizer_state` / `optimizer_hyperparams` are populated only when the
     session was given an optimizer at `start()`; otherwise they stay empty.
     State entries are keyed `param name -> state key -> tensor` (scalar
@@ -190,6 +206,16 @@ class BatchSnapshot:
 
 
 class Session:
+    """The bridge between a live training loop and the nansense UI.
+
+    Create one with `nansense.start` (the intended entry point) rather than
+    directly. The training loop drives the session through `batches` (wrap
+    each phase's dataloader), `epochs` + `restore_point` (the time-travel
+    epoch loop), and `close` when training finishes; the served UI drives
+    pausing, stepping, layer watching and experiments through the rest of the
+    surface. With `enabled=False` every method is a near-zero-overhead no-op.
+    """
+
     def __init__(
         self,
         model: nn.Module,
@@ -1397,6 +1423,13 @@ class Session:
         )
 
     def close(self) -> None:
+        """Mark training finished once the loop completes.
+
+        Releases anything waiting on the session and finalizes in-flight
+        recordings so their MP4 files are playable. The served page stays up
+        for post-mortem browsing of the last captured state — `close` ends
+        the *training* side of the session, not the UI.
+        """
         with self._cv:
             self._closed = True
             self._cv.notify_all()

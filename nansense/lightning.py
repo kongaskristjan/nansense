@@ -77,6 +77,10 @@ class NansenseCallback(Callback):
     recommended whenever the module wraps its layers in a submodule, both
     for fx tracing and so input capture sees the real forward signature.
 
+    `port` / `host` / `open_browser` / `enabled` / `input_mean` /
+    `input_std` / `input_transform` mean the same as on `nansense.start`;
+    the UI comes up once `fit` begins.
+
     Supported out of the box: automatic optimization, epoch-boundary
     validation (including `check_val_every_n_epoch > 1`), sanity-check
     skipping, and `enabled=False` as the zero-overhead off switch. Mid-epoch
@@ -499,7 +503,9 @@ def fit_with_time_travel(
     Equivalent to `make_trainer().fit(model, ...)` with `callback` attached,
     plus the UI's Time Travel button: every epoch boundary is checkpointed
     to `cache_dir`, and a jump re-enters training at the chosen epoch with
-    model / optimizer / scheduler / RNG state restored.
+    model / optimizer / scheduler / RNG state restored. `model`,
+    `train_dataloaders`, `val_dataloaders` and `datamodule` are forwarded
+    to `trainer.fit` unchanged.
 
     `make_trainer` is a factory because each jump needs a fresh `Trainer`:
     Lightning treats a trainer as single-use for `fit`, and after the

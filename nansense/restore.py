@@ -146,7 +146,8 @@ class TimeTravelStatus:
     run already completed); `reason` then carries the human-readable
     explanation for the disabled button's tooltip. `cached_epochs` are the
     epochs with a loadable checkpoint on disk, restricted to the current
-    schedule's range.
+    schedule's range. `total_epochs` is the run's known epoch count (`0`
+    while a lazy schedule hasn't learned it), bounding the jump target picker.
     """
 
     available: bool
