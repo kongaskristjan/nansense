@@ -321,16 +321,20 @@ def _build_page(
                             "watched layers, this also unwatches them and "
                             "drops their collected stats)"
                         )
-                        ui.menu_item(
-                            "Toggle collecting stats",
-                            on_click=lambda: toggle_stats(),
-                            auto_close=False,
-                        ).classes("text-sm").tooltip(
-                            "Pause/resume the running stats — pausing keeps "
-                            "everything collected so far, resuming restores "
-                            "the previous collection scope (see the settings "
-                            "gear). Cards stay visible either way."
-                        )
+                        # A locked session pins the stats scope, so the
+                        # pause toggle would be a silent no-op — hide it.
+                        if not session.locked:
+                            ui.menu_item(
+                                "Toggle collecting stats",
+                                on_click=lambda: toggle_stats(),
+                                auto_close=False,
+                            ).classes("text-sm").tooltip(
+                                "Pause/resume the running stats — pausing "
+                                "keeps everything collected so far, resuming "
+                                "restores the previous collection scope (see "
+                                "the settings gear). Cards stay visible "
+                                "either way."
+                            )
                         ui.separator()
                         # "Current batch" submenu: every layer (watched or not),
                         # each routing straight to that layer's current-batch

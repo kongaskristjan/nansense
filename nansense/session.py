@@ -352,6 +352,9 @@ class Session:
         # last collecting scope, restored by the top bar's stats toggle.
         self._stats_scope = StatsScope.WATCHED
         self._prev_stats_scope = StatsScope.WATCHED
+        # One-way switch for shared (demo) deployments: run control and every
+        # global setting refuse to change once locked (see `lock`).
+        self._locked = False
         self._watch_accumulator = WatchAccumulator()
         # Per-channel watch caps (GPU VRAM); the accumulator defaults already
         # match, so no initial `configure` flush is needed.
@@ -618,7 +621,7 @@ class Session:
         at capture-mode speed regardless of pause behaviour. Real training
         runs should not enable the UI.
         """
-        if layer not in self._layer_names:
+        if self._locked or layer not in self._layer_names:
             return False
         with self._cv:
             self._watched_layers.add(layer)
@@ -627,6 +630,8 @@ class Session:
 
     def unwatch(self, layer: str) -> None:
         """Stop watching `layer` and drop any stats already collected for it."""
+        if self._locked:
+            return
         with self._cv:
             self._watched_layers.discard(layer)
             self._watch_version += 1
@@ -657,9 +662,12 @@ class Session:
         - `"all"` collects for every layer regardless of the watched set; the
           per-channel caps (`set_watch_performance`) bound the memory.
 
-        Raises `ValueError` for an unknown scope.
+        Raises `ValueError` for an unknown scope. A locked session pins the
+        scope to `ALL` and ignores this call.
         """
         scope = StatsScope(scope)
+        if self._locked:
+            return
         with self._cv:
             self._stats_scope = scope
             if scope is not StatsScope.NONE:
@@ -679,6 +687,8 @@ class Session:
         (`WATCHED` or `ALL`) and continues adding to the existing buckets.
         """
         with self._cv:
+            if self._locked:
+                return self._stats_scope is not StatsScope.NONE
             if self._stats_scope is StatsScope.NONE:
                 self._stats_scope = self._prev_stats_scope
             else:
@@ -1010,8 +1020,10 @@ class Session:
         counting only `phase`'s batches when one is given. Raises
         `ValueError` for an unknown unit/phase, `n < 1`, or a phase
         combined with the epoch unit. Changing the setting restarts the
-        batch counter.
+        batch counter. No-op on a locked session.
         """
+        if self._locked:
+            return
         if unit not in FREQUENCY_UNITS:
             raise ValueError(
                 f"unknown frequency unit {unit!r}; expected one of "
@@ -1045,7 +1057,12 @@ class Session:
             return self._auto_run_experiments
 
     def set_auto_run_experiments(self, enabled: bool) -> None:
-        """Set the shared auto-run-experiments preference (see the getter)."""
+        """Set the shared auto-run-experiments preference (see the getter).
+
+        No-op on a locked session.
+        """
+        if self._locked:
+            return
         with self._cv:
             self._auto_run_experiments = bool(enabled)
             self._cv.notify_all()
@@ -1068,8 +1085,11 @@ class Session:
         """Update the debugger settings (only the given fields change).
 
         Resets the per-batch check counter so a changed interval takes effect
-        from the next batch rather than carrying a stale count.
+        from the next batch rather than carrying a stale count. No-op on a
+        locked session.
         """
+        if self._locked:
+            return
         with self._cv:
             current = self._debug_settings
             self._debug_settings = replace(
@@ -1114,8 +1134,11 @@ class Session:
         limit and samples-per-channel fix the per-channel buffer shapes, so any
         change to them drops every bucket and rebuilds it under the new config
         (the UI warns about this). `channel_limit` must be ≥ 1 and
-        `samples_per_channel` ≥ 1.
+        `samples_per_channel` ≥ 1. No-op (returning False) on a locked
+        session.
         """
+        if self._locked:
+            return False
         with self._cv:
             current = self._watch_performance
             updated = replace(
@@ -1160,8 +1183,10 @@ class Session:
 
         `category` is `"nan_inf"` or `"under_over"`. The matching reasons and
         table columns are removed from any active error; the banner clears
-        entirely if nothing remains.
+        entirely if nothing remains. No-op on a locked session.
         """
+        if self._locked:
+            return
         with self._cv:
             if category == debugger.NAN_INF:
                 self._debug_settings = replace(
@@ -1299,6 +1324,39 @@ class Session:
         with self._cv:
             self._schedule.update(epochs=epochs, phases=phases)
 
+    @property
+    def locked(self) -> bool:
+        """Whether run control and global settings are locked (see `lock`)."""
+        return self._locked
+
+    def lock(self) -> None:
+        """Lock run control and global settings for a shared demo deployment.
+
+        Intended for a publicly hosted playground where many anonymous
+        visitors share one session. Once locked:
+
+        - the run-control methods (`stop`, every `step_*`, `detach`),
+          `request_time_travel`, `watch`/`unwatch`, and the global settings
+          (`set_stats_scope`, `set_update_frequency`,
+          `set_watch_performance`, `set_debug_settings`,
+          `disable_debug_check`, `set_auto_run_experiments`) become no-ops
+          (`request_time_travel` raises `TimeTravelError`, so the UI can
+          show why);
+        - the stats scope is forced to `ALL` — every layer collects, so the
+          UI's per-tab show/hide never touches shared state;
+        - experiment requests still run, with their parameters clamped and
+          the queue depth capped (see `nansense.experiments`).
+
+        Everything read-only stays available, as do pin/perturb probes and
+        experiments. The lock is one-way by design — arm the wanted mode
+        (e.g. `step_run()`) and settings *before* locking. `close()` is not
+        locked; it belongs to the hosting script.
+        """
+        with self._cv:
+            self._stats_scope = StatsScope.ALL
+            self._prev_stats_scope = StatsScope.ALL
+            self._locked = True
+
     def stop(self) -> None:
         self._set_mode(Mode.STEP, resume=False)
 
@@ -1332,6 +1390,8 @@ class Session:
         (0 = first phase). A target in a phase/epoch not yet observed is simply
         matched once training arrives there; one that never arrives runs to the
         end (acceptable — there is nothing to stop on)."""
+        if self._locked:
+            return
         with self._cv:
             self._target_position = (phase_index, epoch, batch_idx)
         self._set_mode(Mode.UNTIL_POSITION, resume=True)
@@ -1455,6 +1515,10 @@ class Session:
         half-issued. The leader validates only its own (rank-0) checkpoint
         here; the followers' replicated state is restored from their own files.
         """
+        if self._locked:
+            raise TimeTravelError(
+                "Time travel is disabled in this shared demo."
+            )
         restorer = self._restorer
         if restorer is None:
             raise TimeTravelError(
@@ -1492,6 +1556,13 @@ class Session:
     def time_travel_status(self) -> TimeTravelStatus:
         """What the UI needs to render the time-travel button and dialog."""
         total = self._schedule.epochs
+        if self._locked:
+            return TimeTravelStatus(
+                available=False,
+                reason="Time travel is disabled in this shared demo.",
+                cached_epochs=[],
+                total_epochs=total or 0,
+            )
         restorer = self._restorer
         if restorer is None or total is None:
             return TimeTravelStatus(
@@ -1545,6 +1616,10 @@ class Session:
             )
 
     def _set_mode(self, mode: Mode, *, resume: bool) -> None:
+        # The single choke point for every run-control method (`stop`,
+        # `step_*`, `detach`), so a locked session refuses them all here.
+        if self._locked:
+            return
         with self._cv:
             self._mode = mode
             if resume:

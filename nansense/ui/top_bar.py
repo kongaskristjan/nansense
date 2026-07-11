@@ -167,8 +167,11 @@ def _refresh_button(session: Session) -> None:
     this only matters in `detach` / `step_run`, where training runs freely and
     the views would otherwise stay frozen between frequency-cadence updates.
     Styled like the adjacent nav button so it reads as the second left-cluster
-    control on every page that shows it.
+    control on every page that shows it. Skipped on a locked session — parked
+    training produces no batches to refresh from.
     """
+    if session.locked:
+        return
     ui.button(
         icon="refresh",
         on_click=session.request_snapshot,
@@ -192,7 +195,25 @@ def _add_step_controls(
     the throttle — rapid batches in step_epoch / step_run / detach coalesce
     into at most ~5 cheap label updates per second, and NiceGUI skips the
     write when the text is unchanged.
+
+    On a locked session the whole control cluster is replaced by a demo
+    notice — the session refuses the calls anyway (`Session.lock`), so the
+    buttons would only mislead.
     """
+    if session.locked:
+        with ui.element("div").classes(
+            "flex items-center gap-1 px-2 py-1 rounded bg-amber-100 "
+            "text-amber-800 text-sm font-medium"
+        ).tooltip(
+            "This is a shared, hosted playground: training sits paused at a "
+            "trained checkpoint and stepping / time travel are disabled. "
+            "Watch layers, browse stats, perturb inputs, and run experiments "
+            "freely."
+        ):
+            ui.icon("lock").classes("text-base")
+            ui.label("demo — training controls disabled")
+        _add_position_label(session)
+        return
     last_batch_confirm = _build_last_batch_confirm_dialog(session)
 
     def run() -> None:
@@ -237,16 +258,30 @@ def _add_step_controls(
         .tooltip("Pause at next batch")
     )
     _add_time_travel_button(session)
+    _add_position_label(session)
+    # Run is grayed while training advances (started by Run or any Step), Stop
+    # while it sits paused — a 0.2s timer toggles both off
+    # `session.is_running`. `None` forces the first apply.
+    last_running: bool | None = None
+
+    def refresh_buttons() -> None:
+        nonlocal last_running
+        running = session.is_running
+        if running != last_running:
+            last_running = running
+            run_button.set_enabled(not running)
+            stop_button.set_enabled(running)
+
+    ui.timer(0.2, refresh_buttons)
+
+
+def _add_position_label(session: Session) -> None:
+    """The live epoch/phase/batch label, updated by its own 0.2 s timer."""
     position_label = ui.label("(waiting for first batch)").classes(
         "ml-3 font-mono text-sm"
     )
-    # Run is grayed while training advances (started by Run or any Step), Stop
-    # while it sits paused — the same 0.2s timer that tracks the live position
-    # toggles both off `session.is_running`. `None` forces the first apply.
-    last_running: bool | None = None
 
     def refresh() -> None:
-        nonlocal last_running
         live = session.live_position
         if live is not None:
             # Append the run's totals when known: total epochs from the
@@ -258,11 +293,6 @@ def _add_step_controls(
                 total_epochs=schedule.epochs,
                 total_batches=schedule.phase_count(live.phase),
             )
-        running = session.is_running
-        if running != last_running:
-            last_running = running
-            run_button.set_enabled(not running)
-            stop_button.set_enabled(running)
 
     ui.timer(0.2, refresh)
 
@@ -496,7 +526,28 @@ def _add_settings_button(
     current page's view, while it records, appears only in that list (marked
     "this view") rather than twice. A red badge on the gear carries the
     active-recording count.
+
+    On a locked session every setting in here is shared, mutable state, so
+    the gear opens a short notice instead of the dialog.
     """
+    if session.locked:
+        with ui.dialog() as locked_dialog, ui.card().classes("max-w-md p-6 gap-3"):
+            ui.label("Settings are locked").classes("text-lg font-bold")
+            ui.label(
+                "This hosted playground is shared by everyone viewing it, so "
+                "the session-wide settings (stats collection, update "
+                "frequency, performance caps, error checks, recording) are "
+                "fixed. Everything per-tab — shown layers, pinned inputs, "
+                "perturbations, experiments — works normally."
+            ).classes("text-sm text-slate-600")
+            with ui.row().classes("w-full justify-end"):
+                ui.button("Close", on_click=locked_dialog.close).props("flat")
+        button = ui.button(
+            icon="settings", on_click=locked_dialog.open, color="slate-500"
+        ).props("dense size=md")
+        button.tooltip("Settings (locked in this shared demo)")
+        return button
+
     # Phases seen so far; refreshed each time the dialog opens (lazy schedules
     # learn them as training runs).
     phase_names = session.schedule.phase_order

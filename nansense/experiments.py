@@ -170,6 +170,29 @@ def run(
 # first); generous enough for every open client plus a little history.
 _EXPERIMENT_RESULTS_KEPT: int = 8
 
+# On a locked session (a shared demo, `Session.lock`), the queue is the one
+# resource every visitor contends on — the pause loop runs experiments one at
+# a time — so request parameters are clamped to these ceilings and the queue
+# depth is capped. Values are chosen so the heaviest allowed request stays in
+# the seconds range on the demo-scale models a locked session hosts.
+_LOCKED_PARAM_LIMITS: dict[str, int] = {
+    "steps": 300,  # deep-dream ascent steps
+    "channels": 8,  # deep-dream channels (one sample each)
+    "batch": 8,  # Captum input batch
+    "ig_steps": 64,  # integrated-gradients interpolation steps
+}
+_LOCKED_MAX_QUEUE: int = 8
+
+
+def _locked_params(params: dict[str, object]) -> dict[str, object]:
+    """`params` with every capped numeric knob clamped to its ceiling."""
+    out = dict(params)
+    for key, limit in _LOCKED_PARAM_LIMITS.items():
+        value = out.get(key)
+        if isinstance(value, (int, float)):
+            out[key] = min(int(value), limit)
+    return out
+
 # How long an auto-experiment registration survives without a heartbeat
 # (`touch_auto_experiment`). UI pages tick every ~0.2 s, so anything beyond
 # a few seconds means the page is gone.
@@ -202,14 +225,28 @@ def request_experiment(
         )
     with session._cv:
         session._experiment_seq += 1
-        session._experiment_queue.append(
-            ExperimentRequest(
-                kind=kind,
-                layer=layer,
-                params=dict(params),
-                seq=session._experiment_seq,
-            )
+        request = ExperimentRequest(
+            kind=kind,
+            layer=layer,
+            params=(
+                _locked_params(params) if session._locked else dict(params)
+            ),
+            seq=session._experiment_seq,
         )
+        if session._locked and len(session._experiment_queue) >= _LOCKED_MAX_QUEUE:
+            # Shared-demo backstop: publish a queue-full error for this seq
+            # (the requesting page polls it like any result) instead of
+            # letting one visitor pile up unbounded work. `_cv` is an RLock,
+            # so publishing under the held lock is fine.
+            _publish_experiment(
+                session,
+                _error(
+                    request,
+                    "the experiment queue is full — try again in a moment",
+                ),
+            )
+            return request.seq
+        session._experiment_queue.append(request)
         session._cv.notify_all()
         return session._experiment_seq
 
@@ -254,7 +291,12 @@ def register_auto_experiment(
             )
         session._experiment_seq += 1
         request = ExperimentRequest(
-            kind=kind, layer=layer, params=dict(params), seq=session._experiment_seq
+            kind=kind,
+            layer=layer,
+            params=(
+                _locked_params(params) if session._locked else dict(params)
+            ),
+            seq=session._experiment_seq,
         )
         session._auto_experiments[key] = _AutoExperiment(
             request=request,

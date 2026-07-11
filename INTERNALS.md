@@ -1382,6 +1382,33 @@ off with one flag:
   `fx_traced` is `False`, and the declared batch counts are never enforced
   because `Schedule.advance` is never called.
 
+## Locked sessions (shared demos)
+
+`Session.lock()` is the one-way switch behind a publicly hosted playground,
+where many anonymous visitors share one session. It forces the stats scope
+to `all` (so per-tab show/hide never touches shared state) and makes every
+run-control and global-settings method a no-op: `_set_mode` — the choke
+point for `stop` / `step_*` / `detach` — returns early, `request_time_travel`
+raises `TimeTravelError` (and `time_travel_status` reports why, so the
+button renders disabled with the reason), and `watch`/`unwatch`,
+`set_stats_scope`, `set_update_frequency`, `set_watch_performance`,
+`set_debug_settings`, `disable_debug_check`, and `set_auto_run_experiments`
+all refuse. `close()` stays available — it belongs to the hosting script,
+which arms its wanted mode (typically `step_run()`) and settings *before*
+locking.
+
+Everything per-visitor keeps working: browsing, per-tab shown layers,
+pin/perturb probes, and experiments — the latter with their numeric knobs
+clamped (`experiments._LOCKED_PARAM_LIMITS`) and the shared queue capped
+(`_LOCKED_MAX_QUEUE`; an over-cap request gets a queue-full error result
+published under its own seq, which the requesting page polls like any
+outcome). The UI reads `session.locked` to swap the step controls for a
+demo notice, hide the Refresh button and the stats pause toggle, and turn
+the settings gear into a "settings are locked" note; enforcement lives in
+the `Session` methods, so the UI state is cosmetic.
+`render.set_strip_format("PNG")` is the companion knob for internet-facing
+deployments — BMP strips are the localhost trade.
+
 ## Lifecycle summary
 
 ```text

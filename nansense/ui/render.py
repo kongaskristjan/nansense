@@ -95,6 +95,23 @@ def image_mime() -> str:
     return _MIME_TYPES[STRIP_FORMAT]
 
 
+def set_strip_format(fmt: str) -> None:
+    """Set the encoding for every rendered image: `"BMP"` or `"PNG"`.
+
+    BMP (the default) is the localhost trade — near-memcpy encode, ~2× the
+    bytes; PNG is for byte-constrained links (an SSH port forward, a hosted
+    deployment). Call it once at startup, before the first render — the
+    render cache does not re-encode existing entries.
+    """
+    global STRIP_FORMAT
+    fmt = fmt.upper()
+    if fmt not in _MIME_TYPES:
+        raise ValueError(
+            f"unknown strip format {fmt!r}; expected one of {list(_MIME_TYPES)}"
+        )
+    STRIP_FORMAT = fmt
+
+
 @dataclass(frozen=True)
 class StripTile:
     """One channel/tile of a strip: its own image plus a column caption.
