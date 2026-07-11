@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 import torch
 
@@ -31,6 +33,7 @@ from nansense.ui.stats_page import (
     _phase_select_options,
     _reconcile_selected_layer,
     _reconcile_selected_phase,
+    _refresh_now,
     _selectable_layers,
     _should_show_bands,
     _visible_layers,
@@ -43,7 +46,9 @@ from tests.nansense.helpers import (
     _make_snapshot,
     _tensor_stats,
     make_position,
+    make_session,
     paused_session,
+    train_step,
 )
 
 
@@ -382,3 +387,26 @@ def test_refresh_gate_passes_only_on_new_publish_or_watched_change() -> None:
         assert session.snapshot is not before
         assert gate.should_refresh(session)
         assert not gate.should_refresh(session)
+
+
+def test_refresh_now_rerenders_and_arms_a_one_shot_publish() -> None:
+    # The button must deliver fresh data while training runs freely: the
+    # immediate refresh re-renders the running aggregates, and the armed
+    # one-shot publish makes the next batch pass the page's gate — which is
+    # what updates the snapshot-derived "Current batch" content.
+    session, model = make_session(epochs=1, phases={"train": 3})
+    session.set_update_frequency(unit="batch", n=100)  # cadence never due
+    session.detach()
+    gate = _RefreshGate()
+    gate.should_refresh(session)  # consume the page-open state
+    refreshed: list[bool] = []
+
+    async def fake_refresh() -> None:
+        refreshed.append(True)
+
+    asyncio.run(_refresh_now(session, fake_refresh))
+    assert refreshed == [True]  # the click re-renders immediately
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+    assert session.snapshot is not None  # the one-shot published...
+    assert gate.should_refresh(session)  # ...and the gate re-renders from it

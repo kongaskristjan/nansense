@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from urllib.parse import quote
 
@@ -139,8 +139,8 @@ class _RefreshGate:
     aggregates advanced another batch. Watched-set and phase-list changes
     (e.g. from the main page in another tab) also pass, so the sidebar and
     cards stay in sync while training runs between updates or sits paused.
-    The sidebar controls and the "Refresh now" button call `refresh`
-    directly, bypassing the gate.
+    The sidebar controls and the "Refresh now" button (`_refresh_now`)
+    call `refresh` directly, bypassing the gate.
     """
 
     last_snapshot: BatchSnapshot | None = None
@@ -161,6 +161,23 @@ class _RefreshGate:
         self.last_watched = watched
         self.last_phases = phases
         return changed
+
+
+async def _refresh_now(
+    session: Session, refresh: Callable[[], Awaitable[None]]
+) -> None:
+    """Behind the top bar's "Refresh now" button.
+
+    The immediate `refresh` re-renders from the data already at hand — the
+    running aggregates and the last published snapshot. Fresh snapshot
+    content (the "Current batch" phase) needs a publish, so this also arms
+    `Session.request_snapshot` (like the main top bar's Refresh): the next
+    free-running batch publishes without pausing, and the tick's
+    `_RefreshGate` re-renders the page from it. A no-op when training isn't
+    producing batches — the shown snapshot is then already current.
+    """
+    session.request_snapshot()
+    await refresh()
 
 
 def _should_show_bands(error: debugger.DebugError | None) -> bool:
@@ -381,9 +398,11 @@ def _build_stats_page(
             _add_settings_button(session, record_view).classes("ml-auto")
             ui.button(
                 icon="refresh",
-                on_click=lambda: refresh(),
+                on_click=lambda: _refresh_now(session, refresh),
                 color="slate-500",
-            ).props("dense size=md flat").tooltip("Refresh now")
+            ).props("dense size=md flat").tooltip(
+                "Refresh now — and from the next training batch while running"
+            )
             _add_repo_logo()
 
         _add_error_banner(session)
