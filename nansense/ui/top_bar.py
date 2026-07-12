@@ -508,9 +508,11 @@ def _add_settings_button(
     "Performance" groups the knobs that trade visualization detail for GPU
     VRAM and overhead. The watched-layer caps (`Session.set_watch_performance`)
     bound per-channel memory: a channel limit (the per-channel histograms and
-    extreme-input patch galleries are kept only for the first N channels) and
-    the samples-per-channel kept by the patch galleries — changing either
-    flushes all collected watch statistics, since the buffer shapes change.
+    extreme-input patch galleries are kept only for the first N channels),
+    the samples-per-channel kept by the patch galleries, and whether the
+    average-extreme galleries (a whole input image per slot) are collected at
+    all — changing any of them flushes all collected watch statistics, since
+    the buffer shapes change.
     "Update frequency" (`Session.set_update_frequency`) sets how often all
     visualizations recompute: every nth epoch (the default, n=1) or every nth
     batch, optionally counting only one phase's batches. The frequency is
@@ -627,9 +629,17 @@ def _add_settings_button(
             ).props("dense outlined").classes("flex-1").tooltip(
                 "Extreme input samples kept per channel, per ranking"
             )
+        average_patches_switch = ui.switch(
+            "Average-extreme patch galleries",
+            on_change=lambda: apply_watch_performance(),
+        ).props("dense").tooltip(
+            "Also collect the max/min-average galleries, which keep a whole "
+            "input image per slot (extra VRAM). The pixel-extreme galleries "
+            "are always collected."
+        )
         ui.label(
-            "Changing the channel limit or samples per channel flushes all "
-            "collected statistics."
+            "Changing the channel limit, samples per channel, or the average "
+            "galleries flushes all collected statistics."
         ).classes("text-xs text-red-500")
         ui.label("Update frequency").classes("text-sm font-medium mt-1")
         ui.label(
@@ -781,6 +791,7 @@ def _add_settings_button(
             channel_limit_enabled=enabled,
             channel_limit=limit,
             samples_per_channel=samples,
+            average_patches=bool(average_patches_switch.value),
         )
         if flushed:
             ui.notify("Watch statistics flushed", type="info")
@@ -959,6 +970,7 @@ def _add_settings_button(
         channel_limit_input.value = perf.channel_limit
         channel_limit_input.set_enabled(perf.channel_limit_enabled)
         samples_input.value = perf.samples_per_channel
+        average_patches_switch.value = perf.average_patches
         freq = session.update_frequency
         unit_select.value = freq.unit
         n_input.value = freq.n

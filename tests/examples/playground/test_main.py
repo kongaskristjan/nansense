@@ -75,6 +75,8 @@ def _prepare(spec: PlaygroundSpec, moment_path: Path) -> PlaygroundSpec:
 def test_shown_layers_exist_on_the_model_graph(spec: PlaygroundSpec) -> None:
     session = nansense.start(spec.build())
     assert set(spec.shown_layers) <= set(session.layer_names)
+    if spec.patch_layers is not None:  # no spec shortlists today; keep generic
+        assert set(spec.patch_layers) <= set(session.layer_names)
 
 
 @playgrounds
@@ -103,6 +105,13 @@ def test_serve_parks_locked_at_the_frozen_train_batch(
     assert session.locked
     assert session.stats_scope is StatsScope.ALL
     assert session.watched_layers == frozenset(spec.shown_layers)
+    # The spec's performance caps rode along in the moment file.
+    perf = session.watch_performance
+    if spec.channel_limit is not None:
+        assert perf.channel_limit_enabled is True
+        assert perf.channel_limit == spec.channel_limit
+    if spec.samples_per_channel is not None:
+        assert perf.samples_per_channel == spec.samples_per_channel
 
     thread = run_in_thread(session.park)
     try:

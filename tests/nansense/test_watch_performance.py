@@ -60,6 +60,29 @@ def test_average_patches_toggle_flushes() -> None:
     assert session.set_watch_performance(average_patches=False) is True
 
 
+def test_dialog_style_combined_update_flips_average_patches() -> None:
+    """The settings dialog pushes all four caps in one call
+    (`apply_watch_performance` in `nansense.ui.top_bar`): toggling only the
+    average-galleries switch must flip the flag and flush, and re-sending
+    the same combination must not flush again."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    current = session.watch_performance
+
+    def dialog_apply(average_patches: bool) -> bool:
+        return session.set_watch_performance(
+            channel_limit_enabled=current.channel_limit_enabled,
+            channel_limit=current.channel_limit,
+            samples_per_channel=current.samples_per_channel,
+            average_patches=average_patches,
+        )
+
+    assert dialog_apply(True) is True
+    assert session.watch_performance.average_patches is True
+    assert dialog_apply(True) is False
+    assert dialog_apply(False) is True
+    assert session.watch_performance.average_patches is False
+
+
 def _fc1_channel_rows(session: Session) -> int | None:
     snap = session.watch_snapshot()
     for key, layer in snap.stats.items():

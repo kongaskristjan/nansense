@@ -1541,10 +1541,10 @@ the raw uint8 payloads + scale tensors, a quarter of the fp32 bytes).
 `Session.set_patch_layers([...])` gates patch accumulation to a shortlist
 (`None` = every layer, the default) while histogram/min-max/graph
 statistics keep covering the full stats scope; `_update_watch_stats`
-checks the set at its single `update_patches` call site. Showcase prepare
-runs shortlist the layers whose galleries the demo actually presents,
-keeping both prepare-time GPU memory and the moment file proportional to
-the shortlist.
+checks the set at its single `update_patches` call site. The hosted
+playgrounds no longer shortlist — uint8 payloads, average grids off, and
+the per-spec channel cap keep full-model galleries small — but the knob
+remains for models that outgrow even that.
 
 **Parking.** Experiments execute on the pause loop, which normally lives
 inside a batch's `_wait_for_proceed`. A moment session drives no batches,
@@ -1554,11 +1554,13 @@ explicit "wait indefinitely") and re-enters `_wait_for_proceed` until
 `lock()` → `park()`.
 
 In `examples/playground`, `--prepare` trains under scope `all` (so the
-frozen stats cover every layer across the whole run), shortlists the
-patch layers per demo spec, arms `freeze_moment` at the last train batch
-of the last epoch, and skips the final epoch's validation so the frozen
-batch is the run's last gradient-carrying one. Serving replays that batch
-once at boot (seconds for LeNet, under a minute for the imagenette
+frozen stats cover every layer across the whole run), arms `freeze_moment`
+at the last train batch of the last epoch, and skips the final epoch's
+validation so the frozen batch is the run's last gradient-carrying one.
+Galleries cover the full model; uint8 payloads and the default-off
+average grids make that affordable, and the per-spec channel cap and
+frozen-batch size are the remaining sizing levers. Serving replays that
+batch once at boot (seconds for LeNet, under a minute for the imagenette
 ResNet on the free Space's CPUs); the container ships no dataset and no
 epoch cache (time travel is disabled under lock anyway).
 

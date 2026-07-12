@@ -70,13 +70,16 @@ class PlaygroundSpec:
     lr: float = 1e-3
     weight_decay: float = 0.05
     # Layers that collect extreme-input patch galleries (None = all layers).
-    # Patch buffers are by far the largest watch state — per-channel input
-    # crops and heatmaps, on the GPU per layer and phase, all stored in the
-    # frozen moment — so deep models at real image sizes shortlist them;
-    # every layer keeps its histogram/graph statistics regardless.
+    # uint8 payloads, average grids off by default, and the channel cap
+    # below keep full-model galleries affordable, so no demo shortlists —
+    # the knob remains for models that outgrow even that; every layer keeps
+    # its histogram/graph statistics regardless.
     patch_layers: tuple[str, ...] | None = None
     # Extreme-patch samples kept per channel (None = session default).
     samples_per_channel: int | None = None
+    # Channels tracked per layer by the per-channel histograms and patch
+    # galleries (None = session default).
+    channel_limit: int | None = None
 
     @property
     def config(self) -> DatasetConfig:
@@ -102,19 +105,13 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         dataset="imagenette",
         model="resnet_deep",
         epochs=50,
-        batch_size=32,
+        # Also the frozen/replayed demo batch: 16 halves the serve-time
+        # replay cost and the snapshot's RAM versus 32.
+        batch_size=16,
         shown_layers=("stem", "stage1.0.conv1"),
-        # All 155 layers of 128px patch buffers cost ~3.4 GB per phase even
-        # at 3 samples/channel — a shortlist spanning the depth keeps the
-        # moment file (and the prepare run's VRAM) in the tens of MB.
-        patch_layers=(
-            "stem",
-            "stage1.0.conv1",
-            "stage2.0.conv1",
-            "stage3.0.conv1",
-            "stage4.0.conv1",
-            "stage5.0.conv1",
-        ),
+        # Full-model galleries: uint8 payloads + average grids off by
+        # default + the 8-channel cap keep the moment in the tens of MB.
+        channel_limit=8,
         samples_per_channel=3,
     ),
 }
@@ -199,6 +196,8 @@ def train_and_freeze(
     )
     if spec.samples_per_channel is not None:
         session.set_watch_performance(samples_per_channel=spec.samples_per_channel)
+    if spec.channel_limit is not None:
+        session.set_watch_performance(channel_limit=spec.channel_limit)
     if spec.patch_layers is not None:
         session.set_patch_layers(spec.patch_layers)
     for layer in spec.shown_layers:
