@@ -595,6 +595,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#nansense.Session.lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lock
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -760,6 +771,17 @@
     <span class="md-ellipsis">
       
         Watch statistics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.StatsScope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StatsScope
       
     </span>
   </a>
@@ -1298,6 +1320,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#nansense.Session.lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lock
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1463,6 +1496,17 @@
     <span class="md-ellipsis">
       
         Watch statistics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.StatsScope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StatsScope
       
     </span>
   </a>
@@ -2167,6 +2211,7 @@ phases outside an <code>epochs()</code> loop.</p>
     <span class="n">n</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
     <span class="n">cache_dir</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">=</span> <span class="n"><span title="nansense.restore.DEFAULT_CACHE_DIR">DEFAULT_CACHE_DIR</span></span><span class="p">,</span>
+    <span class="n">start_epoch</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Iterator">Iterator</span></span><span class="p">[</span><span class="n"><span title="int">int</span></span><span class="p">]</span>
 </code></pre></div>
 
@@ -2190,10 +2235,19 @@ the jump; the generator then re-yields the target epoch::</p>
         for inputs, targets in session.batches(val_dl, phase=&quot;val&quot;):
             ...
 </code></pre></div>
+<p><code>start_epoch</code> resumes the run from <code>cache_dir</code>'s checkpoint of that
+epoch instead of training from scratch: the cache directory is
+adopted as-is (it may come from an earlier process — e.g. one baked
+into a deployment image), the checkpoint is validated against the
+live model / optimizer / scheduler up-front (<code>TimeTravelError</code> on a
+mismatch), and the loop yields <code>start_epoch … n - 1</code> with the state
+restored on the training thread before the first batch. Time travel
+then covers every epoch the directory holds a checkpoint for.</p>
 <p>Not iterating this leaves the run a straight pass with the UI's Time
 Travel button disabled; on a disabled session it is inert and nothing
-touches the disk. Under DDP call it on every rank — a leader jump is
-broadcast so all ranks re-yield the same epoch in lockstep.</p>
+touches the disk (<code>start_epoch</code> is then ignored). Under DDP call it
+on every rank — a leader jump is broadcast so all ranks re-yield the
+same epoch in lockstep.</p>
 
 
     </div>
@@ -2302,6 +2356,47 @@ the <em>training</em> side of the session, not the UI.</p>
     <div class="doc doc-contents ">
 
         <p>What the UI needs to render the time-travel button and dialog.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.lock" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">lock</span>
+
+
+<a href="#nansense.Session.lock" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">lock</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Lock run control and global settings for a shared demo deployment.</p>
+<p>Intended for a publicly hosted playground where many anonymous
+visitors share one session. Once locked:</p>
+<ul>
+<li>the run-control methods (<code>stop</code>, every <code>step_*</code>, <code>detach</code>),
+  <code>request_time_travel</code>, <code>watch</code>/<code>unwatch</code>, the probe surface
+  (<code>pin_current_batch</code>, <code>unpin_batch</code>, <code>add_perturbation</code>,
+  <code>clear_perturbations</code>, <code>set_probe_mode</code> — all shared state every
+  visitor sees), and the global settings (<code>set_stats_scope</code>,
+  <code>set_update_frequency</code>, <code>set_watch_performance</code>,
+  <code>set_debug_settings</code>, <code>disable_debug_check</code>,
+  <code>set_auto_run_experiments</code>) become no-ops (<code>request_time_travel</code>
+  raises <code>TimeTravelError</code>, so the UI can show why);</li>
+<li>the stats scope is forced to <code>ALL</code> — every layer collects, so the
+  UI's per-tab show/hide never touches shared state;</li>
+<li>experiment requests still run, with their parameters clamped and
+  the queue depth capped (see <code>nansense.experiments</code>).</li>
+</ul>
+<p>Everything read-only stays available, as do experiments. The lock is
+one-way by design — arm the wanted mode (e.g. <code>step_run()</code>), the
+settings, and any demo pin <em>before</em> locking. <code>close()</code> is not
+locked; it belongs to the hosting script.</p>
 
 
     </div>
@@ -2772,6 +2867,65 @@ the same instant — so a scheduler-driven <code>lr</code> is the batch's actual
 
 </div><h2 id="watch-statistics">Watch statistics<a class="headerlink" href="#watch-statistics" title="Permanent link">&para;</a></h2>
 
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.StatsScope" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.StatsScope</span>
+
+
+<a href="#nansense.StatsScope" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="nansense.session.StrEnum">StrEnum</span></code></p>
+
+
+
+        <p>Which layers fold their batches into the running statistics.</p>
+<ul>
+<li><code>NONE</code>: nothing is collected; already-collected stats are kept frozen
+  (the pause the top bar's stats toggle uses).</li>
+<li><code>WATCHED</code> (default): the watched layers collect, and watching a layer is
+  also what shows its cards — the classic coupled behaviour.</li>
+<li><code>ALL</code>: every layer in <code>layer_names</code> collects, independent of the watched
+  set.</li>
+</ul>
+<p>Outside <code>WATCHED</code>, the watched set no longer drives collection, so the UI
+treats showing/hiding a layer's cards as per-tab state that never touches
+the session (see <code>main_page</code>).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
 
 <div class="doc doc-object doc-class">
 

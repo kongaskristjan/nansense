@@ -139,6 +139,7 @@ epochs(
     n: int | None = None,
     *,
     cache_dir: Path = DEFAULT_CACHE_DIR,
+    start_epoch: int = 0,
 ) -> Iterator[int]
 ```
 
@@ -157,7 +158,9 @@ for epoch in session.epochs(50, cache_dir="models/latest"):
             ...
 ```
 
-Not iterating this leaves the run a straight pass with the UI's Time Travel button disabled; on a disabled session it is inert and nothing touches the disk. Under DDP call it on every rank — a leader jump is broadcast so all ranks re-yield the same epoch in lockstep.
+`start_epoch` resumes the run from `cache_dir`'s checkpoint of that epoch instead of training from scratch: the cache directory is adopted as-is (it may come from an earlier process — e.g. one baked into a deployment image), the checkpoint is validated against the live model / optimizer / scheduler up-front (`TimeTravelError` on a mismatch), and the loop yields `start_epoch … n - 1` with the state restored on the training thread before the first batch. Time travel then covers every epoch the directory holds a checkpoint for.
+
+Not iterating this leaves the run a straight pass with the UI's Time Travel button disabled; on a disabled session it is inert and nothing touches the disk (`start_epoch` is then ignored). Under DDP call it on every rank — a leader jump is broadcast so all ranks re-yield the same epoch in lockstep.
 
 ### restore_point
 
@@ -200,6 +203,22 @@ time_travel_status() -> TimeTravelStatus
 ```
 
 What the UI needs to render the time-travel button and dialog.
+
+### lock
+
+```
+lock() -> None
+```
+
+Lock run control and global settings for a shared demo deployment.
+
+Intended for a publicly hosted playground where many anonymous visitors share one session. Once locked:
+
+- the run-control methods (`stop`, every `step_*`, `detach`), `request_time_travel`, `watch`/`unwatch`, the probe surface (`pin_current_batch`, `unpin_batch`, `add_perturbation`, `clear_perturbations`, `set_probe_mode` — all shared state every visitor sees), and the global settings (`set_stats_scope`, `set_update_frequency`, `set_watch_performance`, `set_debug_settings`, `disable_debug_check`, `set_auto_run_experiments`) become no-ops (`request_time_travel` raises `TimeTravelError`, so the UI can show why);
+- the stats scope is forced to `ALL` — every layer collects, so the UI's per-tab show/hide never touches shared state;
+- experiment requests still run, with their parameters clamped and the queue depth capped (see `nansense.experiments`).
+
+Everything read-only stays available, as do experiments. The lock is one-way by design — arm the wanted mode (e.g. `step_run()`), the settings, and any demo pin *before* locking. `close()` is not locked; it belongs to the hosting script.
 
 ## PyTorch Lightning integration
 
@@ -315,6 +334,18 @@ All tensor dicts are independent CPU clones taken at snapshot time, so the snaps
 `optimizer_state` / `optimizer_hyperparams` are populated only when the session was given an optimizer at `start()`; otherwise they stay empty. State entries are keyed `param name -> state key -> tensor` (scalar entries like Adam's `step` become 0-dim tensors); hyperparams are the numeric knobs of the parameter's group (`lr`, `momentum`, ...), read at the same instant — so a scheduler-driven `lr` is the batch's actual one.
 
 ## Watch statistics
+
+## nansense.StatsScope
+
+Bases: `StrEnum`
+
+Which layers fold their batches into the running statistics.
+
+- `NONE`: nothing is collected; already-collected stats are kept frozen (the pause the top bar's stats toggle uses).
+- `WATCHED` (default): the watched layers collect, and watching a layer is also what shows its cards — the classic coupled behaviour.
+- `ALL`: every layer in `layer_names` collects, independent of the watched set.
+
+Outside `WATCHED`, the watched set no longer drives collection, so the UI treats showing/hiding a layer's cards as per-tab state that never touches the session (see `main_page`).
 
 ## nansense.WatchSnapshot
 

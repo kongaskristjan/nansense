@@ -40,7 +40,9 @@ Open a watched layer's **stats view** for a closer look at its distributions ove
 
 The Phase dropdown's last entry, **Current batch**, switches the data source from the epoch accumulators to the last captured batch. In this mode *any* layer can be selected, watched or not.
 
-The top bar's eye icon shows the watched-layer count and pauses or resumes stats collection without hiding the cards; its menu also watches/unwatches all layers and deep-links each layer's stats.
+The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.
+
+The settings dialog can switch stats collection between the watched layers (the default), every layer, or none. Outside the default, showing and hiding cards on the main page is per-tab and doesn't affect what is collected.
 
 ## The weights page
 
