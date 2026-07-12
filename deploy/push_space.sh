@@ -7,7 +7,7 @@
 # the Space front matter prepended to the README, every PNG/GIF renormalized
 # to a git-LFS pointer (the Hub rejects plain-git binaries and inspects the
 # whole pushed history, hence the orphan commit) — and force-pushes it to
-# the `space` remote. See PLAYGROUND_DEPLOYMENT.md for the background.
+# the `space` remote. See deploy/README.md for the background.
 #
 # Requires git-lfs (`git lfs install` once) and a clean working tree; run it
 # from any branch, it returns you there. `--dry-run` does everything except

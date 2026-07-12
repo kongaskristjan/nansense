@@ -5,13 +5,13 @@ on MNIST, parked paused on its final training batch with the session locked
 (`Session.lock`). Visitors can show/hide layers per tab, browse statistics,
 and run experiments; stepping, time travel, input pinning/perturbation, and
 the global settings are disabled. The entrypoint is
-[`examples/playground/main.py`](examples/playground/main.py); the mechanics
-are described in [`INTERNALS.md`](INTERNALS.md#locked-sessions-shared-demos).
+[`examples/playground/main.py`](../examples/playground/main.py); the mechanics
+are described in [`INTERNALS.md`](../INTERNALS.md#locked-sessions-shared-demos).
 
 Everything that belongs in this repository already lives here: the
-entrypoint, the root [`Dockerfile`](Dockerfile) (root-level because Docker
+entrypoint, the root [`Dockerfile`](../Dockerfile) (root-level because Docker
 Spaces accept no other location), the root `.dockerignore`, and the deploy
-script [`deploy/push_space.sh`](deploy/push_space.sh). This document covers running it and the pieces
+script [`push_space.sh`](push_space.sh) beside this file. This document covers running it and the pieces
 that must live *outside* the repository (the Hugging Face Space, scheduled
 restarts).
 

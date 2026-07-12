@@ -2,7 +2,7 @@
 #
 # Lives at the repository root because Hugging Face Docker Spaces only look
 # for a root-level Dockerfile (there is no config key for a custom path).
-# See PLAYGROUND_DEPLOYMENT.md for the hosting side (Hugging Face Spaces or
+# See deploy/README.md for the hosting side (Hugging Face Spaces or
 # a plain VM):
 #
 #     docker build -t nansense-playground .
