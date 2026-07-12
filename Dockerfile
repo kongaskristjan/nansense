@@ -8,6 +8,10 @@
 #     docker build -t nansense-playground .
 #     docker run --rm -p 7860:7860 nansense-playground
 #
+# Local builds need BuildKit (the docker-buildx-plugin): Docker's legacy
+# builder, especially under a rootless daemon, writes layers the non-root
+# USER below cannot read and dies at the first RUN after the user switch.
+#
 # The image bakes everything a cold start needs — the MNIST download and the
 # trained per-epoch checkpoint cache (`--prepare` runs at build time) — so a
 # container boots in roughly the time of one CPU epoch replay, which fills
