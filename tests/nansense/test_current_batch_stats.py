@@ -27,6 +27,7 @@ def test_single_batch_stats_matches_tensor_reductions() -> None:
         patch_source=None,
         channel_limit=None,
         samples_per_channel=5,
+        average_patches=False,
         include_patches=False,
     )
     assert (out.layer, out.phase, out.epoch) == ("L", "train", 2)
@@ -50,6 +51,7 @@ def test_single_batch_stats_gathers_patches_for_image_input() -> None:
         patch_source=x,
         channel_limit=None,
         samples_per_channel=5,
+        average_patches=False,
         include_patches=True,
     )
     assert out.patches is not None
@@ -65,6 +67,7 @@ def test_single_batch_stats_gathers_patches_for_image_input() -> None:
         patch_source=x,
         channel_limit=None,
         samples_per_channel=5,
+        average_patches=False,
         include_patches=False,
     )
     assert no_patches.patches is None

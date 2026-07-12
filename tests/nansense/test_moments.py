@@ -60,7 +60,10 @@ def _train_batch(
 
 
 def _freeze_run(
-    moment_path: Path, *, patch_layers: tuple[str, ...] | None = None
+    moment_path: Path,
+    *,
+    patch_layers: tuple[str, ...] | None = None,
+    average_patches: bool = False,
 ) -> tuple[Session, MomentNet]:
     """Train MomentNet for two epochs, freezing the last train batch.
 
@@ -78,6 +81,8 @@ def _freeze_run(
     )
     session.watch("conv1")
     session.set_stats_scope("all")
+    if average_patches:
+        session.set_watch_performance(average_patches=True)
     if patch_layers is not None:
         session.set_patch_layers(patch_layers)
     session.freeze_moment(
@@ -136,7 +141,9 @@ def _assert_watch_snapshots_equal(left: WatchSnapshot, right: WatchSnapshot) -> 
 
 def test_freeze_and_load_round_trip(tmp_path: Path) -> None:
     moment_path = tmp_path / "moment.pt"
-    session, model = _freeze_run(moment_path)
+    # `average_patches=True` puts all four quantized galleries in the file,
+    # so the equality walk below covers their full round trip.
+    session, model = _freeze_run(moment_path, average_patches=True)
     assert moment_path.exists()
 
     restored_model = MomentNet()
@@ -179,8 +186,21 @@ def test_freeze_and_load_round_trip(tmp_path: Path) -> None:
     # The replay's transient gradients were cleared.
     assert all(p.grad is None for p in restored_model.parameters())
 
-    # Every running statistic — histograms, patches, weight history.
+    # Every running statistic — histograms, patches, weight history. The
+    # patch galleries travel as raw uint8 + scales; both sides dequantize
+    # identically, so the tensor comparisons are exact.
     _assert_watch_snapshots_equal(restored.watch_snapshot(), session.watch_snapshot())
+    restored_patches = restored.watch_snapshot().stats[("conv1", "train", 1)].patches
+    assert restored_patches is not None
+    assert set(restored_patches.by_type) == {
+        "max_pixel",
+        "min_pixel",
+        "max_average",
+        "min_average",
+    }
+    # The performance caps — average_patches included — mirror the file's.
+    assert restored.watch_performance == session.watch_performance
+    assert restored.watch_performance.average_patches is True
     # All-layer buckets exist across the run's epochs and phases; only the
     # latest epoch per phase keeps its bins (older ones carry the scalar
     # aggregates and the cached median for the GRAPHS curves).
@@ -218,7 +238,10 @@ def test_patch_layers_shortlist_gates_patch_buffers(tmp_path: Path) -> None:
     # Histogram statistics exist for every layer; patch galleries only for
     # the shortlisted one.
     assert ("fc", "train", 1) in stats
-    assert stats[("conv1", "train", 1)].patches is not None
+    patches = stats[("conv1", "train", 1)].patches
+    assert patches is not None
+    # Average grids are off by default — only the pixel grids exist.
+    assert set(patches.by_type) == {"max_pixel", "min_pixel"}
     assert stats[("bn1", "train", 1)].patches is None
     assert stats[("fc", "train", 1)].patches is None
 
@@ -259,7 +282,7 @@ def test_load_moment_rejects_a_different_model(tmp_path: Path) -> None:
         lambda path: path.write_bytes(b"not a torch file"),
         lambda path: torch.save({"kind": "something_else"}, path),
         lambda path: torch.save(
-            {"kind": "nansense_moment", "version": 2}, path
+            {"kind": "nansense_moment", "version": 3}, path
         ),
     ],
     ids=["missing", "corrupt", "wrong-kind", "old-version"],

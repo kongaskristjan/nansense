@@ -82,6 +82,7 @@ from nansense.restore import (
 )
 from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.watch import (
+    DEFAULT_AVERAGE_PATCHES,
     DEFAULT_CHANNEL_LIMIT,
     DEFAULT_SAMPLES_PER_CHANNEL,
     LayerStatsSnapshot,
@@ -186,13 +187,17 @@ class WatchPerformance:
     scales with the channel count. `channel_limit_enabled` caps per-channel
     data to the first `channel_limit` channels (the layer-wide histogram and
     scalars always cover all channels); `samples_per_channel` is how many
-    extreme samples are kept per channel per ranking. Changing any field
-    flushes all watch statistics, since the buffer shapes change.
+    extreme samples are kept per channel per ranking; `average_patches`
+    enables the max/min-average patch grids, which store a whole input image
+    per slot (off by default — the pixel grids are the ones usually
+    consulted). Changing any field flushes all watch statistics, since the
+    buffer shapes change.
     """
 
     channel_limit_enabled: bool = True
     channel_limit: int = DEFAULT_CHANNEL_LIMIT
     samples_per_channel: int = DEFAULT_SAMPLES_PER_CHANNEL
+    average_patches: bool = DEFAULT_AVERAGE_PATCHES
 
 
 @dataclass(frozen=True)
@@ -829,6 +834,7 @@ class Session:
                 patch_source=patch_source,
                 channel_limit=channel_limit,
                 samples_per_channel=perf.samples_per_channel,
+                average_patches=perf.average_patches,
                 include_patches=include_patches,
             )
         return WatchSnapshot(stats=out)
@@ -1194,15 +1200,16 @@ class Session:
         channel_limit_enabled: bool | None = None,
         channel_limit: int | None = None,
         samples_per_channel: int | None = None,
+        average_patches: bool | None = None,
     ) -> bool:
         """Update the per-channel watch caps (only the given fields change).
 
         Returns whether the change flushed the watch statistics: the channel
-        limit and samples-per-channel fix the per-channel buffer shapes, so any
-        change to them drops every bucket and rebuilds it under the new config
-        (the UI warns about this). `channel_limit` must be ≥ 1 and
-        `samples_per_channel` ≥ 1. No-op (returning False) on a locked
-        session.
+        limit, samples-per-channel, and average-patches toggle fix the
+        per-channel buffer shapes, so any change to them drops every bucket
+        and rebuilds it under the new config (the UI warns about this).
+        `channel_limit` must be ≥ 1 and `samples_per_channel` ≥ 1. No-op
+        (returning False) on a locked session.
         """
         if self._locked:
             return False
@@ -1225,6 +1232,11 @@ class Session:
                     if samples_per_channel is None
                     else max(1, int(samples_per_channel))
                 ),
+                average_patches=(
+                    current.average_patches
+                    if average_patches is None
+                    else bool(average_patches)
+                ),
             )
             self._watch_performance = updated
         # Push to the accumulator outside `_cv` (it takes its own lock); it
@@ -1234,6 +1246,7 @@ class Session:
                 updated.channel_limit if updated.channel_limit_enabled else None
             ),
             samples_per_channel=updated.samples_per_channel,
+            average_patches=updated.average_patches,
         )
 
     @property

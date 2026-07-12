@@ -458,7 +458,7 @@ keys under the snapshot's own `(phase, epoch)`.
 Alongside the histogram stats, each watch bucket owns a
 `PatchAccumulator` that keeps, per activation channel, the
 `n_per_channel` input samples producing the most extreme activations
-under four rankings:
+under up to four rankings:
 
 - `max_pixel` / `min_pixel` — the channel's single largest/smallest
   spatial value. The stored patch is an input crop around that pixel's
@@ -467,11 +467,25 @@ under four rankings:
   receptive field, not an exact computation).
 - `max_average` / `min_average` — the channel's spatial mean; the
   stored patch is the whole input image (there is no single location).
+  Collected only when `WatchPerformance.average_patches` is on — off by
+  default, since the whole-image payloads roughly double the buffer cost
+  for the least-consulted grids.
 
 Each entry also stores the channel's full activation map so the UI can
 blend a heatmap over the patch. 2D `(B, F)` activations degrade
 gracefully: features act as channels, pixel ≡ average, whole-image
 patches, single-cell heat.
+
+Patch and heat payloads are stored quantized: uint8 levels `0..254` plus
+a per-`(channel, sample)` fp32 `[offset, scale]` pair computed over that
+slot's whole slice, with byte 255 reserved as a non-finite sentinel that
+dequantizes to NaN (a diverged activation stays visible in the heat).
+Rendering is 8-bit anyway, and the payloads are pure cargo — quantized
+once at gather time, then only permuted (bytes and scale rows selected by
+the same merge indices) — so this quarters both the GPU footprint and a
+frozen moment's gallery bytes. The `vals` ranking scores stay fp32:
+ranking arithmetic depends on them, and their `∓inf` placeholder slots
+double as the renderer's mask.
 
 `Session._update_watch_stats` feeds the accumulator via
 `WatchAccumulator.update_patches(layer, phase, epoch, act, x)`, where
@@ -494,7 +508,7 @@ placeholder `∓inf` so diverged batches never enter the buffers.
 
 One memory caveat drives the eviction rule in `update_patches`:
 histogram buckets are ~2 KB and live forever, but a patch bucket holds
-`4 × C × N` image crops on the GPU — and the average-type patches store
+up to `4 × C × N` image crops on the GPU — and the average-type patches store
 a *whole input image per channel*, so the cost scales with `C` and the
 input resolution (a 512-channel layer at 192×256 is multiple GB). When
 a newer epoch starts for the same `(layer, phase)`, older epochs' patch
@@ -505,7 +519,7 @@ the rest of the bucket.
 
 #### Performance settings (`Session.set_watch_performance`)
 
-Because the per-channel patches dominate GPU VRAM, two caps are
+Because the per-channel patches dominate GPU VRAM, three knobs are
 user-tunable from the settings dialog's "Performance" section and held on
 the `WatchAccumulator`:
 
@@ -514,16 +528,20 @@ the `WatchAccumulator`:
   each watched layer (default 16, toggleable off for "all channels").
 - `samples_per_channel` — how many extreme samples each ranking keeps per
   channel (the `N` in the `(C, N)` buffers; default 5).
+- `average_patches` — whether the whole-image average grids are collected
+  at all (default off; `PatchSnapshot.by_type` then simply lacks the
+  average keys, and the patch-grid renderers skip absent types).
 
-Both fix the per-channel buffer shapes, so `WatchAccumulator.configure`
-drops every bucket when either changes (the next update rebuilds under the
-new caps) — the UI warns that statistics are flushed. The accumulator
-reads the caps under its own lock during `update`/`update_patches`, so a
+All three fix the per-channel buffer shapes, so `WatchAccumulator.configure`
+drops every bucket when any changes (the next update rebuilds under the
+new config) — the UI warns that statistics are flushed. The accumulator
+reads the config under its own lock during `update`/`update_patches`, so a
 flush can never interleave with a half-built bucket.
 
-`PatchAccumulator.snapshot()` copies the buffers to CPU as a frozen
-`PatchSnapshot → TypePatches` tree carried on
-`LayerStatsSnapshot.patches`; slots never filled keep their `∓inf`
+`PatchAccumulator.snapshot()` copies the buffers to CPU — the payloads
+cross the bus as uint8 and are dequantized CPU-side, so the frozen
+`PatchSnapshot → TypePatches` tree carried on `LayerStatsSnapshot.patches`
+stays fp32 for every render path; slots never filled keep their `∓inf`
 values and are masked by the renderer.
 
 ## Numerical-error debugger (`nansense.debugger`)
@@ -1518,7 +1536,8 @@ unchanged, because the UI only ever reads `session.snapshot` /
 **Patch shortlists.** The extreme-patch buffers are the one watch state
 that dwarfs everything else on deep models (per-channel input crops,
 whole-image samples, and activation heatmaps, per layer and phase — they
-are also training history, so the moment must store them).
+are also training history, so the moment must store them; the file keeps
+the raw uint8 payloads + scale tensors, a quarter of the fp32 bytes).
 `Session.set_patch_layers([...])` gates patch accumulation to a shortlist
 (`None` = every layer, the default) while histogram/min-max/graph
 statistics keep covering the full stats scope; `_update_watch_stats`

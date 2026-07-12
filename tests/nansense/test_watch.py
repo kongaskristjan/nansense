@@ -310,22 +310,25 @@ def test_configure_flushes_only_on_change() -> None:
     acc = WatchAccumulator()
     acc.update(layer="a", phase="train", epoch=0, kind="activation", x=torch.tensor([1.0]))
     # Same values as the defaults -> no change, no flush.
-    from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL
+    from nansense.patches import DEFAULT_AVERAGE_PATCHES, DEFAULT_SAMPLES_PER_CHANNEL
     from nansense.watch import DEFAULT_CHANNEL_LIMIT
 
     assert not acc.configure(
         channel_limit=DEFAULT_CHANNEL_LIMIT,
         samples_per_channel=DEFAULT_SAMPLES_PER_CHANNEL,
+        average_patches=DEFAULT_AVERAGE_PATCHES,
     )
     assert ("a", "train", 0) in acc.snapshot().stats
     # A real change flushes every bucket.
-    assert acc.configure(channel_limit=8, samples_per_channel=3)
+    assert acc.configure(
+        channel_limit=8, samples_per_channel=3, average_patches=False
+    )
     assert acc.snapshot().stats == {}
 
 
 def test_configure_channel_limit_applies_to_new_buckets() -> None:
     acc = WatchAccumulator()
-    acc.configure(channel_limit=2, samples_per_channel=5)
+    acc.configure(channel_limit=2, samples_per_channel=5, average_patches=False)
     x = torch.arange(4.0).reshape(1, 4, 1, 1)
     acc.update(layer="a", phase="train", epoch=0, kind="activation", x=x)
     rows = acc.snapshot().stats[("a", "train", 0)].activations.channel_hists
@@ -415,15 +418,33 @@ def test_watch_accumulator_update_patches_lands_in_snapshot() -> None:
     snap = acc.snapshot()
     patches = snap.stats[("a", "train", 0)].patches
     assert patches is not None
-    assert set(patches.by_type) == {
-        "max_pixel",
-        "min_pixel",
-        "max_average",
-        "min_average",
-    }
+    # Average grids are a performance setting, off by default.
+    assert set(patches.by_type) == {"max_pixel", "min_pixel"}
     # Buckets without patch updates report None, not an empty snapshot.
     acc.update(layer="b", phase="train", epoch=0, kind="activation", x=torch.tensor([1.0]))
     assert acc.snapshot().stats[("b", "train", 0)].patches is None
+
+
+def test_configure_average_patches_flushes_and_collects_all_types() -> None:
+    from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL, PATCH_TYPES
+    from nansense.watch import DEFAULT_CHANNEL_LIMIT
+
+    acc = WatchAccumulator()
+    act, x = _patch_batch()
+    acc.update_patches(layer="a", phase="train", epoch=0, act=act, x=x)
+    # Flipping only average_patches flushes every bucket (buffer shapes are
+    # config-frozen, like the two caps) ...
+    assert acc.configure(
+        channel_limit=DEFAULT_CHANNEL_LIMIT,
+        samples_per_channel=DEFAULT_SAMPLES_PER_CHANNEL,
+        average_patches=True,
+    )
+    assert acc.snapshot().stats == {}
+    # ... and the rebuilt buckets collect all four grids.
+    acc.update_patches(layer="a", phase="train", epoch=0, act=act, x=x)
+    patches = acc.snapshot().stats[("a", "train", 0)].patches
+    assert patches is not None
+    assert set(patches.by_type) == set(PATCH_TYPES)
 
 
 def test_watch_accumulator_snapshot_can_skip_patches() -> None:

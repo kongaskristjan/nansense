@@ -71,9 +71,10 @@ if TYPE_CHECKING:
     from nansense.session import Session
 
 _MOMENT_KIND = "nansense_moment"
-# 3: batch-item replay seed instead of stored snapshot tensors; older
-# epochs' histogram bins collapsed to their cached medians.
-_FORMAT_VERSION = 3
+# 4: patch/heat payloads stored quantized (uint8 + per-slot [offset, scale],
+# byte 255 = non-finite sentinel); average patch grids gated behind the
+# `average_patches` performance flag stored with the caps.
+_FORMAT_VERSION = 4
 
 
 class MomentError(RuntimeError):
@@ -318,13 +319,17 @@ def _watch_performance(watch_state: dict[str, Any]) -> Any:
     from nansense.session import WatchPerformance
 
     limit = watch_state["channel_limit"]
+    samples = int(watch_state["samples_per_channel"])
+    average = bool(watch_state.get("average_patches", False))
     if limit is None:
         return WatchPerformance(
             channel_limit_enabled=False,
-            samples_per_channel=int(watch_state["samples_per_channel"]),
+            samples_per_channel=samples,
+            average_patches=average,
         )
     return WatchPerformance(
         channel_limit_enabled=True,
         channel_limit=int(limit),
-        samples_per_channel=int(watch_state["samples_per_channel"]),
+        samples_per_channel=samples,
+        average_patches=average,
     )

@@ -16,6 +16,7 @@ def test_default_watch_performance() -> None:
         channel_limit_enabled=True,
         channel_limit=DEFAULT_CHANNEL_LIMIT,
         samples_per_channel=DEFAULT_SAMPLES_PER_CHANNEL,
+        average_patches=False,
     )
 
 
@@ -46,6 +47,17 @@ def test_flush_return_value() -> None:
     assert session.set_watch_performance(channel_limit_enabled=False) is False
     # The channel count is irrelevant while disabled, so editing it is a no-op.
     assert session.set_watch_performance(channel_limit=4) is False
+
+
+def test_average_patches_toggle_flushes() -> None:
+    """Flipping `average_patches` reshapes the patch buffers, so it flushes
+    the watch statistics like the two caps do."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    assert session.watch_performance.average_patches is False
+    assert session.set_watch_performance(average_patches=True) is True
+    assert session.watch_performance.average_patches is True
+    assert session.set_watch_performance(average_patches=True) is False
+    assert session.set_watch_performance(average_patches=False) is True
 
 
 def _fc1_channel_rows(session: Session) -> int | None:

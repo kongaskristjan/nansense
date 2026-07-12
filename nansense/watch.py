@@ -55,6 +55,7 @@ import torch
 from torch import Tensor
 
 from nansense.patches import (
+    DEFAULT_AVERAGE_PATCHES,
     DEFAULT_SAMPLES_PER_CHANNEL,
     PatchAccumulator,
     PatchSnapshot,
@@ -777,25 +778,33 @@ class WatchAccumulator:
         # a bucket can never be built under one config and fed under another.
         self._channel_limit: int | None = DEFAULT_CHANNEL_LIMIT
         self._samples_per_channel: int = DEFAULT_SAMPLES_PER_CHANNEL
+        self._average_patches: bool = DEFAULT_AVERAGE_PATCHES
 
     def configure(
-        self, *, channel_limit: int | None, samples_per_channel: int
+        self,
+        *,
+        channel_limit: int | None,
+        samples_per_channel: int,
+        average_patches: bool,
     ) -> bool:
         """Set the per-channel caps, flushing all buckets if they changed.
 
-        The channel limit and samples-per-channel fix the per-channel buffer
-        shapes, so a change can't be folded into existing buckets — every
-        bucket is dropped and rebuilt under the new config on the next update.
-        Returns whether anything changed (and was flushed).
+        The channel limit, samples-per-channel, and the average-patches
+        toggle fix the per-channel buffer shapes, so a change can't be folded
+        into existing buckets — every bucket is dropped and rebuilt under the
+        new config on the next update. Returns whether anything changed (and
+        was flushed).
         """
         with self._lock:
             if (
                 channel_limit == self._channel_limit
                 and samples_per_channel == self._samples_per_channel
+                and average_patches == self._average_patches
             ):
                 return False
             self._channel_limit = channel_limit
             self._samples_per_channel = samples_per_channel
+            self._average_patches = average_patches
             self._stats.clear()
             return True
 
@@ -826,8 +835,8 @@ class WatchAccumulator:
     ) -> None:
         """Fold one batch into `layer`'s extreme-patch buffers.
 
-        A patch bucket holds `4 × channels × n_per_channel` image crops on
-        the GPU, so — like the histogram bins in `_bucket_locked` — the
+        A patch bucket holds up to `4 × channels × n_per_channel` image
+        crops on the GPU, so — like the histogram bins in `_bucket_locked` — the
         first patch update of a newer (layer, phase) epoch releases the
         older epochs' patch buffers. The UI only shows the latest epoch per
         phase, so nothing visible is lost. (Keyed off `patches_started`
@@ -843,8 +852,13 @@ class WatchAccumulator:
             acc = stats.patches
             channel_limit = self._channel_limit
             samples = self._samples_per_channel
+            average = self._average_patches
         acc.update(
-            act=act, x=x, channel_limit=channel_limit, n_per_channel=samples
+            act=act,
+            x=x,
+            channel_limit=channel_limit,
+            n_per_channel=samples,
+            average_patches=average,
         )
 
     def weights_pending(self, layer: str, epoch: int) -> bool:
@@ -1107,9 +1121,11 @@ class WatchAccumulator:
             weight_refs = [(key, dict(bucket)) for key, bucket in self._weights.items()]
             channel_limit = self._channel_limit
             samples = self._samples_per_channel
+            average = self._average_patches
         return {
             "channel_limit": channel_limit,
             "samples_per_channel": samples,
+            "average_patches": average,
             "stats": [
                 {
                     "layer": layer,
@@ -1162,6 +1178,9 @@ class WatchAccumulator:
         with self._lock:
             self._channel_limit = None if limit is None else int(limit)
             self._samples_per_channel = int(state["samples_per_channel"])
+            self._average_patches = bool(
+                state.get("average_patches", DEFAULT_AVERAGE_PATCHES)
+            )
             self._stats = stats
             self._weights = weights
 
@@ -1176,6 +1195,7 @@ def single_batch_stats(
     patch_source: Tensor | None,
     channel_limit: int | None,
     samples_per_channel: int,
+    average_patches: bool,
     include_patches: bool,
 ) -> LayerStatsSnapshot:
     """Stats for a single batch's tensors, computed on the fly.
@@ -1201,6 +1221,7 @@ def single_batch_stats(
             x=patch_source,
             channel_limit=channel_limit,
             n_per_channel=samples_per_channel,
+            average_patches=average_patches,
         )
         patches = patch_acc.snapshot()
     return LayerStatsSnapshot(

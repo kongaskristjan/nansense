@@ -78,9 +78,15 @@ def test_figure_payload_carries_plotly_config() -> None:
     assert _PLOTLY_CONFIG["doubleClick"] == "reset"
 
 
-def _layer_snap_with_patches(phase: str, epoch: int = 0) -> LayerStatsSnapshot:
+def _layer_snap_with_patches(
+    phase: str, epoch: int = 0, *, average_patches: bool = True
+) -> LayerStatsSnapshot:
     acc = PatchAccumulator()
-    acc.update(act=torch.randn(2, 2, 4, 4), x=torch.rand(2, 3, 8, 8))
+    acc.update(
+        act=torch.randn(2, 2, 4, 4),
+        x=torch.rand(2, 3, 8, 8),
+        average_patches=average_patches,
+    )
     patches = acc.snapshot()
     assert patches is not None
     stats = _tensor_stats(4)
@@ -113,6 +119,21 @@ def test_patch_grids_html_renders_enabled_grids_per_phase() -> None:
         assert html.count(label) >= 2
     assert "train (ep 1)" in html
     assert "val (ep 1)" in html
+
+
+def test_patch_grids_html_skips_absent_types() -> None:
+    # A default (average_patches off) snapshot carries only the two pixel
+    # grids; requesting all four types renders those two rather than raising
+    # on the missing average keys.
+    per_phase = {
+        "train": _layer_snap_with_patches("train", average_patches=False)
+    }
+    html = _patch_grids_html(
+        per_phase, enabled=list(PATCH_TYPES), heatmap=False, mean=None, std=None
+    )
+    assert html.count("<img") == 2 * 5 * 2  # 2 grids × 2 channels × 5 samples
+    assert "Max pixel" in html and "Min pixel" in html
+    assert "Max average" not in html and "Min average" not in html
 
 
 def test_patch_grids_html_filters_to_enabled_types() -> None:

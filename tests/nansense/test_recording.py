@@ -210,6 +210,8 @@ def test_main_view_records_one_frame_per_update(tmp_path: Path) -> None:
 def test_minmax_records_pixel_and_average_to_separate_files(tmp_path: Path) -> None:
     phases = {"train": 2}
     session, model, manager = _make_session(tmp_path, epochs=2, phases=phases)
+    # The average grids are off by default; this test records both groups.
+    session.set_watch_performance(average_patches=True)
     session.watch("conv")
     assert manager.start(
         RecordedView(
