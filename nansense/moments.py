@@ -71,7 +71,9 @@ if TYPE_CHECKING:
     from nansense.session import Session
 
 _MOMENT_KIND = "nansense_moment"
-_FORMAT_VERSION = 2
+# 3: batch-item replay seed instead of stored snapshot tensors; older
+# epochs' histogram bins collapsed to their cached medians.
+_FORMAT_VERSION = 3
 
 
 class MomentError(RuntimeError):

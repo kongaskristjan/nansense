@@ -46,7 +46,7 @@ from nansense.watch import (
     TensorStatsSnapshot,
     bin_midpoint,
 )
-from tests.nansense.helpers import _layer_snap
+from tests.nansense.helpers import _layer_snap, live_hist
 
 
 # --- Watching histogram: trace structure / restyle signature --------------
@@ -285,7 +285,7 @@ def test_fill_fraction_full_for_single_bar() -> None:
     # One bar spanning the whole x-range and reaching the y-top covers the
     # entire plot.
     per_phase = {"train": _layer_snap("train", hist={ZERO_BIN + 60: 100})}
-    heights = _probability_densities(per_phase["train"].activations.hist)
+    heights = _probability_densities(live_hist(per_phase["train"].activations))
     bounds = (ZERO_BIN + 60, ZERO_BIN + 60)
     frac = _fill_fraction(
         _phase_hists(per_phase, "activation"),
@@ -457,7 +457,7 @@ def test_linear_y_range_clips_bars_holding_under_coverage() -> None:
     # the bulk bar holds the other 99.95% and must stay fully visible.
     hist = {ZERO_BIN: 5, ZERO_BIN + 50: 10_000}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    heights = _probability_densities(per_phase["train"].activations.hist)
+    heights = _probability_densities(live_hist(per_phase["train"].activations))
     rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     assert rng[0] == 0.0
@@ -471,7 +471,7 @@ def test_linear_y_range_keeps_tall_bars_that_do_not_dominate() -> None:
     # rule nor the 0.5% clip budget applies, so the cap reaches the tallest.
     hist = {ZERO_BIN + 1: 5_000, ZERO_BIN + 2: 5_000, ZERO_BIN + 50: 100}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    heights = _probability_densities(per_phase["train"].activations.hist)
+    heights = _probability_densities(live_hist(per_phase["train"].activations))
     rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     assert rng[1] == pytest.approx(max(heights) * 1.05)
@@ -482,7 +482,7 @@ def test_linear_y_range_excludes_dominant_spike_despite_count() -> None:
     # runner-up, so it never anchors the scale; the cap lands on the bulk.
     hist = {ZERO_BIN: 10_000, ZERO_BIN + 50: 9_000, ZERO_BIN + 51: 1_000}
     per_phase = {"train": _layer_snap("train", hist=hist)}
-    heights = _probability_densities(per_phase["train"].activations.hist)
+    heights = _probability_densities(live_hist(per_phase["train"].activations))
     rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     assert rng[1] == pytest.approx(heights[ZERO_BIN + 50] * 1.05)
@@ -496,8 +496,8 @@ def test_linear_y_range_dominance_is_per_phase() -> None:
         "train": _layer_snap("train", hist={ZERO_BIN: 6_000, ZERO_BIN + 30: 4_000}),
         "val": _layer_snap("val", hist={ZERO_BIN: 5_000, ZERO_BIN + 40: 5_000}),
     }
-    train_heights = _probability_densities(per_phase["train"].activations.hist)
-    val_heights = _probability_densities(per_phase["val"].activations.hist)
+    train_heights = _probability_densities(live_hist(per_phase["train"].activations))
+    val_heights = _probability_densities(live_hist(per_phase["val"].activations))
     rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     expected_cap = max(train_heights[ZERO_BIN + 30], val_heights[ZERO_BIN + 40])
@@ -513,8 +513,8 @@ def test_linear_y_range_pools_phases_weighted_by_count() -> None:
         "train": _layer_snap("train", hist={ZERO_BIN: 5, ZERO_BIN + 30: 5_000}),
         "val": _layer_snap("val", hist={ZERO_BIN + 40: 5_000}),
     }
-    train_heights = _probability_densities(per_phase["train"].activations.hist)
-    val_heights = _probability_densities(per_phase["val"].activations.hist)
+    train_heights = _probability_densities(live_hist(per_phase["train"].activations))
+    val_heights = _probability_densities(live_hist(per_phase["val"].activations))
     rng = _linear_y_range(_phase_hists(per_phase, "activation"), density=True)
     assert rng is not None
     expected_cap = max(train_heights[ZERO_BIN + 30], val_heights[ZERO_BIN + 40])
@@ -609,7 +609,7 @@ def test_histogram_density_mode_plots_probability_density_with_capped_axis() -> 
         per_phase, "activation", "activations", log_x=False, log_y=False
     )
     trace = fig.data[0]
-    expected = _probability_densities(per_phase["train"].activations.hist)
+    expected = _probability_densities(live_hist(per_phase["train"].activations))
     assert list(trace.y) == pytest.approx(expected)
     # Raw counts ride along for the hover text.
     assert trace.customdata[ZERO_BIN] == 50
@@ -629,7 +629,7 @@ def test_histogram_log_y_keeps_density_but_drops_range_cap() -> None:
     fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=False, log_y=True
     )
-    expected = _probability_densities(per_phase["train"].activations.hist)
+    expected = _probability_densities(live_hist(per_phase["train"].activations))
     assert list(fig.data[0].y) == pytest.approx(expected)
     assert fig.layout.yaxis.title.text == "probability density"
     assert fig.layout.yaxis.range is None
@@ -660,7 +660,7 @@ def test_histogram_log_x_linear_y_excludes_dominant_probability_spike() -> None:
     fig, _ = _make_histogram_figure(
         per_phase, "activation", "activations", log_x=True, log_y=False
     )
-    probs = _probabilities(per_phase["train"].activations.hist)
+    probs = _probabilities(live_hist(per_phase["train"].activations))
     assert tuple(fig.layout.yaxis.range) == pytest.approx(
         (0.0, probs[ZERO_BIN + 50] * 1.05)
     )
@@ -1003,7 +1003,7 @@ def test_min_positive_height_finds_smallest_positive_bar() -> None:
         "train": _layer_snap("train", hist={ZERO_BIN: 1000, ZERO_BIN + 50: 1})
     }
     hists = _phase_hists(per_phase, "activation")
-    probs = _probabilities(per_phase["train"].activations.hist)
+    probs = _probabilities(live_hist(per_phase["train"].activations))
     expected = min(p for p in probs if p > 0)
     assert _min_positive_height(hists, density=False) == pytest.approx(expected)
 

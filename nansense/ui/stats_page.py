@@ -1204,7 +1204,11 @@ class _HistPlot:
             # Same rows and axes — only counts (and the epoch label) moved.
             # Restyle in place so zoom/pan survives. A channel index change
             # lands here too: same structure, new bar heights.
-            hists = [kind_stats(per_phase[p], self._kind).hist for p in phases]
+            hists: list[tuple[int, ...]] = []
+            for p in phases:
+                hist = kind_stats(per_phase[p], self._kind).hist
+                assert hist is not None  # `phases` excludes collapsed buckets
+                hists.append(hist)
             names = self._trace_names(per_phase)
             update: dict[str, object] = {
                 "name": names,

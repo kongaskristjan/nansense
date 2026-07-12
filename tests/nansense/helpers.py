@@ -222,3 +222,13 @@ def _frame_snapshot() -> BatchSnapshot:
         activations={"x": torch.rand(2, 3, 4, 4), "conv": torch.rand(2, 2, 4, 4)},
         activation_gradients={"conv": torch.rand(2, 2, 4, 4)},
     )
+
+
+def live_hist(snap: TensorStatsSnapshot) -> tuple[int, ...]:
+    """`snap.hist` narrowed non-None: the bucket's bins must be live here.
+
+    Epoch eviction collapses older buckets' bins to `None`; tests asserting
+    on bin contents read the latest (or only) epoch, where they exist.
+    """
+    assert snap.hist is not None
+    return snap.hist

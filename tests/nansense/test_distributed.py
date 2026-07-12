@@ -24,7 +24,7 @@ from nansense.distributed import _unpack_reduced
 from nansense.ui.app import serve
 from nansense.watch import WatchAccumulator, bin_index
 
-from tests.nansense.helpers import TinyNet
+from tests.nansense.helpers import TinyNet, live_hist
 
 
 def _filled_accumulator(xs: list[torch.Tensor]) -> WatchAccumulator:
@@ -74,7 +74,7 @@ def test_reduced_stats_match_combined_accumulator() -> None:
     assert act.hist == expected.hist
     assert act.channel_hists == expected.channel_hists
     # Nothing ever fed the gradient stream: it reduces to a neutral zero.
-    assert grad.n == 0 and grad.hist == tuple([0] * len(act.hist))
+    assert grad.n == 0 and live_hist(grad) == tuple([0] * len(live_hist(act)))
 
 
 def test_reduce_with_missing_bucket_contributes_zeros() -> None:
@@ -98,7 +98,7 @@ def test_reduce_channel_mismatch_drops_channel_hists() -> None:
     act, _ = _reduce_two(acc_a, acc_b)[("L", "train", 0)]
     assert act.channel_hists is None
     assert act.n == 16
-    assert act.hist[bin_index(1.0)] == 16
+    assert live_hist(act)[bin_index(1.0)] == 16
 
 
 class _FakeFollowerContext:
@@ -182,8 +182,8 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
             assert act.min == 1.0
             assert act.max == 2.0
             assert act.sum == pytest.approx(per_rank * (1.0 + 2.0))
-            assert act.hist[bin_index(1.0)] == per_rank
-            assert act.hist[bin_index(2.0)] == per_rank
+            assert live_hist(act)[bin_index(1.0)] == per_rank
+            assert live_hist(act)[bin_index(2.0)] == per_rank
             assert act.channel_hists is not None and len(act.channel_hists) == 4
             assert all(sum(row) == 2 * 2 * 4 for row in act.channel_hists)
         else:

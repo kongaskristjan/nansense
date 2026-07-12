@@ -7,7 +7,12 @@ import torch
 from torch import Tensor, nn
 
 import nansense
-from tests.nansense.helpers import make_session, paused_worker, train_step
+from tests.nansense.helpers import (
+    live_hist,
+    make_session,
+    paused_worker,
+    train_step,
+)
 
 
 def test_watch_accepts_any_layer_name_and_rejects_unknown() -> None:
@@ -149,7 +154,7 @@ def test_watch_fx_intermediate_accumulates_stats() -> None:
     relu_stats = snap.stats[("relu", "train", 0)].activations
     # ReLU output is non-negative — the histogram's negative half is empty.
     from nansense.watch import ZERO_BIN
-    neg_count = sum(relu_stats.hist[:ZERO_BIN])
+    neg_count = sum(live_hist(relu_stats)[:ZERO_BIN])
     assert neg_count == 0
     assert relu_stats.n == 16  # batch 2 × 8 hidden features
 

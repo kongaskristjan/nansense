@@ -837,7 +837,9 @@ def _draw_histogram_axes(
 
     tensor_stats: TensorStatsSnapshot = kind_stats(stats, kind)
     density = use_density(log_x)
-    heights = trace_heights(tensor_stats.hist, density)
+    # A collapsed bucket (epoch-evicted bins) renders as an empty histogram.
+    hist = tensor_stats.hist if tensor_stats.hist is not None else (0,) * N_BINS
+    heights = trace_heights(hist, density)
     color = phase_color(phase, 0)
     x_values = list(range(N_BINS)) if log_x else list(BIN_CENTERS)
     if log_x:
@@ -857,7 +859,7 @@ def _draw_histogram_axes(
         # Flag bars clipped by the cap so they don't read as ending at the top
         # edge (mirrors the Plotly view's overflow markers).
         (mark_xs, mark_ys), = _overflow_marks(
-            [(phase, tensor_stats.hist)], x_values, density, y_range[1]
+            [(phase, hist)], x_values, density, y_range[1]
         )
         if mark_xs:
             ax.scatter(

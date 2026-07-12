@@ -56,6 +56,7 @@ shared filesystem on multi-node runs; trivially true single-node).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 import torch
@@ -254,7 +255,19 @@ def reduce_watch_stats(session: Session) -> None:
     dist.all_reduce(mins, op=dist.ReduceOp.MIN)
     dist.all_reduce(maxs, op=dist.ReduceOp.MAX)
     if ctx.is_leader:
-        session._dist_watch_stats = _unpack_reduced(meta, ints, sums, mins, maxs)
+        reduced = _unpack_reduced(meta, ints, sums, mins, maxs)
+        # Buckets whose bins an epoch eviction collapsed contributed zero
+        # counts to the SUM above — mark their reduced snapshots collapsed
+        # and stand in the leader's cached medians (rank-local, like the
+        # patches and dead-channel counts).
+        collapsed = acc.collapsed_hist_medians(key for key, _, _ in meta)
+        for key, (act_median, grad_median) in collapsed.items():
+            act, grad = reduced[key]
+            reduced[key] = (
+                replace(act, hist=None, collapsed_median=act_median),
+                replace(grad, hist=None, collapsed_median=grad_median),
+            )
+        session._dist_watch_stats = reduced
 
 
 def _unpack_reduced(

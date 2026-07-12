@@ -9,6 +9,7 @@ plus the park loop that serves experiments on a restored moment.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -180,9 +181,15 @@ def test_freeze_and_load_round_trip(tmp_path: Path) -> None:
 
     # Every running statistic — histograms, patches, weight history.
     _assert_watch_snapshots_equal(restored.watch_snapshot(), session.watch_snapshot())
-    # All-layer buckets exist across the run's epochs and phases.
-    assert ("conv1", "train", 1) in restored.watch_snapshot().stats
-    assert ("fc", "val", 0) in restored.watch_snapshot().stats
+    # All-layer buckets exist across the run's epochs and phases; only the
+    # latest epoch per phase keeps its bins (older ones carry the scalar
+    # aggregates and the cached median for the GRAPHS curves).
+    stats = restored.watch_snapshot().stats
+    assert ("fc", "val", 0) in stats
+    assert stats[("conv1", "train", 1)].activations.hist is not None
+    old_train = stats[("conv1", "train", 0)].activations
+    assert old_train.hist is None
+    assert old_train.n > 0 and math.isfinite(old_train.median)
 
     # Watched seed, frozen stats scope, and the position label's totals.
     assert restored.watched_layers == frozenset({"conv1"})
@@ -252,7 +259,7 @@ def test_load_moment_rejects_a_different_model(tmp_path: Path) -> None:
         lambda path: path.write_bytes(b"not a torch file"),
         lambda path: torch.save({"kind": "something_else"}, path),
         lambda path: torch.save(
-            {"kind": "nansense_moment", "version": 1}, path
+            {"kind": "nansense_moment", "version": 2}, path
         ),
     ],
     ids=["missing", "corrupt", "wrong-kind", "old-version"],

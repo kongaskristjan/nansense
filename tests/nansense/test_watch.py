@@ -21,6 +21,7 @@ from nansense.watch import (
     bin_midpoint,
     histogram_edges,
 )
+from tests.nansense.helpers import live_hist
 
 
 def test_n_bins_matches_211() -> None:
@@ -133,7 +134,7 @@ def test_accumulator_starts_empty() -> None:
     assert math.isinf(snap.max) and snap.max < 0
     assert math.isnan(snap.mean)
     assert math.isnan(snap.median)
-    assert all(c == 0 for c in snap.hist)
+    assert all(c == 0 for c in live_hist(snap))
     # No data seen, so no source dtype to place the under/overflow band at.
     assert snap.dtype is None
 
@@ -166,9 +167,9 @@ def test_accumulator_histogram_counts_match_input() -> None:
     values = [-1e3, -1.0, 0.0, 1.0, 1e3]
     acc.update(torch.tensor(values))
     snap = acc.snapshot()
-    assert sum(snap.hist) == len(values)
+    assert sum(live_hist(snap)) == len(values)
     for v in values:
-        assert snap.hist[bin_index(v)] >= 1
+        assert live_hist(snap)[bin_index(v)] >= 1
 
 
 def test_accumulator_promotes_bf16_to_fp32() -> None:
@@ -194,8 +195,8 @@ def test_overflow_values_land_in_extreme_bins() -> None:
     acc = TensorAccumulator()
     acc.update(torch.tensor([1e8, -1e8]))
     snap = acc.snapshot()
-    assert snap.hist[N_BINS - 1] == 1  # extreme positive
-    assert snap.hist[0] == 1  # extreme negative
+    assert live_hist(snap)[N_BINS - 1] == 1  # extreme positive
+    assert live_hist(snap)[0] == 1  # extreme negative
 
 
 def test_diverged_activation_lands_in_overflow_and_zero_bins() -> None:
@@ -204,12 +205,12 @@ def test_diverged_activation_lands_in_overflow_and_zero_bins() -> None:
     acc = TensorAccumulator()
     acc.update(torch.tensor([float("inf"), float("-inf"), float("nan")]))
     snap = acc.snapshot()
-    assert snap.hist[N_BINS - 1] == 1  # +inf → top overflow
-    assert snap.hist[0] == 1  # -inf → bottom overflow
-    assert snap.hist[ZERO_BIN] == 1  # nan → zero band
+    assert live_hist(snap)[N_BINS - 1] == 1  # +inf → top overflow
+    assert live_hist(snap)[0] == 1  # -inf → bottom overflow
+    assert live_hist(snap)[ZERO_BIN] == 1  # nan → zero band
     # Nothing leaked into the bins flanking zero (the pre-fix misbinning).
-    assert snap.hist[ZERO_BIN - 1] == 0
-    assert snap.hist[ZERO_BIN + 1] == 0
+    assert live_hist(snap)[ZERO_BIN - 1] == 0
+    assert live_hist(snap)[ZERO_BIN + 1] == 0
 
 
 def test_non_finite_values_do_not_poison_scalar_stats() -> None:
@@ -227,9 +228,9 @@ def test_non_finite_values_do_not_poison_scalar_stats() -> None:
     assert math.isfinite(snap.mean) and snap.mean == pytest.approx(3.0)
     assert math.isfinite(snap.std)
     # The non-finite values stay visible in the histogram.
-    assert snap.hist[N_BINS - 1] == 1  # +inf
-    assert snap.hist[0] == 1  # -inf
-    assert snap.hist[ZERO_BIN] == 1  # nan in the zero band
+    assert live_hist(snap)[N_BINS - 1] == 1  # +inf
+    assert live_hist(snap)[0] == 1  # -inf
+    assert live_hist(snap)[ZERO_BIN] == 1  # nan in the zero band
 
 
 def test_all_non_finite_update_leaves_scalar_stats_empty() -> None:
@@ -239,7 +240,7 @@ def test_all_non_finite_update_leaves_scalar_stats_empty() -> None:
     assert snap.n == 0  # nothing finite contributed
     assert math.isnan(snap.mean)  # n == 0
     # but the divergence is still counted in the histogram.
-    assert snap.hist[ZERO_BIN] == 1 and snap.hist[N_BINS - 1] == 1
+    assert live_hist(snap)[ZERO_BIN] == 1 and live_hist(snap)[N_BINS - 1] == 1
 
 
 def test_retain_layers_drops_unwatched_buckets() -> None:
@@ -269,11 +270,11 @@ def test_watch_accumulator_diverged_activation_lands_in_overflow_bins() -> None:
     x = torch.tensor([float("inf"), float("-inf"), float("nan"), 1.0]).reshape(2, 1, 2, 1)
     acc.update(layer="a", phase="train", epoch=0, kind="activation", x=x)
     act = acc.snapshot().stats[("a", "train", 0)].activations
-    assert act.hist[N_BINS - 1] == 1
-    assert act.hist[0] == 1
-    assert act.hist[ZERO_BIN] == 1
-    assert act.hist[ZERO_BIN - 1] == 0
-    assert act.hist[ZERO_BIN + 1] == 0
+    assert live_hist(act)[N_BINS - 1] == 1
+    assert live_hist(act)[0] == 1
+    assert live_hist(act)[ZERO_BIN] == 1
+    assert live_hist(act)[ZERO_BIN - 1] == 0
+    assert live_hist(act)[ZERO_BIN + 1] == 0
     # The per-channel row mirrors the universal histogram for the lone channel.
     assert act.channel_hists is not None
     assert tuple(act.channel_hists[0]) == act.hist
@@ -292,7 +293,7 @@ def test_channel_limit_caps_per_channel_rows_but_not_universal() -> None:
     assert len(snap.channel_hists) == 2
     # Universal histogram + scalars cover all 4 channels.
     assert snap.n == 4
-    assert sum(snap.hist) == 4
+    assert sum(live_hist(snap)) == 4
     assert snap.max == pytest.approx(4.0)
 
 
@@ -501,14 +502,14 @@ def test_accumulator_channel_count_change_collapses_to_universal() -> None:
     acc.update(torch.ones(2, 4))
     snap = acc.snapshot()
     assert snap.channel_hists is None
-    assert sum(snap.hist) == 14  # the universal histogram kept counting
+    assert sum(live_hist(snap)) == 14  # the universal histogram kept counting
     # Re-appearing with the original channel count does not re-enable it.
     acc.update(torch.ones(2, 3))
     assert acc.snapshot().channel_hists is None
 
 
-def test_watch_accumulator_new_epoch_collapses_same_phase_channels_only() -> None:
-    """A phase's new epoch releases only that phase's older channel buffers."""
+def test_watch_accumulator_new_epoch_collapses_same_phase_bins_only() -> None:
+    """A phase's new epoch releases only that phase's older bin buffers."""
     acc = WatchAccumulator()
     x = torch.ones(2, 3)
     for phase, epoch in [("train", 0), ("val", 0), ("train", 1)]:
@@ -518,10 +519,40 @@ def test_watch_accumulator_new_epoch_collapses_same_phase_channels_only() -> Non
     old_train = snap.stats[("a", "train", 0)]
     assert old_train.activations.channel_hists is None
     assert old_train.gradients.channel_hists is None
-    # The universal histogram of the collapsed bucket is untouched.
-    assert sum(old_train.activations.hist) == 6
-    assert snap.stats[("a", "val", 0)].activations.channel_hists is not None
-    assert snap.stats[("a", "train", 1)].activations.channel_hists is not None
+    # The universal histogram collapses with them; the scalar aggregates and
+    # the cached median survive for the per-epoch GRAPHS curves.
+    assert old_train.activations.hist is None
+    assert old_train.activations.n == 6
+    assert 0.5 < old_train.activations.median < 2.0  # all-ones bucket
+    val = snap.stats[("a", "val", 0)]
+    assert val.activations.hist is not None
+    assert val.activations.channel_hists is not None
+    assert snap.stats[("a", "train", 1)].activations.hist is not None
+
+
+def test_collapse_hist_caches_the_median_and_stays_collapsed() -> None:
+    acc = TensorAccumulator()
+    acc.update(torch.tensor([[1.0, 1.0], [1.0, -5.0]]))
+    live_median = acc.snapshot().median
+    acc.collapse_hist()
+    snap = acc.snapshot()
+    assert snap.hist is None
+    assert snap.median == live_median
+    assert snap.n == 4  # scalars survive the collapse
+    # Idempotent, and a (never expected) late update must not regrow bins.
+    acc.collapse_hist()
+    acc.update(torch.ones(2, 2))
+    assert acc.snapshot().hist is None
+
+
+def test_collapsed_accumulator_state_dict_round_trip() -> None:
+    acc = TensorAccumulator()
+    acc.update(torch.ones(2, 3))
+    acc.collapse_channels(keep_dead_count=True)
+    acc.collapse_hist()
+    restored = TensorAccumulator()
+    restored.load_state_dict(acc.state_dict())
+    assert restored.snapshot() == acc.snapshot()
 
 
 # --- Dead-channel counts across epoch eviction ------------------------------

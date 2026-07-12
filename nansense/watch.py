@@ -139,7 +139,11 @@ class TensorStatsSnapshot:
     `n` / `sum` / `sum_sq` / `min` / `max` are running scalars over every
     tensor element seen so far, feeding the `mean` / `variance` / `std`
     properties. `hist` is the layer-wide histogram: one count per bin over
-    the fixed symmetric-log bin edges of `histogram_edges()`.
+    the fixed symmetric-log bin edges of `histogram_edges()`; `None` when an
+    older epoch's bins were collapsed by a newer one starting for its phase
+    (only the latest epoch per phase renders bins — the per-epoch GRAPHS
+    curves read the scalars and `median`, which survives the collapse via
+    `collapsed_median`).
     """
 
     n: int
@@ -147,7 +151,7 @@ class TensorStatsSnapshot:
     sum_sq: float
     min: float
     max: float
-    hist: tuple[int, ...]
+    hist: tuple[int, ...] | None
     # Per-channel histogram rows summing to `hist`; `None` when per-channel
     # tracking is off for this accumulator (1D tensors, a dim-1 size change,
     # or an older epoch collapsed when a newer one started for its phase).
@@ -162,6 +166,9 @@ class TensorStatsSnapshot:
     # `channel_hists` is live — read `dead_channel_count`, which covers both —
     # or when the count was never knowable (per-channel tracking off).
     collapsed_dead_count: int | None = None
+    # Median carried over from a collapsed universal histogram. `None` while
+    # `hist` is live — read `median`, which covers both.
+    collapsed_median: float | None = None
 
     @property
     def mean(self) -> float:
@@ -185,9 +192,14 @@ class TensorStatsSnapshot:
 
     @property
     def median(self) -> float:
-        """Histogram-derived median: midpoint of the bin that holds the median."""
+        """Histogram-derived median: midpoint of the bin that holds the median.
+
+        For a collapsed bucket (`hist is None`) this is the value cached at
+        collapse time (`collapsed_median`)."""
         if self.n == 0:
             return float("nan")
+        if self.hist is None:
+            return float("nan") if self.collapsed_median is None else self.collapsed_median
         half = self.n / 2
         running = 0
         for i, count in enumerate(self.hist):
@@ -367,7 +379,9 @@ class _RunningStats:
     sum_sq: Tensor
     min: Tensor
     max: Tensor
-    hist: Tensor
+    # `None` once an epoch eviction collapsed the histogram (see
+    # `TensorAccumulator.collapse_hist`); the scalars above live on.
+    hist: Tensor | None
 
     @staticmethod
     def zeros(device: torch.device) -> _RunningStats:
@@ -402,6 +416,10 @@ class TensorAccumulator:
         # collapse drops it (`collapse_channels(keep_dead_count=True)`), so
         # older epochs keep their point on the dead-neurons timeline.
         self._collapsed_dead_count: int | None = None
+        # The universal histogram's final median, kept when an epoch-eviction
+        # collapse drops the bins (`collapse_hist`), so older epochs keep
+        # their point on the GRAPHS median curve.
+        self._collapsed_median: float | None = None
         # The source dtype, recorded on the first non-empty update (before the
         # fp32 reduction cast), so the UI can show the under/overflow band.
         self._dtype: torch.dtype | None = None
@@ -429,6 +447,10 @@ class TensorAccumulator:
             stats.sum_sq += finite.square().sum()
             stats.min = torch.minimum(stats.min, finite.min())
             stats.max = torch.maximum(stats.max, finite.max())
+        if stats.hist is None:
+            # Collapsed by an epoch eviction — a bucket no update should
+            # reach again; keep it that way rather than regrow the bins.
+            return
         idx = _bin_indices(flat)
         channels = self._usable_channels(x, channel_limit)
         if channels is None:
@@ -513,6 +535,38 @@ class TensorAccumulator:
         self._channel_hist = None
         self._channels_off = True
 
+    def collapse_hist(self) -> None:
+        """Drop the universal histogram for good, caching its median.
+
+        The bin counts are the bulk of a bucket's memory once the
+        per-channel rows are gone, and only the latest epoch per phase
+        renders them — but the per-epoch GRAPHS curves plot the median,
+        which only the bins can produce. So the eviction path computes it
+        here once (one small GPU→CPU sync per epoch boundary, like the
+        dead-channel count) and keeps it as a scalar.
+        """
+        stats = self._stats
+        if stats is None or stats.hist is None:
+            return
+        n = int(stats.n.item())
+        if n > 0:
+            threshold = (n + 1) // 2  # first bin where cumsum >= n / 2
+            cum = torch.cumsum(stats.hist, dim=0)
+            idx = int(torch.searchsorted(cum, threshold).item())
+            self._collapsed_median = bin_midpoint(min(idx, N_BINS - 1))
+        stats.hist = None
+
+    @property
+    def hist_collapsed(self) -> bool:
+        """Whether an epoch eviction dropped this accumulator's bins."""
+        stats = self._stats
+        return stats is not None and stats.hist is None
+
+    @property
+    def collapsed_median(self) -> float | None:
+        """The median cached by `collapse_hist`; `None` while bins are live."""
+        return self._collapsed_median
+
     def channel_count(self) -> int:
         """Rows in the per-channel histogram, or 0 when none is kept."""
         return 0 if self._channel_hist is None else int(self._channel_hist.shape[0])
@@ -549,7 +603,16 @@ class TensorAccumulator:
                 torch.tensor([float("-inf")], dtype=torch.float32, device=device),
             )
         ch_ok = 1.0
-        int_pieces = [stats.n.reshape(1), stats.hist]
+        local = stats.n.device
+        # A collapsed histogram (epoch eviction) contributes zero counts; the
+        # leader overlays its own cached median for such buckets instead
+        # (`WatchAccumulator.collapsed_hist_medians`).
+        hist = (
+            stats.hist
+            if stats.hist is not None
+            else torch.zeros(N_BINS, dtype=torch.int64, device=local)
+        )
+        int_pieces = [stats.n.reshape(1), hist]
         if channels > 0:
             ch = self._channel_hist
             if ch is not None and ch.shape[0] == channels:
@@ -557,9 +620,7 @@ class TensorAccumulator:
             else:
                 ch_ok = 0.0
                 int_pieces.append(
-                    torch.zeros(
-                        channels * N_BINS, dtype=torch.int64, device=stats.hist.device
-                    )
+                    torch.zeros(channels * N_BINS, dtype=torch.int64, device=local)
                 )
         return (
             torch.cat(int_pieces).to(device),
@@ -589,7 +650,9 @@ class TensorAccumulator:
         # it's int64 and the scalars are float32.
         scalars = torch.stack([stats.sum, stats.sum_sq, stats.min, stats.max]).cpu()
         n = int(stats.n.cpu().item())
-        hist_cpu = stats.hist.cpu()
+        hist: tuple[int, ...] | None = None
+        if stats.hist is not None:
+            hist = tuple(int(c) for c in stats.hist.cpu().tolist())
         channel_hists: tuple[tuple[int, ...], ...] | None = None
         if self._channel_hist is not None:
             channel_hists = tuple(
@@ -601,10 +664,11 @@ class TensorAccumulator:
             sum_sq=float(scalars[1].item()),
             min=float(scalars[2].item()),
             max=float(scalars[3].item()),
-            hist=tuple(int(c) for c in hist_cpu.tolist()),
+            hist=hist,
             channel_hists=channel_hists,
             dtype=self._dtype,
             collapsed_dead_count=self._collapsed_dead_count,
+            collapsed_median=self._collapsed_median,
         )
 
     def state_dict(self) -> dict[str, Any]:
@@ -624,13 +688,14 @@ class TensorAccumulator:
                 "sum_sq": _cpu_copy(stats.sum_sq),
                 "min": _cpu_copy(stats.min),
                 "max": _cpu_copy(stats.max),
-                "hist": _cpu_copy(stats.hist),
+                "hist": None if stats.hist is None else _cpu_copy(stats.hist),
             },
             "channel_hist": None
             if self._channel_hist is None
             else _cpu_copy(self._channel_hist),
             "channels_off": self._channels_off,
             "collapsed_dead_count": self._collapsed_dead_count,
+            "collapsed_median": self._collapsed_median,
             "dtype": _dtype_name(self._dtype),
         }
 
@@ -648,7 +713,7 @@ class TensorAccumulator:
                 sum_sq=stats["sum_sq"].clone(),
                 min=stats["min"].clone(),
                 max=stats["max"].clone(),
-                hist=stats["hist"].clone(),
+                hist=None if stats["hist"] is None else stats["hist"].clone(),
             )
         )
         channel_hist = state["channel_hist"]
@@ -656,6 +721,8 @@ class TensorAccumulator:
         self._channels_off = bool(state["channels_off"])
         dead = state["collapsed_dead_count"]
         self._collapsed_dead_count = None if dead is None else int(dead)
+        median = state.get("collapsed_median")
+        self._collapsed_median = None if median is None else float(median)
         self._dtype = _dtype_from_name(state["dtype"])
 
 
@@ -669,9 +736,14 @@ class _LayerStats:
     patches_started: bool = False
 
 
-def _evict_channel_hists(stats: _LayerStats) -> None:
+def _evict_bin_hists(stats: _LayerStats) -> None:
+    """Collapse an older epoch's bin data — per-channel rows and the
+    universal histogram — keeping the scalar aggregates, the dead-channel
+    count, and the median the GRAPHS curves read."""
     stats.activations.collapse_channels(keep_dead_count=True)
     stats.gradients.collapse_channels(keep_dead_count=True)
+    stats.activations.collapse_hist()
+    stats.gradients.collapse_hist()
 
 
 def _evict_patches(stats: _LayerStats) -> None:
@@ -754,13 +826,13 @@ class WatchAccumulator:
     ) -> None:
         """Fold one batch into `layer`'s extreme-patch buffers.
 
-        Histogram stats are small enough to keep for every epoch, but a patch
-        bucket holds `4 × channels × n_per_channel` image crops on the GPU — so
-        the first patch update of a newer (layer, phase) epoch releases the
+        A patch bucket holds `4 × channels × n_per_channel` image crops on
+        the GPU, so — like the histogram bins in `_bucket_locked` — the
+        first patch update of a newer (layer, phase) epoch releases the
         older epochs' patch buffers. The UI only shows the latest epoch per
-        phase, so nothing visible is lost. (Keyed off `patches_started` rather
-        than bucket creation: `update` usually creates the bucket first, which
-        must not skip the patch eviction.)
+        phase, so nothing visible is lost. (Keyed off `patches_started`
+        rather than bucket creation: `update` usually creates the bucket
+        first, which must not skip the patch eviction.)
         """
         key = (layer, phase, epoch)
         with self._lock:
@@ -821,15 +893,16 @@ class WatchAccumulator:
         """Get-or-create the (layer, phase, epoch) bucket (lock held).
 
         Creation means a new epoch of this phase begins: the *same* phase's
-        older epochs release their per-channel histogram buffers (only the
-        latest epoch per phase renders per-channel). Other phases keep
-        theirs until their own next epoch starts.
+        older epochs release their bin buffers — the per-channel rows and
+        the universal histogram (only the latest epoch per phase renders
+        bins; the scalar aggregates and cached median stay for the GRAPHS
+        curves). Other phases keep theirs until their own next epoch starts.
         """
         stats = self._stats.get(key)
         if stats is None:
             stats = _LayerStats()
             self._stats[key] = stats
-            self._evict_older_locked(key, _evict_channel_hists)
+            self._evict_older_locked(key, _evict_bin_hists)
         return stats
 
     def _evict_older_locked(
@@ -842,6 +915,30 @@ class WatchAccumulator:
         for (l, ph, ep), other in self._stats.items():
             if l == layer and ph == phase and ep < epoch:
                 evict(other)
+
+    def collapsed_hist_medians(
+        self, keys: Iterable[tuple[str, str, int]]
+    ) -> dict[tuple[str, str, int], tuple[float | None, float | None]]:
+        """The buckets among `keys` whose universal histograms were collapsed
+        by an epoch eviction, with their cached (activation, gradient)
+        medians. A cross-rank reduction overlays these onto the reduced
+        snapshots: collapsed buckets contribute zero bin counts, so the
+        reduced bins are meaningless and the leader's local median (the
+        rank-local convention patches and dead counts already follow) stands
+        in for them.
+        """
+        out: dict[tuple[str, str, int], tuple[float | None, float | None]] = {}
+        with self._lock:
+            for key in keys:
+                stats = self._stats.get(key)
+                if stats is None:
+                    continue
+                if stats.activations.hist_collapsed or stats.gradients.hist_collapsed:
+                    out[key] = (
+                        stats.activations.collapsed_median,
+                        stats.gradients.collapsed_median,
+                    )
+        return out
 
     def layers_with_stats(self) -> set[str]:
         """Layer names holding any retained bucket (stats or weight samples).

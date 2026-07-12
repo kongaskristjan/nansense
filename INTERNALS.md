@@ -393,21 +393,29 @@ Inside `TensorAccumulator.update(x)`:
    `_hist`, `_channel_hist` — lives on that same device. No GPU→CPU sync
    happens during training.
 
-The universal histogram is ~2 KB and is kept for every epoch, but a
-per-channel buffer is `C × 211` int64 (≈ 0.9 MB at 512 channels), so only
-the most recent epoch per `(layer, phase)` keeps one: when
-`WatchAccumulator.update` creates the bucket for a new epoch of a phase,
-the *same* phase's older epochs collapse to their universal histogram —
-the phase-scoped release rule the patch buffers already use (a new train
-epoch releases only older train buffers; val keeps its own until the next
-val epoch starts). The eviction stores the dropped buffer's final
-dead-channel count as a plain int
-(`collapse_channels(keep_dead_count=True)`), so every past epoch keeps
-its point on the GRAPHS view's dead-neurons series;
-`TensorStatsSnapshot.dead_channel_count` reads the live buffer when
-present and falls back to the stored count. The mid-stream collapses (1D
-tensors, a dim-1 size change) store nothing — a partial epoch's count
-would lie.
+Bin data lives only in the most recent epoch per `(layer, phase)` — the
+UI never renders older bins (HISTOGRAM and MIN-MAX read the latest epoch;
+GRAPHS reads per-epoch scalars), and keeping them would grow memory with
+run length (a per-channel buffer is `C × 211` int64, ≈ 0.9 MB at 512
+channels; the universal histogram ~2 KB, ×2 kinds ×layers ×phases
+×epochs). When `WatchAccumulator.update` creates the bucket for a new
+epoch of a phase, the *same* phase's older epochs collapse — the
+phase-scoped release rule the patch buffers already use (a new train
+epoch releases only older train buffers; val keeps its own until the
+next val epoch starts). The eviction keeps the scalar aggregates and
+caches the two bin-derived stats the views still need as plain scalars,
+one small GPU→CPU sync per epoch boundary each: the buffer's final
+dead-channel count (`collapse_channels(keep_dead_count=True)`) for the
+GRAPHS dead-neurons series, and the universal histogram's median
+(`collapse_hist`) for the GRAPHS median curve.
+`TensorStatsSnapshot.dead_channel_count` / `.median` read the live
+buffers when present and fall back to the stored values (`hist` is then
+`None`; render paths treat such a bucket as having nothing drawable —
+reachable as a phase's latest only through a time-travel rewind). The
+mid-stream channel collapses (1D tensors, a dim-1 size change) store no
+dead count — a partial epoch's count would lie. Under DDP the reduced
+overlay stands in the leader's cached medians for collapsed buckets
+(rank-local, like patches and dead counts).
 
 Histogram bin assignment (`_bin_indices`) is a vectorised log10:
 

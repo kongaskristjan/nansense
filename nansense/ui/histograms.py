@@ -413,13 +413,20 @@ def kind_stats(layer_snap: LayerStatsSnapshot, kind: str) -> TensorStatsSnapshot
 def _phases_with_data(
     per_phase: dict[str, LayerStatsSnapshot], kind: str
 ) -> list[str]:
-    """Phases that have at least one sample for `kind`, in render order.
+    """Phases that have bins to draw for `kind`, in render order.
 
     This is exactly the set (and order) of traces `_make_histogram_figure`
     draws, so it doubles as the signature the panel uses to decide whether a
-    refresh can restyle in place or must rebuild the figure.
+    refresh can restyle in place or must rebuild the figure. A bucket whose
+    bins an epoch eviction collapsed (a time-travel rewind can leave one as
+    a phase's latest) has samples but nothing drawable, so it is excluded
+    like an empty one.
     """
-    return [p for p, snap in per_phase.items() if kind_stats(snap, kind).n > 0]
+    return [
+        p
+        for p, snap in per_phase.items()
+        if kind_stats(snap, kind).n > 0 and kind_stats(snap, kind).hist is not None
+    ]
 
 
 # The figure's drawn traces for one `kind`: a `(phase, histogram)` pair per
@@ -433,10 +440,12 @@ def _phase_hists(
     per_phase: dict[str, LayerStatsSnapshot], kind: str
 ) -> _PhaseHists:
     """The drawn traces' `(phase, histogram)` pairs (see `_PhaseHists`)."""
-    return [
-        (p, kind_stats(per_phase[p], kind).hist)
-        for p in _phases_with_data(per_phase, kind)
-    ]
+    pairs: _PhaseHists = []
+    for p in _phases_with_data(per_phase, kind):
+        hist = kind_stats(per_phase[p], kind).hist
+        assert hist is not None  # _phases_with_data excludes collapsed buckets
+        pairs.append((p, hist))
+    return pairs
 
 
 def _trimmed_bin_bounds(
