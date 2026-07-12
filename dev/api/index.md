@@ -220,6 +220,34 @@ Intended for a publicly hosted playground where many anonymous visitors share on
 
 Everything read-only stays available, as do experiments. The lock is one-way by design — arm the wanted mode (e.g. `step_run()`), the settings, and any demo pin *before* locking. `close()` is not locked; it belongs to the hosting script.
 
+### freeze_moment
+
+```
+freeze_moment(
+    path: Path | str,
+    *,
+    phase: str,
+    epoch: int,
+    batch_idx: int,
+) -> None
+```
+
+Arm a one-shot moment freeze at an exact batch position.
+
+When training reaches `(phase, epoch, batch_idx)`, that batch installs hooks and publishes a snapshot like a capture — whatever the mode, so a detached prepare run works — and, after folding its watch stats, writes the complete debugger moment to `path` without pausing: snapshot, running statistics, watched set, model weights and buffers, and the schedule shape. `nansense.load_moment` later rebuilds the view around a fresh model of the same architecture, the backing for a locked showcase (see `nansense.moments` and `examples/playground`).
+
+One request at a time — arming again replaces an unconsumed target; a target the run never reaches is reported at `close()`. No-op on a disabled or locked session; leader-only under DDP (the frozen statistics are the leader's shard).
+
+### park
+
+```
+park() -> None
+```
+
+Hold the calling thread at a pause, serving UI requests, until `close()`.
+
+The showcase counterpart of a training loop: a script that restored a frozen moment (`nansense.load_moment`) has no batches to drive, but experiments and probes still execute on the pause loop of whatever thread owns the model — this provides that loop. Call it from the thread that built the model, typically right after `lock()`; on an unlocked session a Run/Step click simply re-enters the park. Returns once the session is closed.
+
 ## PyTorch Lightning integration
 
 ## nansense.lightning.NansenseCallback
@@ -551,6 +579,38 @@ A `BaseException` on purpose: the jump must travel through the user's training c
 Bases: `RuntimeError`
 
 A time-travel request that cannot be honored (shown in the UI).
+
+## Frozen moments
+
+## nansense.load_moment
+
+```
+load_moment(
+    model: Module,
+    path: Path | str,
+    *,
+    port: int | None = None,
+    host: str = "127.0.0.1",
+    open_browser: bool = True,
+    input_mean: MeanStd | dict[str, MeanStd] | None = None,
+    input_std: MeanStd | dict[str, MeanStd] | None = None,
+    input_transform: InputTransform
+    | dict[str, InputTransform]
+    | None = None,
+) -> Session
+```
+
+Rebuild a frozen moment around `model` for browsing or a locked demo.
+
+`model` must be a fresh instance of the architecture the moment was frozen from (validated against the file: parameter names/shapes and the discovered layer names must match); its device is kept, and the frozen parameters and buffers are loaded into it. The returned session shows exactly the frozen pause — snapshot, watch statistics, watched set, and schedule totals — with stats collection off (scope `"none"`), so the numbers sit frozen while every view, and experiments, keep working. Nothing trains: the session is a viewer. Raises `MomentError` when the file is unreadable or does not fit `model`.
+
+`port` / `host` / `open_browser` / `input_*` mirror `nansense.start` and serve the UI immediately when `port` is given. For a shared deployment, follow with `session.lock()` and `session.park()` — see `examples/playground` and `Session.freeze_moment` for the saving side.
+
+## nansense.MomentError
+
+Bases: `RuntimeError`
+
+A moment file could not be read or does not fit the given model.
 
 ## Numerical debugging
 

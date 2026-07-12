@@ -606,6 +606,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#nansense.Session.freeze_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        freeze_moment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.park" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        park
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1053,6 +1075,39 @@
     <span class="md-ellipsis">
       
         TimeTravelError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frozen-moments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frozen moments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.load_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_moment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MomentError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MomentError
       
     </span>
   </a>
@@ -1331,6 +1386,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#nansense.Session.freeze_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        freeze_moment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.park" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        park
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1778,6 +1855,39 @@
     <span class="md-ellipsis">
       
         TimeTravelError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frozen-moments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frozen moments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.load_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_moment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MomentError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MomentError
       
     </span>
   </a>
@@ -2397,6 +2507,72 @@ visitors share one session. Once locked:</p>
 one-way by design — arm the wanted mode (e.g. <code>step_run()</code>), the
 settings, and any demo pin <em>before</em> locking. <code>close()</code> is not
 locked; it belongs to the hosting script.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.freeze_moment" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">freeze_moment</span>
+
+
+<a href="#nansense.Session.freeze_moment" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">freeze_moment</span><span class="p">(</span>
+    <span class="n">path</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">|</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">phase</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="n">epoch</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+    <span class="n">batch_idx</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Arm a one-shot moment freeze at an exact batch position.</p>
+<p>When training reaches <code>(phase, epoch, batch_idx)</code>, that batch installs
+hooks and publishes a snapshot like a capture — whatever the mode, so
+a detached prepare run works — and, after folding its watch stats,
+writes the complete debugger moment to <code>path</code> without pausing:
+snapshot, running statistics, watched set, model weights and buffers,
+and the schedule shape. <code>nansense.load_moment</code> later rebuilds the
+view around a fresh model of the same architecture, the backing for
+a locked showcase (see <code>nansense.moments</code> and <code>examples/playground</code>).</p>
+<p>One request at a time — arming again replaces an unconsumed target; a
+target the run never reaches is reported at <code>close()</code>. No-op on a
+disabled or locked session; leader-only under DDP (the frozen
+statistics are the leader's shard).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.park" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">park</span>
+
+
+<a href="#nansense.Session.park" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">park</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Hold the calling thread at a pause, serving UI requests, until
+<code>close()</code>.</p>
+<p>The showcase counterpart of a training loop: a script that restored a
+frozen moment (<code>nansense.load_moment</code>) has no batches to drive, but
+experiments and probes still execute on the pause loop of whatever
+thread owns the model — this provides that loop. Call it from the
+thread that built the model, typically right after <code>lock()</code>; on an
+unlocked session a Run/Step click simply re-enters the park. Returns
+once the session is closed.</p>
 
 
     </div>
@@ -3655,6 +3831,83 @@ all the way to the <code>with restorer:</code> block that suppresses it.</p>
 
 
         <p>A time-travel request that cannot be honored (shown in the UI).</p>
+
+
+
+
+
+
+
+
+
+    </div>
+
+</div><h2 id="frozen-moments">Frozen moments<a class="headerlink" href="#frozen-moments" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="nansense.load_moment" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">nansense.load_moment</span>
+
+
+<a href="#nansense.load_moment" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">load_moment</span><span class="p">(</span>
+    <span class="n">model</span><span class="p">:</span> <span class="n"><span title="torch.nn.Module">Module</span></span><span class="p">,</span>
+    <span class="n">path</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">|</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">port</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">host</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span>
+    <span class="n">open_browser</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">input_mean</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_std</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_transform</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span>
+    <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span><span class="p">]</span>
+    <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.Session (nansense.session.Session)" href="#nansense.Session">Session</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Rebuild a frozen moment around <code>model</code> for browsing or a locked demo.</p>
+<p><code>model</code> must be a fresh instance of the architecture the moment was
+frozen from (validated against the file: parameter names/shapes and the
+discovered layer names must match); its device is kept, and the frozen
+parameters and buffers are loaded into it. The returned session shows
+exactly the frozen pause — snapshot, watch statistics, watched set, and
+schedule totals — with stats collection off (scope <code>"none"</code>), so the
+numbers sit frozen while every view, and experiments, keep working.
+Nothing trains: the session is a viewer. Raises <code>MomentError</code> when the
+file is unreadable or does not fit <code>model</code>.</p>
+<p><code>port</code> / <code>host</code> / <code>open_browser</code> / <code>input_*</code> mirror <code>nansense.start</code> and
+serve the UI immediately when <code>port</code> is given. For a shared deployment,
+follow with <code>session.lock()</code> and <code>session.park()</code> — see
+<code>examples/playground</code> and <code>Session.freeze_moment</code> for the saving side.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.MomentError" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.MomentError</span>
+
+
+<a href="#nansense.MomentError" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="RuntimeError">RuntimeError</span></code></p>
+
+
+
+        <p>A moment file could not be read or does not fit the given model.</p>
 
 
 
