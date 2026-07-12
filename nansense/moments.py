@@ -1,24 +1,46 @@
 """Frozen debugger moments: save a paused view to disk, reload it to showcase.
 
-A *moment* is everything the UI shows for one batch: the published
-`BatchSnapshot` (activations, gradients, weights, optimizer state — the main,
-weights, and "Current batch" views), the running watch statistics behind the
-HISTOGRAM / MIN-MAX / GRAPHS views, the watched-layer set, and the schedule
-shape behind the position label. `Session.freeze_moment` arms a one-shot
-write at an exact batch position during training; `load_moment` rebuilds the
-frozen pause around a freshly constructed model of the same architecture.
+A *moment* is everything the UI shows for one batch, stored as the minimal
+recipe rather than the rendered tensors: the frozen batch itself (the loader's
+`(inputs, targets)` item), the model's parameters and buffers, the optimizer
+state, the running watch statistics behind the HISTOGRAM / MIN-MAX / GRAPHS
+views, the watched-layer set, and the schedule shape behind the position
+label. `Session.freeze_moment` arms a one-shot write at an exact batch
+position during training; `load_moment` rebuilds the frozen pause around a
+freshly constructed model of the same architecture by *replaying* the batch —
+one deterministic forward/backward under the capture hooks regenerates every
+activation and gradient the "Current batch" views show.
+
+Replaying instead of storing is what keeps the file small: a deep model at
+real image sizes carries gigabytes of per-layer activations and gradients for
+a single batch, all reproducible from a few megabytes of inputs. Not
+reproducible — and therefore stored — are the optimizer state and the watch
+statistics (they aggregate training history). The extreme-patch buffers are
+history too (per-channel extremes over a whole epoch's data); bound their
+size at the source with `Session.set_patch_layers`.
 
 The intended use is the locked showcase (`examples/playground`): a prepare
 run trains once and freezes its last train batch; the serving process then
-needs no dataset, optimizer, or training loop —
+needs no dataset or training loop —
 
-    session = nansense.load_moment(model, "moment.pt", port=7860)
+    session = nansense.load_moment(
+        model, "moment.pt", replay=lambda m, batch: criterion(m(batch[0]), batch[1]),
+        port=7860,
+    )
     session.lock()
     session.park()
 
-`load_moment` also loads the frozen weights *and buffers* into `model`, so
-experiments (deep dream, attribution) run against exactly the frozen network,
-on inputs taken from the frozen snapshot.
+`replay` receives the fresh model and the stored batch item and returns the
+loss to backpropagate; it must mirror the training step's forward (the same
+criterion, no optimizer step). Replay runs the model in train mode — the mode
+the frozen batch ran in — and restores the stored parameters and buffers
+afterwards, so BatchNorm running stats are not perturbed. The replayed batch
+reproduces the frozen forward against the *stored* weights: the training run
+published its snapshot after the optimizer step, so the served activations
+are the frozen weights' own (self-consistent with every weight view), not the
+pre-step tensors the live run displayed. Determinism assumes an
+inference-deterministic architecture (no dropout at train time) and no
+autocast during the freeze.
 
 Deliberately not part of a moment: probe pins/perturbations, experiment
 results, recordings, and the numerical-warning banner — per-visitor or
@@ -33,9 +55,9 @@ temp file + atomic rename like the epoch cache.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import torch
 
@@ -49,46 +71,54 @@ if TYPE_CHECKING:
     from nansense.session import Session
 
 _MOMENT_KIND = "nansense_moment"
-_FORMAT_VERSION = 1
-# The snapshot's tensor-dict fields, stored (and rebuilt) by name.
-_SNAPSHOT_FIELDS = (
-    "activations",
-    "activation_gradients",
-    "weights",
-    "weight_gradients",
-    "optimizer_state",
-    "optimizer_hyperparams",
-)
+_FORMAT_VERSION = 2
 
 
 class MomentError(RuntimeError):
     """A moment file could not be read or does not fit the given model."""
 
 
-def write_moment(session: Session, path: Path) -> None:
+def _cpu_copy_item(item: Any) -> Any:
+    """A CPU deep copy of a loader batch item (tensors in nested containers)."""
+    if isinstance(item, torch.Tensor):
+        return item.detach().to("cpu", copy=True)
+    if isinstance(item, (list, tuple)):
+        return type(item)(_cpu_copy_item(v) for v in item)
+    if isinstance(item, dict):
+        return {k: _cpu_copy_item(v) for k, v in item.items()}
+    return item
+
+
+def write_moment(session: Session, path: Path, *, batch_item: Any) -> None:
     """Serialize the just-published moment to `path` (training thread).
 
     Called from the batch `__exit__` of the position `Session.freeze_moment`
     armed, right after `_publish_snapshot` and the watch-stats fold — so the
-    snapshot *is* the frozen batch and the statistics include it.
+    statistics include the frozen batch. `batch_item` is that batch's loader
+    item, the replay seed `load_moment` regenerates the snapshot from.
     """
     snapshot = session.snapshot
     if snapshot is None:  # unreachable from the armed path; defensive
         raise MomentError("no published snapshot to freeze")
+    if batch_item is None:
+        raise MomentError(
+            "the frozen batch carried no loader item to store — drive the "
+            "loop with session.batches(...) or pass item= to session.batch()"
+        )
     payload: dict[str, Any] = {
         "kind": _MOMENT_KIND,
         "version": _FORMAT_VERSION,
         # Layer/input names double-check that `load_moment`'s model discovers
-        # the same graph the freezing run did (the snapshot and watch buckets
-        # are keyed by them); the full state dict below is the exact
-        # name/shape fingerprint `validate_model_state` checks first.
+        # the same graph the freezing run did (the replayed snapshot and the
+        # watch buckets are keyed by them); the full state dict below is the
+        # exact name/shape fingerprint `validate_model_state` checks first.
         "fingerprint": {
             "layer_names": list(session.layer_names),
             "input_names": list(session.input_names),
         },
-        # Parameters *and buffers* (BatchNorm running stats, ...), so the
-        # loading side can run experiments against the exact frozen network —
-        # the snapshot's `weights` dict alone carries no buffers.
+        # Parameters *and* buffers (BatchNorm running stats, ...), so the
+        # loading side replays and experiments against the exact frozen
+        # network.
         "model": {
             name: value.detach().to("cpu", copy=True)
             if isinstance(value, torch.Tensor)
@@ -96,8 +126,12 @@ def write_moment(session: Session, path: Path) -> None:
             for name, value in session.model.state_dict().items()
         },
         "position": asdict(snapshot.position),
-        "snapshot": {
-            name: getattr(snapshot, name) for name in _SNAPSHOT_FIELDS
+        # The replay seed: the frozen batch's loader item, as yielded.
+        "batch_item": _cpu_copy_item(batch_item),
+        # Training history the replay cannot regenerate.
+        "optimizer": {
+            "state": snapshot.optimizer_state,
+            "hyperparams": snapshot.optimizer_hyperparams,
         },
         "watched_layers": sorted(session.watched_layers),
         "watch": session._watch_accumulator.state_dict(),
@@ -148,10 +182,61 @@ def _validate(payload: dict[str, Any], session: Session, path: Path) -> None:
             )
 
 
+def _replay_batch(
+    session: Session,
+    model: nn.Module,
+    payload: dict[str, Any],
+    replay: Callable[[nn.Module, Any], torch.Tensor],
+    position: BatchPosition,
+) -> None:
+    """Regenerate the frozen snapshot: one forward/backward under capture.
+
+    The same hook machinery a publishing training batch uses captures every
+    layer's activation (with `retain_grad`), the `replay` loss backpropagates
+    through them, and `_publish_snapshot` clones the lot to CPU. The stored
+    optimizer state — which the replay has no optimizer to regenerate — is
+    then spliced into the published snapshot. Model mode, parameters, and
+    buffers are restored afterwards (a train-mode forward advances BatchNorm
+    running stats; the frozen ones must win).
+    """
+    from nansense import capture
+
+    was_training = model.training
+    model.train()
+    try:
+        capture.install_hooks(session)
+        try:
+            loss = replay(model, payload["batch_item"])
+            if not isinstance(loss, torch.Tensor):
+                raise MomentError(
+                    "replay must return the loss tensor to backpropagate"
+                )
+            loss.backward()
+        finally:
+            capture.remove_hooks(session)
+        session._publish_snapshot(position)
+        snapshot = session._snapshot
+        assert snapshot is not None
+        optimizer = payload["optimizer"]
+        session._snapshot = replace(
+            snapshot,
+            optimizer_state=optimizer["state"],
+            optimizer_hyperparams=optimizer["hyperparams"],
+        )
+    finally:
+        session._activations.clear()
+        model.zero_grad(set_to_none=True)
+        # Undo the replay's BatchNorm running-stat updates; parameters are
+        # untouched by a step-less replay, so this is a buffer restore.
+        model.load_state_dict(payload["model"])
+        model.train(was_training)
+
+
 def load_moment(
     model: nn.Module,
     path: Path | str,
     *,
+    replay: Callable[[nn.Module, Any], torch.Tensor],
     port: int | None = None,
     host: str = "127.0.0.1",
     open_browser: bool = True,
@@ -164,12 +249,17 @@ def load_moment(
     `model` must be a fresh instance of the architecture the moment was
     frozen from (validated against the file: parameter names/shapes and the
     discovered layer names must match); its device is kept, and the frozen
-    parameters and buffers are loaded into it. The returned session shows
-    exactly the frozen pause — snapshot, watch statistics, watched set, and
-    schedule totals — with stats collection off (scope `"none"`), so the
-    numbers sit frozen while every view, and experiments, keep working.
-    Nothing trains: the session is a viewer. Raises `MomentError` when the
-    file is unreadable or does not fit `model`.
+    parameters and buffers are loaded into it. `replay` is the training
+    step's forward in miniature — given the model and the stored batch item
+    it returns the loss, e.g. ``lambda m, batch: criterion(m(batch[0]),
+    batch[1])`` — and is run once, here, to regenerate the frozen batch's
+    activations and gradients (see the module docstring for why they are not
+    stored). The returned session shows exactly the frozen pause — snapshot,
+    watch statistics, watched set, and schedule totals — with stats
+    collection off (scope `"none"`), so the numbers sit frozen while every
+    view, and experiments, keep working. Nothing trains: the session is a
+    viewer. Raises `MomentError` when the file is unreadable or does not fit
+    `model`.
 
     `port` / `host` / `open_browser` / `input_*` mirror `nansense.start` and
     serve the UI immediately when `port` is given. For a shared deployment,
@@ -178,7 +268,7 @@ def load_moment(
     """
     # Imported lazily to keep the import graph acyclic (the session module
     # calls back into this one when a freeze triggers).
-    from nansense.session import BatchSnapshot, Session, StatsScope
+    from nansense.session import Session, StatsScope
 
     resolved = Path(path)
     payload = _load_payload(resolved)
@@ -186,11 +276,7 @@ def load_moment(
     _validate(payload, session, resolved)
     model.load_state_dict(payload["model"])
     position = BatchPosition(**payload["position"])
-    stored = payload["snapshot"]
-    session._snapshot = BatchSnapshot(
-        position=position,
-        **{name: stored[name] for name in _SNAPSHOT_FIELDS},
-    )
+    _replay_batch(session, model, payload, replay, position)
     session._live_position = position
     session._watched_layers = {
         str(layer)

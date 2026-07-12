@@ -69,9 +69,13 @@ class PlaygroundSpec:
     shown_layers: tuple[str, ...]
     lr: float = 1e-3
     weight_decay: float = 0.05
-    # Extreme-patch samples kept per channel (None = session default). Patch
-    # buffers live on the GPU per layer and phase, so scope-`all` prepare runs
-    # on large models must budget them against VRAM.
+    # Layers that collect extreme-input patch galleries (None = all layers).
+    # Patch buffers are by far the largest watch state — per-channel input
+    # crops and heatmaps, on the GPU per layer and phase, all stored in the
+    # frozen moment — so deep models at real image sizes shortlist them;
+    # every layer keeps its histogram/graph statistics regardless.
+    patch_layers: tuple[str, ...] | None = None
+    # Extreme-patch samples kept per channel (None = session default).
     samples_per_channel: int | None = None
 
     @property
@@ -100,8 +104,17 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         epochs=50,
         batch_size=32,
         shown_layers=("stem", "stage1.0.conv1"),
-        # 155 layers of 128px patch buffers hit ~6 GB per phase at the
-        # default 5 — 3 keeps the prepare run inside a 16 GB GPU.
+        # All 155 layers of 128px patch buffers cost ~3.4 GB per phase even
+        # at 3 samples/channel — a shortlist spanning the depth keeps the
+        # moment file (and the prepare run's VRAM) in the tens of MB.
+        patch_layers=(
+            "stem",
+            "stage1.0.conv1",
+            "stage2.0.conv1",
+            "stage3.0.conv1",
+            "stage4.0.conv1",
+            "stage5.0.conv1",
+        ),
         samples_per_channel=3,
     ),
 }
@@ -186,6 +199,8 @@ def train_and_freeze(
     )
     if spec.samples_per_channel is not None:
         session.set_watch_performance(samples_per_channel=spec.samples_per_channel)
+    if spec.patch_layers is not None:
+        session.set_patch_layers(spec.patch_layers)
     for layer in spec.shown_layers:
         session.watch(layer)
     session.set_stats_scope("all")
@@ -230,15 +245,18 @@ def open_showcase(
     """The frozen moment reloaded and locked, ready to `park()`.
 
     PNG strips (internet bytes beat encode speed), then `load_moment` — which
-    also loads the frozen weights and buffers into `model`, so experiments run
-    against the exact frozen network — then the one-way lock. Everything else
-    a demo needs (watched seed layers, statistics, schedule) already lives in
-    the moment file.
+    loads the frozen weights and buffers into `model` and replays the frozen
+    batch through it (regenerating every activation and gradient the views
+    show; the replay mirrors the prepare run's training step) — then the
+    one-way lock. Everything else a demo needs (watched seed layers,
+    statistics, schedule) lives in the moment file.
     """
     set_strip_format("PNG")
+    criterion = nn.CrossEntropyLoss()
     session = nansense.load_moment(
         model,
         moment_path,
+        replay=lambda m, batch: criterion(m(batch[0]), batch[1]),
         port=port,
         host=host,
         open_browser=False,

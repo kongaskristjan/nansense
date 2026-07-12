@@ -363,6 +363,7 @@ class Session:
         # Per-channel watch caps (GPU VRAM); the accumulator defaults already
         # match, so no initial `configure` flush is needed.
         self._watch_performance = WatchPerformance()
+        self._patch_layers: frozenset[str] | None = None
         # Probe state (see nansense.probe). Config fields are mutated by the
         # UI thread under `_cv`; `_probe_result` is published by the training
         # thread (also under `_cv`, so a stale in-flight run can be detected
@@ -568,8 +569,18 @@ class Session:
         with self._cv:
             return not self._paused and not self._closed
 
-    def batch(self, *, phase: str, epoch: int) -> _BatchContext:
-        return _BatchContext(self, phase=phase, epoch=epoch)
+    def batch(
+        self, *, phase: str, epoch: int, item: object = None
+    ) -> _BatchContext:
+        """One batch boundary; see `batches()` for the loop sugar.
+
+        `item` is the loader's yielded batch (typically `(inputs, targets)`),
+        needed only when an armed `freeze_moment` may trigger on this batch —
+        the moment stores it so `load_moment` can replay the forward/backward
+        instead of storing every activation tensor. `batches()` passes it
+        automatically.
+        """
+        return _BatchContext(self, phase=phase, epoch=epoch, item=item)
 
     def batches(
         self, loader: Iterable[_BatchItem], *, phase: str, epoch: int | None = None
@@ -600,7 +611,7 @@ class Session:
         self._maybe_save_epoch_start(epoch)
         count = 0
         for item in loader:
-            with self.batch(phase=phase, epoch=epoch):
+            with self.batch(phase=phase, epoch=epoch, item=item):
                 yield item
             count += 1
         # The loop ran to completion (no early break / time-travel jump): teach
@@ -1147,6 +1158,36 @@ class Session:
         with self._cv:
             return self._watch_performance
 
+    def set_patch_layers(self, layers: Iterable[str] | None) -> None:
+        """Restrict extreme-patch collection to `layers` (`None` = every layer).
+
+        Histogram/min-max/graph statistics are unaffected — this only gates
+        the per-channel extreme-input patch buffers, by far the largest watch
+        state (input crops, whole-image samples, and activation heatmaps per
+        channel per layer). A scope-`all` run on a deep model at real image
+        sizes spends gigabytes there; restricting patches to the layers a
+        demo actually showcases keeps memory (and a frozen moment's file
+        size) proportional to the shortlist while every layer keeps its
+        statistics views.
+
+        Unknown layer names raise `ValueError` on an enabled session (they
+        would silently collect nothing). No-op when locked; layers already
+        holding patch buffers keep them (this gates new accumulation only).
+        """
+        if self._locked:
+            return
+        if layers is None:
+            self._patch_layers = None
+            return
+        requested = frozenset(str(name) for name in layers)
+        if self._enabled:
+            unknown = requested - set(self._layer_names)
+            if unknown:
+                raise ValueError(
+                    f"unknown layer names for patches: {sorted(unknown)}"
+                )
+        self._patch_layers = requested
+
     def set_watch_performance(
         self,
         *,
@@ -1358,11 +1399,14 @@ class Session:
         When training reaches `(phase, epoch, batch_idx)`, that batch installs
         hooks and publishes a snapshot like a capture — whatever the mode, so
         a detached prepare run works — and, after folding its watch stats,
-        writes the complete debugger moment to `path` without pausing:
-        snapshot, running statistics, watched set, model weights and buffers,
-        and the schedule shape. `nansense.load_moment` later rebuilds the
-        view around a fresh model of the same architecture, the backing for
-        a locked showcase (see `nansense.moments` and `examples/playground`).
+        writes the complete debugger moment to `path` without pausing: the
+        batch's loader item (the replay seed the snapshot is regenerated
+        from — drive the loop with `batches()`, or pass `item=` to a manual
+        `batch()`), running statistics, watched set, model weights and
+        buffers, and the schedule shape. `nansense.load_moment` later rebuilds
+        the view around a fresh model of the same architecture, the backing
+        for a locked showcase (see `nansense.moments` and
+        `examples/playground`).
 
         One request at a time — arming again replaces an unconsumed target; a
         target the run never reaches is reported at `close()`. No-op on a
@@ -1904,6 +1948,7 @@ class Session:
         # Extreme-input patches stay rank-local in distributed runs: only
         # the leader renders them, so followers skip the buffers entirely.
         source = self._patch_source_input() if self.is_leader else None
+        patch_layers = self._patch_layers
         # Live parameter tensors, resolved at most once per batch — and only
         # when some watched layer still needs this epoch's weight sample
         # (every batch after the epoch's first is just the cheap
@@ -1950,7 +1995,7 @@ class Session:
                     kind="gradient",
                     x=grad,
                 )
-            if source is not None:
+            if source is not None and (patch_layers is None or name in patch_layers):
                 self._watch_accumulator.update_patches(
                     layer=name,
                     phase=pos.phase,
@@ -2227,10 +2272,13 @@ class Session:
 
 
 class _BatchContext:
-    def __init__(self, session: Session, *, phase: str, epoch: int) -> None:
+    def __init__(
+        self, session: Session, *, phase: str, epoch: int, item: object = None
+    ) -> None:
         self._session = session
         self._phase = phase
         self._epoch = epoch
+        self._item = item
         self._position: BatchPosition | None = None
         self._captured = False
         self._freq_update = False
@@ -2400,7 +2448,11 @@ class _BatchContext:
                             # module at the top level.
                             from nansense import moments
 
-                            moments.write_moment(self._session, self._freeze_path)
+                            moments.write_moment(
+                                self._session,
+                                self._freeze_path,
+                                batch_item=self._item,
+                            )
                         probe.maybe_run_probe_at_capture(self._session)
                         # Auto experiments re-run on every publish, so a pause
                         # shows fresh results and a free-running frequency

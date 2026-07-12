@@ -25,6 +25,7 @@ The public surface of the `nansense` package. Everything here is importable as `
         - time_travel_status
         - lock
         - freeze_moment
+        - set_patch_layers
         - park
 
 ## PyTorch Lightning integration

@@ -1438,12 +1438,13 @@ moment with `--prepare` and serves it via `load_moment` + `lock` + `park`
 
 ## Frozen moments (`nansense.moments`)
 
-A *moment* is everything the debugger shows for one batch — the published
-`BatchSnapshot`, the watch accumulators behind the HISTOGRAM / MIN-MAX /
-GRAPHS views, the watched set, and the schedule totals — saved to one file
-and later rebuilt around a fresh model. It exists for the locked showcase:
-train once, freeze, then serve the frozen pause with no dataset, optimizer,
-or training loop in the serving process.
+A *moment* is everything the debugger shows for one batch, saved to one
+file as the minimal recipe — the frozen batch's loader item, the model
+state, the optimizer state, the watch accumulators behind the HISTOGRAM /
+MIN-MAX / GRAPHS views, the watched set, and the schedule totals — and
+later rebuilt around a fresh model by *replaying* that batch. It exists for
+the locked showcase: train once, freeze, then serve the frozen pause with
+no dataset or training loop in the serving process.
 
 **Freezing** is a one-shot armed request in the `_snapshot_request` family:
 `Session.freeze_moment(path, phase=, epoch=, batch_idx=)` arms a target
@@ -1452,38 +1453,71 @@ position, `_take_freeze_request` (the same lock-free fast path as
 match, and the matching batch counts as publishing (`_publishes`) — hooks
 install and a snapshot publishes whatever the mode, so a detached prepare
 run freezes without pausing. `moments.write_moment` runs at `__exit__`
-right after `_publish_snapshot`, so the file's snapshot *is* the target
-batch and the accumulators include it. A target the run never reaches is
-reported at `close()`. Leader-only under DDP — the frozen statistics are
-the leader's shard; freeze a single-process run when the demo needs exact
-global numbers.
+right after `_publish_snapshot`, so the accumulators include the target
+batch. It stores the batch's loader item as the replay seed, which the
+batch context carries only when given one — `session.batches(...)` passes
+each yielded item through automatically; a manual `session.batch(...)`
+must pass `item=`, and freezing without one raises `MomentError`. A target
+the run never reaches is reported at `close()`. Leader-only under DDP —
+the frozen statistics are the leader's shard; freeze a single-process run
+when the demo needs exact global numbers.
 
 **The file** is a single `torch.save` payload of plain dicts/lists/tensors —
 loadable with `weights_only=True`, nothing pickled by reference — written
 via temp file + atomic rename like the epoch cache. It carries the full
-`model.state_dict()` (parameters *and* buffers, so experiments later run
-against the exact frozen network — the snapshot's `weights` dict alone has
-no BatchNorm running stats), the snapshot's tensor dicts and position, the
-`WatchAccumulator` state (`state_dict`/`load_state_dict` pairs on
-`TensorAccumulator` and `PatchAccumulator`; bucket maps stored as record
-lists, dtypes by name), the watched set, the per-channel caps, and
-`Schedule.state_dict()` (epochs / phase order / learned counts — the
-position label's totals). Excluded by design: probe pins, perturbations,
-experiment results, recordings, and the debug banner — per-visitor or
-transient state.
+`model.state_dict()` (parameters *and* buffers, so the replay and later
+experiments run against the exact frozen network), the frozen position and
+batch item, the snapshot's optimizer state and hyperparameters (training
+history a replay cannot regenerate), the `WatchAccumulator` state
+(`state_dict`/`load_state_dict` pairs on `TensorAccumulator` and
+`PatchAccumulator`; bucket maps stored as record lists, dtypes by name),
+the watched set, the per-channel caps, and `Schedule.state_dict()` (epochs
+/ phase order / learned counts — the position label's totals).
+Deliberately *not* stored: the snapshot's activation and gradient tensors.
+For a deep model at real image sizes those run to gigabytes per batch,
+all reproducible from a few megabytes of inputs — storing the recipe
+instead of the render is what keeps moment files deployable. Also excluded:
+probe pins, perturbations, experiment results, recordings, and the debug
+banner — per-visitor or transient state.
 
-**Loading** (`nansense.load_moment(model, path, port=...)`) constructs a
-normal `Session` around the fresh model (fx trace and name discovery run as
-usual), validates the file against it — `validate_model_state` on the
-stored state dict plus layer-/input-name equality, `MomentError` on any
-mismatch — loads the weights+buffers into the model, and installs the
-state: snapshot, `live_position`, accumulators (tensors stay on CPU; a
-restored moment is browse-only, nothing ever accumulates into it), watched
-set, a `WatchPerformance` mirrored from the file's caps (so an equal
-`configure` can never flush the restored buckets), and the schedule. The
-stats scope is set to `none`: buckets stay browsable while nothing
-collects. Every view then works unchanged, because the UI only ever reads
-`session.snapshot` / `watch_snapshot()`.
+**Loading** (`nansense.load_moment(model, path, replay=..., port=...)`)
+constructs a normal `Session` around the fresh model (fx trace and name
+discovery run as usual), validates the file against it —
+`validate_model_state` on the stored state dict plus layer-/input-name
+equality, `MomentError` on any mismatch — loads the weights+buffers into
+the model, and regenerates the snapshot: capture hooks install, the
+caller's `replay(model, batch_item)` runs the training step's forward and
+returns the loss, one `backward()` populates the retained gradients, and
+`_publish_snapshot` clones the lot exactly as a live publishing batch
+would; the stored optimizer state is then spliced into the published
+snapshot. The replay runs in train mode (the mode the batch was frozen in;
+BatchNorm normalizes by batch statistics either way) and the stored state
+dict is re-loaded afterwards, so the transient running-stat updates never
+leak into the served buffers. Because the training run stepped the
+optimizer before the freeze wrote the weights, the replayed activations
+are the stored weights' own — self-consistent with every weight view,
+not bit-identical to the pre-step forward the live run displayed.
+Determinism assumes no train-time stochastic layers (dropout) and no
+autocast at the freeze. The rest installs as plain state: `live_position`,
+accumulators (tensors stay on CPU; a restored moment is browse-only,
+nothing ever accumulates into it), watched set, a `WatchPerformance`
+mirrored from the file's caps (so an equal `configure` can never flush the
+restored buckets), and the schedule. The stats scope is set to `none`:
+buckets stay browsable while nothing collects. Every view then works
+unchanged, because the UI only ever reads `session.snapshot` /
+`watch_snapshot()`.
+
+**Patch shortlists.** The extreme-patch buffers are the one watch state
+that dwarfs everything else on deep models (per-channel input crops,
+whole-image samples, and activation heatmaps, per layer and phase — they
+are also training history, so the moment must store them).
+`Session.set_patch_layers([...])` gates patch accumulation to a shortlist
+(`None` = every layer, the default) while histogram/min-max/graph
+statistics keep covering the full stats scope; `_update_watch_stats`
+checks the set at its single `update_patches` call site. Showcase prepare
+runs shortlist the layers whose galleries the demo actually presents,
+keeping both prepare-time GPU memory and the moment file proportional to
+the shortlist.
 
 **Parking.** Experiments execute on the pause loop, which normally lives
 inside a batch's `_wait_for_proceed`. A moment session drives no batches,
@@ -1493,11 +1527,13 @@ explicit "wait indefinitely") and re-enters `_wait_for_proceed` until
 `lock()` → `park()`.
 
 In `examples/playground`, `--prepare` trains under scope `all` (so the
-frozen stats cover every layer across the whole run), arms `freeze_moment`
-at the last train batch of the last epoch, and skips the final epoch's
-validation so the frozen batch is the run's last gradient-carrying one.
-Serving reloads the moment in seconds; the container ships no dataset and
-no epoch cache (time travel is disabled under lock anyway).
+frozen stats cover every layer across the whole run), shortlists the
+patch layers per demo spec, arms `freeze_moment` at the last train batch
+of the last epoch, and skips the final epoch's validation so the frozen
+batch is the run's last gradient-carrying one. Serving replays that batch
+once at boot (seconds for LeNet, under a minute for the imagenette
+ResNet on the free Space's CPUs); the container ships no dataset and no
+epoch cache (time travel is disabled under lock anyway).
 
 ## Lifecycle summary
 
