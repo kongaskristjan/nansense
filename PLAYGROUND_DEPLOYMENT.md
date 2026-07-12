@@ -10,7 +10,8 @@ are described in [`INTERNALS.md`](INTERNALS.md#locked-sessions-shared-demos).
 
 Everything that belongs in this repository already lives here: the
 entrypoint, the root [`Dockerfile`](Dockerfile) (root-level because Docker
-Spaces accept no other location), and the root `.dockerignore`. This document covers running it and the pieces
+Spaces accept no other location), the root `.dockerignore`, and the deploy
+script [`deploy/push_space.sh`](deploy/push_space.sh). This document covers running it and the pieces
 that must live *outside* the repository (the Hugging Face Space, scheduled
 restarts).
 
@@ -47,11 +48,26 @@ the least-ops option: HF builds the Dockerfile, fronts it with TLS and
 websocket support (the UI is socket.io-based — this matters), and the free
 "CPU basic" tier (2 vCPU / 16 GB) is plenty for the LeNet demo.
 
-Create a Space with the Docker SDK. Its configuration is YAML front matter
-at the top of the Space repo's `README.md`, kept here as a single commit on
-an `hf-space` branch — `main` plus this block prepended to the README, plus
-the `.gitattributes` written by `git lfs track "*.png" "*.gif"` (needed
-below):
+Create a Space with the Docker SDK, then deploy — and later re-deploy —
+with one command from a clean tree on any branch:
+
+```bash
+git lfs install                # one-time
+deploy/push_space.sh           # --dry-run builds the snapshot without pushing
+```
+
+The script rebuilds a single-commit `space-snapshot` branch from `main` and
+force-pushes it to the `space` remote (added automatically; git prompts for
+your HF username and a write token). Two Hub rules shape what it does. The
+Space's configuration is YAML front matter at the top of the README — the
+script prepends the block below, and since the [accepted
+parameters](https://huggingface.co/docs/hub/spaces-config-reference) include
+no key for a custom Dockerfile location, the Dockerfile sits at the repo
+root. And the Hub rejects binary files committed as plain git blobs while
+inspecting the whole pushed history — hence a parentless snapshot commit
+whose PNGs/GIFs are renormalized to git-LFS pointers (HF materializes LFS
+files both in the Docker build, e.g. the runtime logo asset, and when
+rendering the Space README).
 
 ```yaml
 ---
@@ -65,32 +81,10 @@ short_description: A Pytorch debugger playground on a pretrained network
 ---
 ```
 
-(There is no config key for a custom Dockerfile location — the [accepted
-parameters](https://huggingface.co/docs/hub/spaces-config-reference) have
-none — which is why the Dockerfile sits at the repo root.)
-
-The Space is itself a git repo, but the Hub rejects binary files (the
-repo's PNG/GIF assets) committed as plain git blobs — they must be
-LFS-tracked — and it inspects the whole pushed history. So push a
-single-commit, LFS-tracked snapshot rather than the branch as-is (with the
-Space added as the `space` remote):
-
-```bash
-git lfs install                # one-time
-git checkout --orphan space-snapshot hf-space
-git add --renormalize .        # images become LFS pointers per .gitattributes
-git commit -m "nansense playground Space snapshot"
-git push --force space space-snapshot:main
-git checkout hf-space
-```
-
-HF materializes LFS files both in the Docker build (the runtime logo asset)
-and when rendering the Space README. To update, rebase `hf-space` onto
-`main`, delete `space-snapshot`, and recreate it. The same can be automated
-with a GitHub Action on push (HF documents the
-[sync-to-hub pattern](https://huggingface.co/docs/hub/spaces-github-actions);
-it needs an `HF_TOKEN` secret on the GitHub side and the same
-snapshot/LFS treatment).
+The same can be automated with a GitHub Action on push (HF documents the
+[sync-to-hub pattern](https://huggingface.co/docs/hub/spaces-github-actions))
+by running the script from the workflow with an `HF_TOKEN` secret supplying
+the push credential.
 
 One piece lives outside the repository entirely — **a scheduled restart**
 (optional). The container filesystem is ephemeral and a free Space also
