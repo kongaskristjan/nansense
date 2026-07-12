@@ -136,6 +136,20 @@ def test_patch_grids_html_skips_absent_types() -> None:
     assert "Max average" not in html and "Min average" not in html
 
 
+def test_patch_grids_html_explains_uncollected_average_selection() -> None:
+    # Selecting only an average grid against a default (average_patches off)
+    # snapshot must say the type wasn't collected — not claim the model has
+    # no image input (patches for the pixel types clearly exist).
+    per_phase = {
+        "train": _layer_snap_with_patches("train", average_patches=False)
+    }
+    html = _patch_grids_html(
+        per_phase, enabled=["max_average"], heatmap=False, mean=None, std=None
+    )
+    assert "not collected" in html and "Performance settings" in html
+    assert "image-like" not in html
+
+
 def test_patch_grids_html_filters_to_enabled_types() -> None:
     per_phase = {"train": _layer_snap_with_patches("train")}
     html = _patch_grids_html(

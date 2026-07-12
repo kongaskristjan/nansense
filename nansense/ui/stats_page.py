@@ -1799,6 +1799,14 @@ _NO_PATCHES_HTML: str = (
     "yet — patches need an image-like (4D) model input</div>"
 )
 
+# Patches exist for this layer, just not the selected grid type — the
+# average-extreme galleries are a Performance setting, off by default.
+_TYPE_NOT_COLLECTED_HTML: str = (
+    '<div class="text-xs text-slate-400 italic py-1">this grid type was '
+    "not collected — the average-extreme galleries are off in the "
+    "Performance settings</div>"
+)
+
 # Shown in a layer card (both views) until the layer has accumulated any
 # stats for the selected phase. Stresses that only batches stepped after
 # the layer is watched feed the running aggregate (it grows rather than
@@ -1867,7 +1875,11 @@ def _patch_grids_html(
             f"{phase} (ep {layer_snap.epoch})</div>" + "".join(rows) + "</div>"
         )
     if not blocks:
-        return _NO_PATCHES_HTML
+        collected = any(
+            snap.patches is not None and snap.patches.by_type
+            for snap in per_phase.values()
+        )
+        return _TYPE_NOT_COLLECTED_HTML if collected else _NO_PATCHES_HTML
     return '<div class="flex flex-col gap-4 w-full">' + "".join(blocks) + "</div>"
 
 
