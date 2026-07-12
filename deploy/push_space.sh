@@ -62,7 +62,9 @@ if ! git config --get filter.lfs.clean >/dev/null; then
     echo "git-lfs filters are not configured — install git-lfs and run: git lfs install" >&2
     exit 1
 fi
-if [[ -n "$(git status --porcelain)" ]]; then
+# Untracked files can't leak into the snapshot (only tracked files are
+# renormalized and committed), so only tracked modifications block.
+if [[ -n "$(git status --porcelain -uno)" ]]; then
     echo "working tree not clean — commit or stash first" >&2
     exit 1
 fi
