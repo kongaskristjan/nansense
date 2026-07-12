@@ -69,6 +69,10 @@ class PlaygroundSpec:
     shown_layers: tuple[str, ...]
     lr: float = 1e-3
     weight_decay: float = 0.05
+    # Extreme-patch samples kept per channel (None = session default). Patch
+    # buffers live on the GPU per layer and phase, so scope-`all` prepare runs
+    # on large models must budget them against VRAM.
+    samples_per_channel: int | None = None
 
     @property
     def config(self) -> DatasetConfig:
@@ -96,6 +100,9 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         epochs=50,
         batch_size=32,
         shown_layers=("stem", "stage1.0.conv1"),
+        # 155 layers of 128px patch buffers hit ~6 GB per phase at the
+        # default 5 — 3 keeps the prepare run inside a 16 GB GPU.
+        samples_per_channel=3,
     ),
 }
 
@@ -177,6 +184,8 @@ def train_and_freeze(
         epochs=epochs,
         phases={"train": len(train_loader), "val": len(val_loader)},
     )
+    if spec.samples_per_channel is not None:
+        session.set_watch_performance(samples_per_channel=spec.samples_per_channel)
     for layer in spec.shown_layers:
         session.watch(layer)
     session.set_stats_scope("all")
