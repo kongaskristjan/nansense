@@ -1,9 +1,11 @@
-# Keep the playground image build context lean (deploy/playground/Dockerfile
-# builds from the repo root).
+# Keep the playground image build context lean (the root Dockerfile builds
+# from the repo root). The playground moments are the one cache the image
+# needs — everything else stays out.
 .git
 .venv*
 .claude
 .nansense_cache
+!.nansense_cache/playground
 data
 nansense_recordings
 site
