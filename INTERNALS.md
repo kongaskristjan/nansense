@@ -1021,8 +1021,8 @@ resume_from`: mmap load + the three `validate_*_state` checks, raising
 `TimeTravelError` on a mismatch) and then armed as a pending jump, so the
 first `restore_point()` entry loads the state on the training thread
 through the same `_apply_pending_jump` → `_restore` machinery. This is
-what lets the hosted playground boot straight into its final epoch in
-seconds.
+what lets a run resume straight into its final epoch from a cache baked
+into a deployment image.
 
 **Jump flow.** `Session.request_time_travel(epoch)` runs on the UI thread
 and validates everything up-front: the restorer exists and isn't finished,
@@ -1432,8 +1432,9 @@ the settings gear into a "settings are locked" note; enforcement lives in
 the `Session` methods, so the UI state is cosmetic.
 `render.set_strip_format("PNG")` is the companion knob for internet-facing
 deployments — BMP strips are the localhost trade. `examples/playground`
-is the reference deployment: it freezes a moment with `--prepare` and
-serves it via `load_moment` + `lock` + `park` (see *Frozen moments* below).
+hosts the reference deployments (one spec per demo dataset): each freezes a
+moment with `--prepare` and serves it via `load_moment` + `lock` + `park`
+(see *Frozen moments* below).
 
 ## Frozen moments (`nansense.moments`)
 

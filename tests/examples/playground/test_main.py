@@ -1,13 +1,15 @@
 """Tests for the hosted-playground entrypoint (examples/playground/main.py).
 
-Runs the prepare + serve flow end-to-end on a tiny synthetic dataset: prepare
-must freeze the run's last train batch into a moment file (no validation
-after it, no epoch checkpoints), and serving must reload that moment around a
-fresh model and park locked with every layer's statistics browsable.
+Runs the prepare + serve flow end-to-end for every playground on a tiny
+synthetic dataset: prepare must freeze the run's last train batch into a
+moment file (no validation after it, no epoch checkpoints), and serving must
+reload that moment around a fresh model and park locked with every layer's
+statistics browsable.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,20 +19,25 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import nansense
 from examples.playground.main import (
-    SHOWN_LAYERS,
-    build_model,
+    PLAYGROUNDS,
+    PlaygroundSpec,
     open_showcase,
     train_and_freeze,
 )
-from examples.standard.data import DATASETS
 from nansense.session import StatsScope
 from nansense.ui import render
 from tests.nansense.helpers import run_in_thread
 
-_CONFIG = DATASETS["mnist"]
 _EPOCHS = 2
 _BATCHES = 3
+# Both demo models accept 32x32 inputs: it is the real MNIST size, and the
+# resnet is fully convolutional — so the imagenette flow tests cheaply too.
+_IMAGE_SIZE = 32
 _DEVICE = torch.device("cpu")
+
+playgrounds = pytest.mark.parametrize(
+    "spec", [PLAYGROUNDS[name] for name in sorted(PLAYGROUNDS)], ids=sorted(PLAYGROUNDS)
+)
 
 
 @pytest.fixture(autouse=True)
@@ -40,52 +47,62 @@ def _restore_strip_format() -> Iterator[None]:
     render.set_strip_format("BMP")
 
 
-def _loaders() -> tuple[DataLoader, DataLoader]:
-    x = torch.randn(_BATCHES * 4, _CONFIG.in_channels, 32, 32)
-    y = torch.randint(0, _CONFIG.num_classes, (_BATCHES * 4,))
+def _loaders(spec: PlaygroundSpec) -> tuple[DataLoader, DataLoader]:
+    config = spec.config
+    x = torch.randn(_BATCHES * 4, config.in_channels, _IMAGE_SIZE, _IMAGE_SIZE)
+    y = torch.randint(0, config.num_classes, (_BATCHES * 4,))
     train = DataLoader(TensorDataset(x, y), batch_size=4, shuffle=True)
     val = DataLoader(TensorDataset(x[:4], y[:4]), batch_size=4)
     return train, val
 
 
-def _prepare(moment_path: Path) -> None:
-    model = build_model(_CONFIG)
-    train_loader, val_loader = _loaders()
+def _prepare(spec: PlaygroundSpec, moment_path: Path) -> PlaygroundSpec:
+    spec = dataclasses.replace(spec, epochs=_EPOCHS)
+    model = spec.build()
+    train_loader, val_loader = _loaders(spec)
     train_and_freeze(
+        spec,
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
         device=_DEVICE,
-        epochs=_EPOCHS,
         moment_path=moment_path,
     )
+    return spec
 
 
-def test_shown_layers_exist_on_the_lenet_graph() -> None:
-    session = nansense.start(build_model(_CONFIG))
-    assert set(SHOWN_LAYERS) <= set(session.layer_names)
+@playgrounds
+def test_shown_layers_exist_on_the_model_graph(spec: PlaygroundSpec) -> None:
+    session = nansense.start(spec.build())
+    assert set(spec.shown_layers) <= set(session.layer_names)
 
 
-def test_prepare_freezes_the_moment_and_nothing_else(tmp_path: Path) -> None:
+@playgrounds
+def test_prepare_freezes_the_moment_and_nothing_else(
+    spec: PlaygroundSpec, tmp_path: Path
+) -> None:
     moment_path = tmp_path / "moment.pt"
-    _prepare(moment_path)
+    _prepare(spec, moment_path)
     assert moment_path.exists()
     # No epoch cache: the frozen moment is the only artifact serving needs.
     assert not list(tmp_path.glob("epoch_*.pt"))
 
 
-def test_serve_parks_locked_at_the_frozen_train_batch(tmp_path: Path) -> None:
+@playgrounds
+def test_serve_parks_locked_at_the_frozen_train_batch(
+    spec: PlaygroundSpec, tmp_path: Path
+) -> None:
     moment_path = tmp_path / "moment.pt"
-    _prepare(moment_path)
+    spec = _prepare(spec, moment_path)
     session = open_showcase(
-        build_model(_CONFIG),
+        spec.build(),
         moment_path,
-        config=_CONFIG,
+        config=spec.config,
         port=None,  # no UI in tests; the parked, locked state is under test
     )
     assert session.locked
     assert session.stats_scope is StatsScope.ALL
-    assert session.watched_layers == frozenset(SHOWN_LAYERS)
+    assert session.watched_layers == frozenset(spec.shown_layers)
 
     thread = run_in_thread(session.park)
     try:
