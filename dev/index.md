@@ -11,6 +11,8 @@ Here's how *nansense* can help:
 - **See what is actually going on.** [Visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream).
 - **Spot optimization bottlenecks.** [Discover insufficient receptive fields](#measure-the-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons), [discover padding artifacts](#padding-artifacts) and [spot gradient underflow](#spot-gradient-underflow).
 
+Want a look before installing? Open the [Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) — a trained network you can inspect right in the browser.
+
 Start with [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) to run an example in minutes, read the [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md) for a tour of every page, and see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) for adding nansense to your own training loop — it's just a few lines of code.
 
 ## How is this different from wandb or TensorBoard?

@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/ui/">
+        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/playground/">
       
       
-        <link rel="prev" href="../getting-started/">
+        <link rel="prev" href="..">
       
       
-        <link rel="next" href="../wiring/">
+        <link rel="next" href="../getting-started/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>UI guide - nansense</title>
+        <title>Playground - nansense</title>
       
     
     
@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#ui-guide" class="md-skip">
+        <a href="#playground" class="md-skip">
           Skip to content
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              UI guide
+              Playground
             
           </span>
         </div>
@@ -226,7 +226,9 @@
           
             
               
-              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
                     
@@ -288,10 +290,19 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../playground/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -307,6 +318,7 @@
   
 
       </a>
+      
     </li>
   
 
@@ -342,37 +354,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    UI guide
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../ui/" class="md-nav__link">
         
   
   
@@ -388,114 +373,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#the-top-bar" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The top bar
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-main-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The main page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-input-panel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The input panel
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-stats-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The stats page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-weights-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The weights page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-experiment-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The experiment page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#numerical-debugging" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Numerical debugging
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recording-videos" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recording videos
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -562,7 +439,9 @@
             
             
               
-              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" hidden>
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
                     
@@ -573,102 +452,6 @@
   
     
   
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#the-top-bar" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The top bar
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-main-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The main page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-input-panel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The input panel
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-stats-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The stats page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-weights-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The weights page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-experiment-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The experiment page
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#numerical-debugging" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Numerical debugging
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recording-videos" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recording videos
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
   
 </nav>
                   </div>
@@ -682,50 +465,81 @@
               <article class="md-content__inner md-typeset">
                 
                   
+  
+
 
 
   
   
 
 
-<h1 id="ui-guide">UI guide<a class="headerlink" href="#ui-guide" title="Permanent link">&para;</a></h1>
-<p>When a session starts, nansense serves a web page and pauses on the first batch.</p>
-<p><img alt="Main view of the UI" src="../images/ui_with_elements.png" /></p>
-<p><em>The main view: stepping controls, architecture graph, layer cards with activations/gradients, and the input panel. Each layer in the architecture can be clicked to open the respective layer card.</em></p>
-<h2 id="the-top-bar">The top bar<a class="headerlink" href="#the-top-bar" title="Permanent link">&para;</a></h2>
-<p>You drive the run from the top bar: <strong>Step Batch</strong> advances one batch, <strong>Run</strong> runs to the end and then pauses, and <strong>Stop</strong> pauses a free-running session. The dropdown next to Step Batch steps a whole phase, a whole epoch, or up to a custom position.</p>
-<p><strong>Time Travel</strong> jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a <a href="../wiring/#time-travel">restorer</a>, which checkpoints each epoch start to disk.</p>
-<p><strong>Refresh</strong> pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic <em>Update frequency</em> — how often views refresh during Run — plus the <a href="#recording-videos">recording</a> and <a href="#numerical-debugging">numerical debugging</a> options.</p>
-<h2 id="the-main-page">The main page<a class="headerlink" href="#the-main-page" title="Permanent link">&para;</a></h2>
-<p>The left pane shows the model as a clickable architecture graph. Click a node to <strong>watch</strong> that layer: its activations and gradients appear as a card, and from that point on every batch feeds them into running statistics. Watched views refresh on every pause and, while training runs, on the <em>Update frequency</em> cadence.</p>
-<p>Watching slows down training and consumes memory, so it's generally better to watch only a few layers at a time.</p>
-<p>Each card renders one strip per tensor: a row of per-channel images on a shared diverging blue-white-red scale. From the card you can jump to the layer's <a href="#the-stats-page">stats view</a>, <a href="#the-weights-page">weights view</a>, or <a href="#the-experiment-page">experiment page</a>.</p>
-<h2 id="the-input-panel">The input panel<a class="headerlink" href="#the-input-panel" title="Permanent link">&para;</a></h2>
-<p>The right sidebar controls which input the layer views are computed from. A model with several inputs gets an <strong>Input</strong> dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an <code>input_transform</code> to display (see the <a href="../wiring/#displaying-inputs-correctly">Wiring guide</a>), and a flat <code>(N, C)</code> input shows as a clickable per-feature strip. <strong>Select sample in batch</strong> picks which sample of the current batch to show.</p>
-<p>The views follow the live training batch by default; <strong>Pin</strong> freezes the current batch as a fixed input that nansense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. <strong>Forward mode</strong> (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.</p>
-<p><strong>Perturb</strong> lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you <a href="../#measure-the-receptive-field-of-a-neuron">measure a receptive field</a>.</p>
-<h2 id="the-stats-page">The stats page<a class="headerlink" href="#the-stats-page" title="Permanent link">&para;</a></h2>
-<p>Open a watched layer's <strong>stats view</strong> for a closer look at its distributions over the epoch. The page has three views, switchable per layer:</p>
-<p><strong>Histogram</strong> leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A <strong>Per channel</strong> switch breaks the histogram down to one row per channel — the quickest way to spot <a href="../#investigate-dead-neurons">dead neurons</a>. A <strong>Show subnormal/overflow</strong> checkbox marks the dtype-aware band edges where fp16 gradients <a href="../#spot-gradient-underflow">underflow</a>; it is pre-checked when a numerical warning is active.</p>
-<p><strong>Min/max</strong> is a gallery of the input patches that drove each channel to its most extreme responses — see the <a href="../#minmax-activation-patches">showcase</a>.</p>
-<p><strong>Graphs</strong> plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a <strong>Weights</strong> section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.</p>
-<p>The Phase dropdown's last entry, <strong>Current batch</strong>, switches the data source from the epoch accumulators to the last captured batch. In this mode <em>any</em> layer can be selected, watched or not.</p>
-<p>The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.</p>
-<p>The settings dialog can switch stats collection between the watched layers (the default), every layer, or none. Outside the default, showing and hiding cards on the main page is per-tab and doesn't affect what is collected.</p>
-<h2 id="the-weights-page">The weights page<a class="headerlink" href="#the-weights-page" title="Permanent link">&para;</a></h2>
-<p>Every layer with parameters has a <strong>weights view</strong>. Each parameter gets a panel rendering the weight tensor, its gradient, and — when the session was given an optimizer — one strip per tensor-valued optimizer-state entry (momentum buffers, Adam moments; 0-dim entries like Adam's <code>step</code> join a scalar line below), plus the parameter group's live hyperparameters such as the current learning rate.</p>
-<p>Per-axis controls choose which tensor axes map to X, Y and tile, so any weight shape — conv kernels, matrices, embeddings — can be laid out sensibly. A <strong>Weight graphs</strong> button jumps to the layer's per-epoch weight series in the stats page's Graphs view.</p>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Weight <em>gradients</em> are read when a batch exits, so keep <code>optimizer.zero_grad()</code> at the start of your batch body — zeroing after <code>step()</code> would leave the gradient views empty (see the <a href="../wiring/#wire-it-into-your-loop-raw-pytorch">Wiring guide</a>).</p>
+<h1 id="playground">Playground<a class="headerlink" href="#playground" title="Permanent link">&para;</a></h1>
+<p>Explore a trained network without installing anything. Each playground is a nansense session paused on its final training batch: show and hide layers, browse activations, gradients, weights and epoch statistics, and run experiments such as deep dream. Stepping, time travel and the global settings are disabled in this shared, locked session.</p>
+<p>Pick a network below — Imagenette (a PreActResNet trained for 50 epochs) or MNIST (a LeNet-5 trained for 20 epochs). The demos run on free Hugging Face Spaces, so the first load after a quiet period can take a minute to wake up.</p>
+<div class="playground-switch" role="group" aria-label="Playground variant">
+  <button class="md-button md-button--primary" data-variant="imagenette">Imagenette · ResNet</button>
+  <button class="md-button" data-variant="mnist">MNIST · LeNet-5</button>
+  <a class="md-button" id="playground-open" href="https://kongaskristjan-nansense-playground.hf.space" target="_blank" rel="noopener">Open full screen</a>
 </div>
-<h2 id="the-experiment-page">The experiment page<a class="headerlink" href="#the-experiment-page" title="Permanent link">&para;</a></h2>
-<p>Each layer card has an <strong>Experiment</strong> button. On the experiment page, pick a method — deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion — set its parameters, and run it on the layer. Experiments run between batches, so training must be paused; results show one card per input sample.</p>
-<p>An experiment can also be kept <strong>live</strong>: it re-runs on every visualization update, so you can watch a deep dream or attribution evolve as training proceeds.</p>
-<h2 id="numerical-debugging">Numerical debugging<a class="headerlink" href="#numerical-debugging" title="Permanent link">&para;</a></h2>
-<p>Every few batches (configurable in the settings dialog), nansense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.</p>
-<h2 id="recording-videos">Recording videos<a class="headerlink" href="#recording-videos" title="Permanent link">&para;</a></h2>
-<p>The settings dialog records any view to an MP4, one frame per visualization update, written under <code>nansense_recordings/</code>. Start a recording with a layer watched or an experiment open, then save or discard it from the same dialog.</p>
+
+<iframe id="playground-frame" title="Nansense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen"></iframe>
+
+<style>
+  /* Full-width page: the embedded app needs more room than prose does. */
+  .md-grid {
+    max-width: 100%;
+  }
+  .playground-switch {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .playground-switch .md-button {
+    margin: 0;
+    cursor: pointer;
+  }
+  #playground-frame {
+    width: 100%;
+    height: max(30rem, calc(100vh - 15rem));
+    margin-top: 1rem;
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 0.2rem;
+  }
+</style>
+
+<script>
+  (function () {
+    var spaces = {
+      imagenette: "https://kongaskristjan-nansense-playground.hf.space",
+      mnist: "https://kongaskristjan-nansense-playground-mnist.hf.space",
+    };
+    var frame = document.getElementById("playground-frame");
+    var open = document.getElementById("playground-open");
+    var buttons = document.querySelectorAll(".playground-switch button[data-variant]");
+    var current = "imagenette"; // matches the iframe's HTML src attribute
+    function select(variant) {
+      if (variant === current) return;
+      current = variant;
+      frame.src = spaces[variant];
+      open.href = spaces[variant];
+      buttons.forEach(function (button) {
+        button.classList.toggle("md-button--primary", button.dataset.variant === variant);
+      });
+      history.replaceState(null, "", variant === "imagenette" ? location.pathname : "#" + variant);
+    }
+    buttons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        select(button.dataset.variant);
+      });
+    });
+    function selectFromHash() {
+      select(location.hash === "#mnist" ? "mnist" : "imagenette");
+    }
+    window.addEventListener("hashchange", selectFromHash);
+    if (location.hash === "#mnist") selectFromHash();
+  })();
+</script>
 
 
 
@@ -733,8 +547,13 @@
 
 
 
+  
+  
 
 
+
+
+  
 
 
 
@@ -758,10 +577,12 @@
   
     
       
+        
+      
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../getting-started/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Getting started">
+          <a href=".." class="md-footer__link md-footer__link--prev" aria-label="Previous: Home">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -771,20 +592,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Getting started
+                Home
               </div>
             </div>
           </a>
         
         
           
-          <a href="../wiring/" class="md-footer__link md-footer__link--next" aria-label="Next: Wiring guide">
+          <a href="../getting-started/" class="md-footer__link md-footer__link--next" aria-label="Next: Getting started">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Wiring guide
+                Getting started
               </div>
             </div>
             <div class="md-footer__button md-icon">

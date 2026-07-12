@@ -234,9 +234,21 @@ freeze_moment(
 
 Arm a one-shot moment freeze at an exact batch position.
 
-When training reaches `(phase, epoch, batch_idx)`, that batch installs hooks and publishes a snapshot like a capture — whatever the mode, so a detached prepare run works — and, after folding its watch stats, writes the complete debugger moment to `path` without pausing: snapshot, running statistics, watched set, model weights and buffers, and the schedule shape. `nansense.load_moment` later rebuilds the view around a fresh model of the same architecture, the backing for a locked showcase (see `nansense.moments` and `examples/playground`).
+When training reaches `(phase, epoch, batch_idx)`, that batch installs hooks and publishes a snapshot like a capture — whatever the mode, so a detached prepare run works — and, after folding its watch stats, writes the complete debugger moment to `path` without pausing: the batch's loader item (the replay seed the snapshot is regenerated from — drive the loop with `batches()`, or pass `item=` to a manual `batch()`), running statistics, watched set, model weights and buffers, and the schedule shape. `nansense.load_moment` later rebuilds the view around a fresh model of the same architecture, the backing for a locked showcase (see `nansense.moments` and `examples/playground`).
 
 One request at a time — arming again replaces an unconsumed target; a target the run never reaches is reported at `close()`. No-op on a disabled or locked session; leader-only under DDP (the frozen statistics are the leader's shard).
+
+### set_patch_layers
+
+```
+set_patch_layers(layers: Iterable[str] | None) -> None
+```
+
+Restrict extreme-patch collection to `layers` (`None` = every layer).
+
+Histogram/min-max/graph statistics are unaffected — this only gates the per-channel extreme-input patch buffers, by far the largest watch state (input crops, whole-image samples, and activation heatmaps per channel per layer). A scope-`all` run on a deep model at real image sizes spends gigabytes there; restricting patches to the layers a demo actually showcases keeps memory (and a frozen moment's file size) proportional to the shortlist while every layer keeps its statistics views.
+
+Unknown layer names raise `ValueError` on an enabled session (they would silently collect nothing). No-op when locked; layers already holding patch buffers keep them (this gates new accumulation only).
 
 ### park
 
@@ -427,7 +439,7 @@ Bundles the layer's activation and gradient `TensorStatsSnapshot`s with the extr
 
 Immutable CPU-side view of a single (layer, phase, epoch, kind) accumulator.
 
-`n` / `sum` / `sum_sq` / `min` / `max` are running scalars over every tensor element seen so far, feeding the `mean` / `variance` / `std` properties. `hist` is the layer-wide histogram: one count per bin over the fixed symmetric-log bin edges of `histogram_edges()`.
+`n` / `sum` / `sum_sq` / `min` / `max` are running scalars over every tensor element seen so far, feeding the `mean` / `variance` / `std` properties. `hist` is the layer-wide histogram: one count per bin over the fixed symmetric-log bin edges of `histogram_edges()`; `None` when an older epoch's bins were collapsed by a newer one starting for its phase (only the latest epoch per phase renders bins — the per-epoch GRAPHS curves read the scalars and `median`, which survives the collapse via `collapsed_median`).
 
 ### mean
 
@@ -460,6 +472,8 @@ median: float
 ```
 
 Histogram-derived median: midpoint of the bin that holds the median.
+
+For a collapsed bucket (`hist is None`) this is the value cached at collapse time (`collapsed_median`).
 
 ### dead_channel_count
 
@@ -589,6 +603,7 @@ load_moment(
     model: Module,
     path: Path | str,
     *,
+    replay: Callable[[Module, Any], Tensor],
     port: int | None = None,
     host: str = "127.0.0.1",
     open_browser: bool = True,
@@ -602,7 +617,7 @@ load_moment(
 
 Rebuild a frozen moment around `model` for browsing or a locked demo.
 
-`model` must be a fresh instance of the architecture the moment was frozen from (validated against the file: parameter names/shapes and the discovered layer names must match); its device is kept, and the frozen parameters and buffers are loaded into it. The returned session shows exactly the frozen pause — snapshot, watch statistics, watched set, and schedule totals — with stats collection off (scope `"none"`), so the numbers sit frozen while every view, and experiments, keep working. Nothing trains: the session is a viewer. Raises `MomentError` when the file is unreadable or does not fit `model`.
+`model` must be a fresh instance of the architecture the moment was frozen from (validated against the file: parameter names/shapes and the discovered layer names must match); its device is kept, and the frozen parameters and buffers are loaded into it. `replay` is the training step's forward in miniature — given the model and the stored batch item it returns the loss, e.g. `lambda m, batch: criterion(m(batch[0]), batch[1])` — and is run once, here, to regenerate the frozen batch's activations and gradients (see the module docstring for why they are not stored). The returned session shows exactly the frozen pause — snapshot, watch statistics, watched set, and schedule totals — with stats collection off (scope `"none"`), so the numbers sit frozen while every view, and experiments, keep working. Nothing trains: the session is a viewer. Raises `MomentError` when the file is unreadable or does not fit `model`.
 
 `port` / `host` / `open_browser` / `input_*` mirror `nansense.start` and serve the UI immediately when `port` is given. For a shared deployment, follow with `session.lock()` and `session.park()` — see `examples/playground` and `Session.freeze_moment` for the saving side.
 

@@ -289,6 +289,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../playground/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Playground
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../getting-started/" class="md-nav__link">
         
   
@@ -611,6 +638,17 @@
     <span class="md-ellipsis">
       
         freeze_moment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.set_patch_layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set_patch_layers
       
     </span>
   </a>
@@ -1391,6 +1429,17 @@
     <span class="md-ellipsis">
       
         freeze_moment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.set_patch_layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set_patch_layers
       
     </span>
   </a>
@@ -2536,15 +2585,49 @@ locked; it belongs to the hosting script.</p>
 <p>When training reaches <code>(phase, epoch, batch_idx)</code>, that batch installs
 hooks and publishes a snapshot like a capture — whatever the mode, so
 a detached prepare run works — and, after folding its watch stats,
-writes the complete debugger moment to <code>path</code> without pausing:
-snapshot, running statistics, watched set, model weights and buffers,
-and the schedule shape. <code>nansense.load_moment</code> later rebuilds the
-view around a fresh model of the same architecture, the backing for
-a locked showcase (see <code>nansense.moments</code> and <code>examples/playground</code>).</p>
+writes the complete debugger moment to <code>path</code> without pausing: the
+batch's loader item (the replay seed the snapshot is regenerated
+from — drive the loop with <code>batches()</code>, or pass <code>item=</code> to a manual
+<code>batch()</code>), running statistics, watched set, model weights and
+buffers, and the schedule shape. <code>nansense.load_moment</code> later rebuilds
+the view around a fresh model of the same architecture, the backing
+for a locked showcase (see <code>nansense.moments</code> and
+<code>examples/playground</code>).</p>
 <p>One request at a time — arming again replaces an unconsumed target; a
 target the run never reaches is reported at <code>close()</code>. No-op on a
 disabled or locked session; leader-only under DDP (the frozen
 statistics are the leader's shard).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.set_patch_layers" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">set_patch_layers</span>
+
+
+<a href="#nansense.Session.set_patch_layers" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">set_patch_layers</span><span class="p">(</span><span class="n">layers</span><span class="p">:</span> <span class="n"><span title="collections.abc.Iterable">Iterable</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Restrict extreme-patch collection to <code>layers</code> (<code>None</code> = every layer).</p>
+<p>Histogram/min-max/graph statistics are unaffected — this only gates
+the per-channel extreme-input patch buffers, by far the largest watch
+state (input crops, whole-image samples, and activation heatmaps per
+channel per layer). A scope-<code>all</code> run on a deep model at real image
+sizes spends gigabytes there; restricting patches to the layers a
+demo actually showcases keeps memory (and a frozen moment's file
+size) proportional to the shortlist while every layer keeps its
+statistics views.</p>
+<p>Unknown layer names raise <code>ValueError</code> on an enabled session (they
+would silently collect nothing). No-op when locked; layers already
+holding patch buffers keep them (this gates new accumulation only).</p>
 
 
     </div>
@@ -3319,7 +3402,11 @@ bucket within <code>WatchSnapshot.stats</code>.</p>
 <p><code>n</code> / <code>sum</code> / <code>sum_sq</code> / <code>min</code> / <code>max</code> are running scalars over every
 tensor element seen so far, feeding the <code>mean</code> / <code>variance</code> / <code>std</code>
 properties. <code>hist</code> is the layer-wide histogram: one count per bin over
-the fixed symmetric-log bin edges of <code>histogram_edges()</code>.</p>
+the fixed symmetric-log bin edges of <code>histogram_edges()</code>; <code>None</code> when an
+older epoch's bins were collapsed by a newer one starting for its phase
+(only the latest epoch per phase renders bins — the per-epoch GRAPHS
+curves read the scalars and <code>median</code>, which survives the collapse via
+<code>collapsed_median</code>).</p>
 
 
 
@@ -3430,6 +3517,8 @@ the fixed symmetric-log bin edges of <code>histogram_edges()</code>.</p>
     <div class="doc doc-contents ">
 
         <p>Histogram-derived median: midpoint of the bin that holds the median.</p>
+<p>For a collapsed bucket (<code>hist is None</code>) this is the value cached at
+collapse time (<code>collapsed_median</code>).</p>
 
     </div>
 
@@ -3857,6 +3946,7 @@ all the way to the <code>with restorer:</code> block that suppresses it.</p>
     <span class="n">model</span><span class="p">:</span> <span class="n"><span title="torch.nn.Module">Module</span></span><span class="p">,</span>
     <span class="n">path</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">|</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
     <span class="o">*</span><span class="p">,</span>
+    <span class="n">replay</span><span class="p">:</span> <span class="n"><span title="typing.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="torch.nn.Module">Module</span></span><span class="p">,</span> <span class="n"><span title="typing.Any">Any</span></span><span class="p">],</span> <span class="n"><span title="torch.Tensor">Tensor</span></span><span class="p">],</span>
     <span class="n">port</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">host</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span>
     <span class="n">open_browser</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
@@ -3874,12 +3964,17 @@ all the way to the <code>with restorer:</code> block that suppresses it.</p>
 <p><code>model</code> must be a fresh instance of the architecture the moment was
 frozen from (validated against the file: parameter names/shapes and the
 discovered layer names must match); its device is kept, and the frozen
-parameters and buffers are loaded into it. The returned session shows
-exactly the frozen pause — snapshot, watch statistics, watched set, and
-schedule totals — with stats collection off (scope <code>"none"</code>), so the
-numbers sit frozen while every view, and experiments, keep working.
-Nothing trains: the session is a viewer. Raises <code>MomentError</code> when the
-file is unreadable or does not fit <code>model</code>.</p>
+parameters and buffers are loaded into it. <code>replay</code> is the training
+step's forward in miniature — given the model and the stored batch item
+it returns the loss, e.g. <code>lambda m, batch: criterion(m(batch[0]),
+batch[1])</code> — and is run once, here, to regenerate the frozen batch's
+activations and gradients (see the module docstring for why they are not
+stored). The returned session shows exactly the frozen pause — snapshot,
+watch statistics, watched set, and schedule totals — with stats
+collection off (scope <code>"none"</code>), so the numbers sit frozen while every
+view, and experiments, keep working. Nothing trains: the session is a
+viewer. Raises <code>MomentError</code> when the file is unreadable or does not fit
+<code>model</code>.</p>
 <p><code>port</code> / <code>host</code> / <code>open_browser</code> / <code>input_*</code> mirror <code>nansense.start</code> and
 serve the UI immediately when <code>port</code> is given. For a shared deployment,
 follow with <code>session.lock()</code> and <code>session.park()</code> — see

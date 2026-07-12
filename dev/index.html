@@ -14,7 +14,7 @@
       
       
       
-        <link rel="next" href="getting-started/">
+        <link rel="next" href="playground/">
       
       
         
@@ -452,6 +452,33 @@
   
   
     <li class="md-nav__item">
+      <a href="playground/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Playground
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="getting-started/" class="md-nav__link">
         
   
@@ -725,6 +752,7 @@
 <li><strong>See what is actually going on.</strong> <a href="#visualize-activations-and-gradients-throughout-training">Visualize activations and gradients</a>, <a href="#minmax-activation-patches">find image patches with minimal or maximal activation for a given channel</a> and <a href="#simulate-what-a-neuron-is-searching-for-deep-dream">simulate what each neuron is searching for (deep dream)</a>.</li>
 <li><strong>Spot optimization bottlenecks.</strong> <a href="#measure-the-receptive-field-of-a-neuron">Discover insufficient receptive fields</a>, <a href="#investigate-dead-neurons">measure neuron death</a>, <a href="#padding-artifacts">discover padding artifacts</a> and <a href="#spot-gradient-underflow">spot gradient underflow</a>.</li>
 </ul>
+<p>Want a look before installing? Open the <a href="playground/">Playground</a> — a trained network you can inspect right in the browser.</p>
 <p>Start with <a href="getting-started/">Getting started</a> to run an example in minutes, read the <a href="ui/">UI guide</a> for a tour of every page, and see the <a href="wiring/">Wiring guide</a> for adding nansense to your own training loop — it's just a few lines of code.</p>
 <h2 id="how-is-this-different-from-wandb-or-tensorboard">How is this different from wandb or TensorBoard?<a class="headerlink" href="#how-is-this-different-from-wandb-or-tensorboard" title="Permanent link">&para;</a></h2>
 <p>Loggers like Weights &amp; Biases and TensorBoard record scalar curves of loss and accuracy that you scroll through after the run. Nansense works inside the live training loop instead: it pauses so you can step batch-by-batch and time-travel while inspecting the activations, gradients, weights and optimizer state of every layer. You can even run experiments like deep dream or Grad-CAM on the paused model to probe what a given neuron has learned.</p>
@@ -800,13 +828,13 @@
         
         
           
-          <a href="getting-started/" class="md-footer__link md-footer__link--next" aria-label="Next: Getting started">
+          <a href="playground/" class="md-footer__link md-footer__link--next" aria-label="Next: Playground">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Getting started
+                Playground
               </div>
             </div>
             <div class="md-footer__button md-icon">
