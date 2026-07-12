@@ -78,6 +78,19 @@ git remote get-url "$remote" >/dev/null 2>&1 || git remote add "$remote" "$space
 
 orig_ref=$(git symbolic-ref --quiet --short HEAD || git rev-parse HEAD)
 
+# Whatever happens past this point — success or a failed check — return to
+# the original branch. The snapshot tracks the (gitignored) moment while
+# $orig_ref doesn't, so git would delete the trained file on the way back;
+# park it aside across the checkout.
+finish() {
+    status=$?
+    [[ -f "$moment" ]] && mv "$moment" "$moment.keep"
+    git checkout -qf "$orig_ref" 2>/dev/null || true
+    [[ -f "$moment.keep" ]] && mv "$moment.keep" "$moment"
+    exit "$status"
+}
+trap finish EXIT
+
 # A fresh orphan branch holding main's tree: parentless, so the push carries
 # no history for the Hub's binary-file check to trip over.
 snapshot="space-snapshot-$playground"
@@ -113,9 +126,4 @@ if $dry_run; then
 else
     git push --force "$remote" "$snapshot":main
 fi
-# The snapshot tracks the moment but $orig_ref doesn't, so the checkout
-# below would delete the trained file — park it aside and move it back.
-mv "$moment" "$moment.keep"
-git checkout -qf "$orig_ref"
-mv "$moment.keep" "$moment"
 echo "done (deployed snapshot: $(git rev-parse --short "$snapshot"))"
