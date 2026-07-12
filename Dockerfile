@@ -12,10 +12,11 @@
 # builder, especially under a rootless daemon, writes layers the non-root
 # USER below cannot read and dies at the first RUN after the user switch.
 #
-# The image bakes everything a cold start needs — the MNIST download and the
-# trained per-epoch checkpoint cache (`--prepare` runs at build time) — so a
-# container boots in roughly the time of one CPU epoch replay, which fills
-# the in-memory layer statistics before parking the locked session.
+# The image bakes everything a cold start needs: `--prepare` runs the MNIST
+# training at build time and freezes the run's last train batch — snapshot
+# plus all layer statistics — into a moment file. Serving just reloads that
+# moment and parks the locked session, so a container boots in seconds and
+# needs neither the dataset nor a training pass.
 
 FROM python:3.13-slim
 
@@ -38,8 +39,8 @@ RUN uv sync --frozen --group cpu --no-install-project
 COPY --chown=user:user . .
 RUN uv sync --frozen --group cpu
 
-# Bake the dataset and the trained epoch cache. Serving resumes from the
-# final epoch of this cache (see examples/playground/main.py).
+# Train and freeze the demo moment. Serving reloads it without touching the
+# dataset (see examples/playground/main.py).
 RUN uv run --no-sync examples/playground/main.py --prepare --device cpu
 
 EXPOSE 7860

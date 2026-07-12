@@ -9,6 +9,7 @@ web UI. It deliberately contains no training logic; training lives in
 from __future__ import annotations
 
 from nansense.debugger import DebugError, DebugSettings, LayerReport
+from nansense.moments import MomentError, load_moment
 from nansense.restore import (
     TimeTravelError,
     TimeTravelJump,
@@ -32,6 +33,7 @@ __all__ = [
     "LayerReport",
     "LayerStatsSnapshot",
     "Mode",
+    "MomentError",
     "Schedule",
     "Session",
     "StatsScope",
@@ -41,6 +43,7 @@ __all__ = [
     "TimeTravelStatus",
     "TrainingRestorer",
     "WatchSnapshot",
+    "load_moment",
     "serve",
     "start",
 ]

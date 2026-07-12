@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,31 @@ class Schedule:
             if phase not in self._phase_order:
                 self._phase_order.append(phase)
             self._phase_counts[phase] = n
+
+    def state_dict(self) -> dict[str, Any]:
+        """The serializable schedule shape, for a frozen moment: the epoch
+        count, phase order, and known per-phase batch counts (the totals
+        behind the position label and the phase dropdowns)."""
+        with self._lock:
+            return {
+                "epochs": self._epochs,
+                "phase_order": list(self._phase_order),
+                "phase_counts": dict(self._phase_counts),
+            }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore a `state_dict()` shape (a frozen-moment reload).
+
+        Batch counters reset — a restored moment drives no further batches —
+        and the schedule stays undeclared, so nothing new is enforced."""
+        epochs = state["epochs"]
+        with self._lock:
+            self._epochs = None if epochs is None else int(epochs)
+            self._phase_order = [str(p) for p in state["phase_order"]]
+            self._phase_counts = {
+                str(name): int(n) for name, n in state["phase_counts"].items()
+            }
+            self._counters = {}
 
     def update(
         self, *, epochs: int | None = None, phases: dict[str, int] | None = None

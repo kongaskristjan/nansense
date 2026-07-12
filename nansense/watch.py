@@ -49,7 +49,7 @@ import math
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
@@ -335,6 +335,24 @@ def bin_midpoint(idx: int) -> float:
     return sign * 10.0 ** ((lo + hi) / 2)
 
 
+def _cpu_copy(t: Tensor) -> Tensor:
+    """An independent CPU copy (never an alias, unlike `Tensor.cpu()`)."""
+    return t.detach().to("cpu", copy=True)
+
+
+def _dtype_name(dtype: torch.dtype | None) -> str | None:
+    """`torch.float32 -> "float32"`; dtypes are stored by name so a frozen
+    moment stays loadable with `torch.load(weights_only=True)`."""
+    return None if dtype is None else str(dtype).removeprefix("torch.")
+
+
+def _dtype_from_name(name: str | None) -> torch.dtype | None:
+    if name is None:
+        return None
+    dtype = getattr(torch, str(name), None)
+    return dtype if isinstance(dtype, torch.dtype) else None
+
+
 @dataclass
 class _RunningStats:
     """Device-resident running reductions, allocated together on first use.
@@ -588,6 +606,57 @@ class TensorAccumulator:
             dtype=self._dtype,
             collapsed_dead_count=self._collapsed_dead_count,
         )
+
+    def state_dict(self) -> dict[str, Any]:
+        """Independent CPU copy of the full running state, for a frozen moment.
+
+        Plain tensors and primitives only, so the containing file loads back
+        with `torch.load(weights_only=True)`. Runs on the training thread (or
+        against a paused one), like every other accumulator read.
+        """
+        stats = self._stats
+        return {
+            "stats": None
+            if stats is None
+            else {
+                "n": _cpu_copy(stats.n),
+                "sum": _cpu_copy(stats.sum),
+                "sum_sq": _cpu_copy(stats.sum_sq),
+                "min": _cpu_copy(stats.min),
+                "max": _cpu_copy(stats.max),
+                "hist": _cpu_copy(stats.hist),
+            },
+            "channel_hist": None
+            if self._channel_hist is None
+            else _cpu_copy(self._channel_hist),
+            "channels_off": self._channels_off,
+            "collapsed_dead_count": self._collapsed_dead_count,
+            "dtype": _dtype_name(self._dtype),
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore a `state_dict()`. The tensors stay on CPU: a restored
+        accumulator backs a frozen (browse-only) moment, not further
+        accumulation on a GPU stream."""
+        stats = state["stats"]
+        self._stats = (
+            None
+            if stats is None
+            else _RunningStats(
+                n=stats["n"].clone(),
+                sum=stats["sum"].clone(),
+                sum_sq=stats["sum_sq"].clone(),
+                min=stats["min"].clone(),
+                max=stats["max"].clone(),
+                hist=stats["hist"].clone(),
+            )
+        )
+        channel_hist = state["channel_hist"]
+        self._channel_hist = None if channel_hist is None else channel_hist.clone()
+        self._channels_off = bool(state["channels_off"])
+        dead = state["collapsed_dead_count"]
+        self._collapsed_dead_count = None if dead is None else int(dead)
+        self._dtype = _dtype_from_name(state["dtype"])
 
 
 @dataclass
@@ -926,6 +995,78 @@ class WatchAccumulator:
             for key, bucket in weight_refs
         }
         return WatchSnapshot(stats=out, weights=weights)
+
+    def state_dict(self) -> dict[str, Any]:
+        """Every bucket (stats, patches, weight samples) plus the caps, as
+        plain CPU data for a frozen moment (see `nansense.moments`).
+
+        Bucket maps are stored as record lists — `weights_only` loading and
+        format stability beat tuple-keyed dicts. Like `snapshot()`, only the
+        map copy holds the lock; the (possibly GPU→CPU) tensor exports run
+        outside it against a paused-or-calling training thread.
+        """
+        with self._lock:
+            stats_refs = list(self._stats.items())
+            weight_refs = [(key, dict(bucket)) for key, bucket in self._weights.items()]
+            channel_limit = self._channel_limit
+            samples = self._samples_per_channel
+        return {
+            "channel_limit": channel_limit,
+            "samples_per_channel": samples,
+            "stats": [
+                {
+                    "layer": layer,
+                    "phase": phase,
+                    "epoch": epoch,
+                    "activations": stats.activations.state_dict(),
+                    "gradients": stats.gradients.state_dict(),
+                    "patches": stats.patches.state_dict(),
+                    "patches_started": stats.patches_started,
+                }
+                for (layer, phase, epoch), stats in stats_refs
+            ],
+            "weights": [
+                {
+                    "layer": layer,
+                    "epoch": epoch,
+                    "params": {
+                        name: acc.state_dict() for name, acc in bucket.items()
+                    },
+                }
+                for (layer, epoch), bucket in weight_refs
+            ],
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Replace all buckets and caps with a `state_dict()`'s content.
+
+        The caps come from the file so the restored buckets can never be
+        flushed by a mismatched `configure` — the loading side mirrors them
+        into the session's `WatchPerformance`.
+        """
+        stats: dict[tuple[str, str, int], _LayerStats] = {}
+        for record in state["stats"]:
+            bucket = _LayerStats()
+            bucket.activations.load_state_dict(record["activations"])
+            bucket.gradients.load_state_dict(record["gradients"])
+            bucket.patches.load_state_dict(record["patches"])
+            bucket.patches_started = bool(record["patches_started"])
+            key = (str(record["layer"]), str(record["phase"]), int(record["epoch"]))
+            stats[key] = bucket
+        weights: dict[tuple[str, int], dict[str, TensorAccumulator]] = {}
+        for record in state["weights"]:
+            params: dict[str, TensorAccumulator] = {}
+            for name, acc_state in record["params"].items():
+                acc = TensorAccumulator()
+                acc.load_state_dict(acc_state)
+                params[str(name)] = acc
+            weights[(str(record["layer"]), int(record["epoch"]))] = params
+        limit = state["channel_limit"]
+        with self._lock:
+            self._channel_limit = None if limit is None else int(limit)
+            self._samples_per_channel = int(state["samples_per_channel"])
+            self._stats = stats
+            self._weights = weights
 
 
 def single_batch_stats(

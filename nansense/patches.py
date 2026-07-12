@@ -33,10 +33,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 
 import torch
 from torch import Tensor
+
+
+def _cpu_copy(t: Tensor) -> Tensor:
+    """An independent CPU copy (never an alias, unlike `Tensor.cpu()`)."""
+    return t.detach().to("cpu", copy=True)
 
 # Default number of extreme samples kept per channel per ranking. The live
 # value is a per-accumulator setting (`PatchAccumulator(n_per_channel=...)`),
@@ -207,6 +212,74 @@ class PatchAccumulator:
                 crop=buf.crop,
             )
         return PatchSnapshot(by_type=out)
+
+    def state_dict(self) -> dict[str, Any]:
+        """Independent CPU copy of the buffers + frozen shapes, for a frozen
+        moment. Plain tensors/primitives only (`weights_only`-loadable); an
+        accumulator that never saw data stores `config: None`."""
+        config = self._config
+        return {
+            "n_per_channel": self._n_per_channel,
+            "config": None
+            if config is None
+            else {
+                "act_ndim": config.act_ndim,
+                "channels": config.channels,
+                "act_hw": list(config.act_hw),
+                "in_channels": config.in_channels,
+                "input_hw": list(config.input_hw),
+                "crop_hw": list(config.crop_hw),
+            },
+            "buffers": {
+                ptype: {
+                    "largest": buf.largest,
+                    "crop": buf.crop,
+                    "vals": _cpu_copy(buf.vals),
+                    "patches": _cpu_copy(buf.patches),
+                    "heat": _cpu_copy(buf.heat),
+                    "top": _cpu_copy(buf.top),
+                    "left": _cpu_copy(buf.left),
+                }
+                for ptype, buf in self._buffers.items()
+            },
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore a `state_dict()`. Buffers stay on CPU — a restored
+        accumulator backs a frozen (browse-only) moment; the never-filled
+        `∓inf` placeholder slots round-trip as-is for the renderer's mask."""
+        self._n_per_channel = int(state["n_per_channel"])
+        config = state["config"]
+        if config is None:
+            self._config = None
+            self._buffers = {}
+            return
+        hin, win = (int(v) for v in config["input_hw"])
+        ha, wa = (int(v) for v in config["act_hw"])
+        ph, pw = (int(v) for v in config["crop_hw"])
+        self._config = _Config(
+            act_ndim=int(config["act_ndim"]),
+            channels=int(config["channels"]),
+            act_hw=(ha, wa),
+            in_channels=int(config["in_channels"]),
+            input_hw=(hin, win),
+            crop_hw=(ph, pw),
+        )
+        self._buffers = {
+            ptype: _TypeBuffer(
+                largest=bool(buf["largest"]),
+                crop=bool(buf["crop"]),
+                vals=buf["vals"].clone(),
+                patches=buf["patches"].clone(),
+                heat=buf["heat"].clone(),
+                top=buf["top"].clone(),
+                left=buf["left"].clone(),
+            )
+            for ptype, buf in cast(
+                "dict[PatchType, dict[str, Any]]", state["buffers"]
+            ).items()
+            if ptype in PATCH_TYPES
+        }
 
     def _make_config(self, act: Tensor, x: Tensor) -> _Config:
         hin, win = int(x.shape[2]), int(x.shape[3])

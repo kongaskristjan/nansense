@@ -24,6 +24,8 @@ The public surface of the `nansense` package. Everything here is importable as `
         - mode
         - time_travel_status
         - lock
+        - freeze_moment
+        - park
 
 ## PyTorch Lightning integration
 
@@ -78,6 +80,12 @@ The public surface of the `nansense` package. Everything here is importable as `
 ::: nansense.TimeTravelJump
 
 ::: nansense.TimeTravelError
+
+## Frozen moments
+
+::: nansense.load_moment
+
+::: nansense.MomentError
 
 ## Numerical debugging
 

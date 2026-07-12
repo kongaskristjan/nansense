@@ -303,6 +303,10 @@ class Session:
         # publish only on the frequency cadence — this lets the Refresh button
         # force the next batch to publish without pausing or recomputing.
         self._snapshot_request = False
+        # One-shot moment freeze, armed by `freeze_moment` as
+        # (path, phase, epoch, batch_idx) and consumed by the exactly-matching
+        # batch, which publishes and writes the file (see `nansense.moments`).
+        self._freeze_request: tuple[Path, str, int, int] | None = None
         self._cv = threading.Condition()
         self._resume_token = 0
         self._pause_count = 0
@@ -1346,6 +1350,30 @@ class Session:
         with self._cv:
             self._schedule.update(epochs=epochs, phases=phases)
 
+    def freeze_moment(
+        self, path: Path | str, *, phase: str, epoch: int, batch_idx: int
+    ) -> None:
+        """Arm a one-shot moment freeze at an exact batch position.
+
+        When training reaches `(phase, epoch, batch_idx)`, that batch installs
+        hooks and publishes a snapshot like a capture — whatever the mode, so
+        a detached prepare run works — and, after folding its watch stats,
+        writes the complete debugger moment to `path` without pausing:
+        snapshot, running statistics, watched set, model weights and buffers,
+        and the schedule shape. `nansense.load_moment` later rebuilds the
+        view around a fresh model of the same architecture, the backing for
+        a locked showcase (see `nansense.moments` and `examples/playground`).
+
+        One request at a time — arming again replaces an unconsumed target; a
+        target the run never reaches is reported at `close()`. No-op on a
+        disabled or locked session; leader-only under DDP (the frozen
+        statistics are the leader's shard).
+        """
+        if not self._enabled or self._locked:
+            return
+        with self._cv:
+            self._freeze_request = (Path(path), phase, int(epoch), int(batch_idx))
+
     @property
     def locked(self) -> bool:
         """Whether run control and global settings are locked (see `lock`)."""
@@ -1422,6 +1450,26 @@ class Session:
 
     def detach(self) -> None:
         self._set_mode(Mode.DETACH, resume=True)
+
+    def park(self) -> None:
+        """Hold the calling thread at a pause, serving UI requests, until
+        `close()`.
+
+        The showcase counterpart of a training loop: a script that restored a
+        frozen moment (`nansense.load_moment`) has no batches to drive, but
+        experiments and probes still execute on the pause loop of whatever
+        thread owns the model — this provides that loop. Call it from the
+        thread that built the model, typically right after `lock()`; on an
+        unlocked session a Run/Step click simply re-enters the park. Returns
+        once the session is closed.
+        """
+        if not self._enabled:
+            return
+        # Parking is an explicit "wait for the UI indefinitely" — suppress the
+        # unserved-pause grace, which would otherwise detach out of the wait.
+        self.mark_served()
+        while not self.closed:
+            self._wait_for_proceed()
 
     def epochs(
         self,
@@ -1638,6 +1686,18 @@ class Session:
         with self._cv:
             self._closed = True
             self._cv.notify_all()
+            freeze_request = self._freeze_request
+            self._freeze_request = None
+        if freeze_request is not None:
+            # The run ended without reaching the armed freeze position — say
+            # so instead of leaving a prepare script silently moment-less.
+            path, phase, epoch, batch_idx = freeze_request
+            print(
+                f"nansense: freeze_moment target (epoch {epoch} | {phase} "
+                f"batch {batch_idx}) was never reached; {path} was not "
+                "written.",
+                flush=True,
+            )
         # Finalize any in-flight recordings so their MP4 files are playable
         # even when the training script simply runs to completion.
         if self._recording_manager is not None:
@@ -1976,6 +2036,23 @@ class Session:
             self._snapshot_request = False
             return True
 
+    def _take_freeze_request(self, pos: BatchPosition) -> Path | None:
+        """Consume the armed moment freeze if `pos` is its exact target.
+
+        Training thread, at batch start. Same lock-free fast path as
+        `_take_pending_jump`: the reference read is None for the entire life
+        of most sessions, and only a position match takes the lock.
+        """
+        request = self._freeze_request
+        if request is None:
+            return None
+        path, phase, epoch, batch_idx = request
+        if (pos.phase, pos.epoch, pos.batch_idx) != (phase, epoch, batch_idx):
+            return None
+        with self._cv:
+            self._freeze_request = None
+        return path
+
     def _peek_pending_jump(self) -> int:
         """The armed time-travel target without consuming it, -1 when none.
 
@@ -2158,6 +2235,7 @@ class _BatchContext:
         self._captured = False
         self._freq_update = False
         self._snapshot_requested = False
+        self._freeze_path: Path | None = None
         self._stats_only = False
         self._dist_reduce = False
         self._debug_check = False
@@ -2166,11 +2244,16 @@ class _BatchContext:
     def _publishes(self) -> bool:
         """Whether this batch publishes a snapshot at `__exit__`.
 
-        A mode capture, a frequency-cadence update, or a one-shot UI Refresh
-        request all publish; only a capture additionally pauses, and only a
-        frequency update additionally records a frame.
+        A mode capture, a frequency-cadence update, a one-shot UI Refresh
+        request, or an armed moment freeze all publish; only a capture
+        additionally pauses, and only a frequency update records a frame.
         """
-        return self._captured or self._freq_update or self._snapshot_requested
+        return (
+            self._captured
+            or self._freq_update
+            or self._snapshot_requested
+            or self._freeze_path is not None
+        )
 
     def __enter__(self) -> Self:
         # `_enabled` is a plain attribute read (no lock), checked first so a
@@ -2222,6 +2305,10 @@ class _BatchContext:
             # of mode — so it needs hooks installed here even on a plain
             # (detach) batch to see the activation gradients at __exit__.
             self._debug_check = self._session._should_debug_check(self._position)
+            # An armed moment freeze matches exactly one position; the
+            # matching batch publishes (hooks install below) and `__exit__`
+            # writes the file.
+            self._freeze_path = self._session._take_freeze_request(self._position)
         if dist_ctx is not None:
             # Per-batch control sync (every rank): the leader announces
             # whether this batch's watch stats get globally reduced at
@@ -2308,6 +2395,12 @@ class _BatchContext:
                         # the probe's forward below doesn't stack a second
                         # batch's worth of memory on top of them.
                         self._session._activations.clear()
+                        if self._freeze_path is not None:
+                            # Imported lazily: nansense.moments imports this
+                            # module at the top level.
+                            from nansense import moments
+
+                            moments.write_moment(self._session, self._freeze_path)
                         probe.maybe_run_probe_at_capture(self._session)
                         # Auto experiments re-run on every publish, so a pause
                         # shows fresh results and a free-running frequency

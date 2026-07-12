@@ -1432,10 +1432,71 @@ the settings gear into a "settings are locked" note; enforcement lives in
 the `Session` methods, so the UI state is cosmetic.
 `render.set_strip_format("PNG")` is the companion knob for internet-facing
 deployments — BMP strips are the localhost trade. `examples/playground`
-is the reference deployment: it bakes an epoch cache with `--prepare`,
-then serves by resuming at the final epoch (`start_epoch`), replaying it
-under the `all` scope, and parking `step_run` + `lock` on the run's last
-train batch.
+is the reference deployment: it freezes a moment with `--prepare` and
+serves it via `load_moment` + `lock` + `park` (see *Frozen moments* below).
+
+## Frozen moments (`nansense.moments`)
+
+A *moment* is everything the debugger shows for one batch — the published
+`BatchSnapshot`, the watch accumulators behind the HISTOGRAM / MIN-MAX /
+GRAPHS views, the watched set, and the schedule totals — saved to one file
+and later rebuilt around a fresh model. It exists for the locked showcase:
+train once, freeze, then serve the frozen pause with no dataset, optimizer,
+or training loop in the serving process.
+
+**Freezing** is a one-shot armed request in the `_snapshot_request` family:
+`Session.freeze_moment(path, phase=, epoch=, batch_idx=)` arms a target
+position, `_take_freeze_request` (the same lock-free fast path as
+`_take_pending_jump`) consumes it in `_BatchContext.__enter__` on the exact
+match, and the matching batch counts as publishing (`_publishes`) — hooks
+install and a snapshot publishes whatever the mode, so a detached prepare
+run freezes without pausing. `moments.write_moment` runs at `__exit__`
+right after `_publish_snapshot`, so the file's snapshot *is* the target
+batch and the accumulators include it. A target the run never reaches is
+reported at `close()`. Leader-only under DDP — the frozen statistics are
+the leader's shard; freeze a single-process run when the demo needs exact
+global numbers.
+
+**The file** is a single `torch.save` payload of plain dicts/lists/tensors —
+loadable with `weights_only=True`, nothing pickled by reference — written
+via temp file + atomic rename like the epoch cache. It carries the full
+`model.state_dict()` (parameters *and* buffers, so experiments later run
+against the exact frozen network — the snapshot's `weights` dict alone has
+no BatchNorm running stats), the snapshot's tensor dicts and position, the
+`WatchAccumulator` state (`state_dict`/`load_state_dict` pairs on
+`TensorAccumulator` and `PatchAccumulator`; bucket maps stored as record
+lists, dtypes by name), the watched set, the per-channel caps, and
+`Schedule.state_dict()` (epochs / phase order / learned counts — the
+position label's totals). Excluded by design: probe pins, perturbations,
+experiment results, recordings, and the debug banner — per-visitor or
+transient state.
+
+**Loading** (`nansense.load_moment(model, path, port=...)`) constructs a
+normal `Session` around the fresh model (fx trace and name discovery run as
+usual), validates the file against it — `validate_model_state` on the
+stored state dict plus layer-/input-name equality, `MomentError` on any
+mismatch — loads the weights+buffers into the model, and installs the
+state: snapshot, `live_position`, accumulators (tensors stay on CPU; a
+restored moment is browse-only, nothing ever accumulates into it), watched
+set, a `WatchPerformance` mirrored from the file's caps (so an equal
+`configure` can never flush the restored buckets), and the schedule. The
+stats scope is set to `none`: buckets stay browsable while nothing
+collects. Every view then works unchanged, because the UI only ever reads
+`session.snapshot` / `watch_snapshot()`.
+
+**Parking.** Experiments execute on the pause loop, which normally lives
+inside a batch's `_wait_for_proceed`. A moment session drives no batches,
+so `Session.park()` provides the loop: it marks the session served (an
+explicit "wait indefinitely") and re-enters `_wait_for_proceed` until
+`close()`. The hosting script's whole serve path is `load_moment` →
+`lock()` → `park()`.
+
+In `examples/playground`, `--prepare` trains under scope `all` (so the
+frozen stats cover every layer across the whole run), arms `freeze_moment`
+at the last train batch of the last epoch, and skips the final epoch's
+validation so the frozen batch is the run's last gradient-carrying one.
+Serving reloads the moment in seconds; the container ships no dataset and
+no epoch cache (time travel is disabled under lock anyway).
 
 ## Lifecycle summary
 
