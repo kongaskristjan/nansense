@@ -194,7 +194,7 @@ Open a watched layer's **stats view** for a closer look at its distributions ove
 
 **Graphs** plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a **Weights** section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.
 
-The Phase dropdown's last entry, **Current batch**, switches the data source from the epoch accumulators to the last captured batch. In this mode *any* layer can be selected, watched or not.
+The Phase dropdown's last entry, **Current batch**, switches the data source from the epoch accumulators to the last captured batch. In this mode *any* layer can be selected, watched or not. The page opens on the phase currently training once that phase has collected stats for the opened layer, and on Current batch otherwise.
 
 The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.
 
