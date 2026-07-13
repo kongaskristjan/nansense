@@ -111,8 +111,8 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         shown_layers=("stem", "stage1.0.conv1"),
         # Full-model galleries: uint8 payloads + average grids off by
         # default + the 8-channel cap keep the moment in the tens of MB.
-        channel_limit=8,
-        samples_per_channel=3,
+        channel_limit=12,
+        samples_per_channel=5,
     ),
 }
 
