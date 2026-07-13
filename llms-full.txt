@@ -228,6 +228,27 @@ The settings dialog records any view to an MP4, one frame per visualization upda
 
 Adding nansense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the [API reference](https://kongaskristjan.github.io/nansense/dev/api/index.md).
 
+## Integrate with one prompt
+
+Run this from your project with a coding agent (Claude Code, Cursor, …): it reads the docs and wires nansense into your training loop.
+
+Gate nansense behind a `--debugger-port PORT` flag, so it stays a zero-overhead no-op unless a port is passed *(recommended)*
+
+```
+Add the nansense PyTorch debugger to this project's training loop.
+
+Read the docs first — everything in one file: https://kongaskristjan.github.io/nansense/llms-full.txt
+(page-by-page index: https://kongaskristjan.github.io/nansense/llms.txt)
+
+Requirements: PyTorch >= 2.3, Python 3.10-3.14, and an eager training loop you can wrap (PyTorch Lightning is also supported). If this project can't meet these, stop and ask me how to proceed.
+
+Then:
+1. Add nansense to the project's dependencies (`pip install nansense`).
+2. Wire nansense.start() / session.epochs() / session.batches() / session.close() into the training loop as the wiring guide shows; enable time travel if there's a clean epoch loop.
+3. Add a `--debugger-port PORT` CLI flag and pass `port=that_port, enabled=that_port is not None`, so nansense stays a zero-overhead no-op unless a port is given.
+4. Show me the diff and the exact command to launch training with the debugger.
+```
+
 ## Wire it into your loop: raw PyTorch
 
 ```
