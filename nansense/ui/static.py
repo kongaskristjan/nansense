@@ -1,6 +1,20 @@
 """Static CSS/JS string constants shipped with the UI pages."""
 
 
+# The layout is desktop-first: below this width the flex panes squeeze into
+# unusable slivers, so the page stops shrinking here and pans horizontally
+# instead (`_page_scaffold` allows overflow-x on the root). Desktop windows
+# are practically always wider, so this only kicks in on phones (~360-430px
+# viewports) and similarly narrow embeds.
+MIN_APP_WIDTH: int = 800
+
+_MIN_APP_WIDTH_CSS: str = f"""
+<style>
+  body {{ min-width: {MIN_APP_WIDTH}px; }}
+</style>
+"""
+
+
 _ARCHITECTURE_CLICK_CSS: str = """
 <style>
   g.node { cursor: pointer; }

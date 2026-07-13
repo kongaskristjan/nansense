@@ -9,7 +9,12 @@ import torch
 
 from nansense.ui.common import _resizable_pane_props, _resize_handle, _strip_html
 from nansense.ui.render import image_mime, render_strip
-from nansense.ui.static import _PANEL_RESIZE_CSS, _PANEL_RESIZE_JS
+from nansense.ui.static import (
+    _MIN_APP_WIDTH_CSS,
+    _PANEL_RESIZE_CSS,
+    _PANEL_RESIZE_JS,
+    MIN_APP_WIDTH,
+)
 
 
 def test_strip_html_scales_native_data_and_keeps_legend_crisp() -> None:
@@ -80,3 +85,11 @@ def test_resize_script_matches_python_attribute_names() -> None:
     # Width memory must be per browser session, not persistent.
     assert "sessionStorage" in _PANEL_RESIZE_JS
     assert "localStorage" not in _PANEL_RESIZE_JS
+
+
+def test_min_app_width_css_matches_constant() -> None:
+    assert f"min-width: {MIN_APP_WIDTH}px;" in _MIN_APP_WIDTH_CSS
+    # Wider than any phone viewport (so phones pan instead of squeezing the
+    # panes), narrower than a normal desktop window (so desktops never see
+    # a horizontal scrollbar).
+    assert 600 <= MIN_APP_WIDTH <= 1100

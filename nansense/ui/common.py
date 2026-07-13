@@ -13,6 +13,7 @@ from nicegui.elements.mixins.disableable_element import DisableableElement
 from nansense.session import Session
 from nansense.ui.render import LABEL_HEIGHT, StripRender, StripTile, image_mime
 from nansense.ui.static import (
+    _MIN_APP_WIDTH_CSS,
     _PANEL_RESIZE_CSS,
     _PANEL_RESIZE_JS,
     _STRIP_CHECKERBOARD_STYLE,
@@ -25,12 +26,15 @@ def _page_scaffold(title: str = "") -> None:
     `title` is the page-specific part of the tab title; the main page
     passes nothing and is titled plain "Nansense". Every page fills the
     viewport and scrolls inside its own panes, so page-level scrolling is
-    disabled at every level.
+    disabled — except horizontally on viewports narrower than
+    `MIN_APP_WIDTH` (phones), where the body keeps its minimum width and
+    the root pans over it instead of squeezing the panes.
     """
     ui.page_title(f"Nansense — {title}" if title else "Nansense")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
-    ui.query("html").classes("overflow-hidden")
+    ui.query("html").classes("overflow-x-auto overflow-y-hidden")
+    ui.add_head_html(_MIN_APP_WIDTH_CSS)
 
 
 def _install_panel_resize() -> None:
