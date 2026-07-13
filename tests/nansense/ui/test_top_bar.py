@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+from nicegui import ui
 
 from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
@@ -11,8 +12,11 @@ from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
+    _DOCS_SHARE_URL,
     _REPO_URL,
+    _SHARE_JS,
     _STAR_TOOLTIP,
+    _add_share_button,
     _at_last_batch,
     _best_effort_ui_update,
     _current_position,
@@ -364,3 +368,45 @@ def test_logo_data_uri_is_a_cached_png() -> None:
 def test_repo_logo_links_repo_and_nudges_a_star() -> None:
     assert _REPO_URL == "https://github.com/kongaskristjan/nansense"
     assert "star" in _STAR_TOOLTIP.lower()
+
+
+def test_share_button_targets_docs_home() -> None:
+    assert _DOCS_SHARE_URL == "https://kongaskristjan.github.io/nansense/dev/"
+
+
+def test_share_js_copies_link_then_emits() -> None:
+    """The client-side click handler copies the docs URL and then emits, so the
+    copy stays in the real DOM click (keeping the user gesture the Clipboard API
+    needs) while the Python handler still fires to toast."""
+    assert _DOCS_SHARE_URL in _SHARE_JS
+    assert "navigator.clipboard" in _SHARE_JS
+    assert "writeText" in _SHARE_JS
+    assert "emit(...args)" in _SHARE_JS
+
+
+def _button_labels(card: ui.card) -> list[str]:
+    """Text of every button built directly under `card` (ignoring its tooltip)."""
+    return [
+        c.text
+        for c in card.default_slot.children
+        if isinstance(c, ui.button)
+    ]
+
+
+def test_share_button_shown_when_unlocked() -> None:
+    """An unlocked session gets the "Share nansense" button on the top bar."""
+    session, _ = make_session(epochs=1, phases={"train": 1})
+    assert session.locked is False
+    with ui.card() as card:
+        _add_share_button(session)
+    assert _button_labels(card) == ["Share nansense"]
+
+
+def test_share_button_hidden_on_locked_session() -> None:
+    """Hidden on the hosted (locked) playground — the helper adds nothing."""
+    session, _ = make_session(epochs=1, phases={"train": 1})
+    session.lock()
+    assert session.locked is True
+    with ui.card() as card:
+        _add_share_button(session)
+    assert card.default_slot.children == []

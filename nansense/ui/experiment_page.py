@@ -47,6 +47,7 @@ from nansense.ui.top_bar import (
     _add_error_banner,
     _add_repo_logo,
     _add_settings_button,
+    _add_share_button,
     _add_step_controls,
     _back_button,
     _build_step_until_custom_dialog,
@@ -521,6 +522,7 @@ def _build_experiment_page(
             _back_button()
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
+            _add_share_button(session)
             _add_repo_logo()
 
         _add_error_banner(session)

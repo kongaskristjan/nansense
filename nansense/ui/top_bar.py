@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from bisect import bisect_right
 from collections.abc import Callable
 from functools import lru_cache
@@ -31,6 +32,23 @@ _TOP_BAR_CLASSES: str = (
 _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
 _STAR_TOOLTIP: str = (
     "Like nansense? A GitHub ★ star ★ means a lot and keeps me hacking."
+)
+# The "Share nansense" button copies this docs link. `dev` is the only version
+# the site publishes (releases go to `latest`, which isn't deployed), so it is
+# the live URL rather than a placeholder.
+_DOCS_SHARE_URL: str = "https://kongaskristjan.github.io/nansense/dev/"
+# Client-side click handler for the share button: copy the docs link, then
+# `emit` so the button's Python handler can toast. The copy runs in the real
+# DOM click (NiceGUI `js_handler`, not a server round-trip) so it keeps the
+# transient user activation the Clipboard API requires — going through the
+# server would drop that activation and the write would be rejected. The button
+# is hidden on the hosted (locked) playground, so it only ever runs on a local
+# instance, where `localhost` is a secure context and `navigator.clipboard`
+# exists.
+_SHARE_JS: str = (
+    "(...args) => { if (navigator.clipboard) "
+    f"navigator.clipboard.writeText({json.dumps(_DOCS_SHARE_URL)}); "
+    "emit(...args); }"
 )
 _LOGO_PATH: Path = (
     Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
@@ -143,6 +161,31 @@ def _add_repo_logo() -> ui.link:
         # the top bar's right edge.
         ui.tooltip(_STAR_TOOLTIP).props('anchor="bottom right" self="top right"')
     return link
+
+
+def _add_share_button(session: Session) -> None:
+    """A "Share nansense" button that copies the docs link, just left of the logo.
+
+    Clicking copies `_DOCS_SHARE_URL` to the clipboard and toasts. Hidden on a
+    locked session: the hosted playground embeds the app in an iframe (where the
+    surrounding docs page carries its own share control), and a shared demo has
+    no per-visitor link to hand out anyway. Added last-but-one in every page's
+    top bar so the repo-star logo keeps the far-right corner.
+    """
+    if session.locked:
+        return
+    button = ui.button("Share nansense", icon="share", color="slate-500").props(
+        "dense size=md no-caps"
+    )
+    button.tooltip("Copy a shareable link to the nansense docs")
+    # The Python handler only toasts; the clipboard write itself runs client-side
+    # in `_SHARE_JS` (which then `emit`s to fire this handler) so the copy keeps
+    # the user gesture the Clipboard API needs.
+    button.on(
+        "click",
+        lambda: ui.notify("Link to the nansense docs copied to clipboard"),
+        js_handler=_SHARE_JS,
+    )
 
 
 def _back_button() -> None:
