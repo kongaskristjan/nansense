@@ -1359,10 +1359,13 @@ refresh's worker thread calls `session.current_batch_stats(layers=...)`
 instead of `watch_snapshot`, and `_WatchLayerPanel._phase_view` returns its
 single snapshot-keyed entry unfiltered. `_selectable_layers` then offers
 *every* layer in the Layer dropdown (not just the watched ones), since the
-snapshot covers them all; a `?phase=current` query param opens the page
-already on it (the watch menu's per-layer links). `record_view` returns
-`None` in this mode — the recorders render from the running accumulators,
-which it doesn't use.
+snapshot covers them all. The page opens on the phase training is currently
+in when the running aggregates already hold stats for it — scoped to the
+`?layer=` link's layer, so a link naming an unwatched layer isn't bounced
+to a phase whose Layer dropdown would swap the layer out — and on Current
+batch otherwise (`_initial_phase`, backed by `Session.stats_phases`).
+`record_view` returns `None` in this mode — the recorders render from the
+running accumulators, which it doesn't use.
 
 The histogram view's one load-bearing design choice: routine ticks **restyle
 the Plotly figure in place** (`Plotly.update`) — only bar counts change, and an

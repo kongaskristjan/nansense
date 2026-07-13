@@ -112,7 +112,8 @@ class _WatchPageState:
     grid_type: PatchType = "max_pixel"
     heat_on: bool = False
     # Every card shows one phase at a time, picked by a header dropdown
-    # shared by both views; defaults to the schedule's first phase.
+    # shared by both views; defaults to the phase training is currently in
+    # when it has collected stats, else "Current batch" (`_initial_phase`).
     selected_phase: str = ""
     # Which watched layer's cards to render: a layer name, or `_LAYER_ALL`
     # for every watched layer at once. Defaults (via reconciliation) to the
@@ -242,10 +243,12 @@ def _build_stats_page(
     stats computed directly from the last captured `BatchSnapshot` rather than
     the running watch aggregates, so it works for *any* layer whether or not
     it is watched — and the Layer dropdown then offers every layer, not just
-    the watched ones. The page opens on "Current batch" by default (it needs no
-    watched aggregates, so a freshly opened Stats view always has something to
-    show); the user can switch to a recorded phase from the dropdown. The view
-    and phase apply across views, one at a time:
+    the watched ones. The page opens on the phase training is currently in
+    when that phase already holds collected stats (for the linked layer, if
+    the URL named one); otherwise on "Current batch", which needs no watched
+    aggregates, so a freshly opened Stats view always has something to show
+    (see `_initial_phase`). The view and phase apply across views, one at a
+    time:
 
     - HISTOGRAM (the default) — a merged activations/gradients stats table,
       then one plotly figure per tensor kind for the selected phase's latest
@@ -301,10 +304,11 @@ def _build_stats_page(
         "graphs": _VIEW_GRAPHS,
     }.get(requested_view, _VIEW_HISTOGRAM)
     state = _WatchPageState(
-        # Default to "Current batch": it reads the last captured snapshot
-        # directly, so the page shows data immediately for any layer without
-        # waiting for watch aggregates to fill.
-        selected_phase=_PHASE_CURRENT_BATCH,
+        # Open on the phase training is currently in when its aggregates
+        # already hold stats; else "Current batch", which reads the last
+        # captured snapshot directly, so the page shows data immediately for
+        # any layer without waiting for watch aggregates to fill.
+        selected_phase=_initial_phase(session, selected_layer),
         view=initial_view,
         # Seed the layer picked by the caller (e.g. a `?layer=` link from the
         # main page's watch menu). Reconciliation drops it back to the first
@@ -317,10 +321,11 @@ def _build_stats_page(
         # active under/overflow issue, regardless of how it was reached.
         show_bands=_should_show_bands(session.debug_error),
     )
-    # A graphs deep-link opens with "Current batch" seeded but no such
-    # entry in its Phase dropdown — resolve to a real phase before the
-    # dropdown is built rather than flashing an empty selection until the
-    # first refresh reconciles it.
+    # A graphs deep-link can open with "Current batch" seeded (nothing
+    # collected for the running phase yet) but has no such entry in its
+    # Phase dropdown — resolve to a real phase before the dropdown is built
+    # rather than flashing an empty selection until the first refresh
+    # reconciles it.
     state.selected_phase = _reconcile_selected_phase(
         state.selected_phase, state.view, list(phase_names)
     )
@@ -1677,6 +1682,29 @@ def _reconcile_selected_phase(
         return phase_names[0] if phase_names else ""
     if selected == _PHASE_CURRENT_BATCH or selected in phase_names:
         return selected
+    return _PHASE_CURRENT_BATCH
+
+
+def _initial_phase(session: Session, layer: str) -> str:
+    """The Phase selection the page opens on.
+
+    The phase training is currently in — the live batch position's, falling
+    back to the published snapshot's — when the running aggregates already
+    hold stats for it. `layer` (the `?layer=` deep link, "" when the URL
+    named none) scopes that check: a Stats link on an unwatched layer must
+    land on "Current batch", the only selection whose Layer dropdown offers
+    that layer, rather than bounce to a phase that would swap the layer out.
+    Before any batch, or while the phase has nothing collected, "Current
+    batch" — it always has something to show.
+    """
+    position = session.live_position
+    if position is None:
+        snapshot = session.snapshot
+        position = snapshot.position if snapshot is not None else None
+    if position is not None and position.phase in session.stats_phases(
+        layer or None
+    ):
+        return position.phase
     return _PHASE_CURRENT_BATCH
 
 

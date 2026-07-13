@@ -750,6 +750,15 @@ class Session:
             layers = set(self._stats_collection_layers_locked())
         return frozenset(layers | self._watch_accumulator.layers_with_stats())
 
+    def stats_phases(self, layer: str | None = None) -> frozenset[str]:
+        """Phases with retained running stats — for `layer`, or any layer.
+
+        Backs the `/stats` page's opening Phase selection: the phase training
+        is currently in is only a useful default while some retained bucket
+        can actually render it.
+        """
+        return frozenset(self._watch_accumulator.phases_with_stats(layer))
+
     def watch_snapshot(
         self,
         *,

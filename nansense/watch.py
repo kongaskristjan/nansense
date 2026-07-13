@@ -966,6 +966,19 @@ class WatchAccumulator:
             layers.update(key[0] for key in self._weights)
             return layers
 
+    def phases_with_stats(self, layer: str | None = None) -> set[str]:
+        """Phase names holding a retained stats bucket — `layer`'s, or any.
+
+        Weight samples don't count: they're keyed by epoch alone, so they
+        can't render a phase's view on their own.
+        """
+        with self._lock:
+            return {
+                key[1]
+                for key in self._stats
+                if layer is None or key[0] == layer
+            }
+
     def forget_layer(self, layer: str) -> None:
         """Drop all stored stats for `layer` (e.g. on unwatch)."""
         with self._lock:

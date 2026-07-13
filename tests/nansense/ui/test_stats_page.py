@@ -29,6 +29,7 @@ from nansense.ui.stats_page import (
     _figure_payload,
     _filter_phase,
     _hover_attach_js,
+    _initial_phase,
     _layer_select_options,
     _patch_grids_html,
     _patch_grids_signature,
@@ -440,6 +441,36 @@ def test_reconcile_selected_phase(
 def test_reconcile_selected_phase_without_known_phases() -> None:
     # A lazy schedule that hasn't observed a phase yet: nothing to swap to.
     assert _reconcile_selected_phase(_PHASE_CURRENT_BATCH, _VIEW_GRAPHS, []) == ""
+
+
+# --- Opening phase: the running phase when it has collected stats ------------
+
+
+def test_initial_phase_before_any_batch_is_current_batch() -> None:
+    # No live position and no snapshot yet — nothing to key a phase off.
+    session, _ = make_session()
+    assert _initial_phase(session, "") == _PHASE_CURRENT_BATCH
+
+
+def test_initial_phase_prefers_the_running_phase_once_collected() -> None:
+    with paused_session(TinyNet(), phases={"train": 4}) as session:
+        # Paused on the first batch with nothing watched: no aggregates yet.
+        assert session.stats_phases() == frozenset()
+        assert _initial_phase(session, "") == _PHASE_CURRENT_BATCH
+        assert session.watch("fc1")
+        # Watching alone collects nothing until a batch is stepped.
+        assert _initial_phase(session, "fc1") == _PHASE_CURRENT_BATCH
+        session.step_batch()
+        assert session.wait_until_paused(after_pauses=1, timeout=5.0)
+        assert session.stats_phases() == frozenset({"train"})
+        # Opening the page (bare, or on the watched layer's link) lands on
+        # the running phase now that its aggregates hold stats.
+        assert _initial_phase(session, "") == "train"
+        assert _initial_phase(session, "fc1") == "train"
+        # A link naming an unwatched layer stays on "Current batch" — the
+        # only selection whose Layer dropdown can offer that layer.
+        assert session.stats_phases("fc2") == frozenset()
+        assert _initial_phase(session, "fc2") == _PHASE_CURRENT_BATCH
 
 
 def test_refresh_gate_passes_only_on_new_publish_or_watched_change() -> None:
