@@ -704,11 +704,14 @@ def _build_page(
         # icon's colour/strike in sync (cheap class writes, no-op when stable).
         sync_stats_icon()
         snap = session.snapshot
-        # With a probe result present (a batch is pinned, or an eval/train
-        # forward mode is selected), the page renders the probe instead of the
+        # With a probe result present (a batch is pinned, an eval/train forward
+        # mode is selected, or — per connection in a locked demo — this visitor
+        # perturbed a pixel), the page renders the probe instead of the
         # snapshot: pinning tracks one fixed input across stepping and time
         # travel, while eval/train shows the current batch under that mode.
-        probe = session.probe_result
+        # `client_key` is None on an unlocked session, so this is the shared
+        # probe result there.
+        probe = session.probe_result_for(input_panel.client_key)
         if snap is None and probe is None:
             return
         input_panel.sync_spinner_max(_display_batch_size(snap, probe))

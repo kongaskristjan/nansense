@@ -78,7 +78,7 @@ from nansense.instruments import (
     MetricsSnapshot,
     WeightContext,
 )
-from nansense.probe import PerturbationMap, ProbeResult
+from nansense.probe import PerturbationMap, ProbeResult, _ProbeClient
 from nansense.restore import (
     DEFAULT_CACHE_DIR,
     TimeTravelError,
@@ -450,6 +450,17 @@ class Session:
         self._probe_count = 0
         self._probe_result: ProbeResult | None = None
         self._probe_error: str | None = None
+        # Per-client perturbation state for locked (shared demo) sessions: each
+        # browser connection perturbs its own copy without touching what other
+        # visitors see (see `nansense.probe._ProbeClient`). Keyed by a
+        # per-connection key, LRU-capped, and reaped on a heartbeat TTL. The
+        # base activations every client diffs against are computed once and
+        # cached in `_shared_base_cache` (the frozen input never changes while
+        # locked), so a client stores only its own perturbed forward.
+        self._probe_clients: OrderedDict[str, _ProbeClient] = OrderedDict()
+        self._shared_base_cache: (
+            tuple[tuple[int, int, str], dict[str, Tensor]] | None
+        ) = None
         # Experiment state (see nansense.experiments): requests queue up and
         # the pause loop drains them in order, so concurrent clients (browser
         # tabs) don't supersede each other. Results are kept per request seq
@@ -1110,6 +1121,24 @@ class Session:
         """Why the last probe run failed, or `None` when it succeeded."""
         return self._probe_error
 
+    def probe_result_for(self, client: str | None = None) -> ProbeResult | None:
+        """This connection's probe result, or the shared one when `client` is None.
+
+        `client=None` returns the shared `probe_result` (the unlocked /
+        single-user path); a per-connection key returns that connection's
+        private result (locked shared-demo perturbation). The UI reads through
+        this uniformly, passing its key when locked and `None` otherwise.
+        """
+        if client is None:
+            return self._probe_result
+        return probe.client_probe_result(self, client)
+
+    def probe_error_for(self, client: str | None = None) -> str | None:
+        """This connection's probe error, or the shared one when `client` is None."""
+        if client is None:
+            return self._probe_error
+        return probe.client_probe_error(self, client)
+
     @property
     def probe_count(self) -> int:
         """Monotonic count of completed probe runs (including failed ones)."""
@@ -1166,6 +1195,33 @@ class Session:
         with self._cv:
             return dict(self._perturbations)
 
+    def perturbations_for(self, client: str | None = None) -> PerturbationMap:
+        """This connection's perturbations, or the shared ones when `client` is None."""
+        if client is None:
+            return self.perturbations
+        return probe.client_perturbations(self, client)
+
+    def register_probe_client(self, key: str) -> None:
+        """Register a per-connection perturbation container (locked sessions).
+
+        Mint a stable per-connection `key` (e.g. `uuid4().hex`) when the page
+        builds, call this, and heartbeat it with `touch_probe_client` each tick;
+        the container is reaped a few seconds after the heartbeat stops (a
+        closed tab), and how many are kept at once is capped (oldest evicted).
+        No-op on a disabled session.
+        """
+        if not self._enabled:
+            return
+        probe.register_probe_client(self, key)
+
+    def touch_probe_client(self, key: str) -> None:
+        """Heartbeat `key`'s perturbation container so it isn't reaped."""
+        probe.touch_probe_client(self, key)
+
+    def unregister_probe_client(self, key: str) -> None:
+        """Drop `key`'s perturbation container (its perturbations and result)."""
+        probe.unregister_probe_client(self, key)
+
     def add_perturbation(
         self,
         *,
@@ -1173,6 +1229,7 @@ class Session:
         sample: int,
         index: tuple[int, ...],
         values: tuple[float, ...],
+        client: str | None = None,
     ) -> None:
         """Pin `index` of `sample` in input `input_name` to `values` on probes.
 
@@ -1185,19 +1242,37 @@ class Session:
         inputs when nothing is pinned — and trigger a probe re-run that also
         captures the perturbed activations. Entries that don't fit the base
         (out of range, wrong count, absent input) are skipped at apply time.
-        No-op on a locked session — perturbations are shared state.
+        No-op on a locked session — the shared perturbations are frozen state
+        every visitor sees. Passing a per-connection `client` key instead
+        targets that connection's private perturbations (see
+        `register_probe_client`), which *is* allowed while locked: each visitor
+        edits their own copy without changing what others see.
         """
+        if client is not None:
+            probe.add_perturbation_for(
+                self,
+                client,
+                input_name=input_name,
+                sample=sample,
+                index=index,
+                values=values,
+            )
+            return
         if self._locked:
             return
         probe.add_perturbation(
             self, input_name=input_name, sample=sample, index=index, values=values
         )
 
-    def clear_perturbations(self) -> None:
+    def clear_perturbations(self, *, client: str | None = None) -> None:
         """Drop all perturbations (and the probe result, when not pinned).
 
-        No-op on a locked session.
+        No-op on a locked session; a per-connection `client` key clears that
+        connection's private perturbations instead (allowed while locked).
         """
+        if client is not None:
+            probe.clear_perturbations_for(self, client)
+            return
         if self._locked:
             return
         probe.clear_perturbations(self)
@@ -1224,17 +1299,32 @@ class Session:
         probe.set_probe_mode(self, mode)
 
     def wait_for_probe(
-        self, *, after_count: int = 0, timeout: float | None = None
+        self,
+        *,
+        after_count: int = 0,
+        timeout: float | None = None,
+        client: str | None = None,
     ) -> bool:
         """Block until more than `after_count` probe runs have completed.
 
         The probe-side counterpart of `wait_until_paused`, used by tests and
         the UI to synchronize with asynchronously-requested probe runs
-        without polling. Counts failed runs too — check `probe_error`.
+        without polling. Counts failed runs too — check `probe_error`. A
+        per-connection `client` key waits on that client's private run count
+        instead of the shared one.
         """
         with self._cv:
+            if client is None:
+                return self._cv.wait_for(
+                    lambda: self._probe_count > after_count or self._closed,
+                    timeout=timeout,
+                )
             return self._cv.wait_for(
-                lambda: self._probe_count > after_count or self._closed,
+                lambda: (
+                    (c := self._probe_clients.get(client)) is not None
+                    and c.count > after_count
+                )
+                or self._closed,
                 timeout=timeout,
             )
 
@@ -2652,6 +2742,7 @@ class Session:
                     or self._closed
                     or self._pending_jump is not None
                     or self._probe_request
+                    or any(c.request for c in self._probe_clients.values())
                     or bool(self._experiment_queue),
                     timeout=grace,
                 )
@@ -2669,10 +2760,18 @@ class Session:
                 if done:
                     self._paused = False
                 run_probe = False
+                client_probes: list[str] = []
                 experiment: ExperimentRequest | None = None
                 if not done:
                     run_probe = self._probe_request
                     self._probe_request = False
+                    # Per-client perturbation probes (locked shared demos) drain
+                    # here too, one at a time on this thread alongside the shared
+                    # probe and experiments; each client's request flag is
+                    # cleared under the lock so a concurrent re-arm re-runs it.
+                    client_probes = probe.pending_probe_client_keys_locked(self)
+                    for client_key in client_probes:
+                        self._probe_clients[client_key].request = False
                     if self._experiment_queue:
                         experiment = self._experiment_queue.popleft()
                         # Mark it running while still holding the lock and
@@ -2694,8 +2793,14 @@ class Session:
                 return
             if run_probe:
                 probe.run_probe_guarded(self)
+            for client_key in client_probes:
+                probe.run_client_probe_guarded(self, client_key)
             if experiment is not None:
                 experiments.run_experiment_guarded(self, experiment)
+            # Reap per-client containers whose page heartbeat lapsed. A parked
+            # demo has no snapshot publishes to hang the sweep off, so it runs
+            # here on pause-loop activity; the LRU cap bounds memory otherwise.
+            probe.gc_probe_clients(self)
 
     def _snapshot_input(self) -> Tensor | None:
         """The last snapshot's primary input tensor (the first model input).

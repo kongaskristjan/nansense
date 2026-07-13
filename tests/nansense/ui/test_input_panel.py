@@ -125,8 +125,10 @@ def test_compare_active_iff_perturbed(
 ) -> None:
     """`compare` is not a toggle: it derives from the perturbation map."""
     panel = InputPanel.__new__(InputPanel)
+    panel._client_key = None
     panel._session = cast(
-        Session, SimpleNamespace(perturbations=perturbations)
+        Session,
+        SimpleNamespace(perturbations_for=lambda client=None: perturbations),
     )
     assert panel.compare is expected
 
@@ -175,7 +177,16 @@ class _FakeSession:
         self.probe_error = ""
         self.clears = 0
 
-    def clear_perturbations(self) -> None:
+    def perturbations_for(self, client: str | None = None) -> PerturbMap:
+        return self.perturbations
+
+    def probe_error_for(self, client: str | None = None) -> str:
+        return self.probe_error
+
+    def touch_probe_client(self, key: str) -> None:
+        pass
+
+    def clear_perturbations(self, *, client: str | None = None) -> None:
         self.clears += 1
         self.perturbations = {}
 
@@ -192,6 +203,7 @@ class _Wired:
         self.session = _FakeSession(dict(perturbations))
         panel = InputPanel.__new__(InputPanel)
         panel._session = cast(Session, self.session)
+        panel._client_key = None  # unlocked/shared path
         panel._syncing_pin = False
         panel._syncing_perturb = False
         panel._perturb_armed = armed

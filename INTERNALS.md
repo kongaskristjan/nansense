@@ -1924,19 +1924,39 @@ which arms its wanted mode (typically `step_run()`) and settings *before*
 locking.
 
 Everything per-visitor keeps working: browsing, per-tab shown layers,
-and experiments — the latter with their numeric knobs
+experiments, and perturbation — the experiments with their numeric knobs
 clamped (`experiments._LOCKED_PARAM_LIMITS`) and the shared queue capped
 (`_LOCKED_MAX_QUEUE`; an over-cap request gets a queue-full error result
 published under its own seq, which the requesting page polls like any
-outcome). The probe surface (`pin_current_batch`, `add_perturbation`,
-`set_probe_mode`, and their clears) is refused too — the pinned batch,
-perturbations, and forward mode are shared state every visitor sees; a
-hosting script can still pin a demo input *before* locking, and the lock
-then keeps it pinned. The UI reads `session.locked` to swap the step
-controls for a demo notice, hide the Refresh button, the stats pause
-toggle, and the input pane's pin/forward-mode/perturb sections, and turn
-the settings gear into a "settings are locked" note; enforcement lives in
-the `Session` methods, so the UI state is cosmetic.
+outcome). The *shared* probe surface — `pin_current_batch`, `set_probe_mode`,
+and the no-key `add_perturbation` / `clear_perturbations` — stays refused,
+because the pinned batch, forward mode, and shared perturbations are state
+every visitor sees; a hosting script can still pin a demo input *before*
+locking, and the lock then keeps it pinned.
+
+**Per-client perturbation.** Passing a per-connection `client` key to
+`add_perturbation` / `clear_perturbations` (and reading back through
+`probe_result_for(key)` / `perturbations_for(key)` / `probe_error_for(key)`)
+routes to a private `probe._ProbeClient` container instead of the shared
+fields — allowed while locked, so "Click to perturb" works in a shared demo
+without one visitor's clicks changing another's view. Each container holds
+only that connection's edits and its perturbed probe result; the unperturbed
+base activations are computed once and reused by every client
+(`probe._shared_base_caps`, keyed by the frozen snapshot/pin identity + mode),
+so a client stores roughly one image's activations. Containers are keyed by a
+`uuid4` the input panel mints per page, heartbeated from the page tick
+(`touch_probe_client`), LRU-capped at `probe._MAX_PROBE_CLIENTS`, and reaped
+`probe._PROBE_CLIENT_TTL` seconds after the heartbeat stops (a closed tab) —
+the sweep (`gc_probe_clients`) runs on pause-loop activity, since a parked
+demo has no snapshot publishes. The pause loop drains each client's armed
+probe one at a time on the training thread, right alongside the shared probe
+and experiments. Recording still reads the shared probe state, so per-client
+perturbations are interactive-view-only. The UI reads `session.locked` to swap
+the step controls for a demo notice, hide the Refresh button, the stats pause
+toggle, and the input pane's pin/forward-mode sections (the perturb section
+stays, routed through the connection's key), and turn the settings gear into a
+"settings are locked" note; enforcement lives in the `Session` methods, so the
+UI state is cosmetic.
 `render.set_strip_format("PNG")` is the companion knob for internet-facing
 deployments — BMP strips are the localhost trade. `examples/playground`
 hosts the reference deployments (one spec per demo dataset): each freezes a

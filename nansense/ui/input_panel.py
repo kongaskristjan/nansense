@@ -18,6 +18,7 @@ pixel of the viewed sample on every subsequent probe input.
 from __future__ import annotations
 
 from collections.abc import Callable
+from uuid import uuid4
 
 from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
@@ -132,7 +133,22 @@ class InputPanel:
         self._strip_mode = False
         # Controls disabled while recording, refreshed by each rebuild.
         self._value_controls: list[DisableableElement] = []
+        # Per-connection perturbation identity. In a locked (shared demo)
+        # session each visitor perturbs a private copy keyed by this; unlocked
+        # sessions use the shared probe state (key stays None). Every probe read
+        # and write below funnels through `_client_key`, so the unlocked path is
+        # unchanged. Registered now and heartbeated from `refresh_status` (the
+        # page tick); the container lapses a few seconds after the tab closes.
+        self._client_key: str | None = None
+        if session.locked:
+            self._client_key = uuid4().hex
+            session.register_probe_client(self._client_key)
         self._build()
+
+    @property
+    def client_key(self) -> str | None:
+        """The per-connection probe key (None on an unlocked/shared session)."""
+        return self._client_key
 
     def _build(self) -> None:
         # One compact column: the image first (it is what everything below
@@ -200,21 +216,14 @@ class InputPanel:
                 "text-xs text-red-600 self-start"
             )
 
-            # The pin / forward-mode / perturb controls drive *shared* probe
-            # state (every visitor sees the pinned batch, the perturbations,
-            # and the probe mode), so a locked session hides the whole block
-            # — the session refuses the calls anyway (`Session.lock`), the
-            # controls would only mislead. Built either way so the refresh
-            # helpers can touch them unconditionally.
-            probe_sections = ui.column().classes("w-full items-center gap-2")
+            # Pin and Forward mode drive *shared* probe state (every visitor
+            # sees the pinned batch and the probe mode), so a locked shared demo
+            # hides them — the session refuses those calls anyway. They are
+            # still built so the refresh helpers can touch them unconditionally.
+            shared_probe = ui.column().classes("w-full items-center gap-2")
             if self._session.locked:
-                probe_sections.set_visibility(False)
-                ui.separator()
-                ui.label(
-                    "Input pinning and perturbation are disabled in this "
-                    "shared demo."
-                ).classes("text-xs text-slate-500 self-start")
-            with probe_sections:
+                shared_probe.set_visibility(False)
+            with shared_probe:
                 ui.separator()
                 self._section_label("Pin")
                 self._pin_switch = ui.switch(
@@ -241,15 +250,21 @@ class InputPanel:
                     "Choose how the model behaves when NaNsense reruns this input"
                 )
 
+            # Perturbation is per-connection in a locked session (each visitor
+            # edits a private copy — see `Session.register_probe_client`), so
+            # unlike pin/mode it stays available in a shared demo. All its reads
+            # and writes funnel through `_client_key` (None on an unlocked
+            # session → the shared probe state, unchanged).
+            with ui.column().classes("w-full items-center gap-2"):
                 ui.separator()
                 self._section_label("Perturb")
                 with ui.row().classes("w-full items-center justify-between no-wrap"):
                     self._perturb_switch = ui.switch(
                         "Click to perturb",
-                        # On a rebuild (navigating back from /stats) the shared
+                        # On a rebuild (navigating back from /stats) the
                         # perturbations survive, so the switch must come up on to
                         # match the perturbed image/strips the page still renders.
-                        value=bool(self._session.perturbations),
+                        value=bool(self._session.perturbations_for(self._client_key)),
                         on_change=self._on_perturb_change,
                     ).props("dense").tooltip(
                         "Click a pixel to change it and compare the result"
@@ -265,7 +280,9 @@ class InputPanel:
                 self._clear_row = ui.row().classes(
                     "w-full items-center justify-between no-wrap"
                 )
-                self._clear_row.set_visibility(bool(self._session.perturbations))
+                self._clear_row.set_visibility(
+                    bool(self._session.perturbations_for(self._client_key))
+                )
                 with self._clear_row:
                     self._perturb_caption = ui.label("").classes(
                         "text-xs text-slate-500 font-mono"
@@ -281,8 +298,14 @@ class InputPanel:
                     "Layer cards now show the change from the original input"
                 ).classes("text-xs text-slate-500 self-start")
                 self._compare_caption.set_visibility(
-                    bool(self._session.perturbations)
+                    bool(self._session.perturbations_for(self._client_key))
                 )
+                # In a shared demo, reassure the visitor their edits are their
+                # own — perturbing does not change what anyone else sees.
+                if self._session.locked:
+                    ui.label(
+                        "Your perturbations are private to this browser session."
+                    ).classes("text-xs text-slate-500 self-start")
                 self._set_perturb_cursor(self._perturb_switch.value)
 
     def _set_perturb_cursor(self, active: bool) -> None:
@@ -325,7 +348,7 @@ class InputPanel:
         one pixel is perturbed, so the diff is never the all-zero (white)
         no-edit case.
         """
-        return bool(self._session.perturbations)
+        return bool(self._session.perturbations_for(self._client_key))
 
     @staticmethod
     def _section_label(text: str) -> None:
@@ -531,25 +554,29 @@ class InputPanel:
     def refresh_status(self) -> None:
         """Cheap per-tick text/visibility updates (no-op writes are skipped).
 
-        Also mirrors shared session state into this connection's controls so
-        a pin / perturbation made in another tab shows up here immediately:
-        the pin switch follows `is_pinned`, the perturb switch follows
-        `perturbations` (or the local armed intent), and the perturbation
-        count / clear row / compare note follow `perturbations` (the perturbed
-        image itself rides along on the shared probe result the page tick
-        re-renders). The perturb value control is rebuilt here when the
-        selected input's channel kind changes.
+        Mirrors the (per-connection when locked, shared otherwise)
+        perturbation state into this connection's controls: the perturb switch
+        follows `perturbations_for` (or the local armed intent) and the count /
+        clear row / compare note follow it too — the perturbed image itself
+        rides along on the probe result the page tick re-renders. The pin
+        switch / pinned caption follow the shared pin (unlocked only). Also
+        heartbeats this connection's per-client probe container so it isn't
+        reaped, and rebuilds the perturb value control when the selected
+        input's channel kind changes.
         """
+        if self._client_key is not None:
+            self._session.touch_probe_client(self._client_key)
         self._sync_perturb_control()
         if self._pin_switch.value != self._session.is_pinned:
             self._syncing_pin = True
             self._pin_switch.set_value(self._session.is_pinned)
             self._syncing_pin = False
-        # The switch is on while this tab is armed or any perturbation exists,
-        # so a perturbation made elsewhere (another tab, or surviving a rebuild
-        # after navigating back from /stats) turns the switch on, and an
-        # external clear turns it back off in tabs that didn't arm it.
-        perturb_on = self._perturb_armed or bool(self._session.perturbations)
+        # The switch is on while this tab is armed or a perturbation exists,
+        # so a perturbation surviving a rebuild (navigating back from /stats),
+        # or made in another tab on an unlocked shared session, turns the
+        # switch on, and a clear turns it back off in tabs that didn't arm it.
+        perturbations = self._session.perturbations_for(self._client_key)
+        perturb_on = self._perturb_armed or bool(perturbations)
         if self._perturb_switch.value != perturb_on:
             self._syncing_perturb = True
             self._perturb_switch.set_value(perturb_on)
@@ -561,7 +588,7 @@ class InputPanel:
             if pos is not None
             else ""
         )
-        n = len(self._session.perturbations)
+        n = len(perturbations)
         self._perturb_caption.text = (
             f"{n} perturbed pixel{'' if n == 1 else 's'}" if n else ""
         )
@@ -570,14 +597,16 @@ class InputPanel:
             self._clear_row.set_visibility(has_perturbations)
         if self._compare_caption.visible != has_perturbations:
             self._compare_caption.set_visibility(has_perturbations)
-        self._error_label.text = self._session.probe_error or ""
+        self._error_label.text = (
+            self._session.probe_error_for(self._client_key) or ""
+        )
 
     def _current_input(self) -> Tensor | None:
         """The selected input batch the displayed image was rendered from."""
         name = self._selected_input
         if name is None:
             return None
-        probe = self._session.probe_result
+        probe = self._session.probe_result_for(self._client_key)
         if probe is not None:
             return probe.shown_input(name)
         snap = self._session.snapshot
@@ -619,7 +648,7 @@ class InputPanel:
             self._session.set_probe_mode(str(value))
 
     def _on_clear(self) -> None:
-        self._session.clear_perturbations()
+        self._session.clear_perturbations(client=self._client_key)
         self.refresh_status()  # hide the compare note/clear row now
         self._on_change()  # drop the diff view now, not on the next probe
 
@@ -667,5 +696,9 @@ class InputPanel:
         else:
             return
         self._session.add_perturbation(
-            input_name=name, sample=self.sample_idx, index=index, values=values
+            input_name=name,
+            sample=self.sample_idx,
+            index=index,
+            values=values,
+            client=self._client_key,
         )

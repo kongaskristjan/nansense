@@ -29,9 +29,10 @@ with `nansense.experiments`.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import torch
@@ -50,6 +51,42 @@ PROBE_MODES: tuple[str, ...] = ("unchanged", "eval", "train")
 # input `[B, C]` and `values` is a single scalar.
 PerturbationKey = tuple[str, int, tuple[int, ...]]
 PerturbationMap = dict[PerturbationKey, tuple[float, ...]]
+
+# Per-client perturbation state (see `_ProbeClient` and the `*_for` Session
+# methods). In a locked (shared demo) session the pin, forward mode, and the
+# base input stay shared and frozen, but each visitor perturbs their own copy:
+# the edits and the resulting perturbed activations are held per connection so
+# one visitor's clicks never change what another sees. `_MAX_PROBE_CLIENTS`
+# caps how many such per-visitor containers are retained at once (oldest
+# evicted first — a hard memory ceiling), and `_PROBE_CLIENT_TTL` is how long a
+# container survives without a page heartbeat before it is reaped (a closed tab
+# stops ticking and is dropped ~this many seconds later, like an auto
+# experiment). The base activations are computed once and shared across every
+# client's diff (see `_shared_base_caps`), so a client stores only its own
+# perturbed forward — roughly one image's activations per visitor.
+_MAX_PROBE_CLIENTS: int = 16
+_PROBE_CLIENT_TTL: float = 5.0
+
+
+@dataclass
+class _ProbeClient:
+    """One browser connection's private perturbation state (locked sessions).
+
+    Mirrors the shared probe fields (`_perturbations`, `_probe_request`,
+    `_probe_version`, `_probe_count`, `_probe_result`, `_probe_error`) but per
+    connection. `version` guards a stale in-flight run from overwriting newer
+    edits (same contract as the shared `_probe_version`); `request` arms a
+    re-run the pause loop drains; `expires_at` is a `time.monotonic` deadline
+    refreshed by the page heartbeat, after which the container is reaped.
+    """
+
+    perturbations: PerturbationMap = field(default_factory=dict)
+    request: bool = False
+    version: int = 0
+    count: int = 0
+    result: ProbeResult | None = None
+    error: str | None = None
+    expires_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -422,3 +459,233 @@ def _probe_forward(
     ordered = [inputs[n] for n in session._input_names if n in inputs]
     with isolated_model(session, mode) as device, torch.no_grad():
         return session._capture_forward([t.to(device) for t in ordered])
+
+
+# --- Per-client perturbation state (locked / shared demo sessions) ---------
+#
+# The shared setters above refuse to run on a locked session because they
+# mutate state every visitor sees. These `*_for(key)` entry points give each
+# connection its own perturbation set and probe result instead, so perturbation
+# works in a shared demo without one visitor's clicks leaking into another's
+# view. They run on the same pause-loop / training thread as the shared probe
+# (the model is only touched there); the base input and forward mode stay
+# shared, and the base activations are computed once and reused by every
+# client (see `_shared_base_caps`).
+
+
+def _client_locked(session: Session, key: str) -> _ProbeClient:
+    """Get or create `key`'s container and mark it most-recently used (`_cv`)."""
+    client = session._probe_clients.get(key)
+    if client is None:
+        client = _ProbeClient()
+        session._probe_clients[key] = client
+    session._probe_clients.move_to_end(key)
+    return client
+
+
+def _evict_probe_clients_locked(session: Session) -> None:
+    """Drop the least-recently-used containers past the cap (caller holds `_cv`)."""
+    while len(session._probe_clients) > _MAX_PROBE_CLIENTS:
+        session._probe_clients.popitem(last=False)
+
+
+def register_probe_client(session: Session, key: str) -> None:
+    """Implementation of `Session.register_probe_client`."""
+    with session._cv:
+        client = _client_locked(session, key)
+        client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
+        _evict_probe_clients_locked(session)
+
+
+def touch_probe_client(session: Session, key: str) -> None:
+    """Implementation of `Session.touch_probe_client` (heartbeat)."""
+    with session._cv:
+        client = session._probe_clients.get(key)
+        if client is not None:
+            client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
+            session._probe_clients.move_to_end(key)
+
+
+def unregister_probe_client(session: Session, key: str) -> None:
+    """Implementation of `Session.unregister_probe_client`."""
+    with session._cv:
+        session._probe_clients.pop(key, None)
+
+
+def gc_probe_clients(session: Session) -> None:
+    """Reap containers whose heartbeat lapsed (training thread, pause loop).
+
+    The per-client counterpart of `experiments.run_auto_experiments`' expiry
+    sweep: a closed tab stops heartbeating and its container is dropped once
+    `expires_at` passes. Called on pause-loop activity — a parked demo has no
+    snapshot publishes to hang the sweep off, and the LRU cap bounds memory
+    even when the loop is idle.
+    """
+    now = time.monotonic()
+    with session._cv:
+        expired = [
+            key
+            for key, client in session._probe_clients.items()
+            if client.expires_at is not None and client.expires_at < now
+        ]
+        for key in expired:
+            del session._probe_clients[key]
+
+
+def add_perturbation_for(
+    session: Session,
+    key: str,
+    *,
+    input_name: str,
+    sample: int,
+    index: tuple[int, ...],
+    values: tuple[float, ...],
+) -> None:
+    """Add a perturbation to `key`'s private set and arm its probe re-run."""
+    if not session._enabled:
+        return
+    with session._cv:
+        client = _client_locked(session, key)
+        client.perturbations[(input_name, sample, tuple(index))] = tuple(values)
+        client.request = True
+        client.version += 1
+        client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
+        _evict_probe_clients_locked(session)
+        session._cv.notify_all()
+
+
+def clear_perturbations_for(session: Session, key: str) -> None:
+    """Drop `key`'s perturbations and its probe result (nothing left to show)."""
+    with session._cv:
+        client = session._probe_clients.get(key)
+        if client is None or not client.perturbations:
+            return
+        client.perturbations.clear()
+        client.version += 1
+        client.request = False
+        client.result = None
+        client.error = None
+        session._cv.notify_all()
+
+
+def client_probe_result(session: Session, key: str) -> ProbeResult | None:
+    """The latest probe result for `key`, or `None`."""
+    with session._cv:
+        client = session._probe_clients.get(key)
+        return client.result if client is not None else None
+
+
+def client_probe_error(session: Session, key: str) -> str | None:
+    """Why `key`'s last probe failed, or `None`."""
+    with session._cv:
+        client = session._probe_clients.get(key)
+        return client.error if client is not None else None
+
+
+def client_perturbations(session: Session, key: str) -> PerturbationMap:
+    """Copy of `key`'s active perturbations."""
+    with session._cv:
+        client = session._probe_clients.get(key)
+        return dict(client.perturbations) if client is not None else {}
+
+
+def pending_probe_client_keys_locked(session: Session) -> list[str]:
+    """Keys of clients with an armed probe re-run (caller holds `_cv`)."""
+    return [k for k, c in session._probe_clients.items() if c.request]
+
+
+def _shared_base_caps(
+    session: Session, bases: dict[str, Tensor], mode: str
+) -> dict[str, Tensor]:
+    """Base activations for the frozen input under `mode`, computed once.
+
+    Every client's perturbed probe diffs against the *same* unperturbed base,
+    which in a locked demo never changes — so this caches the single base
+    forward and hands the same capture dict to each client. The cache key is
+    the identity of the snapshot / pinned inputs the base came from plus the
+    mode, so a new snapshot or a re-pin (unlocked sessions) recomputes it.
+    Runs on the training thread only, serialized with every other probe, so no
+    two clients race to fill the cache.
+    """
+    sig: tuple[int, int, str] = (
+        id(session._snapshot),
+        id(session._pinned_inputs),
+        mode,
+    )
+    cached = session._shared_base_cache
+    if cached is not None and cached[0] == sig:
+        return cached[1]
+    caps = _probe_forward(session, bases, mode=mode)
+    session._shared_base_cache = (sig, caps)
+    return caps
+
+
+def run_client_probe_guarded(session: Session, key: str) -> None:
+    """Run `key`'s perturbed probe, publishing an error instead of crashing."""
+    with session._cv:
+        client = session._probe_clients.get(key)
+        if client is None:
+            return
+        version = client.version
+    try:
+        _run_client_probe(session, key, version)
+    except Exception as e:  # noqa: BLE001 — surfaced via the client's error
+        with session._cv:
+            client = session._probe_clients.get(key)
+            if client is None or client.version != version:
+                return
+            client.error = f"{type(e).__name__}: {e}"
+            client.count += 1
+            session._cv.notify_all()
+
+
+def _run_client_probe(session: Session, key: str, version: int) -> None:
+    """One client's probe: the shared base plus this client's perturbed forward.
+
+    Reads the client's edits and the shared base/mode under `_cv`, runs the
+    forwards without the lock, and publishes only if the client's edits haven't
+    changed since (its `version` still matches). With no perturbations left the
+    result is dropped so the view reverts to the shared snapshot.
+    """
+    with session._cv:
+        client = session._probe_clients.get(key)
+        if client is None:
+            return
+        perturbations = dict(client.perturbations)
+        mode = session._probe_mode
+        pinned = session._pinned_inputs
+    if not perturbations:
+        with session._cv:
+            client = session._probe_clients.get(key)
+            if client is None or client.version != version:
+                return
+            client.result = None
+            client.error = None
+            client.count += 1
+            session._cv.notify_all()
+        return
+    bases = pinned if pinned is not None else session._snapshot_inputs()
+    if not bases:
+        return
+    perturbed = apply_perturbations(bases, perturbations)
+    base_caps = _shared_base_caps(session, bases, mode)
+    pert_caps = (
+        _probe_forward(session, perturbed, mode=mode)
+        if perturbed is not None
+        else None
+    )
+    result = ProbeResult(
+        inputs=bases,
+        activations=base_caps,
+        mode=mode,
+        perturbed_inputs=perturbed,
+        perturbed_activations=pert_caps,
+    )
+    with session._cv:
+        client = session._probe_clients.get(key)
+        if client is None or client.version != version:
+            return
+        client.result = result
+        client.error = None
+        client.count += 1
+        session._cv.notify_all()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -12,7 +13,9 @@ from torch import Tensor, nn
 import nansense
 from nansense.capture import _CaptureInterpreter
 from nansense.probe import (
+    _MAX_PROBE_CLIENTS,
     apply_perturbations,
+    gc_probe_clients,
     request_probe_locked,
     run_probe_guarded,
 )
@@ -577,3 +580,121 @@ def test_failing_probe_does_not_publish_a_superseded_error(
     monkeypatch.setattr("nansense.probe._run_probe", bump_then_fail)
     run_probe_guarded(session)
     assert session.probe_error is None
+
+
+# --- Per-client perturbation (locked / shared demo sessions) ----------------
+#
+# The per-connection routing works regardless of lock (a `client` key always
+# targets a private container), so these exercise the mechanics on an unlocked
+# paused session; `test_lock.py` covers that it is *allowed while locked* when
+# the shared path is refused.
+
+
+def test_per_client_perturbation_runs() -> None:
+    """A per-connection key perturbs a private copy and gets its own probe
+    result, leaving the shared probe state untouched."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        snap = session.snapshot
+        assert snap is not None
+
+        session.add_perturbation(
+            input_name="x",
+            sample=0,
+            index=(1, 2),
+            values=(5.0, 5.0, 5.0),
+            client="A",
+        )
+        assert session.wait_for_probe(client="A", timeout=5)
+        probe = session.probe_result_for("A")
+        assert probe is not None
+        assert session.probe_result is None  # shared result untouched
+        assert probe.perturbed_inputs is not None
+        torch.testing.assert_close(
+            probe.perturbed_inputs["x"][0, :, 1, 2],
+            torch.tensor([5.0, 5.0, 5.0]),
+        )
+        assert probe.perturbed_activations is not None
+        assert session.perturbations_for("A") != {}
+
+
+def test_per_client_perturbations_are_isolated_and_share_the_base() -> None:
+    """Two clients edit different pixels; each sees only its own edit, and the
+    unperturbed base activations are computed once and shared."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        session.add_perturbation(
+            input_name="x", sample=0, index=(0, 0), values=(9.0, 9.0, 9.0),
+            client="A",
+        )
+        session.add_perturbation(
+            input_name="x", sample=0, index=(3, 3), values=(1.0, 1.0, 1.0),
+            client="B",
+        )
+        assert session.wait_for_probe(client="A", timeout=5)
+        assert session.wait_for_probe(client="B", timeout=5)
+        a = session.probe_result_for("A")
+        b = session.probe_result_for("B")
+        assert a is not None and b is not None and a is not b
+        assert a.perturbed_inputs is not None and b.perturbed_inputs is not None
+        torch.testing.assert_close(
+            a.perturbed_inputs["x"][0, :, 0, 0], torch.tensor([9.0, 9.0, 9.0])
+        )
+        torch.testing.assert_close(
+            b.perturbed_inputs["x"][0, :, 3, 3], torch.tensor([1.0, 1.0, 1.0])
+        )
+        assert len(session.perturbations_for("A")) == 1
+        assert len(session.perturbations_for("B")) == 1
+        # The shared base forward is computed once and reused (same object).
+        assert a.activations is b.activations
+
+
+def test_clear_perturbations_for_one_client_leaves_others() -> None:
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        for key in ("A", "B"):
+            session.add_perturbation(
+                input_name="x", sample=0, index=(0, 0), values=(1.0, 1.0, 1.0),
+                client=key,
+            )
+        assert session.wait_for_probe(client="A", timeout=5)
+        assert session.wait_for_probe(client="B", timeout=5)
+
+        session.clear_perturbations(client="A")
+        assert session.probe_result_for("A") is None
+        assert session.perturbations_for("A") == {}
+        # B is untouched.
+        assert session.probe_result_for("B") is not None
+        assert session.perturbations_for("B") != {}
+
+
+def test_probe_clients_capped_lru() -> None:
+    """Only the most-recent `_MAX_PROBE_CLIENTS` containers are retained."""
+    session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
+    for i in range(_MAX_PROBE_CLIENTS + 3):
+        session.register_probe_client(f"c{i}")
+    assert len(session._probe_clients) == _MAX_PROBE_CLIENTS
+    assert "c0" not in session._probe_clients  # oldest evicted
+    assert f"c{_MAX_PROBE_CLIENTS + 2}" in session._probe_clients  # newest kept
+
+
+def test_probe_clients_reaped_after_ttl() -> None:
+    """A container whose page heartbeat lapsed is dropped; a fresh one stays."""
+    session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
+    session.register_probe_client("stale")
+    session.register_probe_client("fresh")
+    session._probe_clients["stale"].expires_at = time.monotonic() - 1.0
+    gc_probe_clients(session)
+    assert "stale" not in session._probe_clients
+    assert "fresh" in session._probe_clients
+
+
+def test_unregister_probe_client_drops_state() -> None:
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        session.add_perturbation(
+            input_name="x", sample=0, index=(0, 0), values=(1.0, 1.0, 1.0),
+            client="A",
+        )
+        assert session.wait_for_probe(client="A", timeout=5)
+        assert session.probe_result_for("A") is not None
+
+        session.unregister_probe_client("A")
+        assert session.probe_result_for("A") is None
+        assert session.perturbations_for("A") == {}

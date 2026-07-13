@@ -150,6 +150,37 @@ def test_a_pin_made_before_locking_sticks() -> None:
         session.close()
 
 
+def test_locked_session_runs_per_client_perturbation() -> None:
+    """The shared perturb path stays refused, but a per-connection `client` key
+    perturbs a private copy and runs its own probe — the basis for enabling
+    "Click to perturb" in a shared demo without visitors colliding."""
+    session, model = make_session(epochs=1, phases={"train": 2})
+    session.lock()
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            train_step(model)
+
+    with paused_worker(session, loop):
+        # paused_worker's teardown detach() is refused on a locked session,
+        # so resume via close() at the end instead.
+        # The shared path is still refused.
+        session.add_perturbation(
+            input_name="x", sample=0, index=(0,), values=(1.0,)
+        )
+        assert session.perturbations == {}
+        # A per-connection key runs privately.
+        session.add_perturbation(
+            input_name="x", sample=0, index=(1,), values=(2.0,), client="A"
+        )
+        assert session.wait_for_probe(client="A", timeout=10.0)
+        probe = session.probe_result_for("A")
+        assert probe is not None and probe.perturbed_inputs is not None
+        assert session.probe_result is None  # shared result untouched
+        assert session.perturbations_for("A") != {}
+        session.close()
+
+
 def test_locked_session_still_runs_experiments() -> None:
     session, model = make_session(epochs=1, phases={"train": 2})
     session.lock()
