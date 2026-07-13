@@ -85,6 +85,15 @@ _RENDER_POOL = ThreadPoolExecutor(
     max_workers=min(8, os.cpu_count() or 1), thread_name_prefix="nansense-render"
 )
 
+# Resting width of the right-hand input pane. Proportional to the viewport so a
+# narrow (phone) screen doesn't get a pane wide enough to crowd out the layer
+# strips, floored at 11rem (below that the probe controls get unusable) and
+# capped at 18rem — the old fixed `w-72`, so wide monitors are unchanged and the
+# pane never bloats. Expressed as `width` (clamp) alone, never min-/max-width,
+# so the drag handle's inline px width still overrides it freely: the cap bounds
+# only the default, not how far the pane can be resized (see `_PANEL_RESIZE_JS`).
+_INPUT_PANE_WIDTH: str = "w-[clamp(11rem,25vw,18rem)]"
+
 
 class _RenderCache:
     """Strip-HTML cache for the main page, shared across connections.
@@ -509,7 +518,7 @@ def _build_page(
                     )
             input_handle = _resize_handle("main-input", "right")
             input_pane = ui.column().classes(
-                "w-72 shrink-0 h-full overflow-auto p-3 "
+                f"{_INPUT_PANE_WIDTH} shrink-0 h-full overflow-auto p-3 "
                 "border-l-2 border-slate-300 bg-slate-50 items-center"
             ).props(_resizable_pane_props("main-input"))
             with input_pane:
