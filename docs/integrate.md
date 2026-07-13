@@ -4,31 +4,32 @@ Run this prompt from your project with a coding agent (Claude Code, Cursor, …)
 
 <div class="nansense-prompt" markdown="1">
 
-<label class="nansense-prompt-option">
-<input type="checkbox" id="nansense-port-only" checked>
-<span>Gate nansense behind a <code>--debugger-port PORT</code> flag, so it stays a zero-overhead no-op unless a port is passed <em>(recommended)</em></span>
-</label>
-
 ```text
 Add the nansense PyTorch debugger to this project's training loop.
 
-Read the docs first — everything in one file: https://kongaskristjan.github.io/nansense/llms-full.txt
-(page-by-page index: https://kongaskristjan.github.io/nansense/llms.txt)
+Read the docs first: https://kongaskristjan.github.io/nansense/llms-full.txt
+(page-by-page index is here https://kongaskristjan.github.io/nansense/llms.txt)
 
-Requirements: PyTorch >= 2.3, Python 3.10-3.14, and an eager training loop you can wrap (PyTorch Lightning is also supported). If this project can't meet these, stop and ask me how to proceed.
+Requirements: PyTorch >= 2.3, Python 3.10-3.14, and an eager training loop you can wrap (PyTorch Lightning is also supported). If this project can't meet these, ask me how to proceed.
 
 Then:
 1. Add nansense to the project's dependencies (`pip install nansense`).
 2. Wire nansense.start() / session.epochs() / session.batches() / session.close() into the training loop as the wiring guide shows; enable time travel if there's a clean epoch loop.
 3. Add a `--debugger-port PORT` CLI flag and pass `port=that_port, enabled=that_port is not None`, so nansense stays a zero-overhead no-op unless a port is given.
-4. Show me the diff and the exact command to launch training with the debugger.
+4. Show me the exact command to launch training with the debugger.
 ```
+
+### Prompt settings:
+
+<label class="nansense-prompt-option">
+<input type="checkbox" id="nansense-port-only" checked>
+<span>Gate nansense behind a <code>--debugger-port PORT</code> flag, so it stays a zero-overhead no-op unless a port is passed <em>(recommended)</em></span>
+</label>
+
 
 </div>
 
 ## Prefer to look first?
-
-Plenty of people want to see what the change looks like before letting an agent touch their training loop:
 
 - The [Wiring guide](wiring.md) shows the exact code the prompt produces, for raw PyTorch and PyTorch Lightning — plus time travel, input display and distributed training.
 - [Getting started](getting-started.md) runs a bundled example on your machine, without touching your project.
