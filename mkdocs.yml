@@ -10,9 +10,11 @@ edit_uri: edit/main/docs/
 nav:
   - Home: index.md
   - Playground: playground.md
+  - Showcase: showcase.md
   - Getting started: getting-started.md
-  - UI guide: ui.md
+  - Integrate with one prompt: integrate.md
   - Wiring guide: wiring.md
+  - UI guide: ui.md
   - API reference: api.md
 
 theme:
@@ -85,9 +87,11 @@ plugins:
       sections:
         Usage:
           - index.md
+          - showcase.md
           - getting-started.md
-          - ui.md
+          - integrate.md
           - wiring.md
+          - ui.md
         API:
           - api.md
 

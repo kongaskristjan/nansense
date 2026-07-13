@@ -1,7 +1,7 @@
 {#-
   Extends Material's stock header with a centered banner that links to the
-  "Integrate with one prompt" section of the Wiring guide. Kept in sync with
-  the upstream partial; the only addition is the md-header__banner anchor.
+  "Integrate with one prompt" page. Kept in sync with the upstream partial;
+  the only addition is the md-header__banner anchor.
 -#}
 {% set class = "md-header" %}
 {% if "navigation.tabs.sticky" in features %}
@@ -39,7 +39,7 @@
       </div>
     </div>
     {% if is_playground %}
-      <a class="md-header__banner" href="{{ 'wiring/#integrate-with-one-prompt' | url }}" title="Add nansense to your project with one prompt">
+      <a class="md-header__banner" href="{{ 'integrate/' | url }}" title="Add nansense to your project with one prompt">
         <span class="md-header__banner-icon">✨</span>
         <span class="md-header__banner-text">Visualize your net with one prompt</span>
       </a>
