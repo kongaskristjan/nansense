@@ -159,22 +159,19 @@ class _ShareTarget:
 # What the share dialog offers. The playground URL pins the `dev` version:
 # unlike the docs site's own pages, the app can't derive the live docs
 # version from its location (it runs on localhost or the HF Space), and
-# `dev` is the only version the site currently publishes.
+# `dev` is the only version the site currently publishes. The library link is
+# the version-less site root, which redirects to the default published
+# version — so it stays current when a release later takes over `latest`.
 _SHARE_TARGETS: dict[str, _ShareTarget] = {
     "playground": _ShareTarget(
         label="Playground",
         url="https://kongaskristjan.github.io/nansense/dev/playground/",
         title="Nansense playground — a live PyTorch training run to poke around in",
     ),
-    "github": _ShareTarget(
-        label="GitHub",
-        url=_REPO_URL,
+    "library": _ShareTarget(
+        label="Library",
+        url="https://kongaskristjan.github.io/nansense/",
         title="nansense — a PyTorch debugger: pause training, look inside every layer",
-    ),
-    "video": _ShareTarget(
-        label="Demo video",
-        url="https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44",
-        title="nansense demo video",
     ),
 }
 
@@ -196,6 +193,78 @@ def _share_platform_links(url: str, title: str) -> list[tuple[str, str]]:
     ]
 
 
+# Brand glyphs for the share-intent buttons, inlined as SVG path data so the
+# app stays self-contained (NiceGUI bundles no brand-icon font; Email uses the
+# bundled Material "mail" icon instead). X / Reddit / Y Combinator come from
+# Simple Icons (CC0 1.0 — public domain). LinkedIn comes from Font Awesome
+# Free 6.7.2 by @fontawesome — https://fontawesome.com, License:
+# https://fontawesome.com/license/free (Icons: CC BY 4.0), Copyright 2024
+# Fonticons, Inc.; this comment carries the required attribution. The glyphs
+# remain their owners' trademarks, used nominatively: each button does nothing
+# but link to that platform's own share composer.
+_PLATFORM_ICONS: dict[str, tuple[str, str]] = {  # label -> (viewBox, path d)
+    "X": (
+        "0 0 24 24",
+        "M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 "
+        "13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 "
+        "3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 "
+        "11.09h-3.182z",
+    ),
+    "LinkedIn": (
+        "0 0 448 512",
+        "M100.28 448H7.4V148.9h92.88zM53.79 108.1C24.09 108.1 0 83.5 0 "
+        "53.8a53.79 53.79 0 0 1 107.58 0c0 29.7-24.1 54.3-53.79 54.3zM447.9 "
+        "448h-92.68V302.4c0-34.7-.7-79.2-48.29-79.2-48.29 0-55.69 37.7-55.69 "
+        "76.7V448h-92.78V148.9h89.08v40.8h1.3c12.4-23.5 42.69-48.3 87.88-48.3 "
+        "94 0 111.28 61.9 111.28 142.3V448z",
+    ),
+    "Reddit": (
+        "0 0 24 24",
+        "M12 0C5.373 0 0 5.373 0 12c0 3.314 1.343 6.314 3.515 8.485l-2.286 "
+        "2.286C.775 23.225 1.097 24 1.738 24H12c6.627 0 12-5.373 "
+        "12-12S18.627 0 12 0Zm4.388 3.199c1.104 0 1.999.895 1.999 1.999 0 "
+        "1.105-.895 2-1.999 2-.946 0-1.739-.657-1.947-1.539v.002c-1.147.162"
+        "-2.032 1.15-2.032 2.341v.007c1.776.067 3.4.567 4.686 1.363.473-.363 "
+        "1.064-.58 1.707-.58 1.547 0 2.802 1.254 2.802 2.802 0 1.117-.655 "
+        "2.081-1.601 2.531-.088 3.256-3.637 5.876-7.997 5.876-4.361 0-7.905"
+        "-2.617-7.998-5.87-.954-.447-1.614-1.415-1.614-2.538 0-1.548 1.255"
+        "-2.802 2.803-2.802.645 0 1.239.218 1.712.585 1.275-.79 2.881-1.291 "
+        "4.64-1.365v-.01c0-1.663 1.263-3.034 2.88-3.207.188-.911.993-1.595 "
+        "1.959-1.595Zm-8.085 8.376c-.784 0-1.459.78-1.506 1.797-.047 "
+        "1.016.64 1.429 1.426 1.429.786 0 1.371-.369 1.418-1.385.047-1.017"
+        "-.553-1.841-1.338-1.841Zm7.406 0c-.786 0-1.385.824-1.338 1.841.047 "
+        "1.017.634 1.385 1.418 1.385.785 0 1.473-.413 1.426-1.429-.046-1.017"
+        "-.721-1.797-1.506-1.797Zm-3.703 4.013c-.974 0-1.907.048-2.77.135"
+        "-.147.015-.241.168-.183.305.483 1.154 1.622 1.964 2.953 1.964 1.33 "
+        "0 2.47-.81 2.953-1.964.057-.137-.037-.29-.184-.305-.863-.087-1.795"
+        "-.135-2.769-.135Z",
+    ),
+    "Hacker News": (  # the Y Combinator mark, HN's standard share glyph
+        "0 0 24 24",
+        "M0 24V0h24v24H0zM6.951 5.896l4.112 7.708v5.064h1.583v-4.972l4.148"
+        "-7.799h-1.749l-2.457 4.875c-.372.745-.688 1.434-.688 1.434s-.297"
+        "-.708-.651-1.434L8.831 5.896h-1.88z",
+    ),
+}
+
+
+def _platform_icon_html(label: str) -> str | None:
+    """The 18px `currentColor` SVG for a platform button, `None` for Email.
+
+    Rendered as an inline SVG child of the button (not an `img:` data URI) so
+    `fill="currentColor"` picks up the button's text color.
+    """
+    spec = _PLATFORM_ICONS.get(label)
+    if spec is None:
+        return None
+    viewbox, path = spec
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}" '
+        'width="18" height="18" fill="currentColor" aria-hidden="true">'
+        f'<path d="{path}"/></svg>'
+    )
+
+
 def _add_share_button() -> None:
     """The share icon just left of the logo, and the share dialog it opens.
 
@@ -203,19 +272,21 @@ def _add_share_button() -> None:
     every page — the hosted playground included (handing out links is exactly
     what a public demo is for; the docs page delegates `clipboard-write` to
     the app iframe). The dialog picks *what* to share (`_SHARE_TARGETS`) and
-    where: Copy link plus one share-intent anchor per platform. The action row
-    is rebuilt on every target switch so each anchor's href — and the copy
+    where: Copy link plus one share-intent icon per platform (brand glyphs
+    from `_PLATFORM_ICONS`, hover for the platform name). The card is fixed-
+    width so switching targets never resizes the dialog. The action row is
+    rebuilt on every target switch so each anchor's href — and the copy
     handler's URL — is baked in for the current pick; the clipboard write runs
     client-side in the `js_handler` (then `emit`s so Python can toast), since
     a server round-trip would drop the user gesture the Clipboard API needs.
     """
-    with ui.dialog() as dialog, ui.card().classes("min-w-96 max-w-lg p-6 gap-3"):
+    with ui.dialog() as dialog, ui.card().classes("w-[30rem] max-w-full p-6 gap-3"):
         ui.label("Share nansense").classes("text-lg font-bold")
         ui.toggle(
             {key: t.label for key, t in _SHARE_TARGETS.items()},
             value="playground",
             on_change=lambda e: rebuild(str(e.value)),
-        ).props("dense no-caps")
+        ).props('no-caps padding="xs lg"')
         url_label = ui.label("").classes(
             "text-xs font-mono text-slate-500 break-all"
         )
@@ -243,16 +314,26 @@ def _add_share_button() -> None:
             for label, href in _share_platform_links(target.url, target.title):
                 # Real anchors opening a new tab, so the platform's composer
                 # never replaces the app (nor the docs page embedding it).
-                ui.button(label).props(
-                    f'href="{href}" target="_blank" dense size=sm no-caps outline'
+                hint = "Share via email" if label == "Email" else f"Share on {label}"
+                props = (
+                    f'href="{href}" target="_blank" dense size=md flat round '
+                    f'aria-label="{hint}"'
                 )
+                icon_html = _platform_icon_html(label)
+                if icon_html is None:
+                    button = ui.button(icon="mail", color="slate-600").props(props)
+                else:
+                    button = ui.button(color="slate-600").props(props)
+                    with button:
+                        ui.html(icon_html)
+                button.tooltip(hint)
 
     rebuild("playground")
 
     button = ui.button(icon="share", on_click=dialog.open, color="slate-500").props(
         "dense size=md flat"
     )
-    button.tooltip("Share nansense — the playground, GitHub, or the demo video")
+    button.tooltip("Share nansense — the playground or the library")
 
 
 def _back_button() -> None:

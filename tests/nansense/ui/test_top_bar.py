@@ -14,6 +14,7 @@ from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
+    _PLATFORM_ICONS,
     _REPO_URL,
     _SHARE_TARGETS,
     _STAR_TOOLTIP,
@@ -24,6 +25,7 @@ from nansense.ui.top_bar import (
     _debug_banner_summary,
     _debug_pct,
     _logo_data_uri,
+    _platform_icon_html,
     _share_platform_links,
     _summarize_epoch_ranges,
     _time_travel_default_index,
@@ -372,21 +374,20 @@ def test_repo_logo_links_repo_and_nudges_a_star() -> None:
     assert "star" in _STAR_TOOLTIP.lower()
 
 
-def test_share_targets_cover_playground_repo_and_video() -> None:
-    """The dialog offers the three shareables: playground, repo, hero video."""
-    assert list(_SHARE_TARGETS) == ["playground", "github", "video"]
+def test_share_targets_cover_playground_and_library() -> None:
+    """The dialog offers two shareables: the playground and the library docs.
+
+    The library link is the version-less site root (redirects to the default
+    published version), not a pinned /dev/ page."""
+    assert list(_SHARE_TARGETS) == ["playground", "library"]
     assert (
         _SHARE_TARGETS["playground"].url
         == "https://kongaskristjan.github.io/nansense/dev/playground/"
     )
-    assert _SHARE_TARGETS["github"].url == _REPO_URL
-    # The README/docs hero video: a GitHub user-attachments asset.
-    assert _SHARE_TARGETS["video"].url.startswith(
-        "https://github.com/user-attachments/assets/"
-    )
+    assert _SHARE_TARGETS["library"].url == "https://kongaskristjan.github.io/nansense/"
 
 
-@pytest.mark.parametrize("key", ["playground", "github", "video"])
+@pytest.mark.parametrize("key", ["playground", "library"])
 def test_share_platform_links_embed_the_encoded_target(key: str) -> None:
     """Every platform's share-intent href carries the URL-encoded target link
     (and no raw spaces from the title), so the composer opens prefilled."""
@@ -409,3 +410,18 @@ def test_share_button_is_a_quiet_icon_added_unconditionally() -> None:
     assert buttons[0]._props.get("icon") == "share"
     assert buttons[0].text == ""  # icon-only: quieter than the labelled controls
     assert "flat" in buttons[0]._props
+
+
+def test_platform_icons_cover_every_platform_but_email() -> None:
+    """Each share platform renders a brand glyph (Email uses the bundled
+    Material `mail` icon, so it has no SVG entry); path data must be real SVG
+    path commands so a truncated paste can't ship a blank button."""
+    labels = {label for label, _ in _share_platform_links("https://e.com", "t")}
+    assert set(_PLATFORM_ICONS) == labels - {"Email"}
+    for viewbox, path in _PLATFORM_ICONS.values():
+        assert viewbox.startswith("0 0 ")
+        assert path.startswith("M") and len(path) > 50
+    assert _platform_icon_html("Email") is None
+    x_svg = _platform_icon_html("X")
+    assert x_svg is not None
+    assert 'fill="currentColor"' in x_svg
