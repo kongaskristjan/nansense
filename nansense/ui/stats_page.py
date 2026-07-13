@@ -468,7 +468,7 @@ def _build_stats_page(
             ).props("dense size=md flat").tooltip(
                 "Refresh now — and from the next training batch while running"
             )
-            _add_share_button(session)
+            _add_share_button()
             _add_repo_logo()
 
         _add_error_banner(session)

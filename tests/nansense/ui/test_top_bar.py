@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import pytest
 import torch
 from nicegui import ui
@@ -12,9 +14,8 @@ from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
-    _DOCS_SHARE_URL,
     _REPO_URL,
-    _SHARE_JS,
+    _SHARE_TARGETS,
     _STAR_TOOLTIP,
     _add_share_button,
     _at_last_batch,
@@ -23,6 +24,7 @@ from nansense.ui.top_bar import (
     _debug_banner_summary,
     _debug_pct,
     _logo_data_uri,
+    _share_platform_links,
     _summarize_epoch_ranges,
     _time_travel_default_index,
     _under_over_band_lines,
@@ -370,43 +372,40 @@ def test_repo_logo_links_repo_and_nudges_a_star() -> None:
     assert "star" in _STAR_TOOLTIP.lower()
 
 
-def test_share_button_targets_docs_home() -> None:
-    assert _DOCS_SHARE_URL == "https://kongaskristjan.github.io/nansense/dev/"
+def test_share_targets_cover_playground_repo_and_video() -> None:
+    """The dialog offers the three shareables: playground, repo, hero video."""
+    assert list(_SHARE_TARGETS) == ["playground", "github", "video"]
+    assert (
+        _SHARE_TARGETS["playground"].url
+        == "https://kongaskristjan.github.io/nansense/dev/playground/"
+    )
+    assert _SHARE_TARGETS["github"].url == _REPO_URL
+    # The README/docs hero video: a GitHub user-attachments asset.
+    assert _SHARE_TARGETS["video"].url.startswith(
+        "https://github.com/user-attachments/assets/"
+    )
 
 
-def test_share_js_copies_link_then_emits() -> None:
-    """The client-side click handler copies the docs URL and then emits, so the
-    copy stays in the real DOM click (keeping the user gesture the Clipboard API
-    needs) while the Python handler still fires to toast."""
-    assert _DOCS_SHARE_URL in _SHARE_JS
-    assert "navigator.clipboard" in _SHARE_JS
-    assert "writeText" in _SHARE_JS
-    assert "emit(...args)" in _SHARE_JS
+@pytest.mark.parametrize("key", ["playground", "github", "video"])
+def test_share_platform_links_embed_the_encoded_target(key: str) -> None:
+    """Every platform's share-intent href carries the URL-encoded target link
+    (and no raw spaces from the title), so the composer opens prefilled."""
+    target = _SHARE_TARGETS[key]
+    links = dict(_share_platform_links(target.url, target.title))
+    assert set(links) == {"X", "LinkedIn", "Reddit", "Hacker News", "Email"}
+    encoded = quote(target.url, safe="")
+    for href in links.values():
+        assert encoded in href
+        assert " " not in href
 
 
-def _button_labels(card: ui.card) -> list[str]:
-    """Text of every button built directly under `card` (ignoring its tooltip)."""
-    return [
-        c.text
-        for c in card.default_slot.children
-        if isinstance(c, ui.button)
-    ]
-
-
-def test_share_button_shown_when_unlocked() -> None:
-    """An unlocked session gets the "Share nansense" button on the top bar."""
-    session, _ = make_session(epochs=1, phases={"train": 1})
-    assert session.locked is False
+def test_share_button_is_a_quiet_icon_added_unconditionally() -> None:
+    """One flat icon-only share button — no locked-session gate anymore: the
+    hosted playground shows it too (handing out links is what a demo is for)."""
     with ui.card() as card:
-        _add_share_button(session)
-    assert _button_labels(card) == ["Share nansense"]
-
-
-def test_share_button_hidden_on_locked_session() -> None:
-    """Hidden on the hosted (locked) playground — the helper adds nothing."""
-    session, _ = make_session(epochs=1, phases={"train": 1})
-    session.lock()
-    assert session.locked is True
-    with ui.card() as card:
-        _add_share_button(session)
-    assert card.default_slot.children == []
+        _add_share_button()
+    buttons = [c for c in card.default_slot.children if isinstance(c, ui.button)]
+    assert len(buttons) == 1
+    assert buttons[0]._props.get("icon") == "share"
+    assert buttons[0].text == ""  # icon-only: quieter than the labelled controls
+    assert "flat" in buttons[0]._props

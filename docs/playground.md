@@ -10,9 +10,10 @@ hide:
   <button class="pg-btn" type="button" data-variant="mnist" aria-pressed="false">MNIST · LeNet-5</button>
 </div>
 
-<button class="pg-share-btn" type="button">Share playground</button>
-
-<iframe id="playground-frame" title="Nansense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen"></iframe>
+<!-- `clipboard-write` delegates the Clipboard API into the cross-origin app
+     frame: the app's own Share dialog (top bar) copies links, and without the
+     delegation the browser rejects the write inside the iframe. -->
+<iframe id="playground-frame" title="Nansense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
 
 <style>
   /* Fullscreen app page: the header collapses to a slim toolbar (logo +
@@ -73,32 +74,6 @@ hide:
     opacity: 1;
     background: rgba(255, 255, 255, 0.18);
   }
-  /* "Share playground" action button, relocated next to the repo link by the
-     script. Outlined rather than flat like .pg-btn so it reads as an action
-     (copy the link), not a third variant toggle. */
-  .pg-share-btn {
-    appearance: none;
-    border: 1px solid rgba(255, 255, 255, 0.4);
-    border-radius: 0.4rem;
-    background: transparent;
-    color: var(--md-primary-bg-color);
-    font: inherit;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    line-height: 1.2;
-    padding: 0.3rem 0.6rem;
-    margin-right: 0.4rem;
-    white-space: nowrap;
-    cursor: pointer;
-    opacity: 0.85;
-    transition: opacity 0.2s, background-color 0.2s;
-  }
-  .pg-share-btn:hover {
-    opacity: 1;
-    background: rgba(255, 255, 255, 0.18);
-  }
-
   /* Iframe fills everything below the header; its top is set from the live
      header height by the script (robust to zoom and mobile header sizing). */
   .md-main,
@@ -147,38 +122,6 @@ hide:
     var title = document.querySelector(".md-header__title");
     if (title) {
       title.insertAdjacentElement("afterend", switchEl);
-    }
-
-    // Add a "Share playground" button to the header, just before the repo
-    // link, copying this page's URL (Web Share sheet where available, clipboard
-    // otherwise). Kept out of the variant switch so it reads as an action, not
-    // a third variant.
-    var shareBtn = document.querySelector(".pg-share-btn");
-    if (shareBtn) {
-      var source = document.querySelector(".md-header__source");
-      if (source) {
-        source.insertAdjacentElement("beforebegin", shareBtn);
-      } else {
-        (document.querySelector(".md-header__inner") || document.body).appendChild(shareBtn);
-      }
-      var shareLabel = shareBtn.textContent;
-      var shareReset = null;
-      shareBtn.addEventListener("click", function () {
-        // Derived at click time: picks up the deployed version prefix (dev,
-        // latest, ...) and the currently selected variant's #hash.
-        var shareUrl = location.origin + location.pathname + location.hash;
-        if (navigator.share) {
-          navigator.share({ title: "Nansense playground", url: shareUrl }).catch(function () {});
-          return;
-        }
-        if (navigator.clipboard) {
-          navigator.clipboard.writeText(shareUrl).then(function () {
-            shareBtn.textContent = "Link copied";
-            if (shareReset) clearTimeout(shareReset);
-            shareReset = setTimeout(function () { shareBtn.textContent = shareLabel; }, 1500);
-          }).catch(function () {});
-        }
-      });
     }
 
     // Keep the iframe sized to the live header height.

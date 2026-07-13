@@ -7,18 +7,19 @@ of inline HTML/CSS/JS, so a regression there is invisible to `mkdocs build`
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _DOCS = Path(__file__).parent.parent / "docs"
 
 
-def test_playground_page_has_share_button() -> None:
-    """The playground header carries a "Share playground" button (mirrors the
-    app's "Share nansense" button). The shared URL is derived from the live
-    location so it tracks the deployed version prefix and variant hash instead
-    of pinning a hardcoded version."""
+def test_playground_iframe_delegates_clipboard_write() -> None:
+    """Sharing moved from the docs header into the app's own Share dialog,
+    which copies links via the async Clipboard API — inside the cross-origin
+    playground iframe that only works if the embedding frame delegates
+    `clipboard-write` through the `allow` attribute."""
     text = (_DOCS / "playground.md").read_text(encoding="utf-8")
-    assert 'class="pg-share-btn"' in text
-    assert "Share playground" in text
-    assert "location.origin + location.pathname + location.hash" in text
-    assert "https://kongaskristjan.github.io/nansense/dev/playground/" not in text
+    assert "pg-share-btn" not in text  # the header button is gone
+    iframe = re.search(r"<iframe[^>]*>", text)
+    assert iframe is not None
+    assert 'allow="fullscreen; clipboard-write"' in iframe.group(0)

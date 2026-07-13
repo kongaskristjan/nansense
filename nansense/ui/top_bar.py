@@ -7,6 +7,7 @@ import base64
 import json
 from bisect import bisect_right
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
@@ -32,23 +33,6 @@ _TOP_BAR_CLASSES: str = (
 _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
 _STAR_TOOLTIP: str = (
     "Like nansense? A GitHub ★ star ★ means a lot and keeps me hacking."
-)
-# The "Share nansense" button copies this docs link. `dev` is the only version
-# the site publishes (releases go to `latest`, which isn't deployed), so it is
-# the live URL rather than a placeholder.
-_DOCS_SHARE_URL: str = "https://kongaskristjan.github.io/nansense/dev/"
-# Client-side click handler for the share button: copy the docs link, then
-# `emit` so the button's Python handler can toast. The copy runs in the real
-# DOM click (NiceGUI `js_handler`, not a server round-trip) so it keeps the
-# transient user activation the Clipboard API requires — going through the
-# server would drop that activation and the write would be rejected. The button
-# is hidden on the hosted (locked) playground, so it only ever runs on a local
-# instance, where `localhost` is a secure context and `navigator.clipboard`
-# exists.
-_SHARE_JS: str = (
-    "(...args) => { if (navigator.clipboard) "
-    f"navigator.clipboard.writeText({json.dumps(_DOCS_SHARE_URL)}); "
-    "emit(...args); }"
 )
 _LOGO_PATH: Path = (
     Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
@@ -163,29 +147,112 @@ def _add_repo_logo() -> ui.link:
     return link
 
 
-def _add_share_button(session: Session) -> None:
-    """A "Share nansense" button that copies the docs link, just left of the logo.
+@dataclass(frozen=True)
+class _ShareTarget:
+    """One thing the share dialog can hand out: a link plus its share text."""
 
-    Clicking copies `_DOCS_SHARE_URL` to the clipboard and toasts. Hidden on a
-    locked session: the hosted playground embeds the app in an iframe (where the
-    surrounding docs page carries its own share control), and a shared demo has
-    no per-visitor link to hand out anyway. Added last-but-one in every page's
-    top bar so the repo-star logo keeps the far-right corner.
+    label: str
+    url: str
+    title: str
+
+
+# What the share dialog offers. The playground URL pins the `dev` version:
+# unlike the docs site's own pages, the app can't derive the live docs
+# version from its location (it runs on localhost or the HF Space), and
+# `dev` is the only version the site currently publishes.
+_SHARE_TARGETS: dict[str, _ShareTarget] = {
+    "playground": _ShareTarget(
+        label="Playground",
+        url="https://kongaskristjan.github.io/nansense/dev/playground/",
+        title="Nansense playground — a live PyTorch training run to poke around in",
+    ),
+    "github": _ShareTarget(
+        label="GitHub",
+        url=_REPO_URL,
+        title="nansense — a PyTorch debugger: pause training, look inside every layer",
+    ),
+    "video": _ShareTarget(
+        label="Demo video",
+        url="https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44",
+        title="nansense demo video",
+    ),
+}
+
+
+def _share_platform_links(url: str, title: str) -> list[tuple[str, str]]:
+    """(platform label, share-intent href) pairs for one target link.
+
+    Each href opens the platform's share/submit composer prefilled with the
+    target URL (and title, where the platform takes one).
     """
-    if session.locked:
-        return
-    button = ui.button("Share nansense", icon="share", color="slate-500").props(
-        "dense size=md no-caps"
+    u = quote(url, safe="")
+    t = quote(title, safe="")
+    return [
+        ("X", f"https://x.com/intent/post?text={t}&url={u}"),
+        ("LinkedIn", f"https://www.linkedin.com/sharing/share-offsite/?url={u}"),
+        ("Reddit", f"https://www.reddit.com/submit?url={u}&title={t}"),
+        ("Hacker News", f"https://news.ycombinator.com/submitlink?u={u}&t={t}"),
+        ("Email", f"mailto:?subject={t}&body={u}"),
+    ]
+
+
+def _add_share_button() -> None:
+    """The share icon just left of the logo, and the share dialog it opens.
+
+    A flat icon-only button, quieter than the working controls beside it, on
+    every page — the hosted playground included (handing out links is exactly
+    what a public demo is for; the docs page delegates `clipboard-write` to
+    the app iframe). The dialog picks *what* to share (`_SHARE_TARGETS`) and
+    where: Copy link plus one share-intent anchor per platform. The action row
+    is rebuilt on every target switch so each anchor's href — and the copy
+    handler's URL — is baked in for the current pick; the clipboard write runs
+    client-side in the `js_handler` (then `emit`s so Python can toast), since
+    a server round-trip would drop the user gesture the Clipboard API needs.
+    """
+    with ui.dialog() as dialog, ui.card().classes("min-w-96 max-w-lg p-6 gap-3"):
+        ui.label("Share nansense").classes("text-lg font-bold")
+        ui.toggle(
+            {key: t.label for key, t in _SHARE_TARGETS.items()},
+            value="playground",
+            on_change=lambda e: rebuild(str(e.value)),
+        ).props("dense no-caps")
+        url_label = ui.label("").classes(
+            "text-xs font-mono text-slate-500 break-all"
+        )
+        action_row = ui.row().classes("w-full gap-2 flex-wrap items-center")
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Close", on_click=dialog.close).props("flat")
+
+    def rebuild(key: str) -> None:
+        target = _SHARE_TARGETS[key]
+        url_label.text = target.url
+        action_row.clear()
+        with action_row:
+            copy = ui.button("Copy link", icon="content_copy", color="primary").props(
+                "dense size=sm no-caps"
+            )
+            copy.on(
+                "click",
+                lambda: ui.notify("Link copied to clipboard"),
+                js_handler=(
+                    "(...args) => { if (navigator.clipboard) "
+                    f"navigator.clipboard.writeText({json.dumps(target.url)}); "
+                    "emit(...args); }"
+                ),
+            )
+            for label, href in _share_platform_links(target.url, target.title):
+                # Real anchors opening a new tab, so the platform's composer
+                # never replaces the app (nor the docs page embedding it).
+                ui.button(label).props(
+                    f'href="{href}" target="_blank" dense size=sm no-caps outline'
+                )
+
+    rebuild("playground")
+
+    button = ui.button(icon="share", on_click=dialog.open, color="slate-500").props(
+        "dense size=md flat"
     )
-    button.tooltip("Copy a shareable link to the nansense docs")
-    # The Python handler only toasts; the clipboard write itself runs client-side
-    # in `_SHARE_JS` (which then `emit`s to fire this handler) so the copy keeps
-    # the user gesture the Clipboard API needs.
-    button.on(
-        "click",
-        lambda: ui.notify("Link to the nansense docs copied to clipboard"),
-        js_handler=_SHARE_JS,
-    )
+    button.tooltip("Share nansense — the playground, GitHub, or the demo video")
 
 
 def _back_button() -> None:

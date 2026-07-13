@@ -373,7 +373,7 @@ def _build_page(
             ).props("dense size=md").tooltip(
                 "Toggle input selection pane"
             )
-            _add_share_button(session)
+            _add_share_button()
             _add_repo_logo()
 
         _add_error_banner(session)
