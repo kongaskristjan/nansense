@@ -480,6 +480,13 @@
     overflow: hidden;
   }
 
+  /* The header row is a centered .md-grid (max-width 61rem) by default,
+     which floats everything in a column with a gap on either side. Let it
+     span the full width so the logo sits flush left and the repo link right. */
+  .md-header__inner {
+    max-width: none;
+  }
+
   /* Strip the header down to what we keep: hide the wordmark, the version
      selector, the light/dark toggle and search — leave the logo (home link)
      and the repo link. */
@@ -490,15 +497,14 @@
   .md-header [for="__search"] {
     display: none !important;
   }
-  .md-header__source {
-    margin-left: auto; /* pin the repo link to the far right */
-  }
-
-  /* The variant switch, relocated into the header toolbar by the script. */
+  /* The variant switch, relocated into the header toolbar by the script.
+     Its auto right margin eats the free space, pushing the repo link that
+     follows it to the far right. */
   .playground-switch {
     display: flex;
     align-items: center;
     gap: 0.3rem;
+    margin-right: auto;
   }
   .pg-btn {
     appearance: none;
