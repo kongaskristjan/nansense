@@ -7,7 +7,7 @@
 *Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 
 [🕹️ Try the Playground](playground.md){ .md-button .md-button--primary }
-[✨ Integrate with one prompt](integrate.md){ .md-button }
+[✨ Integrate with one prompt](integrate.md){ .md-button .md-button--primary }
 
 Here's how *nansense* can help:
 
