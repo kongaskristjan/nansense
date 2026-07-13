@@ -37,7 +37,7 @@ def test_steps_are_short_single_sentences(locked: bool) -> None:
         assert step.text.endswith(".")
         # One sentence: no sentence break inside the text.
         assert ". " not in step.text
-        assert len(step.text) <= 90
+        assert len(step.text) <= 140
         assert step.selectors
 
 

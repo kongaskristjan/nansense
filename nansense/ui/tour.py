@@ -84,7 +84,9 @@ def tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
             ensure_card=True,
         ),
         TourStep(
-            "These buttons open the layer's weights, experiments, and stats.",
+            "These buttons open the weights and current optimizer state, "
+            "run deep dream and attribution experiments, and show its "
+            "training stats.",
             (
                 '[data-tour="weights"]',
                 '[data-tour="experiment"]',
