@@ -11,7 +11,7 @@
   - `tests/` - Tests for both examples and the nansense library
   - `assets/` - Assets
   - `docs/` + `mkdocs.yml` - User documentation site (MkDocs Material), published to GitHub Pages
-  - `README.md` - Landing page: pitch, running examples, minimal wiring; deep docs live in `docs/`
+  - `README.md` - Landing page: pitch, hero video, prominent links (playground, one-prompt integration, docs), a teaser example command; keep it short — examples and wiring details live in `docs/`
   - `INTERNALS.md` - High level overview of nansense library internals
 
 ## Prompts
