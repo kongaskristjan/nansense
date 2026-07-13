@@ -52,10 +52,12 @@ from nansense.ui.top_bar import (
     _add_settings_button,
     _add_share_button,
     _add_step_controls,
+    _add_tour_button,
     _build_step_until_custom_dialog,
     _refresh_button,
     _top_bar_row,
 )
+from nansense.ui.tour import add_tour
 
 
 @dataclass
@@ -239,6 +241,20 @@ def _build_page(
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
     ui.add_body_html(_layer_info_script(session.layer_info, slugs))
 
+    # The tour points at (and auto-shows, for its strips step) one layer;
+    # preferring one that owns weights makes all three card buttons real
+    # targets for the tour's three-arrow step. Auto-starts only on locked
+    # (playground) sessions — local runs reach it via the `?` button.
+    layer_weights = session.layer_weights
+    tour_layer = next(
+        (n for n in layer_names if layer_weights.get(n)),
+        layer_names[0] if layer_names else None,
+    )
+    add_tour(
+        locked=session.locked,
+        layer_slug=slugs[tour_layer] if tour_layer is not None else None,
+    )
+
     step_until_custom = _build_step_until_custom_dialog(session)
 
     def watch_all() -> None:
@@ -373,6 +389,7 @@ def _build_page(
             ).props("dense size=md").tooltip(
                 "Toggle input selection pane"
             )
+            _add_tour_button()
             _add_share_button()
             _add_repo_logo()
 
@@ -494,7 +511,6 @@ def _build_page(
             architecture_handle = _resize_handle("main-architecture", "left")
             with architecture_pane:
                 ui.mermaid(mermaid_src).classes("w-full")
-            layer_weights = session.layer_weights
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-3 bg-slate-200 gap-3"
             ):
@@ -988,8 +1004,13 @@ class _LayerView:
                 # href (not on_click navigation) renders the buttons as real
                 # anchors, so the browser natively opens middle/ctrl clicks
                 # in a new tab and plain clicks in the current one.
+                # `data-tour` marks the wrappers as the tour's arrow targets
+                # (`tour.py`) — on the divs for the same reason as
+                # `data-card-action` above.
                 if weights:
-                    with ui.element("div").props("data-card-action"):
+                    with ui.element("div").props(
+                        'data-card-action data-tour="weights"'
+                    ):
                         ui.button(
                             "Weights",
                             icon="grid_on",
@@ -1001,7 +1022,9 @@ class _LayerView:
                         ).tooltip(
                             f"Inspect this layer's weights ({len(weights)})"
                         )
-                with ui.element("div").props("data-card-action"):
+                with ui.element("div").props(
+                    'data-card-action data-tour="experiment"'
+                ):
                     ui.button(
                         "Experiment",
                         icon="science",
@@ -1013,7 +1036,9 @@ class _LayerView:
                     ).tooltip(
                         "Run deep dream / Captum experiments on this layer"
                     )
-                with ui.element("div").props("data-card-action"):
+                with ui.element("div").props(
+                    'data-card-action data-tour="stats"'
+                ):
                     ui.button(
                         "Stats",
                         icon="bar_chart",
@@ -1038,7 +1063,9 @@ class _LayerView:
                     )
                     with self._hide_button:
                         self._hide_tooltip = ui.tooltip("")
-            with ui.element("div").classes("w-full overflow-x-auto p-2"):
+            with ui.element("div").classes("w-full overflow-x-auto p-2").props(
+                'data-tour="strips"'
+            ):
                 # The max-content wrapper makes every row span the widest
                 # strip. Without it a row is only as wide as the visible
                 # container, so its sticky marker would be dragged out of

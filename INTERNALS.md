@@ -1183,7 +1183,11 @@ One module per page plus shared support: `app.py` (`serve` + page routes),
 settings/recording, and step-until dialogs), `input_panel.py` (the main
 page's right sidebar), `render.py` + `histograms.py` (pure render/plot
 math), `graph.py` (the Mermaid architecture graph), `bin_samples.py`,
-`common.py` (small cross-page helpers), and `static.py` (the CSS/JS blobs).
+`common.py` (small cross-page helpers), `static.py` (the CSS/JS blobs), and
+`tour.py` (the main page's guided tour: Python step data plus an overlay-JS
+driver that draws arrows to `data-tour`-tagged elements; auto-starts once
+per browser — a localStorage flag — on locked sessions, and is replayed
+anywhere via the top bar's `?` button).
 Page modules import from the shared modules; `app.py` imports the pages —
 the graph is acyclic.
 

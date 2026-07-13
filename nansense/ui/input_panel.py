@@ -173,7 +173,12 @@ class InputPanel:
                 "text-xs text-amber-600 self-start"
             )
             self._input_warning_label.set_visibility(False)
-            with ui.row().classes("w-full items-center justify-between no-wrap"):
+            # `data-tour` marks the row as the tour's sample-spinner arrow
+            # target (`tour.py`); it sits on this plain div because Quasar
+            # doesn't reliably pass `data-*` through to q-input's DOM.
+            with ui.row().classes(
+                "w-full items-center justify-between no-wrap"
+            ).props('data-tour="sample"'):
                 # The batch size is filled in once known (see
                 # `sync_spinner_max`); the sample index itself is 0-based.
                 self._sample_label = ui.label("Select sample in batch:").classes(

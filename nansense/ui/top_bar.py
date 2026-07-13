@@ -362,6 +362,21 @@ def _add_share_button() -> None:
     button.tooltip("Share nansense — the playground or the library")
 
 
+def _add_tour_button() -> None:
+    """The `?` left of the share button (main page only): (re)runs the tour.
+
+    Purely client-side — the driver installed by `tour.add_tour` owns all
+    the state, so the click never round-trips to the server. Available on
+    any session; only the locked playground *auto*-starts the tour (see
+    `tour.add_tour`), so a local runner sees it exactly when they ask.
+    """
+    button = ui.button(icon="help_outline", color="slate-500").props(
+        "dense size=md flat"
+    )
+    button.on("click", js_handler="() => window.nansenseStartTour()")
+    button.tooltip("Show a quick tour of this view")
+
+
 def _back_button() -> None:
     """The arrow-back button to the main page (every subpage's top bar).
 
@@ -447,34 +462,40 @@ def _add_step_controls(
         else:
             session.step_batch()
 
-    run_button = (
-        ui.button("Run", on_click=run, color="green")
-        .props("dense size=md")
-        .tooltip("Run to the last batch of training, then pause")
-    )
-    with ui.dropdown_button(
-        "Step Batch",
-        on_click=step_batch,
-        split=True,
-        auto_close=True,
-        color="orange",
-    ).props("dense size=md").tooltip("Advance one batch"):
-        _step_menu_item(
-            "Step epoch",
-            "Run to the start of the next epoch",
-            session.step_epoch,
+    # The wrapper mirrors the top-bar row's flex/gap so it renders
+    # invisibly; it exists as the tour's anchor for the whole stepping
+    # cluster (one ring around Run / Step Batch / Stop / time travel).
+    with ui.element("div").classes("flex items-center gap-x-3").props(
+        'data-tour="step-controls"'
+    ):
+        run_button = (
+            ui.button("Run", on_click=run, color="green")
+            .props("dense size=md")
+            .tooltip("Run to the last batch of training, then pause")
         )
-        _step_menu_item(
-            "Step custom…",
-            "Pick a phase/epoch/batch to pause at",
-            step_until_custom.open,
+        with ui.dropdown_button(
+            "Step Batch",
+            on_click=step_batch,
+            split=True,
+            auto_close=True,
+            color="orange",
+        ).props("dense size=md").tooltip("Advance one batch"):
+            _step_menu_item(
+                "Step epoch",
+                "Run to the start of the next epoch",
+                session.step_epoch,
+            )
+            _step_menu_item(
+                "Step custom…",
+                "Pick a phase/epoch/batch to pause at",
+                step_until_custom.open,
+            )
+        stop_button = (
+            ui.button("Stop", on_click=session.stop, color="red")
+            .props("dense size=md")
+            .tooltip("Pause at next batch")
         )
-    stop_button = (
-        ui.button("Stop", on_click=session.stop, color="red")
-        .props("dense size=md")
-        .tooltip("Pause at next batch")
-    )
-    _add_time_travel_button(session)
+        _add_time_travel_button(session)
     _add_position_label(session)
     # Run is grayed while training advances (started by Run or any Step), Stop
     # while it sits paused — a 0.2s timer toggles both off
