@@ -106,9 +106,10 @@ class _WatchPageState:
     show_bands: bool = False
     # Which of the three views every card shows (a `_VIEW_*` value).
     view: str = _VIEW_HISTOGRAM
-    # MIN/MAX view state: which one of the four grids is shown (a radio
-    # group defaulting to "Max pixel") and whether the activation heatmap
-    # is blended over the patches.
+    # MIN/MAX view state: which grid is shown (a radio group defaulting to
+    # "Max pixel"; the average entries are offered only while their
+    # collection is on — see `_grid_type_options`) and whether the
+    # activation heatmap is blended over the patches.
     grid_type: PatchType = "max_pixel"
     heat_on: bool = False
     # Every card shows one phase at a time, picked by a header dropdown
@@ -145,27 +146,34 @@ class _RefreshGate:
     aggregates advanced another batch. Watched-set and phase-list changes
     (e.g. from the main page in another tab) also pass, so the sidebar and
     cards stay in sync while training runs between updates or sits paused.
-    The sidebar controls and the "Refresh now" button (`_refresh_now`)
-    call `refresh` directly, bypassing the gate.
+    So does a flip of the average-patches Performance setting: it flushes
+    every aggregate bucket and decides which grid types the MIN/MAX radio
+    offers, both of which the page must re-render. The sidebar controls and
+    the "Refresh now" button (`_refresh_now`) call `refresh` directly,
+    bypassing the gate.
     """
 
     last_snapshot: BatchSnapshot | None = None
     last_stats_layers: frozenset[str] = frozenset()
     last_phases: tuple[str, ...] = ()
+    last_average_patches: bool | None = None
 
     def should_refresh(self, session: Session) -> bool:
         """Consume the session's current state; True if it changed."""
         snapshot = session.snapshot
         stats_layers = session.stats_layers
         phases = tuple(session.schedule.phase_order)
+        average_patches = session.watch_performance.average_patches
         changed = (
             snapshot is not self.last_snapshot
             or stats_layers != self.last_stats_layers
             or phases != self.last_phases
+            or average_patches != self.last_average_patches
         )
         self.last_snapshot = snapshot
         self.last_stats_layers = stats_layers
         self.last_phases = phases
+        self.last_average_patches = average_patches
         return changed
 
 
@@ -379,6 +387,10 @@ def _build_stats_page(
         await refresh()
 
     async def set_grid(ptype: PatchType) -> None:
+        # Programmatic value writes from `sync_grid_type_select` re-enter
+        # here; bailing when nothing changed avoids a redundant refresh pass.
+        if ptype == state.grid_type:
+            return
         state.grid_type = ptype
         await refresh()
 
@@ -561,15 +573,18 @@ def _build_stats_page(
                         )
                     )
                 with ui.column().classes("w-full gap-1") as minmax_controls:
-                    minmax_boxes.append(
+                    grid_radio = (
                         ui.radio(
-                            _PATCH_TYPE_LABELS,
+                            _grid_type_options(
+                                session.watch_performance.average_patches
+                            ),
                             value=state.grid_type,
                             on_change=lambda e: set_grid(e.value),
                         ).props("dense").classes("text-sm").tooltip(
                             "Which extreme-activation patch grid to show"
                         )
                     )
+                    minmax_boxes.append(grid_radio)
                     minmax_boxes.append(
                         ui.checkbox(
                             "Enable heatmap",
@@ -628,6 +643,24 @@ def _build_stats_page(
             phase_select.set_options(options, value=state.selected_phase)
         elif phase_select.value != state.selected_phase:
             phase_select.set_value(state.selected_phase)
+
+    def sync_grid_type_select() -> None:
+        """Refresh the MIN/MAX radio's options for the Performance setting.
+
+        The average-extreme galleries are collected only while their
+        Performance setting is on (`WatchPerformance.average_patches`), so
+        the radio offers those entries only then — a dead option's body
+        could only say "not collected". An average selection whose entry
+        just disappeared falls back to the "Max pixel" default. Pushes to
+        the widget only on an actual change (a no-op write would re-enter
+        `set_grid`).
+        """
+        options = _grid_type_options(session.watch_performance.average_patches)
+        state.grid_type = _reconcile_grid_type(state.grid_type, options)
+        if grid_radio.options != options:
+            grid_radio.set_options(options, value=state.grid_type)
+        elif grid_radio.value != state.grid_type:
+            grid_radio.set_value(state.grid_type)
 
     def sync_layer_select() -> None:
         """Refresh the layer dropdown's options/value from the stats layers.
@@ -704,6 +737,7 @@ def _build_stats_page(
                 )
                 sync_phase_select()
                 sync_layer_select()
+                sync_grid_type_select()
                 sync_compare_href()
                 ordered = _selectable_layers(
                     state.selected_phase, layer_names, stats_layers
@@ -1821,6 +1855,34 @@ _PATCH_TYPE_LABELS: dict[PatchType, str] = {
     "max_average": "Max average",
     "min_average": "Min average",
 }
+
+# The MIN/MAX radio entries gated behind the average-patches Performance
+# setting (`WatchPerformance.average_patches`, off by default).
+_AVERAGE_PATCH_TYPES: frozenset[PatchType] = frozenset(
+    {"max_average", "min_average"}
+)
+
+
+def _grid_type_options(average_patches: bool) -> dict[PatchType, str]:
+    """The MIN/MAX radio's value→label map for the Performance setting.
+
+    The average-extreme entries are offered only while their collection is
+    on: a setting change flushes every aggregate bucket
+    (`WatchAccumulator.configure`) and the "Current batch" stats follow the
+    live setting too, so while it's off those grids are nowhere to be had.
+    """
+    return {
+        ptype: label
+        for ptype, label in _PATCH_TYPE_LABELS.items()
+        if average_patches or ptype not in _AVERAGE_PATCH_TYPES
+    }
+
+
+def _reconcile_grid_type(
+    selected: PatchType, options: dict[PatchType, str]
+) -> PatchType:
+    """A valid radio selection: `selected` while offered, else the default."""
+    return selected if selected in options else "max_pixel"
 
 _NO_PATCHES_HTML: str = (
     '<div class="text-xs text-slate-400 italic py-1">no patches gathered '

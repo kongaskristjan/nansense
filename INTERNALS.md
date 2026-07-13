@@ -530,7 +530,9 @@ the `WatchAccumulator`:
   channel (the `N` in the `(C, N)` buffers; default 5).
 - `average_patches` — whether the whole-image average grids are collected
   at all (default off; `PatchSnapshot.by_type` then simply lacks the
-  average keys, and the patch-grid renderers skip absent types).
+  average keys, the patch-grid renderers skip absent types, and the
+  `/stats` MIN/MAX radio drops the two average entries —
+  `_grid_type_options`).
 
 All three fix the per-channel buffer shapes, so `WatchAccumulator.configure`
 drops every bucket when any changes (the next update rebuilds under the
@@ -1318,8 +1320,10 @@ between a HISTOGRAM view, a MIN/MAX extreme-patch view, and a GRAPHS
 view; a fast timer feeds `session.watch_snapshot()` to the visible view,
 gated by `_RefreshGate` to the visualization update cadence — a tick
 re-renders only after a new snapshot publish (the settings' "Update
-frequency", a pause/step, a one-shot Refresh) or a watched-set/phase-list
-change, so the page updates in step with the main view. The HISTOGRAM card leads with a **Statistics** section — one
+frequency", a pause/step, a one-shot Refresh), a watched-set/phase-list
+change, or an average-patches Performance flip (it flushes the aggregates
+and re-gates the MIN/MAX radio's entries), so the page updates in step
+with the main view. The HISTOGRAM card leads with a **Statistics** section — one
 framed table per phase with activations and gradients as the two value
 columns (dead channels activation-only) — above the two histogram plots.
 GRAPHS plots each stat (mean/std/median/min/max, plus dead

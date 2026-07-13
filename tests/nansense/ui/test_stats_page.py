@@ -9,13 +9,14 @@ import torch
 
 from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
-from nansense.patches import PATCH_TYPES, PatchAccumulator
+from nansense.patches import PATCH_TYPES, PatchAccumulator, PatchType
 from nansense.session import BatchSnapshot, StatsScope
 from nansense.ui.histograms import _make_histogram_figure
 from nansense.ui.stats_page import (
     _ALL_LAYERS_MAX,
     _HOVER_EVENT,
     _LAYER_ALL,
+    _PATCH_TYPE_LABELS,
     _PHASE_CURRENT_BATCH,
     _PHASE_CURRENT_BATCH_LABEL,
     _PLOTLY_CONFIG,
@@ -28,12 +29,14 @@ from nansense.ui.stats_page import (
     _deep_dream_href,
     _figure_payload,
     _filter_phase,
+    _grid_type_options,
     _hover_attach_js,
     _initial_phase,
     _layer_select_options,
     _patch_grids_html,
     _patch_grids_signature,
     _phase_select_options,
+    _reconcile_grid_type,
     _reconcile_selected_layer,
     _reconcile_selected_phase,
     _refresh_now,
@@ -473,6 +476,33 @@ def test_initial_phase_prefers_the_running_phase_once_collected() -> None:
         assert _initial_phase(session, "fc2") == _PHASE_CURRENT_BATCH
 
 
+# --- MIN/MAX radio: average entries offered only while collected -------------
+
+
+def test_grid_type_options_gate_average_entries() -> None:
+    # Off (the default): only the pixel grids are ever collected, so the
+    # radio must not offer the average entries.
+    assert list(_grid_type_options(False)) == ["max_pixel", "min_pixel"]
+    # On: all four grids collect and all four entries show.
+    assert _grid_type_options(True) == _PATCH_TYPE_LABELS
+
+
+@pytest.mark.parametrize(
+    ("selected", "average_patches", "expected"),
+    [
+        ("min_pixel", False, "min_pixel"),  # still offered → kept
+        ("max_average", True, "max_average"),  # still offered → kept
+        ("max_average", False, "max_pixel"),  # entry gone → the default
+        ("min_average", False, "max_pixel"),
+    ],
+)
+def test_reconcile_grid_type(
+    selected: PatchType, average_patches: bool, expected: PatchType
+) -> None:
+    options = _grid_type_options(average_patches)
+    assert _reconcile_grid_type(selected, options) == expected
+
+
 def test_refresh_gate_passes_only_on_new_publish_or_watched_change() -> None:
     # The page's periodic tick refreshes at the visualization update cadence:
     # the gate passes once per newly published snapshot (and on watched-set
@@ -493,6 +523,19 @@ def test_refresh_gate_passes_only_on_new_publish_or_watched_change() -> None:
         assert session.snapshot is not before
         assert gate.should_refresh(session)
         assert not gate.should_refresh(session)
+
+
+def test_refresh_gate_passes_on_average_patches_flip() -> None:
+    # Flipping the average-patches Performance setting flushes every
+    # aggregate bucket and changes which grid types the MIN/MAX radio
+    # offers, so the page must re-render on the next tick.
+    session, _ = make_session()
+    gate = _RefreshGate()
+    assert gate.should_refresh(session)
+    assert not gate.should_refresh(session)
+    assert session.set_watch_performance(average_patches=True)
+    assert gate.should_refresh(session)
+    assert not gate.should_refresh(session)
 
 
 def test_refresh_now_rerenders_and_arms_a_one_shot_publish() -> None:
