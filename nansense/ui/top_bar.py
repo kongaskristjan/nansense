@@ -271,62 +271,88 @@ def _add_share_button() -> None:
     A flat icon-only button, quieter than the working controls beside it, on
     every page — the hosted playground included (handing out links is exactly
     what a public demo is for; the docs page delegates `clipboard-write` to
-    the app iframe). The dialog picks *what* to share (`_SHARE_TARGETS`) and
-    where: Copy link plus one share-intent icon per platform (brand glyphs
-    from `_PLATFORM_ICONS`, hover for the platform name). The card is fixed-
-    width so switching targets never resizes the dialog. The action row is
-    rebuilt on every target switch so each anchor's href — and the copy
-    handler's URL — is baked in for the current pick; the clipboard write runs
-    client-side in the `js_handler` (then `emit`s so Python can toast), since
-    a server round-trip would drop the user gesture the Clipboard API needs.
+    the app iframe). The dialog is three captioned sections: *what* to share
+    (a full-width segmented toggle over `_SHARE_TARGETS`), the link itself (a
+    one-line pill with an inline copy button), and *where* (one share-intent
+    icon per platform — brand glyphs from `_PLATFORM_ICONS`, hover for the
+    name). The card is fixed-width and the pill single-line, so switching
+    targets never resizes the dialog. The link/platform sections are rebuilt
+    on every target switch so each anchor's href — and the copy handler's URL
+    — is baked in for the current pick; the clipboard write runs client-side
+    in the `js_handler` (then `emit`s so Python can toast), since a server
+    round-trip would drop the user gesture the Clipboard API needs.
     """
-    with ui.dialog() as dialog, ui.card().classes("w-[30rem] max-w-full p-6 gap-3"):
+    caption_classes = "text-xs uppercase tracking-wider text-slate-400"
+    with ui.dialog() as dialog, ui.card().classes("w-[32rem] max-w-full p-6 gap-4"):
         ui.label("Share nansense").classes("text-lg font-bold")
-        ui.toggle(
-            {key: t.label for key, t in _SHARE_TARGETS.items()},
-            value="playground",
-            on_change=lambda e: rebuild(str(e.value)),
-        ).props('no-caps padding="xs lg"')
-        url_label = ui.label("").classes(
-            "text-xs font-mono text-slate-500 break-all"
-        )
-        action_row = ui.row().classes("w-full gap-2 flex-wrap items-center")
+        with ui.column().classes("w-full gap-1"):
+            ui.label("What to share").classes(caption_classes)
+            ui.toggle(
+                {key: t.label for key, t in _SHARE_TARGETS.items()},
+                value="playground",
+                on_change=lambda e: rebuild(str(e.value)),
+            ).classes("w-full").props('spread no-caps padding="xs lg"')
+        content = ui.column().classes("w-full gap-4")
         with ui.row().classes("w-full justify-end"):
             ui.button("Close", on_click=dialog.close).props("flat")
 
     def rebuild(key: str) -> None:
         target = _SHARE_TARGETS[key]
-        url_label.text = target.url
-        action_row.clear()
-        with action_row:
-            copy = ui.button("Copy link", icon="content_copy", color="primary").props(
-                "dense size=sm no-caps"
-            )
-            copy.on(
-                "click",
-                lambda: ui.notify("Link copied to clipboard"),
-                js_handler=(
-                    "(...args) => { if (navigator.clipboard) "
-                    f"navigator.clipboard.writeText({json.dumps(target.url)}); "
-                    "emit(...args); }"
-                ),
-            )
-            for label, href in _share_platform_links(target.url, target.title):
-                # Real anchors opening a new tab, so the platform's composer
-                # never replaces the app (nor the docs page embedding it).
-                hint = "Share via email" if label == "Email" else f"Share on {label}"
-                props = (
-                    f'href="{href}" target="_blank" dense size=md flat round '
-                    f'aria-label="{hint}"'
-                )
-                icon_html = _platform_icon_html(label)
-                if icon_html is None:
-                    button = ui.button(icon="mail", color="slate-600").props(props)
-                else:
-                    button = ui.button(color="slate-600").props(props)
-                    with button:
-                        ui.html(icon_html)
-                button.tooltip(hint)
+        content.clear()
+        with content:
+            with ui.column().classes("w-full gap-1"):
+                ui.label("Link").classes(caption_classes)
+                with ui.row().classes(
+                    "w-full items-center no-wrap gap-0.5 bg-slate-100 rounded "
+                    "pl-2 pr-1 py-1"
+                ):
+                    # 11px mono lets the longest URL (the playground's) fit the
+                    # 32rem card on one line; `truncate` is the safety net.
+                    ui.label(target.url).classes(
+                        "grow min-w-0 truncate text-[11px] font-mono text-slate-600"
+                    )
+                    copy = ui.button(icon="content_copy", color="slate-500").props(
+                        'flat round dense size=sm aria-label="Copy link"'
+                    )
+                    copy.tooltip("Copy link")
+                    copy.on(
+                        "click",
+                        lambda: ui.notify("Link copied to clipboard"),
+                        js_handler=(
+                            "(...args) => { if (navigator.clipboard) "
+                            f"navigator.clipboard.writeText({json.dumps(target.url)}); "
+                            "emit(...args); }"
+                        ),
+                    )
+            with ui.column().classes("w-full gap-1"):
+                ui.label("Share on").classes(caption_classes)
+                with ui.row().classes("gap-2 items-center"):
+                    for label, href in _share_platform_links(
+                        target.url, target.title
+                    ):
+                        # Real anchors opening a new tab, so the platform's
+                        # composer never replaces the app (nor the docs page
+                        # embedding it).
+                        hint = (
+                            "Share via email"
+                            if label == "Email"
+                            else f"Share on {label}"
+                        )
+                        props = (
+                            f'href="{href}" target="_blank" unelevated round '
+                            f'dense size=md text-color=slate-700 '
+                            f'aria-label="{hint}"'
+                        )
+                        icon_html = _platform_icon_html(label)
+                        if icon_html is None:
+                            button = ui.button(icon="mail", color="slate-200").props(
+                                props
+                            )
+                        else:
+                            button = ui.button(color="slate-200").props(props)
+                            with button:
+                                ui.html(icon_html)
+                        button.tooltip(hint)
 
     rebuild("playground")
 
