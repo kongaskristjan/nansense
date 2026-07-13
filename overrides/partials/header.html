@@ -9,6 +9,8 @@
 {% elif "navigation.tabs" not in features %}
   {% set class = class ~ " md-header--shadow" %}
 {% endif %}
+{#- The one-prompt CTA banner is scoped to the Playground page only. -#}
+{% set is_playground = page and page.file and page.file.src_uri == "playground.md" %}
 <header class="{{ class }}" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="{{ lang.t('header') }}">
     <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-header__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
@@ -36,10 +38,12 @@
         </div>
       </div>
     </div>
-    <a class="md-header__banner" href="{{ 'wiring/#integrate-with-one-prompt' | url }}" title="Add nansense to your project with one prompt">
-      <span class="md-header__banner-icon">✨</span>
-      <span class="md-header__banner-text">Visualize your net with one prompt</span>
-    </a>
+    {% if is_playground %}
+      <a class="md-header__banner" href="{{ 'wiring/#integrate-with-one-prompt' | url }}" title="Add nansense to your project with one prompt">
+        <span class="md-header__banner-icon">✨</span>
+        <span class="md-header__banner-text">Visualize your net with one prompt</span>
+      </a>
+    {% endif %}
     {% if config.theme.palette %}
       {% if not config.theme.palette is mapping %}
         {% include "partials/palette.html" %}
