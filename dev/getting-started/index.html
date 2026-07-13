@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/getting-started/">
       
       
-        <link rel="prev" href="../playground/">
+        <link rel="prev" href="../showcase/">
       
       
-        <link rel="next" href="../ui/">
+        <link rel="next" href="../integrate/">
       
       
         
@@ -318,6 +318,33 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../showcase/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Showcase
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -417,14 +444,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../ui/" class="md-nav__link">
+      <a href="../integrate/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    UI guide
+    Integrate with one prompt
   
 
     
@@ -452,6 +479,33 @@
     
   
     Wiring guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UI guide
   
 
     
@@ -560,7 +614,7 @@
 
 
 <h1 id="getting-started">Getting started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h1>
-<p>The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, install the library and see the <a href="../wiring/">Wiring guide</a>.</p>
+<p>The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, paste <a href="../integrate/">one prompt</a> into your coding agent, or install the library and follow the <a href="../wiring/">Wiring guide</a> yourself.</p>
 <h2 id="run-the-examples">Run the examples<a class="headerlink" href="#run-the-examples" title="Permanent link">&para;</a></h2>
 <p>The examples run with <a href="https://docs.astral.sh/uv/getting-started/installation">uv</a>, a fast Python package manager. <code>uv</code> does not pollute your other Python environments, and automatically installs the necessary packages when running a script.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Install uv:</span>
@@ -630,7 +684,7 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
             <span class="o">...</span>  <span class="c1"># your usual training step</span>
 <span class="n">session</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </code></pre></div>
-<p>The <a href="../wiring/">Wiring guide</a> walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training.</p>
+<p>The <a href="../wiring/">Wiring guide</a> walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training — or let a coding agent do the wiring via <a href="../integrate/">Integrate with one prompt</a>.</p>
 
 
 
@@ -666,7 +720,7 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../playground/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Playground">
+          <a href="../showcase/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Showcase">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -676,20 +730,20 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
                 Previous
               </span>
               <div class="md-ellipsis">
-                Playground
+                Showcase
               </div>
             </div>
           </a>
         
         
           
-          <a href="../ui/" class="md-footer__link md-footer__link--next" aria-label="Next: UI guide">
+          <a href="../integrate/" class="md-footer__link md-footer__link--next" aria-label="Next: Integrate with one prompt">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                UI guide
+                Integrate with one prompt
               </div>
             </div>
             <div class="md-footer__button md-icon">

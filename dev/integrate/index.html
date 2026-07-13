@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/wiring/">
+        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/integrate/">
       
       
-        <link rel="prev" href="../integrate/">
+        <link rel="prev" href="../getting-started/">
       
       
-        <link rel="next" href="../ui/">
+        <link rel="next" href="../wiring/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Wiring guide - nansense</title>
+        <title>Integrate with one prompt - nansense</title>
       
     
     
@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#wiring-guide" class="md-skip">
+        <a href="#integrate-with-one-prompt" class="md-skip">
           Skip to content
         </a>
       
@@ -121,7 +121,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Wiring guide
+              Integrate with one prompt
             
           </span>
         </div>
@@ -372,33 +372,6 @@
       
   
   
-  
-  
-    <li class="md-nav__item">
-      <a href="../integrate/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Integrate with one prompt
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
     
   
   
@@ -418,7 +391,7 @@
   <span class="md-ellipsis">
     
   
-    Wiring guide
+    Integrate with one prompt
   
 
     
@@ -436,7 +409,7 @@
   <span class="md-ellipsis">
     
   
-    Wiring guide
+    Integrate with one prompt
   
 
     
@@ -462,71 +435,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#wire-it-into-your-loop-raw-pytorch" class="md-nav__link">
+  <a href="#prefer-to-look-first" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Wire it into your loop: raw PyTorch
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Wire it into your loop: raw PyTorch">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#time-travel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Time travel
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#the-schedule" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The schedule
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#wire-it-into-your-loop-pytorch-lightning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Wire it into your loop: PyTorch Lightning
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#displaying-inputs-correctly" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Displaying inputs correctly
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#distributed-training-ddp" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Distributed training (DDP)
+        Prefer to look first?
       
     </span>
   </a>
@@ -537,6 +449,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wiring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wiring guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -622,71 +561,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#wire-it-into-your-loop-raw-pytorch" class="md-nav__link">
+  <a href="#prefer-to-look-first" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Wire it into your loop: raw PyTorch
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Wire it into your loop: raw PyTorch">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#time-travel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Time travel
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#the-schedule" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The schedule
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#wire-it-into-your-loop-pytorch-lightning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Wire it into your loop: PyTorch Lightning
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#displaying-inputs-correctly" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Displaying inputs correctly
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#distributed-training-ddp" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Distributed training (DDP)
+        Prefer to look first?
       
     </span>
   </a>
@@ -713,79 +591,34 @@
   
 
 
-<h1 id="wiring-guide">Wiring guide<a class="headerlink" href="#wiring-guide" title="Permanent link">&para;</a></h1>
-<p>Adding nansense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the <a href="../api/">API reference</a>. Prefer not to do it by hand? <a href="../integrate/">Integrate with one prompt</a> has a copy-paste prompt for your coding agent.</p>
-<h2 id="wire-it-into-your-loop-raw-pytorch">Wire it into your loop: raw PyTorch<a class="headerlink" href="#wire-it-into-your-loop-raw-pytorch" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">nansense</span>
+<h1 id="integrate-with-one-prompt">Integrate with one prompt<a class="headerlink" href="#integrate-with-one-prompt" title="Permanent link">&para;</a></h1>
+<p>Run this prompt from your project with a coding agent (Claude Code, Cursor, …): it reads the nansense docs and wires the debugger into your training loop.</p>
+<div class="nansense-prompt">
+<p><label class="nansense-prompt-option">
+<input type="checkbox" id="nansense-port-only" checked>
+<span>Gate nansense behind a <code>--debugger-port PORT</code> flag, so it stays a zero-overhead no-op unless a port is passed <em>(recommended)</em></span>
+</label></p>
+<div class="highlight"><pre><span></span><code>Add the nansense PyTorch debugger to this project&#39;s training loop.
 
-<span class="c1"># Init model, optimizer, criterion, dataloaders</span>
-<span class="n">model</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">optimizer</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">criterion</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">train_dl</span><span class="p">,</span> <span class="n">val_dl</span> <span class="o">=</span> <span class="o">...</span>
+Read the docs first — everything in one file: https://kongaskristjan.github.io/nansense/llms-full.txt
+(page-by-page index: https://kongaskristjan.github.io/nansense/llms.txt)
 
-<span class="c1"># Setup UI. The schedule is discovered as you train (phase names and batch</span>
-<span class="c1"># counts are learned from the loop below); no need to declare them up front.</span>
-<span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+Requirements: PyTorch &gt;= 2.3, Python 3.10-3.14, and an eager training loop you can wrap (PyTorch Lightning is also supported). If this project can&#39;t meet these, stop and ask me how to proceed.
 
-<span class="c1"># Time travel needs an epoch cache. `session.epochs(50)` iterates like</span>
-<span class="c1"># `range(50)` but checkpoints each epoch start; wrap each iteration&#39;s body in</span>
-<span class="c1"># `with session.restore_point():` so a UI-requested jump can unwind it and</span>
-<span class="c1"># re-enter at a different epoch. Without this loop, training runs once through</span>
-<span class="c1"># and the Time Travel button is disabled.</span>
-<span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="n">session</span><span class="o">.</span><span class="n">epochs</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="n">cache_dir</span><span class="o">=</span><span class="s2">&quot;.nansense_cache&quot;</span><span class="p">):</span>
-    <span class="k">with</span> <span class="n">session</span><span class="o">.</span><span class="n">restore_point</span><span class="p">():</span>
-        <span class="c1"># Training batch iteration</span>
-        <span class="k">for</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">targets</span> <span class="ow">in</span> <span class="n">session</span><span class="o">.</span><span class="n">batches</span><span class="p">(</span><span class="n">train_dl</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">):</span>
-            <span class="n">optimizer</span><span class="o">.</span><span class="n">zero_grad</span><span class="p">()</span>  <span class="c1"># keep zero_grad at the beginning of the batch</span>
-            <span class="n">loss</span> <span class="o">=</span> <span class="n">criterion</span><span class="p">(</span><span class="n">model</span><span class="p">(</span><span class="n">inputs</span><span class="p">),</span> <span class="n">targets</span><span class="p">)</span>  <span class="c1"># as nansense reads .grad when</span>
-            <span class="n">loss</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>  <span class="c1"># the batch exits, so zeroing after step() would</span>
-            <span class="n">optimizer</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>  <span class="c1"># leave the weight-gradient views empty.</span>
-        <span class="c1"># Validation batch iteration ...</span>
-
-<span class="c1"># Close the UI (the served page stays up for post-mortem browsing)</span>
-<span class="n">session</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+Then:
+1. Add nansense to the project&#39;s dependencies (`pip install nansense`).
+2. Wire nansense.start() / session.epochs() / session.batches() / session.close() into the training loop as the wiring guide shows; enable time travel if there&#39;s a clean epoch loop.
+3. Add a `--debugger-port PORT` CLI flag and pass `port=that_port, enabled=that_port is not None`, so nansense stays a zero-overhead no-op unless a port is given.
+4. Show me the diff and the exact command to launch training with the debugger.
 </code></pre></div>
-<p>The pieces:</p>
+</div>
+<h2 id="prefer-to-look-first">Prefer to look first?<a class="headerlink" href="#prefer-to-look-first" title="Permanent link">&para;</a></h2>
+<p>Plenty of people want to see what the change looks like before letting an agent touch their training loop:</p>
 <ul>
-<li><a href="../api/#nansense.start"><code>nansense.start(model, ...)</code></a> creates the <a href="../api/#nansense.Session"><code>Session</code></a> and, when <code>port=</code> is given, serves the UI. Pass <code>optimizer=</code> to get per-parameter optimizer state and live hyperparameters on the weights page, and <code>scheduler=</code> so time travel restores the LR schedule.</li>
-<li><a href="../api/#nansense.Session.batches"><code>session.batches(loader, phase=...)</code></a> wraps each phase's dataloader — this is where nansense pauses, steps and captures.</li>
-<li><a href="../api/#nansense.Session.close"><code>session.close()</code></a> marks training finished; the served page stays up for post-mortem browsing.</li>
-<li><code>enabled=False</code> makes the whole session a near-zero-overhead no-op, so you can leave the wiring in place and switch the UI off with one flag.</li>
+<li>The <a href="../wiring/">Wiring guide</a> shows the exact code the prompt produces, for raw PyTorch and PyTorch Lightning — plus time travel, input display and distributed training.</li>
+<li><a href="../getting-started/">Getting started</a> runs a bundled example on your machine, without touching your project.</li>
+<li>The <a href="../playground/">Playground</a> is a trained network you can inspect right in the browser, no install at all.</li>
 </ul>
-<p>To serve the UI separately from session creation (or pick a custom uvicorn log level), omit <code>port</code> and call <a href="../api/#nansense.serve"><code>nansense.serve(session, port=...)</code></a> yourself.</p>
-<h3 id="time-travel">Time travel<a class="headerlink" href="#time-travel" title="Permanent link">&para;</a></h3>
-<p>Time travel needs an epoch cache: drive the epoch loop with <a href="../api/#nansense.Session.epochs"><code>for epoch in session.epochs(N, cache_dir=...)</code></a> (default <code>.nansense_cache</code>) and wrap each iteration's body in <a href="../api/#nansense.Session.restore_point"><code>with session.restore_point():</code></a> as shown above. Each epoch start is checkpointed to disk — model, optimizer, scheduler and RNG state — and a UI-requested jump unwinds the loop body and re-enters it at the chosen epoch.</p>
-<h3 id="the-schedule">The schedule<a class="headerlink" href="#the-schedule" title="Permanent link">&para;</a></h3>
-<p>The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate <code>session.batches</code>, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass <code>phases={"train": a, "val": b}</code> to <code>start()</code> if you want that precision from the very first epoch — an optional up-front declaration (it's what the PyTorch Lightning integration uses).</p>
-<h2 id="wire-it-into-your-loop-pytorch-lightning">Wire it into your loop: PyTorch Lightning<a class="headerlink" href="#wire-it-into-your-loop-pytorch-lightning" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">lightning</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">L</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">nansense.lightning</span><span class="w"> </span><span class="kn">import</span> <span class="n">NansenseCallback</span><span class="p">,</span> <span class="n">fit_with_time_travel</span>
-
-<span class="c1"># PyTorch Lightning modules</span>
-<span class="n">module</span> <span class="o">=</span> <span class="o">...</span>
-<span class="n">datamodule</span> <span class="o">=</span> <span class="o">...</span>
-
-<span class="c1"># `model=&quot;net&quot;` is the attribute path to the network inside your LightningModule, e.g. module.net</span>
-<span class="n">callback</span> <span class="o">=</span> <span class="n">NansenseCallback</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;net&quot;</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-<span class="c1"># Time travel consumes the running fit, so the trainer comes from a factory:</span>
-<span class="c1"># fit_with_time_travel builds a fresh Trainer for each jump-and-replay attempt.</span>
-<span class="n">trainer_factory</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">L</span><span class="o">.</span><span class="n">Trainer</span><span class="p">(</span><span class="n">max_epochs</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>
-<span class="n">fit_with_time_travel</span><span class="p">(</span><span class="n">trainer_factory</span><span class="p">,</span> <span class="n">module</span><span class="p">,</span> <span class="n">datamodule</span><span class="o">=</span><span class="n">datamodule</span><span class="p">,</span> <span class="n">callback</span><span class="o">=</span><span class="n">callback</span><span class="p">)</span>
-</code></pre></div>
-<p>Attach a <a href="../api/#nansense.lightning.NansenseCallback"><code>NansenseCallback(model="&lt;attr path to the network&gt;", ...)</code></a> to your trainer and run the fit through <a href="../api/#nansense.lightning.fit_with_time_travel"><code>fit_with_time_travel</code></a>, which owns the jump-and-replay loop. The callback accepts the same <code>port</code> / <code>host</code> / <code>open_browser</code> / <code>enabled</code> / <code>input_mean</code> / <code>input_std</code> / <code>input_transform</code> arguments as <code>start</code>.</p>
-<h2 id="displaying-inputs-correctly">Displaying inputs correctly<a class="headerlink" href="#displaying-inputs-correctly" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>input_mean</code> / <code>input_std</code>: the input normalization, so images display in their original colors.</li>
-<li><code>input_transform</code>: a callable mapping a non-RGB image input <code>(N, C, H, W)</code> to a displayable <code>(N, 1|3, H, W)</code> image in <code>[0, 1]</code> (keeping <code>H × W</code>); without it, an input whose channel count isn't 1 or 3 shows a hint to add one. A flat <code>(N, C)</code> input needs none; it renders as a colormapped strip.</li>
-<li>For a multi-input model, <code>input_mean</code> / <code>input_std</code> / <code>input_transform</code> each take either one value for all inputs or a <code>dict</code> keyed by input name, and the input pane gains a dropdown to pick which input to view and perturb.</li>
-</ul>
-<p>See <code>examples/multimodal/main.py</code> for all three in action.</p>
-<h2 id="distributed-training-ddp">Distributed training (DDP)<a class="headerlink" href="#distributed-training-ddp" title="Permanent link">&para;</a></h2>
-<p>Distributed (DDP) needs no special wiring: call <code>nansense.start()</code> on every rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and drives pausing and stepping; the other ranks follow its pace and fold their data shard into the watch-page statistics. Time travel works under DDP: drive every rank's epoch loop with <code>session.epochs()</code>, and a jump rewinds all ranks in lockstep.</p>
-<p>See <code>examples/standard/main.py --distributed</code>. Keep in mind that DDP support is currently <strong>experimental</strong>.</p>
 
 
 
@@ -821,7 +654,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../integrate/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Integrate with one prompt">
+          <a href="../getting-started/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Getting started">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -831,20 +664,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Integrate with one prompt
+                Getting started
               </div>
             </div>
           </a>
         
         
           
-          <a href="../ui/" class="md-footer__link md-footer__link--next" aria-label="Next: UI guide">
+          <a href="../wiring/" class="md-footer__link md-footer__link--next" aria-label="Next: Wiring guide">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                UI guide
+                Wiring guide
               </div>
             </div>
             <div class="md-footer__button md-icon">

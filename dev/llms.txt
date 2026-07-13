@@ -7,9 +7,11 @@ Nansense is a PyTorch debugger that works inside the live training loop: it paus
 ## Usage
 
 - [Home](https://kongaskristjan.github.io/nansense/dev/index.md)
+- [Showcase](https://kongaskristjan.github.io/nansense/dev/showcase/index.md)
 - [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md)
-- [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md)
+- [Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md)
 - [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md)
+- [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md)
 
 ## API
 

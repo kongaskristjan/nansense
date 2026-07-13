@@ -1,6 +1,6 @@
 # Getting started
 
-The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, install the library and see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md).
+The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, paste [one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) into your coding agent, or install the library and follow the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) yourself.
 
 ## Run the examples
 
@@ -67,4 +67,4 @@ for epoch in session.epochs(50):
 session.close()
 ```
 
-The [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training.
+The [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training — or let a coding agent do the wiring via [Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md).

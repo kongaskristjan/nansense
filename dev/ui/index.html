@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/ui/">
       
       
-        <link rel="prev" href="../getting-started/">
+        <link rel="prev" href="../wiring/">
       
       
-        <link rel="next" href="../wiring/">
+        <link rel="next" href="../api/">
       
       
         
@@ -321,6 +321,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../showcase/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Showcase
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../getting-started/" class="md-nav__link">
         
   
@@ -329,6 +356,60 @@
     
   
     Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrate with one prompt
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wiring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wiring guide
   
 
     
@@ -510,33 +591,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../wiring/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Wiring guide
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../api/" class="md-nav__link">
         
   
@@ -706,11 +760,11 @@
 <h2 id="the-input-panel">The input panel<a class="headerlink" href="#the-input-panel" title="Permanent link">&para;</a></h2>
 <p>The right sidebar controls which input the layer views are computed from. A model with several inputs gets an <strong>Input</strong> dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an <code>input_transform</code> to display (see the <a href="../wiring/#displaying-inputs-correctly">Wiring guide</a>), and a flat <code>(N, C)</code> input shows as a clickable per-feature strip. <strong>Select sample in batch</strong> picks which sample of the current batch to show.</p>
 <p>The views follow the live training batch by default; <strong>Pin</strong> freezes the current batch as a fixed input that nansense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. <strong>Forward mode</strong> (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.</p>
-<p><strong>Perturb</strong> lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you <a href="../#measure-the-receptive-field-of-a-neuron">measure a receptive field</a>.</p>
+<p><strong>Perturb</strong> lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you <a href="../showcase/#measure-the-receptive-field-of-a-neuron">measure a receptive field</a>.</p>
 <h2 id="the-stats-page">The stats page<a class="headerlink" href="#the-stats-page" title="Permanent link">&para;</a></h2>
 <p>Open a watched layer's <strong>stats view</strong> for a closer look at its distributions over the epoch. The page has three views, switchable per layer:</p>
-<p><strong>Histogram</strong> leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A <strong>Per channel</strong> switch breaks the histogram down to one row per channel — the quickest way to spot <a href="../#investigate-dead-neurons">dead neurons</a>. A <strong>Show subnormal/overflow</strong> checkbox marks the dtype-aware band edges where fp16 gradients <a href="../#spot-gradient-underflow">underflow</a>; it is pre-checked when a numerical warning is active.</p>
-<p><strong>Min/max</strong> is a gallery of the input patches that drove each channel to its most extreme responses — see the <a href="../#minmax-activation-patches">showcase</a>.</p>
+<p><strong>Histogram</strong> leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A <strong>Per channel</strong> switch breaks the histogram down to one row per channel — the quickest way to spot <a href="../showcase/#investigate-dead-neurons">dead neurons</a>. A <strong>Show subnormal/overflow</strong> checkbox marks the dtype-aware band edges where fp16 gradients <a href="../showcase/#spot-gradient-underflow">underflow</a>; it is pre-checked when a numerical warning is active.</p>
+<p><strong>Min/max</strong> is a gallery of the input patches that drove each channel to its most extreme responses — see the <a href="../showcase/#minmax-activation-patches">showcase</a>.</p>
 <p><strong>Graphs</strong> plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a <strong>Weights</strong> section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.</p>
 <p>The Phase dropdown's last entry, <strong>Current batch</strong>, switches the data source from the epoch accumulators to the last captured batch. In this mode <em>any</em> layer can be selected, watched or not. The page opens on the phase currently training once that phase has collected stats for the opened layer, and on Current batch otherwise.</p>
 <p>The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.</p>
@@ -764,7 +818,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../getting-started/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Getting started">
+          <a href="../wiring/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Wiring guide">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -774,20 +828,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Getting started
+                Wiring guide
               </div>
             </div>
           </a>
         
         
           
-          <a href="../wiring/" class="md-footer__link md-footer__link--next" aria-label="Next: Wiring guide">
+          <a href="../api/" class="md-footer__link md-footer__link--next" aria-label="Next: API reference">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Wiring guide
+                API reference
               </div>
             </div>
             <div class="md-footer__button md-icon">

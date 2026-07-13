@@ -26,15 +26,15 @@ The right sidebar controls which input the layer views are computed from. A mode
 
 The views follow the live training batch by default; **Pin** freezes the current batch as a fixed input that nansense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. **Forward mode** (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.
 
-**Perturb** lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you [measure a receptive field](https://kongaskristjan.github.io/nansense/dev/#measure-the-receptive-field-of-a-neuron).
+**Perturb** lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you [measure a receptive field](https://kongaskristjan.github.io/nansense/dev/showcase/#measure-the-receptive-field-of-a-neuron).
 
 ## The stats page
 
 Open a watched layer's **stats view** for a closer look at its distributions over the epoch. The page has three views, switchable per layer:
 
-**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](https://kongaskristjan.github.io/nansense/dev/#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](https://kongaskristjan.github.io/nansense/dev/#spot-gradient-underflow); it is pre-checked when a numerical warning is active.
+**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](https://kongaskristjan.github.io/nansense/dev/showcase/#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](https://kongaskristjan.github.io/nansense/dev/showcase/#spot-gradient-underflow); it is pre-checked when a numerical warning is active.
 
-**Min/max** is a gallery of the input patches that drove each channel to its most extreme responses — see the [showcase](https://kongaskristjan.github.io/nansense/dev/#minmax-activation-patches).
+**Min/max** is a gallery of the input patches that drove each channel to its most extreme responses — see the [showcase](https://kongaskristjan.github.io/nansense/dev/showcase/#minmax-activation-patches).
 
 **Graphs** plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a **Weights** section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.
 

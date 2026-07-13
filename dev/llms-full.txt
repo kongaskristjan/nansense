@@ -14,14 +14,14 @@ Nansense is a PyTorch debugger that works inside the live training loop: it paus
 
 *Nansense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 
+[🕹️ Try the Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) [✨ Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md)
+
 Here's how *nansense* can help:
 
-- **See what is actually going on.** [Visualize activations and gradients](#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](#simulate-what-a-neuron-is-searching-for-deep-dream).
-- **Spot optimization bottlenecks.** [Discover insufficient receptive fields](#measure-the-receptive-field-of-a-neuron), [measure neuron death](#investigate-dead-neurons), [discover padding artifacts](#padding-artifacts) and [spot gradient underflow](#spot-gradient-underflow).
+- **See what is actually going on.** [Visualize activations and gradients](https://kongaskristjan.github.io/nansense/dev/showcase/#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](https://kongaskristjan.github.io/nansense/dev/showcase/#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](https://kongaskristjan.github.io/nansense/dev/showcase/#simulate-what-a-neuron-is-searching-for-deep-dream).
+- **Spot optimization bottlenecks.** [Discover insufficient receptive fields](https://kongaskristjan.github.io/nansense/dev/showcase/#measure-the-receptive-field-of-a-neuron), [measure neuron death](https://kongaskristjan.github.io/nansense/dev/showcase/#investigate-dead-neurons), [discover padding artifacts](https://kongaskristjan.github.io/nansense/dev/showcase/#padding-artifacts) and [spot gradient underflow](https://kongaskristjan.github.io/nansense/dev/showcase/#spot-gradient-underflow).
 
-Want a look before installing? Open the [Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) — a trained network you can inspect right in the browser.
-
-Start with [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) to run an example in minutes, read the [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md) for a tour of every page, and see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) for adding nansense to your own training loop — it's just a few lines of code.
+The [Showcase](https://kongaskristjan.github.io/nansense/dev/showcase/index.md) walks through all of these with real screenshots. [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) runs an example in minutes, the [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md) tours every page, and the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) adds nansense to your own training loop — it's just a few lines of code.
 
 ## How is this different from wandb or TensorBoard?
 
@@ -29,25 +29,27 @@ Loggers like Weights & Biases and TensorBoard record scalar curves of loss and a
 
 Persisting all this data on disk is infeasible, as a single batch of activations and gradients can easily be several gigabytes. Nansense sidesteps that by pausing and inspecting the tensors on demand, instead of writing everything to disk.
 
-## Showcase
+# Showcase
 
-### Visualize activations and gradients throughout training
+What nansense shows you, with real screenshots from the bundled examples. Every one of these is a few clicks away in the [Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) — no install needed.
+
+## Visualize activations and gradients throughout training
 
 A layer's activations (top row) and gradients (bottom row) for a single input. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.
 
 *Figure 1. An intermediate layer's activations and gradient from an image of a golf ball. Each column is a separate channel. Due to the next layer being a ReLU, the gradient exists only where the activation is positive.*
 
-### Padding artifacts
+## Padding artifacts
 
 *Figure 2. Activations of a CIFAR10-trained network layer, with the input shown for comparison as the rightmost image. The augmentation used here zero-pads on the left and bottom of the image, which lights up as strong edge activations on every channel. Maybe use reflection padding next time?*
 
-### Min/max activation patches
+## Min/max activation patches
 
 For any channel, nansense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a specific neuron has learned to detect.
 
 *Figure 3. For each of the 6 first channels/neurons in a specific layer, the 4 strongest activating patches from the training set have been collected. The heatmap coloring shows the activation strength. Both `CHANNEL 1` and `CHANNEL 4` seem optimized for detecting french horns, however `CHANNEL 1` is more centered on the instrument itself, while `CHANNEL 4` also fires on human faces. See also Figure 4.*
 
-### Simulate what a neuron is searching for (deep dream)
+## Simulate what a neuron is searching for (deep dream)
 
 Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for.
 
@@ -63,19 +65,19 @@ Here's a video visualizing other layers:
 
 [](https://github.com/user-attachments/assets/327e0f36-4b80-4c6f-8bd0-639606a9338b)
 
-### Measure the receptive field of a neuron
+## Measure the receptive field of a neuron
 
 To measure the receptive field of a neuron, *nansense* can perturb a single pixel and show the diff between the original and perturbed activations as it propagates through the network.
 
 *Figure 6. Here we perturb a single pixel of an image, and visualize how the perturbation transmits through the network. As we go deeper down the layers, the diff spreads throughout most of the image, which indicates a reasonably healthy receptive field (at least some part of the network can see the whole image).*
 
-### Investigate dead neurons
+## Investigate dead neurons
 
 *Nansense* can measure each channel's activation and gradient distribution over a full epoch. This makes it easy to discover optimization problems, such as some neurons being driven to zero.
 
 *Figure 7. The activation histogram of a dead channel in a layer. Apparently all activations are negative, which causes the next ReLU layer to clamp everything to zero. Because this eliminates any gradients, the channel will likely never recover from this state.*
 
-### Spot gradient underflow
+## Spot gradient underflow
 
 In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range (below the dtype's smallest normal value) where precision drains toward zero and the layer's learning quality quietly drops. *Nansense* checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there.
 
@@ -85,7 +87,7 @@ Curious how it works? The repository's [INTERNALS.md](https://github.com/kongask
 
 # Getting started
 
-The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, install the library and see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md).
+The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, paste [one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) into your coding agent, or install the library and follow the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) yourself.
 
 ## Run the examples
 
@@ -152,85 +154,11 @@ for epoch in session.epochs(50):
 session.close()
 ```
 
-The [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training.
+The [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training — or let a coding agent do the wiring via [Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md).
 
-# UI guide
+# Integrate with one prompt
 
-When a session starts, nansense serves a web page and pauses on the first batch.
-
-*The main view: stepping controls, architecture graph, layer cards with activations/gradients, and the input panel. Each layer in the architecture can be clicked to open the respective layer card.*
-
-## The top bar
-
-You drive the run from the top bar: **Step Batch** advances one batch, **Run** runs to the end and then pauses, and **Stop** pauses a free-running session. The dropdown next to Step Batch steps a whole phase, a whole epoch, or up to a custom position.
-
-**Time Travel** jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a [restorer](https://kongaskristjan.github.io/nansense/dev/wiring/#time-travel), which checkpoints each epoch start to disk.
-
-**Refresh** pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic *Update frequency* — how often views refresh during Run — plus the [recording](#recording-videos) and [numerical debugging](#numerical-debugging) options.
-
-## The main page
-
-The left pane shows the model as a clickable architecture graph. Click a node to **watch** that layer: its activations and gradients appear as a card, and from that point on every batch feeds them into running statistics. Watched views refresh on every pause and, while training runs, on the *Update frequency* cadence.
-
-Watching slows down training and consumes memory, so it's generally better to watch only a few layers at a time.
-
-Each card renders one strip per tensor: a row of per-channel images on a shared diverging blue-white-red scale. From the card you can jump to the layer's [stats view](#the-stats-page), [weights view](#the-weights-page), or [experiment page](#the-experiment-page).
-
-## The input panel
-
-The right sidebar controls which input the layer views are computed from. A model with several inputs gets an **Input** dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an `input_transform` to display (see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/#displaying-inputs-correctly)), and a flat `(N, C)` input shows as a clickable per-feature strip. **Select sample in batch** picks which sample of the current batch to show.
-
-The views follow the live training batch by default; **Pin** freezes the current batch as a fixed input that nansense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. **Forward mode** (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.
-
-**Perturb** lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you [measure a receptive field](https://kongaskristjan.github.io/nansense/dev/#measure-the-receptive-field-of-a-neuron).
-
-## The stats page
-
-Open a watched layer's **stats view** for a closer look at its distributions over the epoch. The page has three views, switchable per layer:
-
-**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](https://kongaskristjan.github.io/nansense/dev/#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](https://kongaskristjan.github.io/nansense/dev/#spot-gradient-underflow); it is pre-checked when a numerical warning is active.
-
-**Min/max** is a gallery of the input patches that drove each channel to its most extreme responses — see the [showcase](https://kongaskristjan.github.io/nansense/dev/#minmax-activation-patches).
-
-**Graphs** plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a **Weights** section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.
-
-The Phase dropdown's last entry, **Current batch**, switches the data source from the epoch accumulators to the last captured batch. In this mode *any* layer can be selected, watched or not. The page opens on the phase currently training once that phase has collected stats for the opened layer, and on Current batch otherwise.
-
-The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.
-
-The settings dialog can switch stats collection between the watched layers (the default), every layer, or none. Outside the default, showing and hiding cards on the main page is per-tab and doesn't affect what is collected.
-
-## The weights page
-
-Every layer with parameters has a **weights view**. Each parameter gets a panel rendering the weight tensor, its gradient, and — when the session was given an optimizer — one strip per tensor-valued optimizer-state entry (momentum buffers, Adam moments; 0-dim entries like Adam's `step` join a scalar line below), plus the parameter group's live hyperparameters such as the current learning rate.
-
-Per-axis controls choose which tensor axes map to X, Y and tile, so any weight shape — conv kernels, matrices, embeddings — can be laid out sensibly. A **Weight graphs** button jumps to the layer's per-epoch weight series in the stats page's Graphs view.
-
-Note
-
-Weight *gradients* are read when a batch exits, so keep `optimizer.zero_grad()` at the start of your batch body — zeroing after `step()` would leave the gradient views empty (see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/#wire-it-into-your-loop-raw-pytorch)).
-
-## The experiment page
-
-Each layer card has an **Experiment** button. On the experiment page, pick a method — deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion — set its parameters, and run it on the layer. Experiments run between batches, so training must be paused; results show one card per input sample.
-
-An experiment can also be kept **live**: it re-runs on every visualization update, so you can watch a deep dream or attribution evolve as training proceeds.
-
-## Numerical debugging
-
-Every few batches (configurable in the settings dialog), nansense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.
-
-## Recording videos
-
-The settings dialog records any view to an MP4, one frame per visualization update, written under `nansense_recordings/`. Start a recording with a layer watched or an experiment open, then save or discard it from the same dialog.
-
-# Wiring guide
-
-Adding nansense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the [API reference](https://kongaskristjan.github.io/nansense/dev/api/index.md).
-
-## Integrate with one prompt
-
-Run this from your project with a coding agent (Claude Code, Cursor, …): it reads the docs and wires nansense into your training loop.
+Run this prompt from your project with a coding agent (Claude Code, Cursor, …): it reads the nansense docs and wires the debugger into your training loop.
 
 Gate nansense behind a `--debugger-port PORT` flag, so it stays a zero-overhead no-op unless a port is passed *(recommended)*
 
@@ -248,6 +176,18 @@ Then:
 3. Add a `--debugger-port PORT` CLI flag and pass `port=that_port, enabled=that_port is not None`, so nansense stays a zero-overhead no-op unless a port is given.
 4. Show me the diff and the exact command to launch training with the debugger.
 ```
+
+## Prefer to look first?
+
+Plenty of people want to see what the change looks like before letting an agent touch their training loop:
+
+- The [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) shows the exact code the prompt produces, for raw PyTorch and PyTorch Lightning — plus time travel, input display and distributed training.
+- [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) runs a bundled example on your machine, without touching your project.
+- The [Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) is a trained network you can inspect right in the browser, no install at all.
+
+# Wiring guide
+
+Adding nansense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the [API reference](https://kongaskristjan.github.io/nansense/dev/api/index.md). Prefer not to do it by hand? [Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) has a copy-paste prompt for your coding agent.
 
 ## Wire it into your loop: raw PyTorch
 
@@ -335,6 +275,76 @@ See `examples/multimodal/main.py` for all three in action.
 Distributed (DDP) needs no special wiring: call `nansense.start()` on every rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and drives pausing and stepping; the other ranks follow its pace and fold their data shard into the watch-page statistics. Time travel works under DDP: drive every rank's epoch loop with `session.epochs()`, and a jump rewinds all ranks in lockstep.
 
 See `examples/standard/main.py --distributed`. Keep in mind that DDP support is currently **experimental**.
+
+# UI guide
+
+When a session starts, nansense serves a web page and pauses on the first batch.
+
+*The main view: stepping controls, architecture graph, layer cards with activations/gradients, and the input panel. Each layer in the architecture can be clicked to open the respective layer card.*
+
+## The top bar
+
+You drive the run from the top bar: **Step Batch** advances one batch, **Run** runs to the end and then pauses, and **Stop** pauses a free-running session. The dropdown next to Step Batch steps a whole phase, a whole epoch, or up to a custom position.
+
+**Time Travel** jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a [restorer](https://kongaskristjan.github.io/nansense/dev/wiring/#time-travel), which checkpoints each epoch start to disk.
+
+**Refresh** pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic *Update frequency* — how often views refresh during Run — plus the [recording](#recording-videos) and [numerical debugging](#numerical-debugging) options.
+
+## The main page
+
+The left pane shows the model as a clickable architecture graph. Click a node to **watch** that layer: its activations and gradients appear as a card, and from that point on every batch feeds them into running statistics. Watched views refresh on every pause and, while training runs, on the *Update frequency* cadence.
+
+Watching slows down training and consumes memory, so it's generally better to watch only a few layers at a time.
+
+Each card renders one strip per tensor: a row of per-channel images on a shared diverging blue-white-red scale. From the card you can jump to the layer's [stats view](#the-stats-page), [weights view](#the-weights-page), or [experiment page](#the-experiment-page).
+
+## The input panel
+
+The right sidebar controls which input the layer views are computed from. A model with several inputs gets an **Input** dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an `input_transform` to display (see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/#displaying-inputs-correctly)), and a flat `(N, C)` input shows as a clickable per-feature strip. **Select sample in batch** picks which sample of the current batch to show.
+
+The views follow the live training batch by default; **Pin** freezes the current batch as a fixed input that nansense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. **Forward mode** (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.
+
+**Perturb** lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you [measure a receptive field](https://kongaskristjan.github.io/nansense/dev/showcase/#measure-the-receptive-field-of-a-neuron).
+
+## The stats page
+
+Open a watched layer's **stats view** for a closer look at its distributions over the epoch. The page has three views, switchable per layer:
+
+**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](https://kongaskristjan.github.io/nansense/dev/showcase/#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](https://kongaskristjan.github.io/nansense/dev/showcase/#spot-gradient-underflow); it is pre-checked when a numerical warning is active.
+
+**Min/max** is a gallery of the input patches that drove each channel to its most extreme responses — see the [showcase](https://kongaskristjan.github.io/nansense/dev/showcase/#minmax-activation-patches).
+
+**Graphs** plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a **Weights** section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.
+
+The Phase dropdown's last entry, **Current batch**, switches the data source from the epoch accumulators to the last captured batch. In this mode *any* layer can be selected, watched or not. The page opens on the phase currently training once that phase has collected stats for the opened layer, and on Current batch otherwise.
+
+The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.
+
+The settings dialog can switch stats collection between the watched layers (the default), every layer, or none. Outside the default, showing and hiding cards on the main page is per-tab and doesn't affect what is collected.
+
+## The weights page
+
+Every layer with parameters has a **weights view**. Each parameter gets a panel rendering the weight tensor, its gradient, and — when the session was given an optimizer — one strip per tensor-valued optimizer-state entry (momentum buffers, Adam moments; 0-dim entries like Adam's `step` join a scalar line below), plus the parameter group's live hyperparameters such as the current learning rate.
+
+Per-axis controls choose which tensor axes map to X, Y and tile, so any weight shape — conv kernels, matrices, embeddings — can be laid out sensibly. A **Weight graphs** button jumps to the layer's per-epoch weight series in the stats page's Graphs view.
+
+Note
+
+Weight *gradients* are read when a batch exits, so keep `optimizer.zero_grad()` at the start of your batch body — zeroing after `step()` would leave the gradient views empty (see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/#wire-it-into-your-loop-raw-pytorch)).
+
+## The experiment page
+
+Each layer card has an **Experiment** button. On the experiment page, pick a method — deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion — set its parameters, and run it on the layer. Experiments run between batches, so training must be paused; results show one card per input sample.
+
+An experiment can also be kept **live**: it re-runs on every visualization update, so you can watch a deep dream or attribution evolve as training proceeds.
+
+## Numerical debugging
+
+Every few batches (configurable in the settings dialog), nansense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.
+
+## Recording videos
+
+The settings dialog records any view to an MP4, one frame per visualization update, written under `nansense_recordings/`. Start a recording with a layer watched or an experiment open, then save or discard it from the same dialog.
 # API
 
 # API reference
