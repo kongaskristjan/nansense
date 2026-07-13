@@ -7,15 +7,17 @@ one Space per demo:
 - `imagenette` → <https://kongaskristjan-nansense-playground.hf.space>
 - `mnist` → <https://kongaskristjan-nansense-playground-mnist.hf.space>
 
-Deploying is two commands: train the frozen moment locally (a GPU makes the
-imagenette run reasonable), then push the snapshot from a clean tree on any
-branch:
+Deploy from a clean tree on any branch — one playground or both:
 
 ```bash
-git lfs install         # one-time
-uv run --group cuda examples/playground/main.py --playground imagenette --prepare --device cuda
-deploy/push_space.sh imagenette    # --dry-run builds the snapshot without pushing
+git lfs install                       # one-time
+deploy/push_space.py imagenette       # or: mnist, or: all
 ```
+
+`--prepare-cache` first (re)trains the playground's frozen moment on the
+local GPU (minutes for mnist, hours for imagenette); without it the script
+expects the moment to exist and prints the training command if not.
+`--dry-run` builds and verifies the snapshot(s) without pushing.
 
 git prompts for your HF username and a write token. The Space then builds
 the root [`Dockerfile`](../Dockerfile) in a few minutes — no training
@@ -26,7 +28,7 @@ should change; a code-only redeploy re-uses the already-uploaded LFS object.
 The script exists because of three Hub rules. A Space is configured by YAML
 front matter at the top of its README, with no config key for a custom
 Dockerfile path — so the script prepends the block (kept inside
-`push_space.sh`) and the Dockerfile lives at the repo root. Spaces pass no
+`push_space.py`) and the Dockerfile lives at the repo root. Spaces pass no
 Docker build args — so the script stamps the Dockerfile's `PLAYGROUND`
 default per Space. And the Hub rejects binary files committed as plain git
 blobs, inspecting the whole pushed history — so the script builds a

@@ -4,7 +4,7 @@
 # Lives at the repository root because Hugging Face Docker Spaces only look
 # for a root-level Dockerfile (there is no config key for a custom path).
 # One image definition serves both Spaces: PLAYGROUND picks the demo, and
-# deploy/push_space.sh stamps its default per Space. Locally:
+# deploy/push_space.py stamps its default per Space. Locally:
 #
 #     docker build --build-arg PLAYGROUND=mnist -t nansense-playground .
 #     docker run --rm -p 7860:7860 nansense-playground
