@@ -79,11 +79,6 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
-        
-        <a href="#playground" class="md-skip">
-          Skip to content
-        </a>
-      
     </div>
     <div data-md-component="announce">
       
@@ -299,8 +294,6 @@
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
       
-        
-      
       
       <a href="./" class="md-nav__link md-nav__link--active">
         
@@ -450,8 +443,6 @@
   
   
   
-    
-  
   
 </nav>
                   </div>
@@ -473,38 +464,96 @@
   
 
 
-<h1 id="playground">Playground<a class="headerlink" href="#playground" title="Permanent link">&para;</a></h1>
-<p>Explore a trained network without installing anything. Each playground is a nansense session paused on its final training batch: show and hide layers, browse activations, gradients, weights and epoch statistics, and run experiments such as deep dream. Stepping, time travel and the global settings are disabled in this shared, locked session.</p>
-<p>Pick a network below — Imagenette (a PreActResNet trained for 50 epochs) or MNIST (a LeNet-5 trained for 20 epochs). The demos run on free Hugging Face Spaces, so the first load after a quiet period can take a minute to wake up.</p>
 <div class="playground-switch" role="group" aria-label="Playground variant">
-  <button class="md-button md-button--primary" data-variant="imagenette">Imagenette · ResNet</button>
-  <button class="md-button" data-variant="mnist">MNIST · LeNet-5</button>
-  <a class="md-button" id="playground-open" href="https://kongaskristjan-nansense-playground.hf.space" target="_blank" rel="noopener">Open full screen</a>
+  <button class="pg-btn" type="button" data-variant="imagenette" aria-pressed="true">Imagenette · ResNet</button>
+  <button class="pg-btn" type="button" data-variant="mnist" aria-pressed="false">MNIST · LeNet-5</button>
 </div>
 
 <iframe id="playground-frame" title="Nansense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen"></iframe>
 
 <style>
-  /* Full-width page: the embedded app needs more room than prose does. */
-  .md-grid {
-    max-width: 100%;
+  /* Fullscreen app page: the header collapses to a slim toolbar (logo +
+     variant switch + repo link) and the iframe fills the rest. Scoped to
+     this page — the inline <style> only ships on /playground/. */
+  html,
+  body {
+    overflow: hidden;
   }
+
+  /* Strip the header down to what we keep: hide the wordmark, the version
+     selector, the light/dark toggle and search — leave the logo (home link)
+     and the repo link. */
+  .md-header__title,
+  .md-version,
+  .md-header__option,
+  .md-search,
+  .md-header [for="__search"] {
+    display: none !important;
+  }
+  .md-header__source {
+    margin-left: auto; /* pin the repo link to the far right */
+  }
+
+  /* The variant switch, relocated into the header toolbar by the script. */
   .playground-switch {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
     align-items: center;
+    gap: 0.3rem;
   }
-  .playground-switch .md-button {
-    margin: 0;
+  .pg-btn {
+    appearance: none;
+    border: 0;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--md-primary-bg-color);
+    font: inherit;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    line-height: 1.2;
+    padding: 0.3rem 0.6rem;
+    white-space: nowrap;
     cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s, background-color 0.2s;
+  }
+  .pg-btn:hover {
+    opacity: 1;
+  }
+  .pg-btn[aria-pressed="true"] {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  /* Iframe fills everything below the header; its top is set from the live
+     header height by the script (robust to zoom and mobile header sizing). */
+  .md-main,
+  .md-content,
+  .md-content__inner {
+    margin: 0;
+    padding: 0;
+  }
+  .md-content__inner::before {
+    display: none;
+  }
+  /* MkDocs auto-adds an <h1> from the page title when the markdown has none;
+     the app shell doesn't want it (the tab title still names the page). */
+  .md-content__inner > h1 {
+    display: none;
+  }
+  .md-footer {
+    display: none;
   }
   #playground-frame {
+    position: fixed;
+    top: var(--pg-header-h, 2.4rem);
+    left: 0;
+    right: 0;
+    /* Replaced elements keep their intrinsic height when top/bottom are both
+       set, so size it explicitly from the live header height. */
+    height: calc(100vh - var(--pg-header-h, 2.4rem));
     width: 100%;
-    height: max(30rem, calc(100vh - 15rem));
-    margin-top: 1rem;
-    border: 1px solid var(--md-default-fg-color--lightest);
-    border-radius: 0.2rem;
+    border: 0;
   }
 </style>
 
@@ -515,16 +564,31 @@
       mnist: "https://kongaskristjan-nansense-playground-mnist.hf.space",
     };
     var frame = document.getElementById("playground-frame");
-    var open = document.getElementById("playground-open");
-    var buttons = document.querySelectorAll(".playground-switch button[data-variant]");
+    var switchEl = document.querySelector(".playground-switch");
+    var buttons = switchEl.querySelectorAll(".pg-btn[data-variant]");
     var current = "imagenette"; // matches the iframe's HTML src attribute
+
+    // Lift the variant switch into the header, just past the (hidden) title,
+    // so the repo link keeps the far right.
+    var title = document.querySelector(".md-header__title");
+    if (title) {
+      title.insertAdjacentElement("afterend", switchEl);
+    }
+
+    // Keep the iframe sized to the live header height.
+    var header = document.querySelector(".md-header");
+    function sizeFrame() {
+      document.documentElement.style.setProperty("--pg-header-h", header.offsetHeight + "px");
+    }
+    sizeFrame();
+    window.addEventListener("resize", sizeFrame);
+
     function select(variant) {
       if (variant === current) return;
       current = variant;
       frame.src = spaces[variant];
-      open.href = spaces[variant];
       buttons.forEach(function (button) {
-        button.classList.toggle("md-button--primary", button.dataset.variant === variant);
+        button.setAttribute("aria-pressed", String(button.dataset.variant === variant));
       });
       history.replaceState(null, "", variant === "imagenette" ? location.pathname : "#" + variant);
     }
@@ -579,7 +643,7 @@
       
         
       
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+      <nav class="md-footer__inner md-grid" aria-label="Footer" hidden>
         
           
           <a href=".." class="md-footer__link md-footer__link--prev" aria-label="Previous: Home">
