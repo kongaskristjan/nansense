@@ -55,6 +55,8 @@
     
       <link rel="stylesheet" href="../assets/_mkdocstrings.css">
     
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
     <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -125,6 +127,10 @@
         </div>
       </div>
     </div>
+    <a class="md-header__banner" href="#integrate-with-one-prompt" title="Add nansense to your project with one prompt">
+      <span class="md-header__banner-icon">✨</span>
+      <span class="md-header__banner-text">Visualize your net with one prompt</span>
+    </a>
     
       
         <form class="md-header__option" data-md-component="palette">
@@ -432,6 +438,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#integrate-with-one-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integrate with one prompt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#wire-it-into-your-loop-raw-pytorch" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -565,6 +582,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#integrate-with-one-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integrate with one prompt
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#wire-it-into-your-loop-raw-pytorch" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -658,6 +686,27 @@
 
 <h1 id="wiring-guide">Wiring guide<a class="headerlink" href="#wiring-guide" title="Permanent link">&para;</a></h1>
 <p>Adding nansense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the <a href="../api/">API reference</a>.</p>
+<h2 id="integrate-with-one-prompt">Integrate with one prompt<a class="headerlink" href="#integrate-with-one-prompt" title="Permanent link">&para;</a></h2>
+<p>Run this from your project with a coding agent (Claude Code, Cursor, …): it reads the docs and wires nansense into your training loop.</p>
+<div class="nansense-prompt">
+<p><label class="nansense-prompt-option">
+<input type="checkbox" id="nansense-port-only" checked>
+<span>Gate nansense behind a <code>--debugger-port PORT</code> flag, so it stays a zero-overhead no-op unless a port is passed <em>(recommended)</em></span>
+</label></p>
+<div class="highlight"><pre><span></span><code>Add the nansense PyTorch debugger to this project&#39;s training loop.
+
+Read the docs first — everything in one file: https://kongaskristjan.github.io/nansense/llms-full.txt
+(page-by-page index: https://kongaskristjan.github.io/nansense/llms.txt)
+
+Requirements: PyTorch &gt;= 2.3, Python 3.10-3.14, and an eager training loop you can wrap (PyTorch Lightning is also supported). If this project can&#39;t meet these, stop and ask me how to proceed.
+
+Then:
+1. Add nansense to the project&#39;s dependencies (`pip install nansense`).
+2. Wire nansense.start() / session.epochs() / session.batches() / session.close() into the training loop as the wiring guide shows; enable time travel if there&#39;s a clean epoch loop.
+3. Add a `--debugger-port PORT` CLI flag and pass `port=that_port, enabled=that_port is not None`, so nansense stays a zero-overhead no-op unless a port is given.
+4. Show me the diff and the exact command to launch training with the debugger.
+</code></pre></div>
+</div>
 <h2 id="wire-it-into-your-loop-raw-pytorch">Wire it into your loop: raw PyTorch<a class="headerlink" href="#wire-it-into-your-loop-raw-pytorch" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">nansense</span>
@@ -828,6 +877,8 @@
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/prompt-toggle.js"></script>
       
     
   </body>

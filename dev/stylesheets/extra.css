@@ -1,0 +1,77 @@
+/* Call-to-action banner in the Material header. It rides in the normal flex
+   flow (not absolutely positioned) so it can never overlap the title or the
+   search box — flexbox reserves its space. */
+
+.md-header__banner {
+  display: none; /* shown only at desktop widths; see media query below */
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 40vw;
+  padding: 0.28rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+  color: var(--md-primary-bg-color);
+  background-color: color-mix(in srgb, var(--md-primary-bg-color) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--md-primary-bg-color) 45%, transparent);
+  transition: background-color 0.2s, color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+
+.md-header__banner:hover,
+.md-header__banner:focus-visible {
+  background-color: var(--md-primary-bg-color);
+  color: var(--md-primary-fg-color);
+  transform: scale(1.03);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  outline: none;
+}
+
+.md-header__banner-icon {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.md-header__banner-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* At desktop widths there is room to spare: stop the title from eating it and
+   let the banner center itself in the gap with auto margins. Below this width
+   the banner is hidden (default above) so the title keeps its normal flex-grow
+   and the header lays out exactly like stock Material — no mobile side effects. */
+@media screen and (min-width: 76.25em) {
+  .md-header__title {
+    /* Give the title a fixed box (its topics are absolutely positioned, so it
+       has no intrinsic width) instead of letting it grow and eat all the free
+       space; the banner then centers in the gap. 12rem fits every page title. */
+    flex: 0 0 12rem;
+  }
+  .md-header__banner {
+    display: inline-flex;
+    margin: 0 auto;
+  }
+}
+
+/* "Integrate with one prompt" — the toggle that rewrites the copy-paste prompt. */
+
+.nansense-prompt-option {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: 0.6rem 0 0.8rem;
+  padding: 0.55rem 0.75rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  background-color: var(--md-code-bg-color);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.nansense-prompt-option input {
+  margin-top: 0.12rem;
+  flex-shrink: 0;
+}
