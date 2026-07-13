@@ -186,6 +186,7 @@ def _share_platform_links(url: str, title: str) -> list[tuple[str, str]]:
     t = quote(title, safe="")
     return [
         ("X", f"https://x.com/intent/post?text={t}&url={u}"),
+        ("Facebook", f"https://www.facebook.com/sharer/sharer.php?u={u}"),
         ("LinkedIn", f"https://www.linkedin.com/sharing/share-offsite/?url={u}"),
         ("Reddit", f"https://www.reddit.com/submit?url={u}&title={t}"),
         ("Hacker News", f"https://news.ycombinator.com/submitlink?u={u}&t={t}"),
@@ -195,8 +196,8 @@ def _share_platform_links(url: str, title: str) -> list[tuple[str, str]]:
 
 # Brand glyphs for the share-intent buttons, inlined as SVG path data so the
 # app stays self-contained (NiceGUI bundles no brand-icon font; Email uses the
-# bundled Material "mail" icon instead). X / Reddit / Y Combinator come from
-# Simple Icons (CC0 1.0 — public domain). LinkedIn comes from Font Awesome
+# bundled Material "mail" icon instead). X / Facebook / Reddit / Y Combinator
+# come from Simple Icons (CC0 1.0 — public domain). LinkedIn comes from Font Awesome
 # Free 6.7.2 by @fontawesome — https://fontawesome.com, License:
 # https://fontawesome.com/license/free (Icons: CC BY 4.0), Copyright 2024
 # Fonticons, Inc.; this comment carries the required attribution. The glyphs
@@ -209,6 +210,15 @@ _PLATFORM_ICONS: dict[str, tuple[str, str]] = {  # label -> (viewBox, path d)
         "13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 "
         "3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 "
         "11.09h-3.182z",
+    ),
+    "Facebook": (
+        "0 0 24 24",
+        "M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 "
+        "5.858-5.978.401 0 .955.042 1.468.103a8.68 8.68 0 0 1 1.141.195v3.325a8.623 "
+        "8.623 0 0 0-.653-.036 26.805 26.805 0 0 0-.733-.009c-.707 0-1.259.096-1.675"
+        ".309a1.686 1.686 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l"
+        "-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0"
+        "-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647Z",
     ),
     "LinkedIn": (
         "0 0 448 512",

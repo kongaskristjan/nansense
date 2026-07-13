@@ -393,7 +393,7 @@ def test_share_platform_links_embed_the_encoded_target(key: str) -> None:
     (and no raw spaces from the title), so the composer opens prefilled."""
     target = _SHARE_TARGETS[key]
     links = dict(_share_platform_links(target.url, target.title))
-    assert set(links) == {"X", "LinkedIn", "Reddit", "Hacker News", "Email"}
+    assert set(links) == {"X", "Facebook", "LinkedIn", "Reddit", "Hacker News", "Email"}
     encoded = quote(target.url, safe="")
     for href in links.values():
         assert encoded in href
