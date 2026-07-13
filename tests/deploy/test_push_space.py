@@ -48,6 +48,7 @@ def test_front_matter_is_valid_space_config(name: str) -> None:
         assert key in fm, key
     assert space.moment == Path(f".nansense_cache/playground/{name}/moment.pt")
     assert space.remote == f"space-{name}"
+    assert space.url.startswith("ssh://git@hf.co/spaces/")
 
 
 def test_stamp_dockerfile_rewrites_the_arg_default() -> None:

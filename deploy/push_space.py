@@ -73,14 +73,14 @@ class Space:
 SPACES: dict[str, Space] = {
     "imagenette": Space(
         playground="imagenette",
-        url="https://huggingface.co/spaces/kongaskristjan/nansense-playground",
+        url="ssh://git@hf.co/spaces/kongaskristjan/nansense-playground",
         title="Nansense Playground",
         emoji="👁",
         short_description="A PyTorch debugger playground on an Imagenette ResNet",
     ),
     "mnist": Space(
         playground="mnist",
-        url="https://huggingface.co/spaces/kongaskristjan/nansense-playground-mnist",
+        url="ssh://git@hf.co/spaces/kongaskristjan/nansense-playground-mnist",
         title="Nansense Playground (MNIST)",
         emoji="🔢",
         short_description="A PyTorch debugger playground on an MNIST LeNet",
@@ -150,8 +150,12 @@ def push_space(space: Space, *, dry_run: bool) -> None:
             f"  {' '.join(prepare_command(space))}\n"
             "(or pass --prepare-cache)"
         )
-    if not git("remote", "get-url", space.remote, check=False):
+    # Add the remote, or repoint one left behind by an older URL scheme.
+    current_url = git("remote", "get-url", space.remote, check=False)
+    if not current_url:
         git("remote", "add", space.remote, space.url)
+    elif current_url != space.url:
+        git("remote", "set-url", space.remote, space.url)
 
     orig_ref = git("symbolic-ref", "--quiet", "--short", "HEAD", check=False) or git(
         "rev-parse", "HEAD"
