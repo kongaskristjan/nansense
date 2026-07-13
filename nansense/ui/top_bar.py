@@ -211,7 +211,7 @@ def _add_step_controls(
             "and run experiments freely."
         ):
             ui.icon("lock").classes("text-base")
-            ui.label("demo — training controls disabled")
+            ui.label("playground — training controls disabled")
         _add_position_label(session)
         return
     last_batch_confirm = _build_last_batch_confirm_dialog(session)
