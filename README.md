@@ -21,11 +21,7 @@ Here's how *nansense* can help:
 - **See what is actually going on**. Visualize activations and gradients, find image patches with minimal or maximal activation for a given channel, and simulate what each neuron is searching for (deep dream)
 - **Spot optimization bottlenecks**. Discover insufficient receptive fields, measure neuron death, discover padding artifacts and spot gradient underflow
 
-## How is this different from wandb or TensorBoard?
-
-Loggers like Weights & Biases and TensorBoard record scalar curves of loss and accuracy that you scroll through after the run. Nansense works inside the live training loop instead: it pauses so you can step batch-by-batch and time-travel while inspecting the activations, gradients, weights and optimizer state of every layer. You can even run experiments like deep dream or Grad-CAM on the paused model to probe what a given neuron has learned.
-
-Persisting all this data on disk is infeasible, as a single batch of activations and gradients can easily be several gigabytes. Nansense sidesteps that by pausing and inspecting the tensors on demand, instead of writing everything to disk.
+Unlike wandb or TensorBoard, which log external metrics (loss, accuracy) to scroll through after the run, nansense is about understanding the internals of the network. A logger tells you *that* the loss stopped falling; nansense shows you *why* — say, a layer's channels dying or fp16 gradients underflowing.
 
 ## Try it
 

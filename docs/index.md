@@ -18,6 +18,4 @@ The [Showcase](showcase.md) walks through all of these with real screenshots. [G
 
 ## How is this different from wandb or TensorBoard?
 
-Loggers like Weights & Biases and TensorBoard record scalar curves of loss and accuracy that you scroll through after the run. Nansense works inside the live training loop instead: it pauses so you can step batch-by-batch and time-travel while inspecting the activations, gradients, weights and optimizer state of every layer. You can even run experiments like deep dream or Grad-CAM on the paused model to probe what a given neuron has learned.
-
-Persisting all this data on disk is infeasible, as a single batch of activations and gradients can easily be several gigabytes. Nansense sidesteps that by pausing and inspecting the tensors on demand, instead of writing everything to disk.
+Loggers record external metrics — the loss and accuracy curves you scroll through after the run. Nansense is focused on understanding the internals of the network. A logger tells you *that* the loss stopped falling; nansense shows you *why* — say, half a layer's channels died after epoch three, or fp16 gradients are underflowing.
