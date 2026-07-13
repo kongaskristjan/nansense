@@ -154,7 +154,6 @@ hide:
     // otherwise). Kept out of the variant switch so it reads as an action, not
     // a third variant.
     var shareBtn = document.querySelector(".pg-share-btn");
-    var shareUrl = "https://kongaskristjan.github.io/nansense/dev/playground/";
     if (shareBtn) {
       var source = document.querySelector(".md-header__source");
       if (source) {
@@ -165,6 +164,9 @@ hide:
       var shareLabel = shareBtn.textContent;
       var shareReset = null;
       shareBtn.addEventListener("click", function () {
+        // Derived at click time: picks up the deployed version prefix (dev,
+        // latest, ...) and the currently selected variant's #hash.
+        var shareUrl = location.origin + location.pathname + location.hash;
         if (navigator.share) {
           navigator.share({ title: "Nansense playground", url: shareUrl }).catch(function () {});
           return;
