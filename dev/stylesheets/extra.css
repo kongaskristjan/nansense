@@ -39,17 +39,12 @@
   text-overflow: ellipsis;
 }
 
-/* At desktop widths there is room to spare: stop the title from eating it and
-   let the banner center itself in the gap with auto margins. Below this width
-   the banner is hidden (default above) so the title keeps its normal flex-grow
-   and the header lays out exactly like stock Material — no mobile side effects. */
+/* Show the banner at desktop widths only, centered in the free space of the
+   Playground toolbar (its auto margins share the gap with the variant switch's
+   own `margin-right: auto`). The Playground page hides the title and search, so
+   there is nothing to collide with; on narrower viewports the banner stays
+   hidden (default above) to keep the slim toolbar uncluttered. */
 @media screen and (min-width: 76.25em) {
-  .md-header__title {
-    /* Give the title a fixed box (its topics are absolutely positioned, so it
-       has no intrinsic width) instead of letting it grow and eat all the free
-       space; the banner then centers in the gap. 12rem fits every page title. */
-    flex: 0 0 12rem;
-  }
   .md-header__banner {
     display: inline-flex;
     margin: 0 auto;
