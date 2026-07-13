@@ -17,6 +17,7 @@ nav:
 
 theme:
   name: material
+  custom_dir: overrides
   logo: images/logo_small.png
   favicon: images/logo_small.png
   palette:
@@ -89,6 +90,12 @@ plugins:
           - wiring.md
         API:
           - api.md
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/prompt-toggle.js
 
 extra:
   version:
