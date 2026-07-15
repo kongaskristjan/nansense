@@ -8,7 +8,7 @@ so a cell's K-step light cone is reproduced exactly. The output is a per-cell
 logit map of the same H x W as the input.
 
 The architecture is deliberately free of data-dependent control flow so
-``torch.fx.symbolic_trace`` succeeds (nansense traces the graph to name layers).
+``torch.fx.symbolic_trace`` succeeds (NaNsense traces the graph to name layers).
 """
 
 from __future__ import annotations

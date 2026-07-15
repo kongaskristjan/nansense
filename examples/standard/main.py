@@ -1,12 +1,12 @@
 """Train a small ResNet, Vision Transformer, or LeNet on MNIST, CIFAR10, or Imagenette.
 
-Single-process by default, with the full nansense wiring (scheduler, time
+Single-process by default, with the full NaNsense wiring (scheduler, time
 travel, checkpoints):
 
     uv run examples/standard/main.py --nansense-port 8080
 
 Pass `--distributed` and launch under torchrun for multi-rank
-DistributedDataParallel training — one process per rank. nansense's wiring is
+DistributedDataParallel training — one process per rank. NaNsense's wiring is
 identical (every rank calls `nansense.start`); rank 0 serves the UI and drives
 pausing/stepping while the other ranks follow and fold their data shard into the
 watch-page statistics. Time travel works here too: every rank drives the same
@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Crop-augmentation padding mode for mnist/cifar10 (default zero). "
             "Zero padding leaks hard border seams into the hidden activations — "
-            "see for yourself in the nansense layer views, then try reflection."
+            "see for yourself in the NaNsense layer views, then try reflection."
         ),
     )
     parser.add_argument(
@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
             "Training loss (default cross_entropy). mse/mae/mae_30 instead "
             "regress softmax probabilities onto the one-hot label; mae_30 is a "
             "balanced (asymmetric) absolute error penalising under-prediction "
-            "more — compare their effect in the nansense views."
+            "more — compare their effect in the NaNsense views."
         ),
     )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
@@ -133,12 +133,12 @@ def parse_args() -> argparse.Namespace:
         "--nansense-port",
         type=int,
         default=8080,
-        help="Port for the nansense UI (default 8080).",
+        help="Port for the NaNsense UI (default 8080).",
     )
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable nansense with near-zero overhead (run as plain training).",
+        help="Disable NaNsense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
 
@@ -203,7 +203,7 @@ def build_optimizer_and_scheduler(
 
 
 def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.device) -> None:
-    """Single-process training with the full nansense wiring and time travel."""
+    """Single-process training with the full NaNsense wiring and time travel."""
     amp_dtype = amp_dtype_from_name(args.dtype)
     print(f"Using device: {device} (dtype={args.dtype})")
 
@@ -220,7 +220,7 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     optimizer, scheduler = build_optimizer_and_scheduler(model, args)
 
     # Always create the session; `enabled=False` makes it a near-zero-overhead
-    # no-op so the training loop below needs no nansense-specific branching.
+    # no-op so the training loop below needs no NaNsense-specific branching.
     # `port=` serves the UI immediately (skipped automatically when disabled).
     session = nansense.start(
         model,
@@ -302,7 +302,7 @@ def distributed_test_accuracy(
     session: nansense.Session,
 ) -> float:
     """Global test accuracy across ranks, with the val phase wrapped by
-    `session.batches` so nansense captures it like the single-process path."""
+    `session.batches` so NaNsense captures it like the single-process path."""
     model.eval()
     hits = torch.zeros(2, device=device)  # correct, total
     for inputs, targets in session.batches(loader, phase="val"):
@@ -344,7 +344,7 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
         padding=args.padding,
     )
 
-    # nansense unwraps the DDP model itself and serves the UI from rank 0 only.
+    # NaNsense unwraps the DDP model itself and serves the UI from rank 0 only.
     model = DistributedDataParallel(
         build_model(args.model, config, blocks_per_stage=args.blocks_per_stage).to(device)
     )

@@ -1,4 +1,4 @@
-"""Train a tiny convnet on MNIST with PyTorch Lightning + nansense.
+"""Train a tiny convnet on MNIST with PyTorch Lightning + NaNsense.
 
 The minimal Lightning wiring: a `NansenseCallback` on a stock `Trainer`,
 run through `fit_with_time_travel` so the UI's Time Travel button works.
@@ -133,12 +133,12 @@ def parse_args() -> argparse.Namespace:
         "--nansense-port",
         type=int,
         default=8080,
-        help="Port for the nansense UI (default 8080).",
+        help="Port for the NaNsense UI (default 8080).",
     )
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable nansense with near-zero overhead (run as plain training).",
+        help="Disable NaNsense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
 

@@ -1,4 +1,4 @@
-"""Predict Conway's Game of Life K steps into the future, with full nansense wiring.
+"""Predict Conway's Game of Life K steps into the future, with full NaNsense wiring.
 
 A fully-convolutional residual net learns the Game-of-Life rule from synthetic
 random boards (no download): the input is a binary board ``[1, H, W]`` (a random
@@ -10,7 +10,7 @@ Training minimises a per-cell ``BCEWithLogitsLoss`` and tracks per-cell accuracy
     uv run examples/game_of_life/main.py --nansense-port 8080
 
 The board-shaped input, target, activations and output make this a vivid
-nansense demo: clicking to perturb a single cell shows its K-step influence
+NaNsense demo: clicking to perturb a single cell shows its K-step influence
 light-cone (the model's learned receptive field), deep-dream surfaces glider /
 oscillator motifs, and time travel watches the rule itself being learned.
 """
@@ -85,12 +85,12 @@ def parse_args() -> argparse.Namespace:
         "--nansense-port",
         type=int,
         default=8080,
-        help="Port for the nansense UI (default 8080).",
+        help="Port for the NaNsense UI (default 8080).",
     )
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable nansense with near-zero overhead (run as plain training).",
+        help="Disable NaNsense with near-zero overhead (run as plain training).",
     )
     parser.add_argument(
         "--cache-dir",
@@ -168,7 +168,7 @@ def per_cell_accuracy(output: Tensor, targets: Tensor) -> float:
 
 
 def run(args: argparse.Namespace, device: torch.device) -> None:
-    """Single-process training with the full nansense wiring and time travel."""
+    """Single-process training with the full NaNsense wiring and time travel."""
     amp_dtype = amp_dtype_from_name(args.dtype)
     print(f"Using device: {device} (dtype={args.dtype})")
 
@@ -179,9 +179,9 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
     optimizer, scheduler = build_optimizer_and_scheduler(model, args)
 
     # Always create the session; `enabled=False` makes it a near-zero-overhead
-    # no-op so the training loop below needs no nansense-specific branching.
+    # no-op so the training loop below needs no NaNsense-specific branching.
     # The board is already in [0, 1] with a single channel, so the normalization
-    # passed to nansense is the identity.
+    # passed to NaNsense is the identity.
     session = nansense.start(
         model,
         enabled=not args.disable_nansense,

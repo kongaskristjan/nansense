@@ -69,7 +69,7 @@ def test_display_url(host: str, expected: str) -> None:
 
 
 def test_format_box_frames_every_line() -> None:
-    box = _format_box(["nansense UI is running at:", "http://127.0.0.1:8080"], 100)
+    box = _format_box(["NaNsense UI is running at:", "http://127.0.0.1:8080"], 100)
     lines = box.splitlines()
     # Top/bottom borders plus one row per input line.
     assert len(lines) == 4

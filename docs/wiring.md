@@ -1,6 +1,6 @@
 # Wiring guide
 
-Adding nansense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the [API reference](api.md). Prefer not to do it by hand? [Integrate with one prompt](integrate.md) has a copy-paste prompt for your coding agent.
+Adding NaNsense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the [API reference](api.md). Prefer not to do it by hand? [Integrate with one prompt](integrate.md) has a copy-paste prompt for your coding agent.
 
 ## Wire it into your loop: raw PyTorch
 
@@ -28,7 +28,7 @@ for epoch in session.epochs(50, cache_dir=".nansense_cache"):
         # Training batch iteration
         for inputs, targets in session.batches(train_dl, phase="train"):
             optimizer.zero_grad()  # keep zero_grad at the beginning of the batch
-            loss = criterion(model(inputs), targets)  # as nansense reads .grad when
+            loss = criterion(model(inputs), targets)  # as NaNsense reads .grad when
             loss.backward()  # the batch exits, so zeroing after step() would
             optimizer.step()  # leave the weight-gradient views empty.
         # Validation batch iteration ...
@@ -40,7 +40,7 @@ session.close()
 The pieces:
 
 - [`nansense.start(model, ...)`](api.md#nansense.start) creates the [`Session`](api.md#nansense.Session) and, when `port=` is given, serves the UI. Pass `optimizer=` to get per-parameter optimizer state and live hyperparameters on the weights page, and `scheduler=` so time travel restores the LR schedule.
-- [`session.batches(loader, phase=...)`](api.md#nansense.Session.batches) wraps each phase's dataloader — this is where nansense pauses, steps and captures.
+- [`session.batches(loader, phase=...)`](api.md#nansense.Session.batches) wraps each phase's dataloader — this is where NaNsense pauses, steps and captures.
 - [`session.close()`](api.md#nansense.Session.close) marks training finished; the served page stays up for post-mortem browsing.
 - `enabled=False` makes the whole session a near-zero-overhead no-op, so you can leave the wiring in place and switch the UI off with one flag.
 

@@ -1,4 +1,4 @@
-"""Hosted nansense playgrounds: locked, shared demos of trained networks.
+"""Hosted NaNsense playgrounds: locked, shared demos of trained networks.
 
 Two playgrounds share this entrypoint — each is deployed as its own Hugging
 Face Space (see deploy/README.md):

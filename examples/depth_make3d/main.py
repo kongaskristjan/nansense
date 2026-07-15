@@ -1,14 +1,14 @@
 """Monocular depth estimation on Make3D via transfer learning.
 
 Predict a per-pixel depth map from a single RGB photo with a pretrained ResNet
-encoder and a small U-Net decoder, under the full nansense wiring (scheduler,
+encoder and a small U-Net decoder, under the full NaNsense wiring (scheduler,
 time travel, checkpoints):
 
     uv run examples/depth_make3d/main.py --nansense-port 8080
 
 The first run downloads the Make3D archives (~0.9 GB; the host can be slow) and
 the ImageNet encoder weights (~45 MB). Pass `--freeze-encoder` to train only the
-decoder. nansense shows a *dense, non-classification* model end to end: the
+decoder. NaNsense shows a *dense, non-classification* model end to end: the
 ImageNet encoder's early activations stay structured (edges, textures), and the
 predicted log-depth renders as an image strip alongside the input photo.
 """
@@ -76,12 +76,12 @@ def parse_args() -> argparse.Namespace:
         "--nansense-port",
         type=int,
         default=8080,
-        help="Port for the nansense UI (default 8080).",
+        help="Port for the NaNsense UI (default 8080).",
     )
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable nansense with near-zero overhead (run as plain training).",
+        help="Disable NaNsense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
 
@@ -104,7 +104,7 @@ def build_optimizer_and_scheduler(
 
 
 def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.device) -> None:
-    """Single-process training with the full nansense wiring and time travel."""
+    """Single-process training with the full NaNsense wiring and time travel."""
     amp_dtype = amp_dtype_from_name(args.dtype)
     print(f"Using device: {device} (dtype={args.dtype})")
 
@@ -122,7 +122,7 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     optimizer, scheduler = build_optimizer_and_scheduler(model, args)
 
     # Always create the session; `enabled=False` makes it a near-zero-overhead
-    # no-op so the training loop below needs no nansense-specific branching.
+    # no-op so the training loop below needs no NaNsense-specific branching.
     # `port=` serves the UI immediately (skipped automatically when disabled).
     session = nansense.start(
         model,

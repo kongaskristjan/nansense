@@ -1,4 +1,4 @@
-"""Nansense — visualization library for deep learning experiments.
+"""NaNsense — visualization library for deep learning experiments.
 
 The library provides a `Session` that hooks into a PyTorch model and
 publishes per-batch activation/gradient snapshots for inspection in a

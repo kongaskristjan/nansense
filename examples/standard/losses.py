@@ -4,7 +4,7 @@
 treat classification as *regression onto the one-hot target*: the model's logits
 are turned into class probabilities with a softmax and compared, element by
 element, against the one-hot encoding of the true label. This is a deliberately
-pedagogical contrast — watch in the nansense views how an `mse` / `mae` run
+pedagogical contrast — watch in the NaNsense views how an `mse` / `mae` run
 shapes the logits and learning curve differently from `cross_entropy`.
 
 `mae_30` is a *balanced* (asymmetric) absolute error: the pinball / quantile

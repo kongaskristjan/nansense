@@ -1,7 +1,7 @@
 """Spoken keyword classification from log-mel spectrograms (8 keywords).
 
 Trains an ImageNet-style ResNet on Google's "mini Speech Commands" set (8
-keywords: down, go, left, no, right, stop, up, yes) with the full nansense
+keywords: down, go, left, no, right, stop, up, yes) with the full NaNsense
 wiring (scheduler, time travel, checkpoints). Each ~1 s 16 kHz clip is turned
 into a `[1, n_mels, n_frames]` log-mel spectrogram in the dataset (via
 torchaudio's `MelSpectrogram` front end) and fed to the ResNet as a
@@ -67,12 +67,12 @@ def parse_args() -> argparse.Namespace:
         "--nansense-port",
         type=int,
         default=8080,
-        help="Port for the nansense UI (default 8080).",
+        help="Port for the NaNsense UI (default 8080).",
     )
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable nansense with near-zero overhead (run as plain training).",
+        help="Disable NaNsense with near-zero overhead (run as plain training).",
     )
     return parser.parse_args()
 
@@ -90,7 +90,7 @@ def build_optimizer_and_scheduler(
 
 
 def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.device) -> None:
-    """Single-process training with the full nansense wiring and time travel."""
+    """Single-process training with the full NaNsense wiring and time travel."""
     amp_dtype = amp_dtype_from_name(args.dtype)
     print(f"Using device: {device} (dtype={args.dtype})")
 
@@ -106,7 +106,7 @@ def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.devi
     optimizer, scheduler = build_optimizer_and_scheduler(model, args)
 
     # Always create the session; `enabled=False` makes it a near-zero-overhead
-    # no-op so the training loop below needs no nansense-specific branching.
+    # no-op so the training loop below needs no NaNsense-specific branching.
     # `input_mean` / `input_std` are scalar log-mel stats passed as 1-tuples so
     # the single-channel spectrogram renders denormalized in the UI.
     session = nansense.start(

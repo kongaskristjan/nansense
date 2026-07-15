@@ -32,7 +32,7 @@ _TOP_BAR_CLASSES: str = (
 
 _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
 _STAR_TOOLTIP: str = (
-    "Like nansense? A GitHub ★ star ★ means a lot and keeps me hacking."
+    "Like NaNsense? A GitHub ★ star ★ means a lot and keeps me hacking."
 )
 _LOGO_PATH: Path = (
     Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
@@ -117,7 +117,7 @@ def _top_bar_row() -> ui.row:
 
 @lru_cache(maxsize=1)
 def _logo_data_uri() -> str:
-    """The nansense mark as a base64 data URI (read once, then cached).
+    """The NaNsense mark as a base64 data URI (read once, then cached).
 
     Inlined rather than served from a static route — the mark is ~3 KB and this
     matches the data-URI pattern the strip images already use (see
@@ -128,7 +128,7 @@ def _logo_data_uri() -> str:
 
 
 def _add_repo_logo() -> ui.link:
-    """The nansense brand mark at the far-right end of the top bar.
+    """The NaNsense brand mark at the far-right end of the top bar.
 
     Sits last in every page's top bar — after the right-aligned controls — as a
     quiet star call-to-action. Rendered as a native link opening in a new tab
@@ -166,12 +166,12 @@ _SHARE_TARGETS: dict[str, _ShareTarget] = {
     "playground": _ShareTarget(
         label="Playground",
         url="https://kongaskristjan.github.io/nansense/dev/playground/",
-        title="Nansense playground — a live PyTorch training run to poke around in",
+        title="NaNsense playground — a live PyTorch training run to poke around in",
     ),
     "library": _ShareTarget(
         label="Library",
         url="https://kongaskristjan.github.io/nansense/",
-        title="nansense — a PyTorch debugger: pause training, look inside every layer",
+        title="NaNsense — a PyTorch debugger: pause training, look inside every layer",
     ),
 }
 
@@ -294,7 +294,7 @@ def _add_share_button() -> None:
     """
     caption_classes = "text-xs uppercase tracking-wider text-slate-400"
     with ui.dialog() as dialog, ui.card().classes("w-[32rem] max-w-full p-6 gap-4"):
-        ui.label("Share nansense").classes("text-lg font-bold")
+        ui.label("Share NaNsense").classes("text-lg font-bold")
         with ui.column().classes("w-full gap-1"):
             ui.label("What to share").classes(caption_classes)
             ui.toggle(
@@ -369,7 +369,7 @@ def _add_share_button() -> None:
     button = ui.button(icon="share", on_click=dialog.open, color="slate-500").props(
         "dense size=md flat"
     )
-    button.tooltip("Share nansense — the playground or the library")
+    button.tooltip("Share NaNsense — the playground or the library")
 
 
 def _add_tour_button() -> None:
@@ -838,7 +838,7 @@ def _add_settings_button(
         ui.separator()
         ui.label("Performance").classes("text-lg font-bold")
         ui.label(
-            "How much nansense computes and stores while training runs — "
+            "How much NaNsense computes and stores while training runs — "
             "these trade visualization detail for GPU VRAM and overhead."
         ).classes("text-sm text-slate-600")
         ui.label("Watched-layer memory").classes("text-sm font-medium mt-1")

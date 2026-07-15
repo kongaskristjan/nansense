@@ -13,7 +13,7 @@ hide:
 <!-- `clipboard-write` delegates the Clipboard API into the cross-origin app
      frame: the app's own Share dialog (top bar) copies links, and without the
      delegation the browser rejects the write inside the iframe. -->
-<iframe id="playground-frame" title="Nansense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
+<iframe id="playground-frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
 
 <style>
   /* Fullscreen app page: the header collapses to a slim toolbar (logo +

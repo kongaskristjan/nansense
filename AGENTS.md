@@ -6,13 +6,13 @@
 - Package manager: `uv`
   - Always use `cuda` group: `uv sync --group cuda`, `uv run --group cuda examples/...`.
 - Directory structure:
-  - 'nansense/' - Nansense visualization library (no training)
+  - 'nansense/' - NaNsense visualization library (no training)
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)
-  - `tests/` - Tests for both examples and the nansense library
+  - `tests/` - Tests for both examples and the NaNsense library
   - `assets/` - Assets
   - `docs/` + `mkdocs.yml` - User documentation site (MkDocs Material), published to GitHub Pages
   - `README.md` - Landing page: pitch, hero video, prominent links (playground, one-prompt integration, docs), a teaser example command; keep it short — examples and wiring details live in `docs/`
-  - `INTERNALS.md` - High level overview of nansense library internals
+  - `INTERNALS.md` - High level overview of NaNsense library internals
 
 ## Prompts
 

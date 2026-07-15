@@ -1,8 +1,8 @@
-"""Multimodal CIFAR-10 (image + tabular features), with full nansense wiring.
+"""Multimodal CIFAR-10 (image + tabular features), with full NaNsense wiring.
 
 A two-input network classifies CIFAR-10 from a 5-channel image (normalized RGB
 plus a luma and a Sobel edge channel) *and* a flat 6-feature stats vector
-derived from the same image. It exists to exercise the nansense input pane on
+derived from the same image. It exists to exercise the NaNsense input pane on
 inputs that aren't a plain RGB image:
 
     uv run examples/multimodal/main.py --nansense-port 8080
@@ -70,12 +70,12 @@ def parse_args() -> argparse.Namespace:
     add_dtype_arg(parser)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
-        "--nansense-port", type=int, default=8080, help="Port for the nansense UI (default 8080)."
+        "--nansense-port", type=int, default=8080, help="Port for the NaNsense UI (default 8080)."
     )
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable nansense with near-zero overhead (run as plain training).",
+        help="Disable NaNsense with near-zero overhead (run as plain training).",
     )
     parser.add_argument(
         "--cache-dir",
@@ -102,7 +102,7 @@ def run_epoch(
     A local loop rather than `examples.common.train_one_epoch`, since that
     helper feeds a single tensor — here each batch is `((image, stats), label)`
     and the model takes both. The body still runs inside `session.batches` so
-    nansense captures it exactly like a single-input loop.
+    NaNsense captures it exactly like a single-input loop.
     """
     model.train(train)
     phase = "train" if train else "val"

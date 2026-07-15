@@ -24,13 +24,13 @@ def _page_scaffold(title: str = "") -> None:
     """Per-page setup boilerplate: the tab title plus the no-scroll viewport.
 
     `title` is the page-specific part of the tab title; the main page
-    passes nothing and is titled plain "Nansense". Every page fills the
+    passes nothing and is titled plain "NaNsense". Every page fills the
     viewport and scrolls inside its own panes, so page-level scrolling is
     disabled — except horizontally on viewports narrower than
     `MIN_APP_WIDTH` (phones), where the body keeps its minimum width and
     the root pans over it instead of squeezing the panes.
     """
-    ui.page_title(f"Nansense — {title}" if title else "Nansense")
+    ui.page_title(f"NaNsense — {title}" if title else "NaNsense")
     ui.query(".nicegui-content").classes("p-0 h-screen overflow-hidden")
     ui.query("body").classes("overflow-hidden")
     ui.query("html").classes("overflow-x-auto overflow-y-hidden")

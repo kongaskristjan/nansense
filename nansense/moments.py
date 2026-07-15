@@ -145,7 +145,7 @@ def write_moment(session: Session, path: Path, *, batch_item: Any) -> None:
     torch.save(payload, tmp)
     tmp.replace(path)
     print(
-        f"nansense: moment frozen at {format_position(snapshot.position)}"
+        f"NaNsense: moment frozen at {format_position(snapshot.position)}"
         f" -> {path}",
         flush=True,
     )
@@ -159,11 +159,11 @@ def _load_payload(path: Path) -> dict[str, Any]:
     except Exception as e:  # corrupt file, unpicklable content, ...
         raise MomentError(f"failed to load {path}: {e}") from e
     if not isinstance(payload, dict) or payload.get("kind") != _MOMENT_KIND:
-        raise MomentError(f"{path} is not a nansense moment file")
+        raise MomentError(f"{path} is not a NaNsense moment file")
     version = payload.get("version")
     if version != _FORMAT_VERSION:
         raise MomentError(
-            f"{path} has moment format version {version}; this nansense "
+            f"{path} has moment format version {version}; this NaNsense "
             f"reads version {_FORMAT_VERSION}"
         )
     return payload

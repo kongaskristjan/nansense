@@ -180,7 +180,7 @@ def build_distributed_dataloaders(
     sampler so the caller can `set_epoch` each epoch).
 
     Both phases are sharded with `drop_last`, so every rank runs the same
-    number of batches per phase — distributed nansense sessions (like DDP
+    number of batches per phase — distributed NaNsense sessions (like DDP
     itself) require the ranks to advance through batches in lockstep.
     """
     train_set = _build_dataset(config, data_dir, train=True, download=download, padding=padding)

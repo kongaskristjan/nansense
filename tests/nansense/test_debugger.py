@@ -478,7 +478,7 @@ def test_first_detection_prints_once_to_console(
         session.detach()
         thread.join(timeout=5.0)
     out = capsys.readouterr().out
-    assert out.count("nansense: numerical issue detected") == 1
+    assert out.count("NaNsense: numerical issue detected") == 1
     assert "nan" in out.lower()
 
 

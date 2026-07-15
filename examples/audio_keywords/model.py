@@ -11,7 +11,7 @@ the whole clip rather than the few frames a shallow stride-2 CNN would see.
 
 There is no data-dependent control flow in `forward` (the per-block shortcut is
 chosen at construction time), so the whole model is `torch.fx.symbolic_trace`-
-able — which nansense relies on to capture per-layer activations.
+able — which NaNsense relies on to capture per-layer activations.
 """
 
 from __future__ import annotations

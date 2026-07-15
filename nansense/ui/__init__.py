@@ -1,4 +1,4 @@
-"""Nansense UI: NiceGUI app + tensor-to-image rendering + Mermaid graph."""
+"""NaNsense UI: NiceGUI app + tensor-to-image rendering + Mermaid graph."""
 
 from __future__ import annotations
 

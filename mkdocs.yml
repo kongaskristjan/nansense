@@ -1,4 +1,4 @@
-site_name: nansense
+site_name: NaNsense
 site_description: >-
   PyTorch debugger: pause training, step batch by batch, and look inside
   every layer — activations, gradients, weights, optimizer state.
@@ -75,7 +75,7 @@ plugins:
             signature_crossrefs: true
   - llmstxt:
       markdown_description: >-
-        Nansense is a PyTorch debugger that works inside the live training
+        NaNsense is a PyTorch debugger that works inside the live training
         loop: it pauses training so you can step batch by batch, time-travel
         to earlier epochs, and inspect the activations, gradients, weights and
         optimizer state of every layer, plus run interpretability experiments

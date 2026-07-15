@@ -14,7 +14,7 @@ output well-conditioned across the wide Make3D depth range (a few to ~70 m).
 
 `create_feature_extractor` returns an fx `GraphModule`; calling it from the
 parent's `forward` lets `torch.fx.symbolic_trace(build_model(...))` inline the
-whole graph, so the model traces cleanly for nansense (no hook fallback needed).
+whole graph, so the model traces cleanly for NaNsense (no hook fallback needed).
 """
 
 from __future__ import annotations

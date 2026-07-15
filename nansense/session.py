@@ -1,4 +1,4 @@
-"""Nansense session: state machine, batch lifecycle, snapshot publishing.
+"""NaNsense session: state machine, batch lifecycle, snapshot publishing.
 
 A `Session` is created once per training run via `nansense.start(...)`.
 The user wraps each batch with `with session.batch(phase=..., epoch=...)`:
@@ -103,7 +103,7 @@ _UNSERVED_PAUSE_TIMEOUT = 30.0
 
 def _warn_unserved_detach() -> None:
     warnings.warn(
-        "nansense: the session paused on a batch but no UI is serving it and "
+        "NaNsense: the session paused on a batch but no UI is serving it and "
         f"nothing resumed it within {_UNSERVED_PAUSE_TIMEOUT:.0f}s. Continuing "
         "without pausing (detached). Pass `port=` to nansense.start() (or call "
         "nansense.serve()) to drive the UI, or use enabled=False for plain "
@@ -231,7 +231,7 @@ class BatchSnapshot:
 
 
 class Session:
-    """The bridge between a live training loop and the nansense UI.
+    """The bridge between a live training loop and the NaNsense UI.
 
     Create one with `nansense.start` (the intended entry point) rather than
     directly. The training loop drives the session through `batches` (wrap
@@ -475,7 +475,7 @@ class Session:
         A disabled session is fully inert: `batch()` is a no-op context
         manager, `serve()` does nothing, and no model hooks are ever
         installed — the intended near-zero-overhead off switch for leaving
-        nansense wiring in place in a training script.
+        NaNsense wiring in place in a training script.
         """
         return self._enabled
 
@@ -1759,7 +1759,7 @@ class Session:
             # so instead of leaving a prepare script silently moment-less.
             path, phase, epoch, batch_idx = freeze_request
             print(
-                f"nansense: freeze_moment target (epoch {epoch} | {phase} "
+                f"NaNsense: freeze_moment target (epoch {epoch} | {phase} "
                 f"batch {batch_idx}) was never reached; {path} was not "
                 "written.",
                 flush=True,
@@ -1928,7 +1928,7 @@ class Session:
         # (no browser) still sees it. Later merges stay quiet — only the
         # episode's onset prints.
         print(
-            f"nansense: numerical issue detected ({debugger.reasons_text(error)}) "
+            f"NaNsense: numerical issue detected ({debugger.reasons_text(error)}) "
             f"at {format_position(error.position)} — training paused. See the "
             "UI banner for affected layers and fixes (e.g. loss scaling or "
             "bfloat16 for fp16 subnormal gradients).",
@@ -2177,7 +2177,7 @@ class Session:
         # Note the jump on the console too (covers both the plain-loop and
         # Lightning restorers, which funnel through here).
         print(
-            f"nansense: time-traveled to the start of epoch {epoch}.", flush=True
+            f"NaNsense: time-traveled to the start of epoch {epoch}.", flush=True
         )
 
     def _wait_for_proceed(self) -> None:
@@ -2541,7 +2541,7 @@ def start(
 
     With `enabled=False` the session is a near-zero-overhead no-op: no fx
     trace at construction, `batch()` does nothing, and the UI is skipped.
-    This lets a training script keep its nansense wiring in place and turn
+    This lets a training script keep its NaNsense wiring in place and turn
     the whole UI off with a single flag.
 
     `optimizer` is optional: when given, snapshots (and the weights page)

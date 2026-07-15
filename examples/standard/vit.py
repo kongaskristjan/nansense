@@ -1,15 +1,15 @@
 """Simple pre-norm Vision Transformer for small-image classification.
 
 Follows Dosovitskiy et al. 2020 ("An Image is Worth 16x16 Words") at
-ViT-Tiny-ish proportions, with two simplifications that suit nansense's
+ViT-Tiny-ish proportions, with two simplifications that suit NaNsense's
 fx-traced visualization: attention is spelled out with explicit linear
 layers and `F.scaled_dot_product_attention` (a tuple-returning
-`nn.MultiheadAttention` would capture nothing — nansense only stores
+`nn.MultiheadAttention` would capture nothing — NaNsense only stores
 tensor-valued node outputs), and the classification head global-average-
 pools the tokens instead of using a class token.
 
 Token-shaped activations (`[tokens, dim]` per sample) render as channel
-tiles in nansense's layer cards: the renderer recovers the patch grid
+tiles in NaNsense's layer cards: the renderer recovers the patch grid
 from the model input's spatial size and unflattens the tokens back to
 `h x w` tiles, one per embedding dim.
 """

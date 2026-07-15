@@ -1,6 +1,6 @@
 """Support code shared by the examples: training-loop primitives and CLI utilities.
 
-The pedagogical content — wiring nansense into a training script — lives in
+The pedagogical content — wiring NaNsense into a training script — lives in
 each example's `main.py`; this module holds the plain training plumbing those
 scripts would otherwise duplicate verbatim.
 """
@@ -52,7 +52,7 @@ DTYPE_HELP = (
     "Compute dtype for the autocast forward/loss (default fp32). fp16/bf16 keep "
     "the model weights in fp32 and only cast the forward pass via torch.autocast. "
     "No GradScaler is used: fp16 gradients are deliberately left unscaled, so this "
-    "is a way to watch gradient underflow happen in the nansense views."
+    "is a way to watch gradient underflow happen in the NaNsense views."
 )
 
 

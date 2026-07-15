@@ -1,4 +1,4 @@
-"""Multi-rank (DDP) awareness for nansense sessions.
+"""Multi-rank (DDP) awareness for NaNsense sessions.
 
 In a `torch.distributed` run every rank constructs a session over the same
 model, but the ranks play different roles:

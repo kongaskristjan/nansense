@@ -49,7 +49,7 @@ class AudioConfig:
     """Static description of the audio task and the log-mel front end.
 
     `mean` / `std` are the display window for the single-channel spectrogram,
-    passed to `nansense.start` as 1-tuples. nansense renders the input as
+    passed to `nansense.start` as 1-tuples. NaNsense renders the input as
     `value * std + mean` clamped to `[0, 1]`, so `std = 1 / 20` and
     `mean = 0.5` map a log-mel value of `-10` to black and `+10` to white —
     a fixed `[-10, +10]` window that comfortably brackets the raw log-mel

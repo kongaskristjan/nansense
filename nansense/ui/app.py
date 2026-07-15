@@ -145,7 +145,7 @@ def _announce(url: str) -> None:
     sensible default when output is redirected), padded by blank lines so it
     is easy to spot between training-log lines."""
     width = shutil.get_terminal_size().columns
-    box = _format_box(["nansense UI is running at:", url], width)
+    box = _format_box(["NaNsense UI is running at:", url], width)
     print(f"\n{box}\n", flush=True)
 
 

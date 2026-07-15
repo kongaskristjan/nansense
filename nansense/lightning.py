@@ -1,6 +1,6 @@
 """PyTorch Lightning integration: `NansenseCallback` and `fit_with_time_travel`.
 
-The callback maps nansense's per-batch context onto Lightning's hook pairs
+The callback maps NaNsense's per-batch context onto Lightning's hook pairs
 (`on_*_batch_start` / `on_*_batch_end`), so a stock `Trainer` gets the full
 pause/step/inspect experience with no changes to the training code:
 
@@ -68,12 +68,12 @@ _Dataloaders = Any
 
 
 class NansenseCallback(Callback):
-    """Drive a nansense session from a Lightning `Trainer`.
+    """Drive a NaNsense session from a Lightning `Trainer`.
 
     The session is created when `fit` starts (optimizers exist by then) and
     closed when it ends — the UI stays up for post-mortem browsing, exactly
     like a hand-written loop. Pass `model="net"` (an attribute path inside
-    the LightningModule) to point nansense at the actual network; this is
+    the LightningModule) to point NaNsense at the actual network; this is
     recommended whenever the module wraps its layers in a submodule, both
     for fx tracing and so input capture sees the real forward signature.
 
@@ -86,7 +86,7 @@ class NansenseCallback(Callback):
     skipping, and `enabled=False` as the zero-overhead off switch. Mid-epoch
     validation (`val_check_interval < 1.0` or step-based) is rejected with a
     clear error, and iterable-style dataloaders without a length are not
-    supported — nansense declares the schedule up-front.
+    supported — NaNsense declares the schedule up-front.
     """
 
     def __init__(
@@ -132,7 +132,7 @@ class NansenseCallback(Callback):
         max_epochs = trainer.max_epochs
         if max_epochs is None or max_epochs <= 0:
             raise RuntimeError(
-                "nansense requires Trainer(max_epochs=N) with a positive N — "
+                "NaNsense requires Trainer(max_epochs=N) with a positive N — "
                 "the schedule (and the UI's progress display) is declared "
                 "up-front from it"
             )
@@ -242,7 +242,7 @@ class NansenseCallback(Callback):
         n_train = trainer.num_training_batches
         if not isinstance(n_train, int) or n_train <= 0:
             raise RuntimeError(
-                "nansense requires a sized train dataloader — the number of "
+                "NaNsense requires a sized train dataloader — the number of "
                 f"batches per epoch must be known up-front (got {n_train!r})"
             )
         phases = {"train": n_train}
@@ -262,7 +262,7 @@ class NansenseCallback(Callback):
         for n in trainer.num_val_batches:
             if not isinstance(n, int):
                 raise RuntimeError(
-                    "nansense requires sized val dataloaders — the number of "
+                    "NaNsense requires sized val dataloaders — the number of "
                     f"batches per epoch must be known up-front (got {n!r})"
                 )
             total += n
@@ -273,7 +273,7 @@ class NansenseCallback(Callback):
         every_n = trainer.check_val_every_n_epoch
         if every_n is None:
             raise RuntimeError(
-                "nansense does not support step-driven validation "
+                "NaNsense does not support step-driven validation "
                 "(check_val_every_n_epoch=None); validate at epoch boundaries"
             )
         return (trainer.current_epoch + 1) % every_n == 0
@@ -286,7 +286,7 @@ class NansenseCallback(Callback):
             and val_check_batch < n_train
         ):
             raise RuntimeError(
-                "nansense does not support mid-epoch validation "
+                "NaNsense does not support mid-epoch validation "
                 "(val_check_interval < 1.0); validate at epoch boundaries"
             )
 
@@ -440,7 +440,7 @@ class _LightningCkptCache(EpochCache):
                 if name.startswith(prefix)
             }
         # Present the weights under "model" so `validate_model_state` checks
-        # them against the live (sub)module exactly like a nansense cache.
+        # them against the live (sub)module exactly like a NaNsense cache.
         return {"epoch": epoch, "model": state}
 
 
@@ -450,7 +450,7 @@ class LightningRestorer(TrainingRestorer):
     Instead of loading state dicts back into live objects, a jump records
     the target's checkpoint path; `fit_with_time_travel` then re-invokes
     `trainer.fit(ckpt_path=...)` and Lightning restores the model,
-    optimizers, schedulers, and loop counters itself. Only nansense's own
+    optimizers, schedulers, and loop counters itself. Only NaNsense's own
     bookkeeping (schedule counters, watch statistics) is rewound here.
     """
 
@@ -498,7 +498,7 @@ def fit_with_time_travel(
     datamodule: LightningDataModule | None = None,
     cache_dir: Path = DEFAULT_CACHE_DIR,
 ) -> None:
-    """Run `trainer.fit` under nansense time travel.
+    """Run `trainer.fit` under NaNsense time travel.
 
     Equivalent to `make_trainer().fit(model, ...)` with `callback` attached,
     plus the UI's Time Travel button: every epoch boundary is checkpointed

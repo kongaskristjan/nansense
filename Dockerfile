@@ -1,4 +1,4 @@
-# The hosted nansense playgrounds: locked, shared demos served from a frozen
+# The hosted NaNsense playgrounds: locked, shared demos served from a frozen
 # moment file (see examples/playground/main.py).
 #
 # Lives at the repository root because Hugging Face Docker Spaces only look

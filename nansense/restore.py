@@ -247,7 +247,7 @@ class EpochCache:
         except Exception as e:  # corrupt file, unpicklable content, ...
             raise TimeTravelError(f"failed to load {path}: {e}") from e
         if not isinstance(payload, dict) or "model" not in payload:
-            raise TimeTravelError(f"{path} is not a nansense epoch checkpoint")
+            raise TimeTravelError(f"{path} is not a NaNsense epoch checkpoint")
         return payload
 
 

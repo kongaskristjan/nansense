@@ -1,4 +1,4 @@
-# Nansense internals
+# NaNsense internals
 
 This document explains how the `nansense` library is structured under the
 hood. For *using* the library, see `README.md`. For agent-facing guidelines,
@@ -6,7 +6,7 @@ see `AGENTS.md`.
 
 ## Threading model
 
-A nansense session lives across two threads:
+A NaNsense session lives across two threads:
 
 - **Training thread.** The user's training loop. Forward / backward / step
   run here, and `with session.batch(phase=..., epoch=...)` is entered here.
@@ -703,7 +703,7 @@ followers blocked at their next batch start until the collective timeout.
 
 ## Probe runs (`nansense.probe`)
 
-A probe is a nansense-internal forward pass on a *pinned* input batch, run
+A probe is a NaNsense-internal forward pass on a *pinned* input batch, run
 between batches so the UI can show the network's response to one fixed
 input across stepping and time travel. `Session.pin_current_batch()` pins
 *every* input tensor of the last snapshot (already CPU clones, keyed by input
@@ -1148,7 +1148,7 @@ restorer:` shape around `trainer.fit`. Its `LightningRestorer` (a
 via `Session.attach_restorer`) delegates all state restoration to
 Lightning: epoch boundaries are checkpointed with
 `trainer.save_checkpoint` into `epoch_<n>.ckpt`, and `_restore` just
-records the checkpoint path and rewinds nansense's schedule/watch
+records the checkpoint path and rewinds NaNsense's schedule/watch
 bookkeeping — the next attempt's `trainer.fit(ckpt_path=...)` restores
 model, optimizers, schedulers, and loop counters itself. Each attempt
 needs a fresh trainer (hence the factory argument): Lightning trainers are
@@ -1423,7 +1423,7 @@ consistent with `_publish_snapshot`.
 ## Enabled flag (zero-overhead off switch)
 
 `nansense.start(model, ..., enabled=False)` returns a fully inert session,
-the intended way to leave nansense wiring in a training script and turn it
+the intended way to leave NaNsense wiring in a training script and turn it
 off with one flag:
 
 - **Construction** skips `capture.try_trace(model)` (the proxy forward pass is the

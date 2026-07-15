@@ -1,4 +1,4 @@
-"""Probe runs: nansense-internal forward passes between batches.
+"""Probe runs: NaNsense-internal forward passes between batches.
 
 A probe re-runs the model on a fixed ("pinned") input batch so the UI can
 show how the network's response to the *same* input evolves across stepping

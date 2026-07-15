@@ -10,7 +10,7 @@ circular padding, then the classic birth/survive thresholds:
 
 Applying this `steps` (K) times gives the prediction target. Everything is
 deterministic: boards are drawn once in ``__init__`` from a seeded generator,
-so epoch replay and nansense time travel see identical data.
+so epoch replay and NaNsense time travel see identical data.
 """
 
 from __future__ import annotations

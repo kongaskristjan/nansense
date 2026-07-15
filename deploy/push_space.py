@@ -74,14 +74,14 @@ SPACES: dict[str, Space] = {
     "imagenette": Space(
         playground="imagenette",
         url="ssh://git@hf.co/spaces/kongaskristjan/nansense-playground",
-        title="Nansense Playground",
+        title="NaNsense Playground",
         emoji="👁",
         short_description="A PyTorch debugger playground on an Imagenette ResNet",
     ),
     "mnist": Space(
         playground="mnist",
         url="ssh://git@hf.co/spaces/kongaskristjan/nansense-playground-mnist",
-        title="Nansense Playground (MNIST)",
+        title="NaNsense Playground (MNIST)",
         emoji="🔢",
         short_description="A PyTorch debugger playground on an MNIST LeNet",
     ),
@@ -181,7 +181,7 @@ def push_space(space: Space, *, dry_run: bool) -> None:
         git("add", "--renormalize", ".")
         git(
             "commit", "-q", "-m",
-            f"nansense {space.playground} playground Space snapshot",
+            f"NaNsense {space.playground} playground Space snapshot",
         )
 
         sample_png = git("ls-files", "*.png").splitlines()[0]

@@ -1,7 +1,7 @@
 """A two-input fusion network: a 5-channel image branch + a flat-stats branch.
 
 `forward(self, image, stats)` gives the model two named inputs (`image`,
-`stats`), which is what the nansense UI's input picker, multi-input probe
+`stats`), which is what the NaNsense UI's input picker, multi-input probe
 re-forwarding, and per-input perturbation key off. The image branch is a small
 strided CNN; the stats branch is an MLP over the `[6]` feature vector
 (BatchNorm-normalized first, so the raw features stay readable in the input

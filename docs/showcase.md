@@ -1,6 +1,6 @@
 # Showcase
 
-What nansense shows you, with real screenshots from the bundled examples. Every one of these is a few clicks away in the [Playground](playground.md) — no install needed.
+What NaNsense shows you, with real screenshots from the bundled examples. Every one of these is a few clicks away in the [Playground](playground.md) — no install needed.
 
 ## Visualize activations and gradients throughout training
 
@@ -18,7 +18,7 @@ A layer's activations (top row) and gradients (bottom row) for a single input. E
 
 ## Min/max activation patches
 
-For any channel, nansense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a specific neuron has learned to detect.
+For any channel, NaNsense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a specific neuron has learned to detect.
 
 ![Patches that maximally activate channels of a hidden layer](images/max_activations_imagenette.png)
 
@@ -46,7 +46,7 @@ Here's a video visualizing other layers:
 
 ## Measure the receptive field of a neuron
 
-To measure the receptive field of a neuron, *nansense* can perturb a single pixel and show the diff between the original and perturbed activations as it propagates through the network.
+To measure the receptive field of a neuron, *NaNsense* can perturb a single pixel and show the diff between the original and perturbed activations as it propagates through the network.
 
 ![A single pixel is perturbed and the diff propagates through the layers](images/receptive_field.gif)
 
@@ -54,7 +54,7 @@ To measure the receptive field of a neuron, *nansense* can perturb a single pixe
 
 ## Investigate dead neurons
 
-*Nansense* can measure each channel's activation and gradient distribution over a full epoch. This makes it easy to discover optimization problems, such as some neurons being driven to zero.
+*NaNsense* can measure each channel's activation and gradient distribution over a full epoch. This makes it easy to discover optimization problems, such as some neurons being driven to zero.
 
 ![A layer whose activations are all below zero, just before a ReLU](images/dead_neuron_histogram.png)
 
@@ -62,7 +62,7 @@ To measure the receptive field of a neuron, *nansense* can perturb a single pixe
 
 ## Spot gradient underflow
 
-In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range (below the dtype's smallest normal value) where precision drains toward zero and the layer's learning quality quietly drops. *Nansense* checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there.
+In low-precision training (fp16) a layer's gradients can collapse into the *subnormal* range (below the dtype's smallest normal value) where precision drains toward zero and the layer's learning quality quietly drops. *NaNsense* checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there.
 
 ## Under the hood
 
