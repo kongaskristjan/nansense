@@ -17,7 +17,7 @@ import torch
 from torch import Tensor, nn
 
 import nansense
-from nansense.moments import MomentError
+from nansense.moments import MomentError, _to_device_item
 from nansense.session import Session, StatsScope
 from nansense.watch import WatchSnapshot
 from tests.nansense.helpers import TinyNet, run_in_thread
@@ -273,6 +273,43 @@ def test_load_moment_rejects_a_different_model(tmp_path: Path) -> None:
     _freeze_run(moment_path)
     with pytest.raises(MomentError, match="does not match"):
         nansense.load_moment(TinyNet(), moment_path, replay=_replay)
+
+
+def test_to_device_item_moves_nested_tensors() -> None:
+    """The replay batch mover keeps container structure and moves tensors.
+
+    The meta device stands in for a second device, so the move is observable
+    without a GPU; non-tensor leaves pass through untouched.
+    """
+    item = {"pair": (torch.zeros(2), [torch.ones(1)]), "label": "y"}
+    moved = _to_device_item(item, torch.device("meta"))
+    assert isinstance(moved["pair"], tuple)
+    assert moved["pair"][0].device.type == "meta"
+    assert moved["pair"][1][0].device.type == "meta"
+    assert moved["label"] == "y"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_load_moment_onto_a_cuda_model(tmp_path: Path) -> None:
+    """A CPU-frozen moment loads into a CUDA model (the playground serve path).
+
+    The stored batch item lives on CPU, so the replay must move it to the
+    model's device; the published snapshot is CPU either way.
+    """
+    moment_path = tmp_path / "moment.pt"
+    _freeze_run(moment_path)
+    cpu = nansense.load_moment(MomentNet(), moment_path, replay=_replay)
+    cuda = nansense.load_moment(
+        MomentNet().cuda(), moment_path, replay=_replay
+    )
+    a, b = cpu.snapshot, cuda.snapshot
+    assert a is not None and b is not None
+    assert set(a.activations) == set(b.activations)
+    for name, tensor in b.activations.items():
+        assert tensor.device.type == "cpu"
+        torch.testing.assert_close(
+            tensor, a.activations[name], rtol=1e-3, atol=1e-4
+        )
 
 
 @pytest.mark.parametrize(

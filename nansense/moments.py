@@ -92,6 +92,26 @@ def _cpu_copy_item(item: Any) -> Any:
     return item
 
 
+def _to_device_item(item: Any, device: torch.device) -> Any:
+    """The loader item with every tensor on `device` (`_cpu_copy_item`'s inverse)."""
+    if isinstance(item, torch.Tensor):
+        return item.to(device)
+    if isinstance(item, (list, tuple)):
+        return type(item)(_to_device_item(v, device) for v in item)
+    if isinstance(item, dict):
+        return {k: _to_device_item(v, device) for k, v in item.items()}
+    return item
+
+
+def _model_device(model: nn.Module) -> torch.device:
+    """The device the model computes on (first parameter, then buffer)."""
+    for tensor in model.parameters():
+        return tensor.device
+    for tensor in model.buffers():
+        return tensor.device
+    return torch.device("cpu")
+
+
 def write_moment(session: Session, path: Path, *, batch_item: Any) -> None:
     """Serialize the just-published moment to `path` (training thread).
 
@@ -201,15 +221,21 @@ def _replay_batch(
     then spliced into the published snapshot. Model mode, parameters, and
     buffers are restored afterwards (a train-mode forward advances BatchNorm
     running stats; the frozen ones must win).
+
+    The batch item is stored on CPU (`_cpu_copy_item`), so it is moved to
+    the model's device here — `load_moment` keeps the model's device, and
+    the replay must run wherever the model lives (e.g. a CUDA-served
+    playground).
     """
     from nansense import capture
 
+    batch_item = _to_device_item(payload["batch_item"], _model_device(model))
     was_training = model.training
     model.train()
     try:
         capture.install_hooks(session)
         try:
-            loss = replay(model, payload["batch_item"])
+            loss = replay(model, batch_item)
             if not isinstance(loss, torch.Tensor):
                 raise MomentError(
                     "replay must return the loss tensor to backpropagate"
