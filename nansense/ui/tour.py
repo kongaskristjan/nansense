@@ -139,9 +139,9 @@ def stats_tour_steps() -> list[TourStep]:
             ),
         ),
         TourStep(
-            "The distributions of the layer's activations and gradients — "
-            "turn on Per channel and hover a bar to see inputs from that "
-            "bin.",
+            "In HISTOGRAM view, you can see the distributions of each layer's "
+            "activations and gradients. Turn on \"Per channel\" and hover a "
+            "bar to see inputs from that bin.",
             ('[data-tour="hist-activation"]', '[data-tour="hist-gradient"]'),
             ensure_view="HISTOGRAM",
         ),
