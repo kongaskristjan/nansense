@@ -71,6 +71,16 @@ def _prepare(spec: PlaygroundSpec, moment_path: Path) -> PlaygroundSpec:
     return spec
 
 
+@pytest.mark.parametrize(
+    ("name", "layer"),
+    [("mnist", "conv1"), ("imagenette", "stage1.0.conv1")],
+)
+def test_locked_playgrounds_default_to_a_single_card(name: str, layer: str) -> None:
+    """One card on first load keeps a locked demo's landing view focused;
+    every other layer stays a diagram click away."""
+    assert PLAYGROUNDS[name].shown_layers == (layer,)
+
+
 @playgrounds
 def test_shown_layers_exist_on_the_model_graph(spec: PlaygroundSpec) -> None:
     session = nansense.start(spec.build())
@@ -118,6 +128,22 @@ def test_serve_parks_locked_at_the_frozen_train_batch(
     assert session.locked
     assert session.stats_scope is StatsScope.ALL
     assert session.watched_layers == frozenset(spec.shown_layers)
+
+
+def test_serve_reseeds_the_watched_cards_from_the_spec(tmp_path: Path) -> None:
+    """The moment freezes the watched seed it was prepared with; serving
+    must re-base it on the spec's `shown_layers`, so the default cards can
+    change without re-training the demo."""
+    moment_path = tmp_path / "moment.pt"
+    spec = _prepare(PLAYGROUNDS["mnist"], moment_path)
+    served = dataclasses.replace(spec, shown_layers=("conv2",))
+    session = open_showcase(
+        served.build(),
+        moment_path,
+        spec=served,
+        port=None,
+    )
+    assert session.watched_layers == frozenset({"conv2"})
     # Demo preferences armed ahead of the lock: experiments wait for a
     # manual Run, and the spec's deep-dream form defaults rode along.
     assert session.auto_run_experiments is False

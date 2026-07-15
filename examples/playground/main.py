@@ -103,8 +103,9 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         model="lenet",
         epochs=20,
         batch_size=64,
-        # The two conv layers make the most visually interesting strips.
-        shown_layers=("conv1", "conv2"),
+        # A single card keeps the first view focused; conv1 makes the most
+        # visually interesting strips and the rest stay a diagram click away.
+        shown_layers=("conv1",),
     ),
     "imagenette": PlaygroundSpec(
         dataset="imagenette",
@@ -113,7 +114,9 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         # Also the frozen/replayed demo batch: 16 halves the serve-time
         # replay cost and the snapshot's RAM versus 32.
         batch_size=16,
-        shown_layers=("stem", "stage1.0.conv1"),
+        # A single card keeps the first view focused; the first residual
+        # conv shows richer training dynamics than the stem.
+        shown_layers=("stage1.0.conv1",),
         # Full-model galleries: uint8 payloads + average grids off by
         # default + the 8-channel cap keep the moment in the tens of MB.
         channel_limit=12,
@@ -259,10 +262,12 @@ def open_showcase(
     show; the replay mirrors the prepare run's training step) — then the
     demo preferences armed ahead of the one-way lock: experiment re-runs
     wait for a manual Run (auto-run off — a shared queue shouldn't fill on
-    parameter edits; a page's first experiment still starts on its own) and
-    the spec's cheaper deep-dream form defaults, if any.
-    Everything else a demo needs (watched seed layers, statistics, schedule)
-    lives in the moment file.
+    parameter edits; a page's first experiment still starts on its own), the
+    spec's cheaper deep-dream form defaults, if any, and the watched seed
+    re-based to the spec's `shown_layers` — the moment froze the seed it was
+    prepared with, so re-seeding here lets the default cards change without
+    re-training. Everything else a demo needs (statistics, schedule) lives
+    in the moment file.
     """
     config = spec.config
     set_strip_format("PNG")
@@ -282,6 +287,12 @@ def open_showcase(
         session.set_experiment_defaults(steps=spec.dream_steps)
     if spec.dream_channels is not None:
         session.set_experiment_defaults(channels=spec.dream_channels)
+    # Scope is `all` (restored from the moment), so the watched set only
+    # picks which cards new tabs show first — never what collects stats.
+    for name in session.watched_layers - set(spec.shown_layers):
+        session.unwatch(name)
+    for name in spec.shown_layers:
+        session.watch(name)
     session.lock()
     return session
 
