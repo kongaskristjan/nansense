@@ -79,6 +79,19 @@ def test_shown_layers_exist_on_the_model_graph(spec: PlaygroundSpec) -> None:
         assert set(spec.patch_layers) <= set(session.layer_names)
 
 
+def test_imagenette_dream_defaults_stay_under_the_locked_ceilings() -> None:
+    """The cheaper imagenette dream defaults only seed the form — visitors
+    may still raise them, up to the locked clamp, so the defaults must sit
+    at or below those ceilings."""
+    from nansense.experiments import _LOCKED_PARAM_LIMITS
+
+    spec = PLAYGROUNDS["imagenette"]
+    assert spec.dream_steps == 150
+    assert spec.dream_channels == 4
+    assert spec.dream_steps <= _LOCKED_PARAM_LIMITS["steps"]
+    assert spec.dream_channels <= _LOCKED_PARAM_LIMITS["channels"]
+
+
 @playgrounds
 def test_prepare_freezes_the_moment_and_nothing_else(
     spec: PlaygroundSpec, tmp_path: Path
@@ -99,12 +112,22 @@ def test_serve_parks_locked_at_the_frozen_train_batch(
     session = open_showcase(
         spec.build(),
         moment_path,
-        config=spec.config,
+        spec=spec,
         port=None,  # no UI in tests; the parked, locked state is under test
     )
     assert session.locked
     assert session.stats_scope is StatsScope.ALL
     assert session.watched_layers == frozenset(spec.shown_layers)
+    # Demo preferences armed ahead of the lock: experiments wait for a
+    # manual Run, and the spec's deep-dream form defaults rode along.
+    assert session.auto_run_experiments is False
+    defaults = session.experiment_defaults
+    assert defaults.get("steps") == (
+        spec.dream_steps if spec.dream_steps is not None else None
+    )
+    assert defaults.get("channels") == (
+        spec.dream_channels if spec.dream_channels is not None else None
+    )
     # The spec's performance caps rode along in the moment file.
     perf = session.watch_performance
     if spec.channel_limit is not None:

@@ -66,6 +66,8 @@ def test_locked_settings_are_refused() -> None:
     assert session.debug_settings.check_nan_inf == before.check_nan_inf
     session.set_auto_run_experiments(False)
     assert session.auto_run_experiments is True
+    session.set_experiment_defaults(steps=1)
+    assert session.experiment_defaults == {}
 
 
 def test_locked_watch_and_unwatch_are_refused() -> None:

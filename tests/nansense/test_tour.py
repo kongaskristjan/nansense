@@ -77,7 +77,7 @@ def test_subpage_tours_stay_short(steps: list[TourStep]) -> None:
 
 @pytest.mark.parametrize(
     ("locked", "main_count", "experiment_count", "has_step_controls"),
-    [(True, 4, 1, False), (False, 5, 2, True)],
+    [(True, 4, 2, False), (False, 5, 2, True)],
 )
 def test_step_controls_step_only_on_live_runs(
     locked: bool,
@@ -94,6 +94,18 @@ def test_step_controls_step_only_on_live_runs(
         assert (
             '[data-tour="step-controls"]' in selectors
         ) == has_step_controls
+
+
+@pytest.mark.parametrize("locked", [True, False])
+def test_experiment_run_step_only_on_the_playground(locked: bool) -> None:
+    """Only the locked playground turns experiment auto-run off, so only
+    its tour points out the manual Run / Cancel pair."""
+    selectors = [
+        sel
+        for step in experiment_tour_steps(locked=locked)
+        for sel in step.selectors
+    ]
+    assert ('[data-tour="run"]' in selectors) == locked
 
 
 @pytest.mark.parametrize(("page", "locked", "steps"), _ALL_PAGE_STEPS)

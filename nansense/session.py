@@ -408,6 +408,9 @@ class Session:
         # when set, experiment pages re-run on init and on every parameter
         # change instead of waiting for a manual Run. Default on.
         self._auto_run_experiments = True
+        # Per-key overrides for the experiment form's default parameter
+        # values (see `set_experiment_defaults`). Mutated under `_cv`.
+        self._experiment_defaults: dict[str, object] = {}
         # Per-view video recording (see `nansense.recording`); created
         # lazily on first UI access so headless sessions never import the
         # rendering stack.
@@ -1120,6 +1123,32 @@ class Session:
             self._cv.notify_all()
 
     @property
+    def experiment_defaults(self) -> dict[str, object]:
+        """Per-key overrides for the experiment form's default values.
+
+        Keys are experiment parameter names (e.g. ``steps``, ``channels``);
+        an experiment page seeds its form with these instead of the built-in
+        defaults, and the user can still change them freely (up to any locked
+        ceiling). Empty unless `set_experiment_defaults` was called.
+        """
+        with self._cv:
+            return dict(self._experiment_defaults)
+
+    def set_experiment_defaults(self, **defaults: object) -> None:
+        """Override the experiment form's default parameter values.
+
+        Only seeds what a fresh experiment page shows — it neither clamps
+        requests (a locked session's ceilings do that) nor touches pages that
+        are already open. Arm before `lock`: like the other global settings,
+        this is a no-op on a locked session.
+        """
+        if self._locked:
+            return
+        with self._cv:
+            self._experiment_defaults.update(defaults)
+            self._cv.notify_all()
+
+    @property
     def debug_settings(self) -> DebugSettings:
         """Current numerical-error debugger configuration (see `debugger`)."""
         with self._cv:
@@ -1458,8 +1487,9 @@ class Session:
           visitor sees), and the global settings (`set_stats_scope`,
           `set_update_frequency`, `set_watch_performance`,
           `set_debug_settings`, `disable_debug_check`,
-          `set_auto_run_experiments`) become no-ops (`request_time_travel`
-          raises `TimeTravelError`, so the UI can show why);
+          `set_auto_run_experiments`, `set_experiment_defaults`) become
+          no-ops (`request_time_travel` raises `TimeTravelError`, so the UI
+          can show why);
         - the stats scope is forced to `ALL` — every layer collects, so the
           UI's per-tab show/hide never touches shared state;
         - experiment requests still run, with their parameters clamped and

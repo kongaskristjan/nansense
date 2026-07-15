@@ -170,7 +170,9 @@ def experiment_tour_steps(*, locked: bool) -> list[TourStep]:
 
     Step 1 points at the kind and layer selectors — mainly for the
     description that appears at the bottom of the pane, which is easy to
-    miss. On live runs only, step 2 explains the page's one real gotcha:
+    miss. Step 2 is per-flavor: the playground (locked) turns auto-run off,
+    so its visitors get the Run / Cancel pair pointed out; live runs
+    auto-run by default and instead get the page's one real gotcha —
     experiments execute on the training thread, so nothing runs until
     training pauses (the playground's training is always parked, and its
     step cluster is replaced by the demo notice anyway).
@@ -182,7 +184,15 @@ def experiment_tour_steps(*, locked: bool) -> list[TourStep]:
             ('[data-tour="kind"]', '[data-tour="layer"]'),
         ),
     ]
-    if not locked:
+    if locked:
+        steps.append(
+            TourStep(
+                "Experiments don't start on their own here — press Run to "
+                "launch one, and Cancel to abort it.",
+                ('[data-tour="run"]',),
+            )
+        )
+    else:
         steps.append(
             TourStep(
                 "Experiments run while training is paused — if results "

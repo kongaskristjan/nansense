@@ -50,6 +50,23 @@ def test_deep_dream_exposes_minimize_toggle() -> None:
     assert minimize.kind == "bool" and minimize.default is False
 
 
+def test_default_param_values_apply_session_overrides() -> None:
+    from nansense.ui.experiment_page import (
+        _EXPERIMENT_PARAMS,
+        _default_param_values,
+    )
+
+    plain = _default_param_values({})
+    assert plain["steps"] == 300 and plain["channels"] == 8
+    seeded = _default_param_values({"steps": 150, "channels": 4})
+    assert seeded["steps"] == 150 and seeded["channels"] == 4
+    # Everything not overridden keeps its built-in default, and every knob
+    # of every kind gets a value.
+    assert seeded["lr"] == plain["lr"]
+    every_key = {s.key for specs in _EXPERIMENT_PARAMS.values() for s in specs}
+    assert set(seeded) == every_key
+
+
 def test_experiment_descriptions_cover_every_kind() -> None:
     from nansense.experiments import EXPERIMENT_KINDS
     from nansense.ui.experiment_page import _EXPERIMENT_DESCRIPTIONS

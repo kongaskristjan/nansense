@@ -407,6 +407,17 @@ def test_auto_run_experiments_setting_defaults_on() -> None:
     assert session.auto_run_experiments is False
 
 
+def test_experiment_defaults_start_empty_and_accumulate() -> None:
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    assert session.experiment_defaults == {}
+    session.set_experiment_defaults(steps=150)
+    session.set_experiment_defaults(channels=4)
+    assert session.experiment_defaults == {"steps": 150, "channels": 4}
+    # The getter hands out a copy — mutating it never leaks into the session.
+    session.experiment_defaults["steps"] = 1
+    assert session.experiment_defaults["steps"] == 150
+
+
 def test_queued_experiments_publish_per_seq_results() -> None:
     # Two clients (browser tabs) request back to back: both run to
     # completion in order, and each result stays retrievable by its seq.

@@ -220,6 +220,20 @@ _EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
     ],
 }
 
+def _default_param_values(overrides: dict[str, object]) -> dict[str, object]:
+    """Every kind's per-key form defaults, with session overrides applied.
+
+    `overrides` is `Session.experiment_defaults` — e.g. a hosted playground
+    seeds cheaper deep-dream defaults; anything not overridden keeps its
+    `_ExperimentParam.default`.
+    """
+    values: dict[str, object] = {}
+    for specs in _EXPERIMENT_PARAMS.values():
+        for spec in specs:
+            values.setdefault(spec.key, overrides.get(spec.key, spec.default))
+    return values
+
+
 # Per kind: (short tooltip on the dropdown, long description shown at the
 # bottom of the left pane) — point 4.
 _EXPERIMENT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
@@ -399,11 +413,10 @@ def _build_experiment_page(
     step_until_custom = _build_step_until_custom_dialog(session)
     widgets: dict[str, ui.element] = {}
     state = _ExperimentPageState(layer=initial_layer)
-    # Seed persisted values with every kind's defaults so a freshly-shown
-    # widget always has a value, even for a key the user hasn't touched.
-    for specs in _EXPERIMENT_PARAMS.values():
-        for spec in specs:
-            state.values.setdefault(spec.key, spec.default)
+    # Seed persisted values with every kind's defaults (session overrides
+    # first) so a freshly-shown widget always has a value, even for a key
+    # the user hasn't touched.
+    state.values.update(_default_param_values(session.experiment_defaults))
 
     # This page's auto-experiment registration: a run registers the request so
     # it also re-runs on every visualization update (same seq → same seeded
@@ -541,8 +554,9 @@ def _build_experiment_page(
             ).props(_resizable_pane_props("experiment-controls")):
                 ui.label("Experiment").classes("font-mono text-base font-bold")
                 ui.separator()
-                # `data-tour` marks the two selectors as the tour's arrow
-                # targets (`tour.experiment_tour_steps`).
+                # `data-tour` marks the tour's arrow targets: the two
+                # selectors, plus the Run / Cancel row below
+                # (`tour.experiment_tour_steps`).
                 kind_select = ui.select(
                     available_experiment_kinds(),
                     label="Experiment",
@@ -551,7 +565,12 @@ def _build_experiment_page(
                 ).props('dense outlined data-tour="kind"').classes("w-full")
                 with kind_select:
                     kind_tooltip = ui.tooltip("")
-                with ui.row().classes("w-full no-wrap gap-2"):
+                # `data-tour="run"` rings the whole Run / Cancel pair on the
+                # locked playground's tour (`tour.experiment_tour_steps`),
+                # where experiments only start on a manual Run.
+                with ui.row().classes("w-full no-wrap gap-2").props(
+                    'data-tour="run"'
+                ):
                     run_button = (
                         ui.button("Run", icon="science", on_click=run, color="yellow-8")
                         .props("dense size=md")
@@ -631,6 +650,9 @@ def _build_experiment_page(
             ):
                 status_label = ui.label(
                     "Adjust parameters — the experiment runs automatically "
+                    "(training must be paused)."
+                    if session.auto_run_experiments
+                    else "Adjust parameters, then press Run "
                     "(training must be paused)."
                 ).classes("text-sm text-slate-600")
                 error_label = ui.label("").classes("text-sm text-red-600")

@@ -80,6 +80,11 @@ class PlaygroundSpec:
     # Channels tracked per layer by the per-channel histograms and patch
     # galleries (None = session default).
     channel_limit: int | None = None
+    # Deep-dream form defaults served to visitors (None = the UI default).
+    # Defaults only: visitors can still raise the values up to the locked
+    # ceilings (300 steps / 8 channels, `experiments._LOCKED_PARAM_LIMITS`).
+    dream_steps: int | None = None
+    dream_channels: int | None = None
 
     @property
     def config(self) -> DatasetConfig:
@@ -113,6 +118,11 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         # default + the 8-channel cap keep the moment in the tens of MB.
         channel_limit=12,
         samples_per_channel=5,
+        # 224x224 dreams through the deep resnet are the demo's costliest
+        # request; halved steps and fewer channels keep the default run
+        # snappy on the shared CPU host.
+        dream_steps=150,
+        dream_channels=4,
     ),
 }
 
@@ -237,7 +247,7 @@ def open_showcase(
     model: nn.Module,
     moment_path: Path,
     *,
-    config: DatasetConfig,
+    spec: PlaygroundSpec,
     port: int | None,
     host: str = "127.0.0.1",
 ) -> nansense.Session:
@@ -247,9 +257,13 @@ def open_showcase(
     loads the frozen weights and buffers into `model` and replays the frozen
     batch through it (regenerating every activation and gradient the views
     show; the replay mirrors the prepare run's training step) — then the
-    one-way lock. Everything else a demo needs (watched seed layers,
-    statistics, schedule) lives in the moment file.
+    demo preferences armed ahead of the one-way lock: experiments wait for a
+    manual Run (auto-run off — a shared queue shouldn't fill on parameter
+    edits) and the spec's cheaper deep-dream form defaults, if any.
+    Everything else a demo needs (watched seed layers, statistics, schedule)
+    lives in the moment file.
     """
+    config = spec.config
     set_strip_format("PNG")
     criterion = nn.CrossEntropyLoss()
     session = nansense.load_moment(
@@ -262,6 +276,11 @@ def open_showcase(
         input_mean=config.mean,
         input_std=config.std,
     )
+    session.set_auto_run_experiments(False)
+    if spec.dream_steps is not None:
+        session.set_experiment_defaults(steps=spec.dream_steps)
+    if spec.dream_channels is not None:
+        session.set_experiment_defaults(channels=spec.dream_channels)
     session.lock()
     return session
 
@@ -296,7 +315,7 @@ def main() -> None:
     session = open_showcase(
         model,
         moment_path,
-        config=spec.config,
+        spec=spec,
         port=args.nansense_port,
         host=args.host,
     )

@@ -879,7 +879,10 @@ declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
 number/switch/select widgets) ordered, for deep dream, Channels → Start from →
 Sample → method knobs (Minimize sits just above Clamp; Sample shows only for the
 current-batch start) and, for Captum, Channel/Target → Inputs → method knobs; values persist
-across kind switches via a shared `state.values`. Beneath the description, a
+across kind switches via a shared `state.values`, seeded from each knob's
+default with `session.experiment_defaults` overrides applied
+(`_default_param_values`) — how a hosted playground serves cheaper
+deep-dream defaults without lowering the locked ceilings. Beneath the description, a
 deep-dream-only **"Compare with MIN/MAX"** button jumps to the same layer's
 `/stats?view=minmax` grids (the MIN/MAX view carries a symmetric "Compare with
 Deep Dream" button at the foot of its controls). Like every cross-page jump
@@ -1450,8 +1453,8 @@ point for `stop` / `step_*` / `detach` — returns early, `request_time_travel`
 raises `TimeTravelError` (and `time_travel_status` reports why, so the
 button renders disabled with the reason), and `watch`/`unwatch`,
 `set_stats_scope`, `set_update_frequency`, `set_watch_performance`,
-`set_debug_settings`, `disable_debug_check`, and `set_auto_run_experiments`
-all refuse. `close()` stays available — it belongs to the hosting script,
+`set_debug_settings`, `disable_debug_check`, `set_auto_run_experiments`,
+and `set_experiment_defaults` all refuse. `close()` stays available — it belongs to the hosting script,
 which arms its wanted mode (typically `step_run()`) and settings *before*
 locking.
 
@@ -1473,7 +1476,10 @@ the `Session` methods, so the UI state is cosmetic.
 deployments — BMP strips are the localhost trade. `examples/playground`
 hosts the reference deployments (one spec per demo dataset): each freezes a
 moment with `--prepare` and serves it via `load_moment` + `lock` + `park`
-(see *Frozen moments* below).
+(see *Frozen moments* below), arming the demo preferences before the
+lock — experiment auto-run off (visitors press Run; the tour points the
+button out) and any spec-level deep-dream form defaults
+(`set_experiment_defaults`, e.g. imagenette's 150 steps / 4 channels).
 
 ## Frozen moments (`nansense.moments`)
 
