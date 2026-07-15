@@ -308,15 +308,16 @@ class _WeightPanel:
                 # the widest strip so the sticky markers stay in view across
                 # the whole scroll range.
                 with ui.element("div").classes("w-max min-w-full"):
-                    with ui.element("div").classes("flex no-wrap items-stretch"):
-                        _strip_marker("bg-sky-500", "WEIGHT", header_gap=True)
-                        self._img = ui.html("")
-                    ui.element("div").classes("h-1")
-                    # `data-tour`: the tour's below-the-weight arrow lands on
-                    # the gradient row (the optimizer strips sit right under).
+                    # `data-tour`: the tour's strips arrow lands on the weight
+                    # row; its message covers the gradient and optimizer
+                    # strips right below (`tour.weights_tour_steps`).
                     with ui.element("div").classes(
                         "flex no-wrap items-stretch"
                     ).props('data-tour="weight-strips"'):
+                        _strip_marker("bg-sky-500", "WEIGHT", header_gap=True)
+                        self._img = ui.html("")
+                    ui.element("div").classes("h-1")
+                    with ui.element("div").classes("flex no-wrap items-stretch"):
                         _strip_marker("bg-violet-500", "GRADIENT")
                         self._grad_img = ui.html("")
                     # One marker-barred strip per tensor-valued optimizer

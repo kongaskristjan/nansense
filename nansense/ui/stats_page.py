@@ -488,9 +488,9 @@ def _build_stats_page(
                         "text-sm text-slate-500"
                     )
                 ui.separator()
-                # `data-tour` marks the two dropdowns as the tour's arrow
+                # `data-tour` marks the three dropdowns as the tour's arrow
                 # targets (`tour.stats_tour_steps`).
-                ui.select(
+                view_select = ui.select(
                     [_VIEW_HISTOGRAM, _VIEW_MINMAX, _VIEW_GRAPHS],
                     label="View",
                     value=state.view,
@@ -530,7 +530,7 @@ def _build_stats_page(
                     {},
                     label="Layer",
                     on_change=lambda e: set_layer(e.value),
-                ).props("dense outlined options-dense").classes(
+                ).props('dense outlined options-dense data-tour="layer"').classes(
                     "w-full text-sm"
                 ).tooltip(
                     "Which layer's cards to show — one keeps the page fast. In "
@@ -631,6 +631,24 @@ def _build_stats_page(
             body_container = ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             )
+
+    def _tour_set_view(e: GenericEventArguments) -> None:
+        """Switch to the view a tour step describes (`TourStep.ensure_view`).
+
+        Emitted by the tour driver whenever a view-bound step is shown; the
+        write goes through the View dropdown so the widget and `set_mode`
+        stay in sync, and a no-op (already on that view) is skipped — the
+        driver re-emits on every re-show.
+        """
+        view = str(e.args)
+        if view != state.view and view in (
+            _VIEW_HISTOGRAM,
+            _VIEW_MINMAX,
+            _VIEW_GRAPHS,
+        ):
+            view_select.set_value(view)
+
+    ui.on("nansense_tour_set_view", _tour_set_view)
 
     def sync_phase_select() -> None:
         """Refresh the Phase dropdown's options/value for the current view.
@@ -995,6 +1013,15 @@ def _bin_samples_html(
     return header + '<div class="flex gap-3 py-1">' + "".join(cells) + "</div>"
 
 
+# `data-tour` anchors for the tour's histograms step (`tour.stats_tour_steps`),
+# one per tensor kind; spelled out literally so the anchor-wiring test can
+# find them in the source. The first visible plot of each kind gets the arrow.
+_HIST_TOUR_ANCHORS: dict[str, str] = {
+    "activation": 'data-tour="hist-activation"',
+    "gradient": 'data-tour="hist-gradient"',
+}
+
+
 class _HistPlot:
     """One Plotly histogram figure that refreshes its data in place.
 
@@ -1060,11 +1087,9 @@ class _HistPlot:
         self._y_top: float | None = None
         self._y_top_density: bool = use_density(self._axis[0])
         with ui.row().classes("items-center gap-x-3 no-wrap"):
-            # `data-tour` marks the switch as the tour's bin-sampler arrow
-            # target (`tour.stats_tour_steps`); the first visible one wins.
             self._channel_switch = (
                 ui.switch("Per channel", value=False, on_change=self._set_mode)
-                .props('dense data-tour="per-channel"')
+                .props("dense")
                 .classes("text-sm")
             )
             self._channel_switch.tooltip(
@@ -1087,7 +1112,11 @@ class _HistPlot:
         fig, (self._x_range, self._y_range) = _make_histogram_figure(
             {}, kind, title, log_x=self._axis[0], log_y=self._axis[1]
         )
-        self.element = ui.plotly(_figure_payload(fig)).classes("w-full")
+        self.element = (
+            ui.plotly(_figure_payload(fig))
+            .classes("w-full")
+            .props(_HIST_TOUR_ANCHORS[kind])
+        )
         self._samples = ui.html(_HOVER_HINT_HTML).classes("w-full")
         self._sync_control_visibility()
         # Route hovers through the page's single shared handler (see
@@ -1392,7 +1421,13 @@ class _EpochStatsPlot:
         self._title = title
         self._has_data = False
         fig = make_epoch_stats_figure(kind, title)
-        self.element = ui.plotly(_figure_payload(fig)).classes("w-full")
+        # Every epoch plot carries the tour's GRAPHS anchor; the arrow lands
+        # on the first visible one (`tour.stats_tour_steps`).
+        self.element = (
+            ui.plotly(_figure_payload(fig))
+            .classes("w-full")
+            .props('data-tour="epoch-graph"')
+        )
 
     def update(self, history: list[LayerStatsSnapshot]) -> None:
         self.update_series(*epoch_stat_series(history, self._kind))
@@ -1983,16 +2018,21 @@ def _patch_grids_html(
     return '<div class="flex flex-col gap-4 w-full">' + "".join(blocks) + "</div>"
 
 
-def _patch_column_html(column: PatchColumn, mime: str, label: str) -> str:
+def _patch_column_html(
+    column: PatchColumn, mime: str, label: str, *, tour_anchor: bool = False
+) -> str:
     """One channel column of a patch grid: a `CHANNEL n` header over its cells.
 
     Mirrors the activation strips' table layout — a slate header bar
     (`_column_header_bar`) over the channel's top-N sample cells, each a
     separate `cell_size` square stacked with a `PATCH_CELL_GAP` gutter so the
-    grid reads as discrete cells rather than one merged column.
+    grid reads as discrete cells rather than one merged column. `tour_anchor`
+    (the grid's first column) tags the div as the tour's MIN/MAX arrow target
+    (`tour.stats_tour_steps`).
     """
     size = column.cell_size
     header = _column_header_bar(column.label, size)
+    anchor = ' data-tour="patch-column"' if tour_anchor else ""
     cells = "".join(
         f'<img src="{_b64_img_src(cell, mime=mime)}" '
         f"style=\"width:{size}px; height:{size}px; image-rendering:pixelated; "
@@ -2001,7 +2041,7 @@ def _patch_column_html(column: PatchColumn, mime: str, label: str) -> str:
         for i, cell in enumerate(column.cells)
     )
     return (
-        f'<div style="display:flex; flex-direction:column; flex:none; '
+        f'<div{anchor} style="display:flex; flex-direction:column; flex:none; '
         f'gap:{PATCH_CELL_GAP}px; width:{size}px;">{header}{cells}</div>'
     )
 
@@ -2037,7 +2077,8 @@ def _patch_grid_row_html(label: str, grid: PatchGridRender) -> str:
         else ""
     )
     columns = "".join(
-        _patch_column_html(column, grid.mime, label) for column in grid.columns
+        _patch_column_html(column, grid.mime, label, tour_anchor=i == 0)
+        for i, column in enumerate(grid.columns)
     )
     return (
         '<div class="flex flex-col gap-0.5 w-full">'

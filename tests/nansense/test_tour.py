@@ -71,8 +71,8 @@ def test_steps_are_short_single_sentences(
     ],
 )
 def test_subpage_tours_stay_short(steps: list[TourStep]) -> None:
-    """Subpage tours cover only the non-obvious bits: at most 3 steps."""
-    assert 1 <= len(steps) <= 3
+    """Subpage tours cover only the non-obvious bits: at most 4 steps."""
+    assert 1 <= len(steps) <= 4
 
 
 @pytest.mark.parametrize(
@@ -137,6 +137,41 @@ def test_diagram_selector_matches_findmermaidnode_scheme() -> None:
     assert fallback == "g.node"
 
 
+def test_stats_steps_force_the_views_they_describe() -> None:
+    """Each view-bound stats step names a real View-dropdown entry.
+
+    The driver switches the page to `ensure_view` when the step shows, so
+    the names must match the stats page's option constants exactly; the
+    dropdowns step forces nothing.
+    """
+    from nansense.ui.stats_page import (
+        _VIEW_GRAPHS,
+        _VIEW_HISTOGRAM,
+        _VIEW_MINMAX,
+    )
+
+    steps = stats_tour_steps()
+    assert [s.ensure_view for s in steps] == [
+        None,
+        _VIEW_HISTOGRAM,
+        _VIEW_MINMAX,
+        _VIEW_GRAPHS,
+    ]
+    # The dropdowns step covers all three selectors in one message.
+    assert len(steps[0].selectors) == 3
+    # The histograms step draws one arrow per tensor kind.
+    assert len(steps[1].selectors) == 2
+
+
+def test_weights_tour_leads_with_the_weight_strip() -> None:
+    """The strips step comes first and its arrow lands on the weight row
+    (the message covers the gradient/optimizer strips below it)."""
+    first, second = weights_tour_steps()
+    assert first.selectors == ('[data-tour="weight-strips"]',)
+    assert "gradient" in first.text and "optimizer" in first.text
+    assert second.selectors == ('[data-tour="axes"]',)
+
+
 def test_seen_keys_are_distinct_per_page() -> None:
     keys = [seen_key(p) for p in ("main", "stats", "weights", "experiment")]
     assert len(set(keys)) == len(keys)
@@ -163,8 +198,10 @@ def test_config_carries_driver_contract() -> None:
     assert subpage["autoStart"] is False
     assert subpage["autoWatchSlug"] is None
     assert subpage["seenKey"] == seen_key("stats")
-    # No subpage step auto-shows a layer card — that's a main-view mechanic.
+    # No subpage step auto-shows a layer card — that's a main-view mechanic —
+    # but the view-bound stats steps serialize their `ensureView`.
     assert '"ensureCard": true' not in json.dumps(subpage)
+    assert '"ensureView": "HISTOGRAM"' in json.dumps(subpage)
 
 
 def test_driver_js_uses_the_config_hooks() -> None:
@@ -174,6 +211,11 @@ def test_driver_js_uses_the_config_hooks() -> None:
     assert "window.nansenseStartTour" in _TOUR_JS
     assert "cfg.seenKey" in _TOUR_JS
     assert "cfg.autoWatchSlug" in _TOUR_JS
+    # View-bound steps reach the stats page through this event name.
+    assert "nansense_tour_set_view" in _TOUR_JS
+    # Quasar fields get their data-tour forwarded to the inner native
+    # control; the driver must widen matches to the whole field.
+    assert ".q-field" in _TOUR_JS
     # The blob is injected as one <script>; it must not close itself early.
     assert _TOUR_JS.count("</script>") == 1
 
@@ -181,3 +223,4 @@ def test_driver_js_uses_the_config_hooks() -> None:
 def test_ensure_card_step_defaults_off() -> None:
     step = TourStep("Text.", ("a",))
     assert step.ensure_card is False
+    assert step.ensure_view is None

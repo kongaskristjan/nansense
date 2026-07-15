@@ -55,12 +55,17 @@ class TourStep:
 
     Each selector contributes one arrow, drawn to its first visible match
     (hidden cards' elements have zero-size rects and are skipped).
-    `ensure_card` marks the step that needs a layer card on screen.
+    `ensure_card` marks the step that needs a layer card on screen (main
+    view only); `ensure_view` names the Stats view the step talks about —
+    showing the step switches the page to it (via the
+    `nansense_tour_set_view` event the stats page listens for), so the
+    arrows land on a live example of what the message describes.
     """
 
     text: str
     selectors: tuple[str, ...]
     ensure_card: bool = False
+    ensure_view: str | None = None
 
 
 def _mermaid_node_selector(slug: str) -> str:
@@ -115,52 +120,66 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
 
 
 def stats_tour_steps() -> list[TourStep]:
-    """The Stats page's steps: the two mode dropdowns and the bin sampler.
+    """The Stats page's steps: the sidebar dropdowns, then one per view.
 
-    Only the non-obvious bits: that the View dropdown swaps what *every*
-    card shows, that "Current batch" is the phase entry that works for any
-    layer (watched or not), and that per-channel histogram bars can be
-    hovered to see real inputs from that value range — the page's least
-    discoverable feature.
+    Step 1 covers the three dropdowns in one message; each following step
+    describes one view and forces it (`ensure_view`), so its arrows point
+    at a live example: the activation/gradient histograms (with the
+    hover-a-bar sampler, the page's least discoverable feature), a MIN/MAX
+    grid's per-channel column, and a GRAPHS epoch series.
     """
     return [
         TourStep(
-            "The View dropdown switches every card: histograms, "
-            "extreme-input patches (MIN/MAX), or per-epoch graphs.",
-            ('[data-tour="view"]',),
+            "These pick what every card shows: the view, the phase "
+            "(\"Current batch\" works for any layer), and which layer.",
+            (
+                '[data-tour="view"]',
+                '[data-tour="phase"]',
+                '[data-tour="layer"]',
+            ),
         ),
         TourStep(
-            "Phases show the watched layers' running stats; \"Current "
-            "batch\" reads the last captured batch and works for any layer.",
-            ('[data-tour="phase"]',),
+            "The distributions of the layer's activations and gradients — "
+            "turn on Per channel and hover a bar to see inputs from that "
+            "bin.",
+            ('[data-tour="hist-activation"]', '[data-tour="hist-gradient"]'),
+            ensure_view="HISTOGRAM",
         ),
         TourStep(
-            "Turn on Per channel, then hover a bar to see real inputs "
-            "whose values landed in that bin.",
-            ('[data-tour="per-channel"]',),
+            "In MIN/MAX, each column is one channel: the real inputs that "
+            "drove it most extreme, strongest sample on top.",
+            ('[data-tour="patch-column"]',),
+            ensure_view="MIN/MAX",
+        ),
+        TourStep(
+            "GRAPHS charts each statistic across the epochs — toggle stats "
+            "beyond the mean via the plot legend.",
+            ('[data-tour="epoch-graph"]',),
+            ensure_view="GRAPHS",
         ),
     ]
 
 
 def weights_tour_steps() -> list[TourStep]:
-    """The Weights page's steps: axis remapping and the non-weight strips.
+    """The Weights page's steps: what the strips are, then axis remapping.
 
-    The dimension-role controls are the page's one mechanic that isn't
-    self-evident, and the strips below each weight (its gradient and the
-    optimizer's per-parameter state) only appear once training has stepped —
-    worth a pointer so they aren't mistaken for more weights.
+    The strips come first — the arrow lands on the weight strip, and the
+    message covers the gradient and optimizer-state strips below it (they
+    only appear once training has stepped, so they shouldn't be mistaken
+    for more weights). The dimension-role controls follow as the page's
+    one mechanic that isn't self-evident.
     """
     return [
+        TourStep(
+            "Each parameter's values, with its gradient and the "
+            "optimizer's state (momentum, Adam moments) in the strips "
+            "below.",
+            ('[data-tour="weight-strips"]',),
+        ),
         TourStep(
             "Map each weight dimension to the X or Y image axis, tile it "
             "side by side, or pin it to one index.",
             ('[data-tour="axes"]',),
-        ),
-        TourStep(
-            "Below the weight: its gradient and the optimizer's "
-            "per-parameter state (momentum, Adam moments) in the same "
-            "layout.",
-            ('[data-tour="weight-strips"]',),
         ),
     ]
 
@@ -219,6 +238,7 @@ def tour_config(
                 "text": step.text,
                 "selectors": list(step.selectors),
                 "ensureCard": step.ensure_card,
+                "ensureView": step.ensure_view,
             }
             for step in steps
         ],
@@ -353,11 +373,15 @@ _TOUR_JS: str = """
 
   // First *visible* match: hidden layer cards keep their DOM (display:none),
   // so a zero-size rect distinguishes shown cards from hidden ones. Also
-  // works for SVG nodes, which have no offsetParent.
+  // works for SVG nodes, which have no offsetParent. Quasar form fields
+  // forward unrecognized attributes (our data-tour anchors) to their inner
+  // native control — a bare input line — so a match inside a q-field is
+  // widened to the whole field, keeping the ring aligned with the visible
+  // widget (label, border and all).
   function findTarget(sel) {
     for (const el of document.querySelectorAll(sel)) {
       const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) return el;
+      if (r.width > 0 && r.height > 0) return el.closest('.q-field') || el;
     }
     return null;
   }
@@ -488,6 +512,11 @@ _TOUR_JS: str = """
     if (step.ensureCard && cfg.autoWatchSlug &&
         !findTarget('[data-tour="strips"]')) {
       emitEvent('nansense_toggle_layer', cfg.autoWatchSlug);
+    }
+    // A view-bound step switches the Stats page to the view it describes;
+    // the page's handler no-ops when that view is already showing.
+    if (step.ensureView) {
+      emitEvent('nansense_tour_set_view', step.ensureView);
     }
     textEl.textContent = step.text;
     countEl.textContent = (i + 1) + ' / ' + cfg.steps.length;
