@@ -74,6 +74,7 @@ from nansense.ui.top_bar import (
     _add_step_controls,
     _add_tour_button,
     _back_button,
+    _back_href,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
@@ -415,6 +416,16 @@ def _build_stats_page(
         )
         compare_deep_dream.props(f'href="{href}"')
 
+    def sync_back_href() -> None:
+        # Locked playground only: Back carries the selected layer so the
+        # main page opens with its card shown ("All watched layers" and an
+        # empty selection carry none — plain "/"). The props write is a
+        # no-op unless the target actually changed.
+        if not session.locked:
+            return
+        target = "" if state.selected_layer == _LAYER_ALL else state.selected_layer
+        back_button.props(f'href="{_back_href(target)}"')
+
     step_until_custom = _build_step_until_custom_dialog(session)
 
     def record_view() -> RecordedView | None:
@@ -461,7 +472,9 @@ def _build_stats_page(
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            _back_button()
+            back_button = _back_button(
+                state.selected_layer if session.locked else None
+            )
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
             ui.button(
@@ -765,6 +778,7 @@ def _build_stats_page(
                 sync_layer_select()
                 sync_grid_type_select()
                 sync_compare_href()
+                sync_back_href()
                 ordered = _selectable_layers(
                     state.selected_phase, layer_names, stats_layers
                 )

@@ -51,6 +51,7 @@ from nansense.ui.top_bar import (
     _add_step_controls,
     _add_tour_button,
     _back_button,
+    _back_href,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
@@ -505,6 +506,7 @@ def _build_experiment_page(
         overlay_switch.set_visibility(state.kind != "deep_dream")
         compare_button.set_visibility(state.kind == "deep_dream")
         sync_compare_href()
+        sync_back_href()
         schedule_run()
 
     def on_layer_change(e: object) -> None:
@@ -521,6 +523,7 @@ def _build_experiment_page(
             return
         state.layer = str(value)
         sync_compare_href()
+        sync_back_href()
         clip_channel()
         schedule_run()
 
@@ -536,9 +539,17 @@ def _build_experiment_page(
         # middle-click / ctrl-click open the stats view in a new tab.
         compare_button.props(f'href="{_minmax_stats_href(state.layer)}"')
 
+    def sync_back_href() -> None:
+        # Locked playground only: Back carries the selected layer so the
+        # main page opens with its card shown.
+        if session.locked:
+            back_button.props(f'href="{_back_href(state.layer)}"')
+
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            _back_button()
+            back_button = _back_button(
+                state.layer if session.locked else None
+            )
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
             _add_tour_button()

@@ -388,17 +388,33 @@ def _add_tour_button() -> None:
     button.tooltip("Show a quick tour of this view")
 
 
-def _back_button() -> None:
+def _back_href(layer: str | None) -> str:
+    """The main-page URL a subpage's Back button targets.
+
+    With a layer, a `?layer=` deep link — the locked playground's subpages
+    carry the layer they show, so going back opens the main page with that
+    layer's card visible and scrolled into view (`main_page._build_page`).
+    """
+    return f"/?layer={quote(layer)}" if layer else "/"
+
+
+def _back_button(layer: str | None = None) -> ui.button:
     """The arrow-back button to the main page (every subpage's top bar).
 
     Rendered as a native link (`href` prop) rather than an `on_click`
     navigation so middle/ctrl-click opens the main page in a new tab —
-    same pattern as the layer cards' Weights/Experiment buttons.
+    same pattern as the layer cards' Weights/Experiment buttons. Returned
+    so pages that switch layers in place can keep the `?layer=` deep link
+    current (see `_back_href`).
     """
-    ui.button(
-        icon="arrow_back",
-        color="slate-500",
-    ).props('dense size=md href="/"').tooltip("Back to the main page")
+    return (
+        ui.button(
+            icon="arrow_back",
+            color="slate-500",
+        )
+        .props(f'dense size=md href="{_back_href(layer)}"')
+        .tooltip("Back to the main page")
+    )
 
 
 def _refresh_button(session: Session) -> None:

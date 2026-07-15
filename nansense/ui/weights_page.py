@@ -126,7 +126,9 @@ def _build_weights_page(session: Session, layer: str) -> None:
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
         with _top_bar_row():
-            _back_button()
+            # The page shows one fixed layer, so the locked Back deep link
+            # never needs re-syncing.
+            _back_button(layer if session.locked else None)
             _refresh_button(session)
             ui.label(title).classes(
                 "font-mono text-base font-bold ml-2 truncate max-w-64"

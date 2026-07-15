@@ -17,6 +17,7 @@ from nansense.ui.main_page import (
     _display_batch_size,
     _input_img_src,
     _layer_info_script,
+    _seed_shown,
 )
 from nansense.ui.graph import slug_map
 from nansense.ui.render import StripRender, image_mime, render_image, render_strip
@@ -42,6 +43,24 @@ def test_input_img_src_is_a_data_uri() -> None:
     src = _input_img_src(png)
     assert src.startswith(f"data:{image_mime()};base64,")
     assert _input_img_src(None) == ""
+
+
+@pytest.mark.parametrize(
+    ("focus_layer", "expected"),
+    [
+        # The Back-button deep link adds its layer on top of the seed set.
+        ("conv2", {"conv1", "conv2"}),
+        # Already-seeded and unknown/empty deep links leave the seed alone.
+        ("conv1", {"conv1"}),
+        ("nope", {"conv1"}),
+        ("", {"conv1"}),
+    ],
+)
+def test_seed_shown_adds_only_a_valid_focus_layer(
+    focus_layer: str, expected: set[str]
+) -> None:
+    shown = _seed_shown(frozenset({"conv1"}), focus_layer, ["conv1", "conv2"])
+    assert shown == expected
 
 
 def test_layer_info_script_publishes_nonempty_entries_by_slug() -> None:

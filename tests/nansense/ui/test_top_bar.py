@@ -20,6 +20,7 @@ from nansense.ui.top_bar import (
     _STAR_TOOLTIP,
     _add_share_button,
     _at_last_batch,
+    _back_href,
     _best_effort_ui_update,
     _current_position,
     _debug_banner_summary,
@@ -50,6 +51,21 @@ def _snapshot_at(phase: str, epoch: int, batch_idx: int) -> BatchSnapshot:
 @pytest.fixture
 def schedule() -> Schedule:
     return Schedule(epochs=3, phases={"train": 5, "val": 2})
+
+
+@pytest.mark.parametrize(
+    ("layer", "expected"),
+    [
+        # The locked subpages carry their layer back to the main page …
+        ("stage1.0.conv1", "/?layer=stage1.0.conv1"),
+        # … URL-escaped, and fall back to a plain "/" without one.
+        ("fc 1", "/?layer=fc%201"),
+        ("", "/"),
+        (None, "/"),
+    ],
+)
+def test_back_href_deep_links_the_layer(layer: str | None, expected: str) -> None:
+    assert _back_href(layer) == expected
 
 
 def test_validate_passes_for_future_position(schedule: Schedule) -> None:

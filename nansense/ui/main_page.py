@@ -163,11 +163,28 @@ def _layer_info_script(layer_info: dict[str, str], slugs: dict[str, str]) -> str
     return f"<script>window.nansenseLayerInfo = {payload};</script>"
 
 
+def _seed_shown(
+    watched: frozenset[str], focus_layer: str, layer_names: list[str]
+) -> set[str]:
+    """A new tab's decoupled shown set: the watched seed plus the deep link.
+
+    `focus_layer` is the `?layer=` query param — the locked playground's
+    subpages put the layer they show into their Back button's href, so
+    returning to the main page shows the card the visitor came from even
+    when it isn't part of the seed set. Unknown names are ignored.
+    """
+    shown = set(watched)
+    if focus_layer in layer_names:
+        shown.add(focus_layer)
+    return shown
+
+
 def _build_page(
     session: Session,
     mermaid_src: str,
     layer_names: list[str],
     *,
+    focus_layer: str = "",
     input_names: list[str],
     input_mean: MeanStd | dict[str, MeanStd] | None,
     input_std: MeanStd | dict[str, MeanStd] | None,
@@ -195,7 +212,14 @@ def _build_page(
 
     state.last_scope = session.stats_scope
     if decoupled():
-        state.shown = set(session.watched_layers)
+        # Only the locked playground emits `?layer=` links (the subpages'
+        # Back buttons); elsewhere the param is ignored so a stray deep link
+        # can't change what an unlocked session shows.
+        state.shown = _seed_shown(
+            session.watched_layers,
+            focus_layer if session.locked else "",
+            layer_names,
+        )
     state.last_watched = shown_layers()
     layer_views: dict[str, _LayerView] = {}
     # One collision-free slug per layer, shared with the Mermaid diagram
@@ -598,6 +622,13 @@ def _build_page(
             ),
             once=True,
         )
+    # A locked `?layer=` deep link (a subpage's Back button) lands on the
+    # card it names, not the top of the list.
+    if session.locked and focus_layer in layer_names:
+        scroll_js = (
+            f"window.nansenseScrollToCard({json.dumps(slugs[focus_layer])})"
+        )
+        ui.timer(0.0, lambda: ui.run_javascript(scroll_js), once=True)
 
     async def tick() -> None:
         input_panel.refresh_status()
