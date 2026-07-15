@@ -1,6 +1,6 @@
 # Getting started
 
-The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, paste [one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) into your coding agent, or install the library and follow the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) yourself.
+The fastest way to try NaNsense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add NaNsense to your own training loop instead, paste [one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) into your coding agent, or install the library and follow the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) yourself.
 
 ## Run the examples
 
@@ -52,9 +52,9 @@ pip install nansense
 
 Install torch first
 
-Install your PyTorch build first (see [pytorch.org](https://pytorch.org/get-started/locally/)) so your CUDA / ROCm / CPU choice is preserved: nansense bundles `captum` for the experiment page's attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch keeps `pip` from pulling a default CPU build. `pip install lightning` additionally enables `nansense.lightning`. Runs on Python 3.10–3.14.
+Install your PyTorch build first (see [pytorch.org](https://pytorch.org/get-started/locally/)) so your CUDA / ROCm / CPU choice is preserved: NaNsense bundles `captum` for the experiment page's attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch keeps `pip` from pulling a default CPU build. `pip install lightning` additionally enables `nansense.lightning`. Runs on Python 3.10–3.14.
 
-Wiring nansense into a training loop is a few lines:
+Wiring NaNsense into a training loop is a few lines:
 
 ```
 import nansense

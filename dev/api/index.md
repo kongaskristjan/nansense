@@ -30,7 +30,7 @@ Create a `Session` for `model` (and optionally serve the UI).
 
 The training schedule is discovered as you go: declare the epoch count at the loop (`for epoch in session.epochs(N)`), and phase names + per-phase batch counts are learned as `session.batches(loader, phase=…)` runs (the full shape is known after the first epoch). `epochs` here is an optional fallback for the count; `phases={"train": a, "val": b}` is an optional up-front declaration that restores full first-epoch fidelity (exact progress and boundary stops from batch 0) — the Lightning integration uses it, and it is the right choice when you need the UI fully precise on epoch 0.
 
-With `enabled=False` the session is a near-zero-overhead no-op: no fx trace at construction, `batch()` does nothing, and the UI is skipped. This lets a training script keep its nansense wiring in place and turn the whole UI off with a single flag.
+With `enabled=False` the session is a near-zero-overhead no-op: no fx trace at construction, `batch()` does nothing, and the UI is skipped. This lets a training script keep its NaNsense wiring in place and turn the whole UI off with a single flag.
 
 `optimizer` is optional: when given, snapshots (and the weights page) additionally carry each parameter's optimizer state — momentum buffers, Adam moments, step counts — plus its param group's numeric hyperparameters. Without it, everything behaves exactly as before.
 
@@ -74,7 +74,7 @@ Once the server thread is launched, a daemon thread waits for the port to bind a
 
 ## nansense.Session
 
-The bridge between a live training loop and the nansense UI.
+The bridge between a live training loop and the NaNsense UI.
 
 Create one with `nansense.start` (the intended entry point) rather than directly. The training loop drives the session through `batches` (wrap each phase's dataloader), `epochs` + `restore_point` (the time-travel epoch loop), and `close` when training finishes; the served UI drives pausing, stepping, layer watching and experiments through the rest of the surface. With `enabled=False` every method is a near-zero-overhead no-op.
 
@@ -86,7 +86,7 @@ enabled: bool
 
 Whether this session captures anything. Set once at `start()`.
 
-A disabled session is fully inert: `batch()` is a no-op context manager, `serve()` does nothing, and no model hooks are ever installed — the intended near-zero-overhead off switch for leaving nansense wiring in place in a training script.
+A disabled session is fully inert: `batch()` is a no-op context manager, `serve()` does nothing, and no model hooks are ever installed — the intended near-zero-overhead off switch for leaving NaNsense wiring in place in a training script.
 
 ### snapshot
 
@@ -266,13 +266,13 @@ The showcase counterpart of a training loop: a script that restored a frozen mom
 
 Bases: `Callback`
 
-Drive a nansense session from a Lightning `Trainer`.
+Drive a NaNsense session from a Lightning `Trainer`.
 
-The session is created when `fit` starts (optimizers exist by then) and closed when it ends — the UI stays up for post-mortem browsing, exactly like a hand-written loop. Pass `model="net"` (an attribute path inside the LightningModule) to point nansense at the actual network; this is recommended whenever the module wraps its layers in a submodule, both for fx tracing and so input capture sees the real forward signature.
+The session is created when `fit` starts (optimizers exist by then) and closed when it ends — the UI stays up for post-mortem browsing, exactly like a hand-written loop. Pass `model="net"` (an attribute path inside the LightningModule) to point NaNsense at the actual network; this is recommended whenever the module wraps its layers in a submodule, both for fx tracing and so input capture sees the real forward signature.
 
 `port` / `host` / `open_browser` / `enabled` / `input_mean` / `input_std` / `input_transform` mean the same as on `nansense.start`; the UI comes up once `fit` begins.
 
-Supported out of the box: automatic optimization, epoch-boundary validation (including `check_val_every_n_epoch > 1`), sanity-check skipping, and `enabled=False` as the zero-overhead off switch. Mid-epoch validation (`val_check_interval < 1.0` or step-based) is rejected with a clear error, and iterable-style dataloaders without a length are not supported — nansense declares the schedule up-front.
+Supported out of the box: automatic optimization, epoch-boundary validation (including `check_val_every_n_epoch > 1`), sanity-check skipping, and `enabled=False` as the zero-overhead off switch. Mid-epoch validation (`val_check_interval < 1.0` or step-based) is rejected with a clear error, and iterable-style dataloaders without a length are not supported — NaNsense declares the schedule up-front.
 
 ### session
 
@@ -297,7 +297,7 @@ fit_with_time_travel(
 ) -> None
 ```
 
-Run `trainer.fit` under nansense time travel.
+Run `trainer.fit` under NaNsense time travel.
 
 Equivalent to `make_trainer().fit(model, ...)` with `callback` attached, plus the UI's Time Travel button: every epoch boundary is checkpointed to `cache_dir`, and a jump re-enters training at the chosen epoch with model / optimizer / scheduler / RNG state restored. `model`, `train_dataloaders`, `val_dataloaders` and `datamodule` are forwarded to `trainer.fit` unchanged.
 

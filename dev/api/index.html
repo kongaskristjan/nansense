@@ -25,7 +25,7 @@
     
     
       
-        <title>API reference - nansense</title>
+        <title>API reference - NaNsense</title>
       
     
     
@@ -100,7 +100,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="nansense" class="md-header__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-header__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
@@ -113,7 +113,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            nansense
+            NaNsense
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -236,12 +236,12 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="nansense" class="md-nav__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-nav__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
     </a>
-    nansense
+    NaNsense
   </label>
   
     <div class="md-nav__source">
@@ -2126,7 +2126,7 @@ progress and boundary stops from batch 0) — the Lightning integration uses
 it, and it is the right choice when you need the UI fully precise on epoch 0.</p>
 <p>With <code>enabled=False</code> the session is a near-zero-overhead no-op: no fx
 trace at construction, <code>batch()</code> does nothing, and the UI is skipped.
-This lets a training script keep its nansense wiring in place and turn
+This lets a training script keep its NaNsense wiring in place and turn
 the whole UI off with a single flag.</p>
 <p><code>optimizer</code> is optional: when given, snapshots (and the weights page)
 additionally carry each parameter's optimizer state — momentum buffers,
@@ -2236,7 +2236,7 @@ input's resolved values.</p>
 
 
 
-        <p>The bridge between a live training loop and the nansense UI.</p>
+        <p>The bridge between a live training loop and the NaNsense UI.</p>
 <p>Create one with <code>nansense.start</code> (the intended entry point) rather than
 directly. The training loop drives the session through <code>batches</code> (wrap
 each phase's dataloader), <code>epochs</code> + <code>restore_point</code> (the time-travel
@@ -2284,7 +2284,7 @@ surface. With <code>enabled=False</code> every method is a near-zero-overhead no
 <p>A disabled session is fully inert: <code>batch()</code> is a no-op context
 manager, <code>serve()</code> does nothing, and no model hooks are ever
 installed — the intended near-zero-overhead off switch for leaving
-nansense wiring in place in a training script.</p>
+NaNsense wiring in place in a training script.</p>
 
     </div>
 
@@ -2745,11 +2745,11 @@ once the session is closed.</p>
 
 
 
-        <p>Drive a nansense session from a Lightning <code>Trainer</code>.</p>
+        <p>Drive a NaNsense session from a Lightning <code>Trainer</code>.</p>
 <p>The session is created when <code>fit</code> starts (optimizers exist by then) and
 closed when it ends — the UI stays up for post-mortem browsing, exactly
 like a hand-written loop. Pass <code>model="net"</code> (an attribute path inside
-the LightningModule) to point nansense at the actual network; this is
+the LightningModule) to point NaNsense at the actual network; this is
 recommended whenever the module wraps its layers in a submodule, both
 for fx tracing and so input capture sees the real forward signature.</p>
 <p><code>port</code> / <code>host</code> / <code>open_browser</code> / <code>enabled</code> / <code>input_mean</code> /
@@ -2760,7 +2760,7 @@ validation (including <code>check_val_every_n_epoch &gt; 1</code>), sanity-check
 skipping, and <code>enabled=False</code> as the zero-overhead off switch. Mid-epoch
 validation (<code>val_check_interval &lt; 1.0</code> or step-based) is rejected with a
 clear error, and iterable-style dataloaders without a length are not
-supported — nansense declares the schedule up-front.</p>
+supported — NaNsense declares the schedule up-front.</p>
 
 
 
@@ -2837,7 +2837,7 @@ supported — nansense declares the schedule up-front.</p>
 
     <div class="doc doc-contents first">
 
-        <p>Run <code>trainer.fit</code> under nansense time travel.</p>
+        <p>Run <code>trainer.fit</code> under NaNsense time travel.</p>
 <p>Equivalent to <code>make_trainer().fit(model, ...)</code> with <code>callback</code> attached,
 plus the UI's Time Travel button: every epoch boundary is checkpointed
 to <code>cache_dir</code>, and a jump re-enters training at the chosen epoch with

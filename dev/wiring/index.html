@@ -27,7 +27,7 @@
     
     
       
-        <title>Wiring guide - nansense</title>
+        <title>Wiring guide - NaNsense</title>
       
     
     
@@ -102,7 +102,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="nansense" class="md-header__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-header__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
@@ -115,7 +115,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            nansense
+            NaNsense
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -238,12 +238,12 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="nansense" class="md-nav__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-nav__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
     </a>
-    nansense
+    NaNsense
   </label>
   
     <div class="md-nav__source">
@@ -714,7 +714,7 @@
 
 
 <h1 id="wiring-guide">Wiring guide<a class="headerlink" href="#wiring-guide" title="Permanent link">&para;</a></h1>
-<p>Adding nansense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the <a href="../api/">API reference</a>. Prefer not to do it by hand? <a href="../integrate/">Integrate with one prompt</a> has a copy-paste prompt for your coding agent.</p>
+<p>Adding NaNsense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the <a href="../api/">API reference</a>. Prefer not to do it by hand? <a href="../integrate/">Integrate with one prompt</a> has a copy-paste prompt for your coding agent.</p>
 <h2 id="wire-it-into-your-loop-raw-pytorch">Wire it into your loop: raw PyTorch<a class="headerlink" href="#wire-it-into-your-loop-raw-pytorch" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">nansense</span>
@@ -739,7 +739,7 @@
         <span class="c1"># Training batch iteration</span>
         <span class="k">for</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">targets</span> <span class="ow">in</span> <span class="n">session</span><span class="o">.</span><span class="n">batches</span><span class="p">(</span><span class="n">train_dl</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">):</span>
             <span class="n">optimizer</span><span class="o">.</span><span class="n">zero_grad</span><span class="p">()</span>  <span class="c1"># keep zero_grad at the beginning of the batch</span>
-            <span class="n">loss</span> <span class="o">=</span> <span class="n">criterion</span><span class="p">(</span><span class="n">model</span><span class="p">(</span><span class="n">inputs</span><span class="p">),</span> <span class="n">targets</span><span class="p">)</span>  <span class="c1"># as nansense reads .grad when</span>
+            <span class="n">loss</span> <span class="o">=</span> <span class="n">criterion</span><span class="p">(</span><span class="n">model</span><span class="p">(</span><span class="n">inputs</span><span class="p">),</span> <span class="n">targets</span><span class="p">)</span>  <span class="c1"># as NaNsense reads .grad when</span>
             <span class="n">loss</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>  <span class="c1"># the batch exits, so zeroing after step() would</span>
             <span class="n">optimizer</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>  <span class="c1"># leave the weight-gradient views empty.</span>
         <span class="c1"># Validation batch iteration ...</span>
@@ -750,7 +750,7 @@
 <p>The pieces:</p>
 <ul>
 <li><a href="../api/#nansense.start"><code>nansense.start(model, ...)</code></a> creates the <a href="../api/#nansense.Session"><code>Session</code></a> and, when <code>port=</code> is given, serves the UI. Pass <code>optimizer=</code> to get per-parameter optimizer state and live hyperparameters on the weights page, and <code>scheduler=</code> so time travel restores the LR schedule.</li>
-<li><a href="../api/#nansense.Session.batches"><code>session.batches(loader, phase=...)</code></a> wraps each phase's dataloader — this is where nansense pauses, steps and captures.</li>
+<li><a href="../api/#nansense.Session.batches"><code>session.batches(loader, phase=...)</code></a> wraps each phase's dataloader — this is where NaNsense pauses, steps and captures.</li>
 <li><a href="../api/#nansense.Session.close"><code>session.close()</code></a> marks training finished; the served page stays up for post-mortem browsing.</li>
 <li><code>enabled=False</code> makes the whole session a near-zero-overhead no-op, so you can leave the wiring in place and switch the UI off with one flag.</li>
 </ul>

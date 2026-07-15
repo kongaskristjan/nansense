@@ -27,7 +27,7 @@
     
     
       
-        <title>Getting started - nansense</title>
+        <title>Getting started - NaNsense</title>
       
     
     
@@ -102,7 +102,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="nansense" class="md-header__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-header__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
@@ -115,7 +115,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            nansense
+            NaNsense
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -238,12 +238,12 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="nansense" class="md-nav__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-nav__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
     </a>
-    nansense
+    NaNsense
   </label>
   
     <div class="md-nav__source">
@@ -614,7 +614,7 @@
 
 
 <h1 id="getting-started">Getting started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h1>
-<p>The fastest way to try nansense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add nansense to your own training loop instead, paste <a href="../integrate/">one prompt</a> into your coding agent, or install the library and follow the <a href="../wiring/">Wiring guide</a> yourself.</p>
+<p>The fastest way to try NaNsense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add NaNsense to your own training loop instead, paste <a href="../integrate/">one prompt</a> into your coding agent, or install the library and follow the <a href="../wiring/">Wiring guide</a> yourself.</p>
 <h2 id="run-the-examples">Run the examples<a class="headerlink" href="#run-the-examples" title="Permanent link">&para;</a></h2>
 <p>The examples run with <a href="https://docs.astral.sh/uv/getting-started/installation">uv</a>, a fast Python package manager. <code>uv</code> does not pollute your other Python environments, and automatically installs the necessary packages when running a script.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Install uv:</span>
@@ -672,9 +672,9 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Install torch first</p>
-<p>Install your PyTorch build first (see <a href="https://pytorch.org/get-started/locally/">pytorch.org</a>) so your CUDA / ROCm / CPU choice is preserved: nansense bundles <code>captum</code> for the experiment page's attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch keeps <code>pip</code> from pulling a default CPU build. <code>pip install lightning</code> additionally enables <code>nansense.lightning</code>. Runs on Python 3.10–3.14.</p>
+<p>Install your PyTorch build first (see <a href="https://pytorch.org/get-started/locally/">pytorch.org</a>) so your CUDA / ROCm / CPU choice is preserved: NaNsense bundles <code>captum</code> for the experiment page's attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch keeps <code>pip</code> from pulling a default CPU build. <code>pip install lightning</code> additionally enables <code>nansense.lightning</code>. Runs on Python 3.10–3.14.</p>
 </div>
-<p>Wiring nansense into a training loop is a few lines:</p>
+<p>Wiring NaNsense into a training loop is a few lines:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">nansense</span>
 
 <span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">)</span>

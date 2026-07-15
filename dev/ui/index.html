@@ -27,7 +27,7 @@
     
     
       
-        <title>UI guide - nansense</title>
+        <title>UI guide - NaNsense</title>
       
     
     
@@ -102,7 +102,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="nansense" class="md-header__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-header__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
@@ -115,7 +115,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            nansense
+            NaNsense
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -238,12 +238,12 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="nansense" class="md-nav__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-nav__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
     </a>
-    nansense
+    NaNsense
   </label>
   
     <div class="md-nav__source">
@@ -746,7 +746,7 @@
 
 
 <h1 id="ui-guide">UI guide<a class="headerlink" href="#ui-guide" title="Permanent link">&para;</a></h1>
-<p>When a session starts, nansense serves a web page and pauses on the first batch.</p>
+<p>When a session starts, NaNsense serves a web page and pauses on the first batch.</p>
 <p><img alt="Main view of the UI" src="../images/ui_with_elements.png" /></p>
 <p><em>The main view: stepping controls, architecture graph, layer cards with activations/gradients, and the input panel. Each layer in the architecture can be clicked to open the respective layer card.</em></p>
 <h2 id="the-top-bar">The top bar<a class="headerlink" href="#the-top-bar" title="Permanent link">&para;</a></h2>
@@ -759,8 +759,8 @@
 <p>Each card renders one strip per tensor: a row of per-channel images on a shared diverging blue-white-red scale. From the card you can jump to the layer's <a href="#the-stats-page">stats view</a>, <a href="#the-weights-page">weights view</a>, or <a href="#the-experiment-page">experiment page</a>.</p>
 <h2 id="the-input-panel">The input panel<a class="headerlink" href="#the-input-panel" title="Permanent link">&para;</a></h2>
 <p>The right sidebar controls which input the layer views are computed from. A model with several inputs gets an <strong>Input</strong> dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an <code>input_transform</code> to display (see the <a href="../wiring/#displaying-inputs-correctly">Wiring guide</a>), and a flat <code>(N, C)</code> input shows as a clickable per-feature strip. <strong>Select sample in batch</strong> picks which sample of the current batch to show.</p>
-<p>The views follow the live training batch by default; <strong>Pin</strong> freezes the current batch as a fixed input that nansense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. <strong>Forward mode</strong> (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.</p>
-<p><strong>Perturb</strong> lets you click pixels to edit the input; nansense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you <a href="../showcase/#measure-the-receptive-field-of-a-neuron">measure a receptive field</a>.</p>
+<p>The views follow the live training batch by default; <strong>Pin</strong> freezes the current batch as a fixed input that NaNsense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. <strong>Forward mode</strong> (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.</p>
+<p><strong>Perturb</strong> lets you click pixels to edit the input; NaNsense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you <a href="../showcase/#measure-the-receptive-field-of-a-neuron">measure a receptive field</a>.</p>
 <h2 id="the-stats-page">The stats page<a class="headerlink" href="#the-stats-page" title="Permanent link">&para;</a></h2>
 <p>Open a watched layer's <strong>stats view</strong> for a closer look at its distributions over the epoch. The page has three views, switchable per layer:</p>
 <p><strong>Histogram</strong> leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A <strong>Per channel</strong> switch breaks the histogram down to one row per channel — the quickest way to spot <a href="../showcase/#investigate-dead-neurons">dead neurons</a>. A <strong>Show subnormal/overflow</strong> checkbox marks the dtype-aware band edges where fp16 gradients <a href="../showcase/#spot-gradient-underflow">underflow</a>; it is pre-checked when a numerical warning is active.</p>
@@ -780,7 +780,7 @@
 <p>Each layer card has an <strong>Experiment</strong> button. On the experiment page, pick a method — deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion — set its parameters, and run it on the layer. Experiments run between batches, so training must be paused; results show one card per input sample.</p>
 <p>An experiment can also be kept <strong>live</strong>: it re-runs on every visualization update, so you can watch a deep dream or attribution evolve as training proceeds.</p>
 <h2 id="numerical-debugging">Numerical debugging<a class="headerlink" href="#numerical-debugging" title="Permanent link">&para;</a></h2>
-<p>Every few batches (configurable in the settings dialog), nansense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.</p>
+<p>Every few batches (configurable in the settings dialog), NaNsense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.</p>
 <h2 id="recording-videos">Recording videos<a class="headerlink" href="#recording-videos" title="Permanent link">&para;</a></h2>
 <p>The settings dialog records any view to an MP4, one frame per visualization update, written under <code>nansense_recordings/</code>. Start a recording with a layer watched or an experiment open, then save or discard it from the same dialog.</p>
 

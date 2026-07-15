@@ -27,7 +27,7 @@
     
     
       
-        <title>Integrate with one prompt - nansense</title>
+        <title>Integrate with one prompt - NaNsense</title>
       
     
     
@@ -102,7 +102,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="nansense" class="md-header__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-header__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
@@ -115,7 +115,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            nansense
+            NaNsense
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -238,12 +238,12 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="nansense" class="md-nav__button md-logo" aria-label="nansense" data-md-component="logo">
+    <a href=".." title="NaNsense" class="md-nav__button md-logo" aria-label="NaNsense" data-md-component="logo">
       
   <img src="../images/logo_small.png" alt="logo">
 
     </a>
-    nansense
+    NaNsense
   </label>
   
     <div class="md-nav__source">
@@ -614,9 +614,9 @@
 
 
 <h1 id="integrate-with-one-prompt">Integrate with one prompt<a class="headerlink" href="#integrate-with-one-prompt" title="Permanent link">&para;</a></h1>
-<p>Run this prompt from your project with a coding agent (Claude Code, Cursor, …): it reads the nansense docs and wires the debugger into your training loop.</p>
+<p>Run this prompt from your project with a coding agent (Claude Code, Cursor, …): it reads the NaNsense docs and wires the debugger into your training loop.</p>
 <div class="nansense-prompt">
-<div class="highlight"><pre><span></span><code>Add the nansense PyTorch debugger to this project&#39;s training loop.
+<div class="highlight"><pre><span></span><code>Add the NaNsense PyTorch debugger to this project&#39;s training loop.
 
 Read the docs first: https://kongaskristjan.github.io/nansense/llms-full.txt
 (page-by-page index is here https://kongaskristjan.github.io/nansense/llms.txt)
@@ -624,15 +624,15 @@ Read the docs first: https://kongaskristjan.github.io/nansense/llms-full.txt
 Requirements: PyTorch &gt;= 2.3, Python 3.10-3.14, and an eager training loop you can wrap (PyTorch Lightning is also supported). If this project can&#39;t meet these, ask me how to proceed.
 
 Then:
-1. Add nansense to the project&#39;s dependencies (`pip install nansense`).
+1. Add NaNsense to the project&#39;s dependencies (`pip install nansense`).
 2. Wire nansense.start() / session.epochs() / session.batches() / session.close() into the training loop as the wiring guide shows; enable time travel if there&#39;s a clean epoch loop.
-3. Add a `--debugger-port PORT` CLI flag and pass `port=that_port, enabled=that_port is not None`, so nansense stays a zero-overhead no-op unless a port is given.
+3. Add a `--debugger-port PORT` CLI flag and pass `port=that_port, enabled=that_port is not None`, so NaNsense stays a zero-overhead no-op unless a port is given.
 4. Show me the exact command to launch training with the debugger.
 </code></pre></div>
 <h3 id="prompt-settings">Prompt settings:<a class="headerlink" href="#prompt-settings" title="Permanent link">&para;</a></h3>
 <p><label class="nansense-prompt-option">
 <input type="checkbox" id="nansense-port-only" checked>
-<span>Gate nansense behind a <code>--debugger-port PORT</code> flag, so it stays a zero-overhead no-op unless a port is passed <em>(recommended)</em></span>
+<span>Gate NaNsense behind a <code>--debugger-port PORT</code> flag, so it stays a zero-overhead no-op unless a port is passed <em>(recommended)</em></span>
 </label></p>
 </div>
 <h2 id="prefer-to-look-first">Prefer to look first?<a class="headerlink" href="#prefer-to-look-first" title="Permanent link">&para;</a></h2>
