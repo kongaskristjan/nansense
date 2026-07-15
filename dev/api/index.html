@@ -2602,8 +2602,9 @@ visitors share one session. Once locked:</p>
   visitor sees), and the global settings (<code>set_stats_scope</code>,
   <code>set_update_frequency</code>, <code>set_watch_performance</code>,
   <code>set_debug_settings</code>, <code>disable_debug_check</code>,
-  <code>set_auto_run_experiments</code>) become no-ops (<code>request_time_travel</code>
-  raises <code>TimeTravelError</code>, so the UI can show why);</li>
+  <code>set_auto_run_experiments</code>, <code>set_experiment_defaults</code>) become
+  no-ops (<code>request_time_travel</code> raises <code>TimeTravelError</code>, so the UI
+  can show why);</li>
 <li>the stats scope is forced to <code>ALL</code> — every layer collects, so the
   UI's per-tab show/hide never touches shared state;</li>
 <li>experiment requests still run, with their parameters clamped and

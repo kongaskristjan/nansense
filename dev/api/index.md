@@ -214,7 +214,7 @@ Lock run control and global settings for a shared demo deployment.
 
 Intended for a publicly hosted playground where many anonymous visitors share one session. Once locked:
 
-- the run-control methods (`stop`, every `step_*`, `detach`), `request_time_travel`, `watch`/`unwatch`, the probe surface (`pin_current_batch`, `unpin_batch`, `add_perturbation`, `clear_perturbations`, `set_probe_mode` — all shared state every visitor sees), and the global settings (`set_stats_scope`, `set_update_frequency`, `set_watch_performance`, `set_debug_settings`, `disable_debug_check`, `set_auto_run_experiments`) become no-ops (`request_time_travel` raises `TimeTravelError`, so the UI can show why);
+- the run-control methods (`stop`, every `step_*`, `detach`), `request_time_travel`, `watch`/`unwatch`, the probe surface (`pin_current_batch`, `unpin_batch`, `add_perturbation`, `clear_perturbations`, `set_probe_mode` — all shared state every visitor sees), and the global settings (`set_stats_scope`, `set_update_frequency`, `set_watch_performance`, `set_debug_settings`, `disable_debug_check`, `set_auto_run_experiments`, `set_experiment_defaults`) become no-ops (`request_time_travel` raises `TimeTravelError`, so the UI can show why);
 - the stats scope is forced to `ALL` — every layer collects, so the UI's per-tab show/hide never touches shared state;
 - experiment requests still run, with their parameters clamped and the queue depth capped (see `nansense.experiments`).
 
