@@ -373,12 +373,13 @@ def _add_share_button() -> None:
 
 
 def _add_tour_button() -> None:
-    """The `?` left of the share button (main page only): (re)runs the tour.
+    """The `?` left of the share button (every page): (re)runs the page's tour.
 
     Purely client-side — the driver installed by `tour.add_tour` owns all
-    the state, so the click never round-trips to the server. Available on
-    any session; only the locked playground *auto*-starts the tour (see
-    `tour.add_tour`), so a local runner sees it exactly when they ask.
+    the state, so the click never round-trips to the server, and it replays
+    the tour even after it was dismissed. Available on any session; only
+    the locked playground *auto*-starts a tour (see `tour.add_tour`), so a
+    local runner sees it exactly when they ask.
     """
     button = ui.button(icon="help_outline", color="slate-500").props(
         "dense size=md flat"

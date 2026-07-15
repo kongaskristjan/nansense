@@ -28,11 +28,13 @@ from nansense.ui.top_bar import (
     _add_settings_button,
     _add_share_button,
     _add_step_controls,
+    _add_tour_button,
     _back_button,
     _build_step_until_custom_dialog,
     _refresh_button,
     _top_bar_row,
 )
+from nansense.ui.tour import add_tour, weights_tour_steps
 
 
 _ROLE_LABELS: dict[str, str] = {"x": "X", "y": "Y", "tile": "Tile", "index": "Index"}
@@ -90,6 +92,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     title = f"Weights · {layer}" if layer else "Weights"
     _page_scaffold(title)
     ui.add_head_html(_STRIP_MARKER_CSS)
+    add_tour("weights", weights_tour_steps(), locked=session.locked)
 
     weight_names = session.layer_weights.get(layer, [])
     wanted = set(weight_names)
@@ -144,6 +147,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
                     "watching the layer)"
                 )
             _add_settings_button(session, record_view).classes("ml-auto")
+            _add_tour_button()
             _add_share_button()
             _add_repo_logo()
 
@@ -260,7 +264,11 @@ class _WeightPanel:
                 ui.label(f"shape {tuple(shape)}").classes(
                     "font-mono text-xs text-slate-500"
                 )
-            with ui.row().classes("items-end gap-4 flex-wrap"):
+            # `data-tour` marks the axis controls as the tour's arrow target
+            # (`tour.weights_tour_steps`); the first panel's visible row wins.
+            with ui.row().classes("items-end gap-4 flex-wrap").props(
+                'data-tour="axes"'
+            ):
                 for d in range(self._ndim):
                     with ui.column().classes("gap-1"):
                         ui.label(f"dim {d} · {shape[d]}").classes(
@@ -304,7 +312,11 @@ class _WeightPanel:
                         _strip_marker("bg-sky-500", "WEIGHT", header_gap=True)
                         self._img = ui.html("")
                     ui.element("div").classes("h-1")
-                    with ui.element("div").classes("flex no-wrap items-stretch"):
+                    # `data-tour`: the tour's below-the-weight arrow lands on
+                    # the gradient row (the optimizer strips sit right under).
+                    with ui.element("div").classes(
+                        "flex no-wrap items-stretch"
+                    ).props('data-tour="weight-strips"'):
                         _strip_marker("bg-violet-500", "GRADIENT")
                         self._grad_img = ui.html("")
                     # One marker-barred strip per tensor-valued optimizer

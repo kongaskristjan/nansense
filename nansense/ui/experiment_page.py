@@ -49,10 +49,12 @@ from nansense.ui.top_bar import (
     _add_settings_button,
     _add_share_button,
     _add_step_controls,
+    _add_tour_button,
     _back_button,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
+from nansense.ui.tour import add_tour, experiment_tour_steps
 
 
 @dataclass(frozen=True)
@@ -389,6 +391,10 @@ def _build_experiment_page(
             _weights_placeholder("No layers available to experiment on.")
         return
     initial_layer = layer if layer in selectable_layers else selectable_layers[0]
+    add_tour(
+        "experiment", experiment_tour_steps(locked=session.locked),
+        locked=session.locked,
+    )
 
     step_until_custom = _build_step_until_custom_dialog(session)
     widgets: dict[str, ui.element] = {}
@@ -522,6 +528,7 @@ def _build_experiment_page(
             _back_button()
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
+            _add_tour_button()
             _add_share_button()
             _add_repo_logo()
 
@@ -534,12 +541,14 @@ def _build_experiment_page(
             ).props(_resizable_pane_props("experiment-controls")):
                 ui.label("Experiment").classes("font-mono text-base font-bold")
                 ui.separator()
+                # `data-tour` marks the two selectors as the tour's arrow
+                # targets (`tour.experiment_tour_steps`).
                 kind_select = ui.select(
                     available_experiment_kinds(),
                     label="Experiment",
                     value=state.kind,
                     on_change=on_kind_change,
-                ).props("dense outlined").classes("w-full")
+                ).props('dense outlined data-tour="kind"').classes("w-full")
                 with kind_select:
                     kind_tooltip = ui.tooltip("")
                 with ui.row().classes("w-full no-wrap gap-2"):
@@ -571,7 +580,10 @@ def _build_experiment_page(
                         label="Layer",
                         on_change=on_layer_change,
                     )
-                    .props("dense outlined options-dense option-disable=disable")
+                    .props(
+                        "dense outlined options-dense option-disable=disable "
+                        'data-tour="layer"'
+                    )
                     .classes("w-full")
                 )
                 params_pane = ui.column().classes("w-full gap-2 p-0")

@@ -1184,10 +1184,12 @@ settings/recording, and step-until dialogs), `input_panel.py` (the main
 page's right sidebar), `render.py` + `histograms.py` (pure render/plot
 math), `graph.py` (the Mermaid architecture graph), `bin_samples.py`,
 `common.py` (small cross-page helpers), `static.py` (the CSS/JS blobs), and
-`tour.py` (the main page's guided tour: Python step data plus an overlay-JS
-driver that draws arrows to `data-tour`-tagged elements; auto-starts once
-per browser — a localStorage flag — on locked sessions, and is replayed
-anywhere via the top bar's `?` button).
+`tour.py` (the per-page guided tours: Python step data for every page — a
+long tour for the main view, one-to-three-step tours for the subpages —
+plus an overlay-JS driver that draws arrows to `data-tour`-tagged
+elements; on locked sessions each page's tour auto-starts once per browser
+— a per-page localStorage flag set on dismissal — and every page's top-bar
+`?` button replays its tour anywhere).
 Page modules import from the shared modules; `app.py` imports the pages —
 the graph is acyclic.
 

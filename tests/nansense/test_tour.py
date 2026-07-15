@@ -1,9 +1,9 @@
-"""Tests for the main view's guided tour (`nansense.ui.tour`).
+"""Tests for the per-page guided tours (`nansense.ui.tour`).
 
 The driver itself is browser JS; what's testable here is the contract it
 relies on: the step data (short single sentences, resolvable selectors),
-the config object, and the `data-tour` anchors actually existing in the UI
-sources the selectors point at.
+the config object, per-page seen keys, and the `data-tour` anchors
+actually existing in the UI sources the selectors point at.
 """
 
 from __future__ import annotations
@@ -16,13 +16,30 @@ import pytest
 
 from nansense.ui.tour import (
     _TOUR_JS,
-    SEEN_KEY,
+    SEEN_KEY_PREFIX,
     TourStep,
+    experiment_tour_steps,
+    main_tour_steps,
+    seen_key,
+    stats_tour_steps,
     tour_config,
-    tour_steps,
+    weights_tour_steps,
 )
 
 _UI_DIR = Path(__file__).resolve().parents[2] / "nansense" / "ui"
+
+# Every page's steps, for both session flavors — the shape the pages
+# actually install (see each page's `add_tour` call).
+_ALL_PAGE_STEPS: list[tuple[str, bool, list[TourStep]]] = [
+    (page, locked, steps)
+    for locked in (True, False)
+    for page, steps in [
+        ("main", main_tour_steps("conv1", locked=locked)),
+        ("stats", stats_tour_steps()),
+        ("weights", weights_tour_steps()),
+        ("experiment", experiment_tour_steps(locked=locked)),
+    ]
+]
 
 
 def _ui_source() -> str:
@@ -31,9 +48,12 @@ def _ui_source() -> str:
     )
 
 
-@pytest.mark.parametrize("locked", [True, False])
-def test_steps_are_short_single_sentences(locked: bool) -> None:
-    for step in tour_steps("conv1", locked=locked):
+@pytest.mark.parametrize(("page", "locked", "steps"), _ALL_PAGE_STEPS)
+def test_steps_are_short_single_sentences(
+    page: str, locked: bool, steps: list[TourStep]
+) -> None:
+    assert steps
+    for step in steps:
         assert step.text.endswith(".")
         # One sentence: no sentence break inside the text.
         assert ". " not in step.text
@@ -42,28 +62,51 @@ def test_steps_are_short_single_sentences(locked: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    ("locked", "count", "has_step_controls"),
-    [(True, 4, False), (False, 5, True)],
+    "steps",
+    [
+        stats_tour_steps(),
+        weights_tour_steps(),
+        experiment_tour_steps(locked=False),
+        experiment_tour_steps(locked=True),
+    ],
+)
+def test_subpage_tours_stay_short(steps: list[TourStep]) -> None:
+    """Subpage tours cover only the non-obvious bits: at most 3 steps."""
+    assert 1 <= len(steps) <= 3
+
+
+@pytest.mark.parametrize(
+    ("locked", "main_count", "experiment_count", "has_step_controls"),
+    [(True, 4, 1, False), (False, 5, 2, True)],
 )
 def test_step_controls_step_only_on_live_runs(
-    locked: bool, count: int, has_step_controls: bool
+    locked: bool,
+    main_count: int,
+    experiment_count: int,
+    has_step_controls: bool,
 ) -> None:
-    steps = tour_steps("conv1", locked=locked)
-    assert len(steps) == count
-    selectors = [sel for step in steps for sel in step.selectors]
-    assert ('[data-tour="step-controls"]' in selectors) == has_step_controls
+    for steps, count in [
+        (main_tour_steps("conv1", locked=locked), main_count),
+        (experiment_tour_steps(locked=locked), experiment_count),
+    ]:
+        assert len(steps) == count
+        selectors = [sel for step in steps for sel in step.selectors]
+        assert (
+            '[data-tour="step-controls"]' in selectors
+        ) == has_step_controls
 
 
-@pytest.mark.parametrize("locked", [True, False])
-def test_data_tour_anchors_exist_in_ui_sources(locked: bool) -> None:
+@pytest.mark.parametrize(("page", "locked", "steps"), _ALL_PAGE_STEPS)
+def test_data_tour_anchors_exist_in_ui_sources(
+    page: str, locked: bool, steps: list[TourStep]
+) -> None:
     """Every `data-tour` selector must have a matching attribute in the UI.
 
-    This is the wiring test: a renamed or dropped anchor in
-    `main_page.py` / `input_panel.py` / `top_bar.py` must fail here rather
-    than silently leaving a tour step with no arrow.
+    This is the wiring test: a renamed or dropped anchor in any page module
+    must fail here rather than silently leaving a tour step with no arrow.
     """
     source = _ui_source()
-    for step in tour_steps("conv1", locked=locked):
+    for step in steps:
         for sel in step.selectors:
             m = re.fullmatch(r'\[data-tour="([a-z-]+)"\]', sel)
             if m is None:
@@ -72,25 +115,44 @@ def test_data_tour_anchors_exist_in_ui_sources(locked: bool) -> None:
 
 
 def test_diagram_selector_matches_findmermaidnode_scheme() -> None:
-    (first, *_), *_ = (s.selectors for s in tour_steps("fc_1", locked=True))
+    (first, *_), *_ = (s.selectors for s in main_tour_steps("fc_1", locked=True))
     # Trailing dash included, so `fc_1` never matches an `fc_1x...` node id.
     assert first == 'g.node[id*="-flowchart-fc_1-"]'
     # No known layer: fall back to pointing at any diagram node.
-    (fallback, *_), *_ = (s.selectors for s in tour_steps(None, locked=True))
+    (fallback, *_), *_ = (
+        s.selectors for s in main_tour_steps(None, locked=True)
+    )
     assert fallback == "g.node"
 
 
+def test_seen_keys_are_distinct_per_page() -> None:
+    keys = [seen_key(p) for p in ("main", "stats", "weights", "experiment")]
+    assert len(set(keys)) == len(keys)
+    # The main page keeps the original unsuffixed key, so playground
+    # visitors who already dismissed its tour aren't replayed.
+    assert seen_key("main") == SEEN_KEY_PREFIX
+    assert seen_key("stats") == f"{SEEN_KEY_PREFIX}-stats"
+
+
 def test_config_carries_driver_contract() -> None:
-    config = tour_config(locked=True, layer_slug="conv1")
+    steps = main_tour_steps("conv1", locked=True)
+    config = tour_config(
+        steps, page="main", auto_start=True, auto_watch_slug="conv1"
+    )
     assert config["autoStart"] is True
     assert config["autoWatchSlug"] == "conv1"
-    assert config["seenKey"] == SEEN_KEY
-    steps = config["steps"]
-    assert isinstance(steps, list)
-    assert len(steps) == len(tour_steps("conv1", locked=True))
-    # Exactly one step may auto-show a card (the strips step).
+    assert config["seenKey"] == seen_key("main")
+    payload = config["steps"]
+    assert isinstance(payload, list)
+    assert len(payload) == len(steps)
+    # Exactly one step may auto-show a card (the main tour's strips step).
     assert json.dumps(config).count('"ensureCard": true') == 1
-    assert tour_config(locked=False, layer_slug=None)["autoStart"] is False
+    subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
+    assert subpage["autoStart"] is False
+    assert subpage["autoWatchSlug"] is None
+    assert subpage["seenKey"] == seen_key("stats")
+    # No subpage step auto-shows a layer card — that's a main-view mechanic.
+    assert '"ensureCard": true' not in json.dumps(subpage)
 
 
 def test_driver_js_uses_the_config_hooks() -> None:

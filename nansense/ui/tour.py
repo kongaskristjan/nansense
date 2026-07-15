@@ -1,19 +1,17 @@
-"""The main view's guided tour: a few one-sentence steps with pointing arrows.
+"""The per-page guided tours: a few one-sentence steps with pointing arrows.
 
 A floating message box (bottom-center, above the page) walks through the
-view's controls; each step draws an amber arrow — plus an outline ring —
-from the box to the live element(s) it talks about:
+current page's least obvious controls; each step draws an amber arrow —
+plus an outline ring — from the box to the live element(s) it talks about.
+Every page has its own short tour (`*_tour_steps` below); the main view's
+is the long one, the subpages get one to three steps covering only what a
+first look wouldn't reveal.
 
-1. a node in the architecture diagram (click-to-show),
-2. a layer card's activation/gradient strips,
-3. the card's Weights / Experiment / Stats buttons (three arrows),
-4. the input pane's sample spinner, and
-5. on live (non-locked) runs only: the Run / Step Batch / Stop cluster.
-
-Step 2 needs a visible card, so advancing to it auto-shows one layer (via
-the same `nansense_toggle_layer` event a diagram click emits) when nothing
-is shown yet — on a locked session that only touches the tab's own `shown`
-set, so playground visitors never affect each other.
+The main tour's strips step needs a visible layer card, so advancing to it
+auto-shows one layer (via the same `nansense_toggle_layer` event a diagram
+click emits) when nothing is shown yet — on a locked session that only
+touches the tab's own `shown` set, so playground visitors never affect
+each other.
 
 The driver is a self-contained JS blob in the `static.py` style: targets
 are plain CSS selectors resolved to their first *visible* match on a 200 ms
@@ -23,11 +21,12 @@ Steps whose target hasn't appeared (yet) simply show no arrow.
 
 Auto-start policy (see `add_tour`): only a locked session — the hosted
 playground, whose visitors are exactly the people who have never seen the
-UI — starts the tour on load, and only once per browser (a localStorage
-flag; the playground's public origin is stable, so the flag survives
-visits). Local runs never auto-start: the top bar's `?` button
-(`top_bar._add_tour_button`) is the explicit way in, and it replays the
-tour anywhere.
+UI — starts a tour on load, and each page's tour only once per browser
+(a per-page localStorage flag, set the moment the tour is dismissed —
+skipped, stepped through, or escaped; the playground's public origin is
+stable, so the flag survives visits). Local runs never auto-start: the top
+bar's `?` button (`top_bar._add_tour_button`) is the explicit way in on
+every page, and it replays that page's tour anywhere, seen or not.
 """
 
 from __future__ import annotations
@@ -37,10 +36,17 @@ from dataclasses import dataclass
 
 from nicegui import ui
 
-# The localStorage flag marking the tour as seen. Origin-scoped, which is
-# fine for the fixed-origin playground (the only auto-start case); local
-# runs change ports (origins) freely because they never auto-start.
-SEEN_KEY = "nansense-tour-seen"
+# The localStorage flags marking a page's tour as seen. Origin-scoped, which
+# is fine for the fixed-origin playground (the only auto-start case); local
+# runs change ports (origins) freely because they never auto-start. The main
+# page keeps the original unsuffixed key so playground visitors who already
+# dismissed its tour aren't replayed by the rename.
+SEEN_KEY_PREFIX = "nansense-tour-seen"
+
+
+def seen_key(page: str) -> str:
+    """The localStorage seen-flag for one page's tour."""
+    return SEEN_KEY_PREFIX if page == "main" else f"{SEEN_KEY_PREFIX}-{page}"
 
 
 @dataclass(frozen=True)
@@ -62,8 +68,8 @@ def _mermaid_node_selector(slug: str) -> str:
     return f'g.node[id*="-flowchart-{slug}-"]'
 
 
-def tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
-    """The tour's steps, pointing step 1 at `layer_slug`'s diagram node.
+def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
+    """The main view's steps, pointing step 1 at `layer_slug`'s diagram node.
 
     Falls back to the first diagram node when no layer is known (a model
     with no captured layers) — the arrow still lands on something sensible.
@@ -108,7 +114,92 @@ def tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
     return steps
 
 
-def tour_config(*, locked: bool, layer_slug: str | None) -> dict[str, object]:
+def stats_tour_steps() -> list[TourStep]:
+    """The Stats page's steps: the two mode dropdowns and the bin sampler.
+
+    Only the non-obvious bits: that the View dropdown swaps what *every*
+    card shows, that "Current batch" is the phase entry that works for any
+    layer (watched or not), and that per-channel histogram bars can be
+    hovered to see real inputs from that value range — the page's least
+    discoverable feature.
+    """
+    return [
+        TourStep(
+            "The View dropdown switches every card: histograms, "
+            "extreme-input patches (MIN/MAX), or per-epoch graphs.",
+            ('[data-tour="view"]',),
+        ),
+        TourStep(
+            "Phases show the watched layers' running stats; \"Current "
+            "batch\" reads the last captured batch and works for any layer.",
+            ('[data-tour="phase"]',),
+        ),
+        TourStep(
+            "Turn on Per channel, then hover a bar to see real inputs "
+            "whose values landed in that bin.",
+            ('[data-tour="per-channel"]',),
+        ),
+    ]
+
+
+def weights_tour_steps() -> list[TourStep]:
+    """The Weights page's steps: axis remapping and the non-weight strips.
+
+    The dimension-role controls are the page's one mechanic that isn't
+    self-evident, and the strips below each weight (its gradient and the
+    optimizer's per-parameter state) only appear once training has stepped —
+    worth a pointer so they aren't mistaken for more weights.
+    """
+    return [
+        TourStep(
+            "Map each weight dimension to the X or Y image axis, tile it "
+            "side by side, or pin it to one index.",
+            ('[data-tour="axes"]',),
+        ),
+        TourStep(
+            "Below the weight: its gradient and the optimizer's "
+            "per-parameter state (momentum, Adam moments) in the same "
+            "layout.",
+            ('[data-tour="weight-strips"]',),
+        ),
+    ]
+
+
+def experiment_tour_steps(*, locked: bool) -> list[TourStep]:
+    """The Experiment page's steps.
+
+    Step 1 points at the kind and layer selectors — mainly for the
+    description that appears at the bottom of the pane, which is easy to
+    miss. On live runs only, step 2 explains the page's one real gotcha:
+    experiments execute on the training thread, so nothing runs until
+    training pauses (the playground's training is always parked, and its
+    step cluster is replaced by the demo notice anyway).
+    """
+    steps = [
+        TourStep(
+            "Pick the experiment kind and target layer — the method's "
+            "description appears at the bottom of this pane.",
+            ('[data-tour="kind"]', '[data-tour="layer"]'),
+        ),
+    ]
+    if not locked:
+        steps.append(
+            TourStep(
+                "Experiments run while training is paused — if results "
+                "stay queued, pause with Stop or Step Batch.",
+                ('[data-tour="step-controls"]',),
+            )
+        )
+    return steps
+
+
+def tour_config(
+    steps: list[TourStep],
+    *,
+    page: str,
+    auto_start: bool,
+    auto_watch_slug: str | None = None,
+) -> dict[str, object]:
     """The driver's config object (`window.nansenseTourConfig`)."""
     return {
         "steps": [
@@ -117,26 +208,36 @@ def tour_config(*, locked: bool, layer_slug: str | None) -> dict[str, object]:
                 "selectors": list(step.selectors),
                 "ensureCard": step.ensure_card,
             }
-            for step in tour_steps(layer_slug, locked=locked)
+            for step in steps
         ],
-        "autoWatchSlug": layer_slug,
-        "autoStart": locked,
-        "seenKey": SEEN_KEY,
+        "autoWatchSlug": auto_watch_slug,
+        "autoStart": auto_start,
+        "seenKey": seen_key(page),
     }
 
 
-def add_tour(*, locked: bool, layer_slug: str | None) -> None:
-    """Install the tour (config + CSS + driver) into the current page.
+def add_tour(
+    page: str,
+    steps: list[TourStep],
+    *,
+    locked: bool,
+    auto_watch_slug: str | None = None,
+) -> None:
+    """Install `page`'s tour (config + CSS + driver) into the current page.
 
-    `layer_slug` is both step 1's arrow target and the layer auto-shown for
-    step 2 — the caller picks a layer that owns weights so step 3's three
-    buttons all exist on the shown card. Only a locked session (the shared
-    playground) auto-starts, and only when the browser hasn't seen the tour;
-    everywhere else the tour waits for the `?` button.
+    `auto_watch_slug` (main page only) is the layer auto-shown for the
+    strips step. Only a locked session (the shared playground) auto-starts,
+    and only when the browser hasn't dismissed this page's tour before
+    (per-page `seen_key`); everywhere else the tour waits for the top bar's
+    `?` button, which replays it regardless of the seen flag.
     """
     # Same `</`-escape as `main_page._layer_info_script`: layer names (via
     # slugs) are user data and must not terminate the script tag early.
-    payload = json.dumps(tour_config(locked=locked, layer_slug=layer_slug))
+    payload = json.dumps(
+        tour_config(
+            steps, page=page, auto_start=locked, auto_watch_slug=auto_watch_slug
+        )
+    )
     payload = payload.replace("</", "<\\/")
     ui.add_head_html(_TOUR_CSS)
     ui.add_body_html(f"<script>window.nansenseTourConfig = {payload};</script>")

@@ -72,10 +72,12 @@ from nansense.ui.top_bar import (
     _add_settings_button,
     _add_share_button,
     _add_step_controls,
+    _add_tour_button,
     _back_button,
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
+from nansense.ui.tour import add_tour, stats_tour_steps
 from nansense.watch import N_BINS, LayerStatsSnapshot, WatchSnapshot
 
 
@@ -286,6 +288,7 @@ def _build_stats_page(
     """
     _page_scaffold("Stats")
     _install_panel_resize()
+    add_tour("stats", stats_tour_steps(), locked=session.locked)
     # A `?watch=1` link starts collecting the seeded layer before anything
     # renders, so the reconciliation below sees it as watched.
     _apply_watch_param(session, selected_layer, watch)
@@ -468,6 +471,7 @@ def _build_stats_page(
             ).props("dense size=md flat").tooltip(
                 "Refresh now — and from the next training batch while running"
             )
+            _add_tour_button()
             _add_share_button()
             _add_repo_logo()
 
@@ -484,12 +488,14 @@ def _build_stats_page(
                         "text-sm text-slate-500"
                     )
                 ui.separator()
+                # `data-tour` marks the two dropdowns as the tour's arrow
+                # targets (`tour.stats_tour_steps`).
                 ui.select(
                     [_VIEW_HISTOGRAM, _VIEW_MINMAX, _VIEW_GRAPHS],
                     label="View",
                     value=state.view,
                     on_change=lambda e: set_mode(e.value),
-                ).props("dense outlined options-dense").classes(
+                ).props('dense outlined options-dense data-tour="view"').classes(
                     "w-full text-sm"
                 ).tooltip("What each layer card shows")
                 # Phases, then "Current batch" as the last entry (dropped in
@@ -502,7 +508,7 @@ def _build_stats_page(
                     label="Phase",
                     value=state.selected_phase,
                     on_change=lambda e: set_phase(e.value),
-                ).props("dense outlined options-dense").classes(
+                ).props('dense outlined options-dense data-tour="phase"').classes(
                     "w-full text-sm"
                 ).tooltip(
                     "Which phase the cards show — or the last captured batch's "
@@ -1054,9 +1060,11 @@ class _HistPlot:
         self._y_top: float | None = None
         self._y_top_density: bool = use_density(self._axis[0])
         with ui.row().classes("items-center gap-x-3 no-wrap"):
+            # `data-tour` marks the switch as the tour's bin-sampler arrow
+            # target (`tour.stats_tour_steps`); the first visible one wins.
             self._channel_switch = (
                 ui.switch("Per channel", value=False, on_change=self._set_mode)
-                .props("dense")
+                .props('dense data-tour="per-channel"')
                 .classes("text-sm")
             )
             self._channel_switch.tooltip(

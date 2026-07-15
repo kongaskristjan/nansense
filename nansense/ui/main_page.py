@@ -57,7 +57,7 @@ from nansense.ui.top_bar import (
     _refresh_button,
     _top_bar_row,
 )
-from nansense.ui.tour import add_tour
+from nansense.ui.tour import add_tour, main_tour_steps
 
 
 @dataclass
@@ -250,9 +250,12 @@ def _build_page(
         (n for n in layer_names if layer_weights.get(n)),
         layer_names[0] if layer_names else None,
     )
+    tour_slug = slugs[tour_layer] if tour_layer is not None else None
     add_tour(
+        "main",
+        main_tour_steps(tour_slug, locked=session.locked),
         locked=session.locked,
-        layer_slug=slugs[tour_layer] if tour_layer is not None else None,
+        auto_watch_slug=tour_slug,
     )
 
     step_until_custom = _build_step_until_custom_dialog(session)
