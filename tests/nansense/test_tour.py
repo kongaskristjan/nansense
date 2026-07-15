@@ -49,15 +49,15 @@ def _ui_source() -> str:
 
 
 @pytest.mark.parametrize(("page", "locked", "steps"), _ALL_PAGE_STEPS)
-def test_steps_are_short_single_sentences(
+def test_steps_are_short_and_skimmable(
     page: str, locked: bool, steps: list[TourStep]
 ) -> None:
     assert steps
     for step in steps:
         assert step.text.endswith(".")
-        # One sentence: no sentence break inside the text.
-        assert ". " not in step.text
-        assert len(step.text) <= 140
+        # Skimmable: at most two sentences and ~200 chars per bubble.
+        assert step.text.count(". ") <= 1
+        assert len(step.text) <= 200
         assert step.selectors
 
 

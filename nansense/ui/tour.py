@@ -152,8 +152,10 @@ def stats_tour_steps() -> list[TourStep]:
             ensure_view="MIN/MAX",
         ),
         TourStep(
-            "GRAPHS charts each statistic across the epochs — toggle stats "
-            "beyond the mean via the plot legend.",
+            "GRAPHS charts this layer's statistics across the epochs — how "
+            "its activations, gradients, and weights evolved over training "
+            "(not the loss curve). Toggle stats beyond the mean via the "
+            "plot legend.",
             ('[data-tour="epoch-graph"]',),
             ensure_view="GRAPHS",
         ),
