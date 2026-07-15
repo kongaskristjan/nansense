@@ -257,9 +257,10 @@ def open_showcase(
     loads the frozen weights and buffers into `model` and replays the frozen
     batch through it (regenerating every activation and gradient the views
     show; the replay mirrors the prepare run's training step) — then the
-    demo preferences armed ahead of the one-way lock: experiments wait for a
-    manual Run (auto-run off — a shared queue shouldn't fill on parameter
-    edits) and the spec's cheaper deep-dream form defaults, if any.
+    demo preferences armed ahead of the one-way lock: experiment re-runs
+    wait for a manual Run (auto-run off — a shared queue shouldn't fill on
+    parameter edits; a page's first experiment still starts on its own) and
+    the spec's cheaper deep-dream form defaults, if any.
     Everything else a demo needs (watched seed layers, statistics, schedule)
     lives in the moment file.
     """

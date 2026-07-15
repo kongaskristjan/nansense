@@ -652,8 +652,8 @@ def _build_experiment_page(
                     "Adjust parameters — the experiment runs automatically "
                     "(training must be paused)."
                     if session.auto_run_experiments
-                    else "Adjust parameters, then press Run "
-                    "(training must be paused)."
+                    else "The first experiment starts on its own — after "
+                    "changing parameters, press Run (training must be paused)."
                 ).classes("text-sm text-slate-600")
                 error_label = ui.label("").classes("text-sm text-red-600")
                 results_col = ui.column().classes("gap-2 w-full")
@@ -951,7 +951,14 @@ def _build_experiment_page(
         update_controls(running=running)
 
         # Auto-run: register (or re-register on change) without a manual Run.
-        if session.auto_run_experiments and state.dirty and not frozen:
+        # Even with auto-run off, the page's *first* experiment self-starts
+        # (`my_seq` stays None until one runs) so the page opens onto a
+        # result; only the re-runs wait for a manual Run then.
+        if (
+            (session.auto_run_experiments or state.my_seq is None)
+            and state.dirty
+            and not frozen
+        ):
             state.dirty = False
             run()
 

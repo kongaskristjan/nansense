@@ -892,7 +892,8 @@ layer, never an `on_click` navigate — so middle-click opens a new tab. A 200 m
 init and on any parameter / layer change, buffered to one run per tick;
 `register_auto_experiment` drops a superseded queued request so the pause
 loop is never flooded) gated on the shared `session.auto_run_experiments`
-setting, and toggles Run/Cancel enablement (Run off while auto-run is on or
+setting — except the init run, which self-starts even with auto-run off so
+the page opens onto a result — and toggles Run/Cancel enablement (Run off while auto-run is on or
 a run is in flight; Cancel off while idle). Run replaces and Cancel aborts
 only this page's request, so tabs don't clobber each other.
 
@@ -1477,8 +1478,8 @@ deployments — BMP strips are the localhost trade. `examples/playground`
 hosts the reference deployments (one spec per demo dataset): each freezes a
 moment with `--prepare` and serves it via `load_moment` + `lock` + `park`
 (see *Frozen moments* below), arming the demo preferences before the
-lock — experiment auto-run off (visitors press Run; the tour points the
-button out) and any spec-level deep-dream form defaults
+lock — experiment auto-run off (a page's first experiment still
+self-starts, but re-runs take a manual Run, which the tour points out) and any spec-level deep-dream form defaults
 (`set_experiment_defaults`, e.g. imagenette's 150 steps / 4 channels).
 
 ## Frozen moments (`nansense.moments`)

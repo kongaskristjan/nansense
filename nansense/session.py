@@ -405,8 +405,9 @@ class Session:
         # client (a UI page or a recording). Mutated under `_cv`.
         self._auto_experiments: dict[str, _AutoExperiment] = {}
         # Session-wide "auto-run experiments" preference (shared across tabs):
-        # when set, experiment pages re-run on init and on every parameter
-        # change instead of waiting for a manual Run. Default on.
+        # when set, experiment pages re-run on every parameter change instead
+        # of waiting for a manual Run (the init run self-starts either way).
+        # Default on.
         self._auto_run_experiments = True
         # Per-key overrides for the experiment form's default parameter
         # values (see `set_experiment_defaults`). Mutated under `_cv`.
@@ -1105,8 +1106,9 @@ class Session:
 
         A session-wide preference shared across browser tabs (toggled from
         the settings dialog). When set, an experiment page runs on init and
-        on any parameter change without a manual Run; when clear, only Run
-        arms an experiment. Default `True`.
+        on any parameter change without a manual Run; when clear, the page
+        still runs once on init but re-runs only on a manual Run. Default
+        `True`.
         """
         with self._cv:
             return self._auto_run_experiments
