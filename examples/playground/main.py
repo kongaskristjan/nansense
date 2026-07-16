@@ -103,9 +103,10 @@ PLAYGROUNDS: dict[str, PlaygroundSpec] = {
         model="lenet",
         epochs=20,
         batch_size=64,
-        # A single card keeps the first view focused; conv1 makes the most
-        # visually interesting strips and the rest stay a diagram click away.
-        shown_layers=("conv1",),
+        # A single card keeps the first view focused; relu1's sparse
+        # post-activation strips read best, and the rest stay a diagram
+        # click away.
+        shown_layers=("relu1",),
     ),
     "imagenette": PlaygroundSpec(
         dataset="imagenette",

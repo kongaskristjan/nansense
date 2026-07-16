@@ -73,7 +73,7 @@ def _prepare(spec: PlaygroundSpec, moment_path: Path) -> PlaygroundSpec:
 
 @pytest.mark.parametrize(
     ("name", "layer"),
-    [("mnist", "conv1"), ("imagenette", "stage1.0.conv1")],
+    [("mnist", "relu1"), ("imagenette", "stage1.0.conv1")],
 )
 def test_locked_playgrounds_default_to_a_single_card(name: str, layer: str) -> None:
     """One card on first load keeps a locked demo's landing view focused;
