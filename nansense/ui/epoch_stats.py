@@ -13,6 +13,7 @@ import math
 
 import plotly.graph_objects as go
 
+from nansense.instruments import MetricSeries
 from nansense.ui.histograms import AXIS_EXPONENT_FORMAT, kind_stats
 from nansense.watch import LayerStatsSnapshot, TensorStatsSnapshot
 
@@ -31,6 +32,19 @@ EPOCH_STAT_SPECS: tuple[tuple[str, str], ...] = (
 # shared value axis).
 DEAD_SERIES: str = "dead channels"
 _DEAD_COLOR: str = "#ef4444"  # red
+
+# Trace colors for the custom-metric plots, cycled in trace order (a metric
+# has as many traces as its mapping keys — usually one).
+METRIC_TRACE_COLORS: tuple[str, ...] = (
+    "#0ea5e9",  # sky
+    "#f97316",  # orange
+    "#22c55e",  # green
+    "#8b5cf6",  # violet
+    "#64748b",  # slate
+    "#eab308",  # yellow
+    "#ec4899",  # pink
+    "#14b8a6",  # teal
+)
 
 _EPOCH_PLOT_HEIGHT: int = 340
 
@@ -175,4 +189,88 @@ def make_epoch_stats_figure(kind: str, title: str) -> go.Figure:
                 showgrid=False,
             )
         )
+    return fig
+
+
+def metric_trace_data(
+    series: MetricSeries,
+) -> tuple[list[float], list[float | None], list[list[object]]]:
+    """One custom-metric trace's arrays: xs, gapped ys, (epoch, batch) hover.
+
+    Non-finite values become `None` (a Plotly gap, and valid JSON). The
+    customdata pairs feed the hover template: the epoch, and a pre-formatted
+    batch suffix that is empty for reduced `on="epoch"` points.
+    """
+    ys = [v if math.isfinite(v) else None for v in series.values]
+    custom: list[list[object]] = [
+        [epoch, "" if batch is None else f" · batch {batch}"]
+        for epoch, batch in zip(series.epochs, series.batches)
+    ]
+    return list(series.xs), ys, custom
+
+
+def metric_epochs(series_map: dict[str, MetricSeries]) -> list[int]:
+    """Sorted distinct epochs across a metric's traces (x-tick spacing)."""
+    return sorted({e for series in series_map.values() for e in series.epochs})
+
+
+def make_metric_figure(
+    metric: str, series_map: dict[str, MetricSeries]
+) -> go.Figure:
+    """The figure for one custom metric, one trace per series.
+
+    Same epoch x-axis conventions as the built-in figures — `on="batch"`
+    points sit at epoch fractions, so the curves line up under them. Built
+    whenever the trace set changes; in between, refreshes restyle the
+    arrays in place (`_MetricPlot`).
+    """
+    fig = go.Figure()
+    for i, (name, series) in enumerate(series_map.items()):
+        xs, ys, custom = metric_trace_data(series)
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                customdata=custom,
+                mode="lines+markers",
+                name=name or metric,
+                hovertemplate=(
+                    "%{y:.4g} · epoch %{customdata[0]}%{customdata[1]}"
+                    "<extra>%{fullData.name}</extra>"
+                ),
+                line=dict(
+                    color=METRIC_TRACE_COLORS[i % len(METRIC_TRACE_COLORS)],
+                    width=2,
+                ),
+                # Dense per-batch series read as lines; the markers matter
+                # for the sparse per-epoch ones (and single-point series).
+                marker=dict(size=6 if series.on == "epoch" else 4),
+            )
+        )
+    fig.update_layout(
+        title=dict(text=metric, x=0.0, font=dict(size=12)),
+        height=_EPOCH_PLOT_HEIGHT,
+        margin=dict(l=50, r=50, t=40, b=40),
+        plot_bgcolor="#f8fafc",
+        paper_bgcolor="white",
+        hovermode="x unified",
+        legend=dict(font=dict(size=10)),
+        xaxis=dict(
+            title=dict(text="epoch", font=dict(size=10)),
+            tickfont=dict(size=9),
+            dtick=epoch_axis_dtick(metric_epochs(series_map)),
+            tick0=0,
+            showgrid=False,
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title=dict(text="value", font=dict(size=10)),
+            tickfont=dict(size=9),
+            exponentformat=AXIS_EXPONENT_FORMAT,
+            showgrid=True,
+            gridcolor="#e2e8f0",
+            zeroline=True,
+            zerolinecolor="#cbd5e1",
+        ),
+    )
     return fig

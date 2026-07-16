@@ -779,17 +779,22 @@ _PROBE_NO_GRADIENTS_HTML: str = (
     "no gradients on probe runs</div>"
 )
 
-# Strip pair shown for a layer whose render fell over. `render_strip` already
+# One layer card's rendered content: the activation and gradient strips plus
+# the custom layer-tensor strips (`Session.watch_layer_tensor`) as
+# (instrument name, strip html) pairs.
+_LayerStrips = tuple[str, str, tuple[tuple[str, str], ...]]
+
+# Strips shown for a layer whose render fell over. `render_strip` already
 # returns `None` (hidden strip) for empty/unsupported tensors; this covers the
 # residual cases (a genuinely unexpected render bug) so one bad layer degrades
 # to a blank card instead of taking the whole frame down with it.
-_EMPTY_STRIPS: tuple[str, str] = ("", "")
+_EMPTY_STRIPS: _LayerStrips = ("", "", ())
 
 
 def _render_layers(
-    layer_names: list[str], strips: Callable[[str], tuple[str, str]]
-) -> dict[str, tuple[str, str]]:
-    """Render every layer's strip pair concurrently, isolating failures.
+    layer_names: list[str], strips: Callable[[str], _LayerStrips]
+) -> dict[str, _LayerStrips]:
+    """Render every layer's strips concurrently, isolating failures.
 
     Layers fan out over `_RENDER_POOL`; a single layer that raises must not
     abort its siblings or drop the frame, so each render is guarded and a
@@ -797,7 +802,7 @@ def _render_layers(
     result a layer absent from the snapshot gets.
     """
 
-    def guarded(name: str) -> tuple[str, str]:
+    def guarded(name: str) -> _LayerStrips:
         try:
             return strips(name)
         except Exception:
@@ -819,8 +824,8 @@ def _compute_frame(
     input_std: tuple[float, ...] | None,
     input_transform: InputTransform | None = None,
     cache: _RenderCache,
-) -> tuple[dict[str, tuple[str, str]], str]:
-    """Render every layer's strip pair plus the input image source.
+) -> tuple[dict[str, _LayerStrips], str]:
+    """Render every layer's strips plus the input image source.
 
     With a probe result present it is the render source (pinned-batch /
     perturbed view, see `_compute_probe_frame`); otherwise the snapshot is.
@@ -849,7 +854,7 @@ def _compute_frame(
     assert snap is not None  # tick only renders when at least one source exists
     input_hw = tensor_hw(snap.activations.get(input_name) if input_name else None)
 
-    def strips(name: str) -> tuple[str, str]:
+    def strips(name: str) -> _LayerStrips:
         if compare:
             # Diff view without any probe (perturb mode on, nothing clicked
             # yet, no pin): the diff is identically zero, rendered as a
@@ -888,7 +893,26 @@ def _compute_frame(
                 )
             ),
         )
-        return act, grad
+        # Custom layer-tensor strips ride below the pair; the diff view
+        # skips them (a custom tensor has no perturbed counterpart to diff).
+        custom: tuple[tuple[str, str], ...] = ()
+        if not compare:
+            custom = tuple(
+                (
+                    label,
+                    cache.get_or_render(
+                        snap,
+                        (name, f"custom:{label}", sample_idx),
+                        lambda tensor=tensor: _strip_html(
+                            render_strip(tensor, sample_idx, input_hw=input_hw)
+                        ),
+                    ),
+                )
+                for label, tensor in sorted(
+                    snap.custom_activations.get(name, {}).items()
+                )
+            )
+        return act, grad, custom
 
     rendered = _render_layers(layer_names, strips)
     input_src = cache.get_or_render(
@@ -919,7 +943,7 @@ def _compute_probe_frame(
     input_std: tuple[float, ...] | None,
     input_transform: InputTransform | None,
     cache: _RenderCache,
-) -> tuple[dict[str, tuple[str, str]], str]:
+) -> tuple[dict[str, _LayerStrips], str]:
     """The probe-sourced equivalent of the snapshot frame.
 
     Without perturbations the strips show the base activations. With
@@ -939,7 +963,7 @@ def _compute_probe_frame(
     )
     input_hw = tensor_hw(probe.base_input(input_name))
 
-    def strips(name: str) -> tuple[str, str]:
+    def strips(name: str) -> _LayerStrips:
         act = cache.get_or_render(
             probe,
             (name, kind, sample_idx),
@@ -952,7 +976,9 @@ def _compute_probe_frame(
                 show_labels=True,
             ),
         )
-        return act, _PROBE_NO_GRADIENTS_HTML
+        # Custom layer tensors are snapshot cargo — a probe forward never
+        # runs the instruments, so the rows disappear like the gradients do.
+        return act, _PROBE_NO_GRADIENTS_HTML, ()
 
     rendered = _render_layers(layer_names, strips)
     shown_input = probe.shown_input(selected_input)
@@ -974,10 +1000,10 @@ def _compute_probe_frame(
 
 def _apply_all(
     views: dict[str, _LayerView],
-    rendered: dict[str, tuple[str, str]],
+    rendered: dict[str, _LayerStrips],
 ) -> None:
-    for name, (act_html, grad_html) in rendered.items():
-        views[name].apply(act_html, grad_html)
+    for name, (act_html, grad_html, custom) in rendered.items():
+        views[name].apply(act_html, grad_html, custom)
 
 
 class _LayerView:
@@ -1114,6 +1140,13 @@ class _LayerView:
                     with ui.element("div").classes("flex no-wrap items-stretch"):
                         _strip_marker("bg-violet-500", "GRADIENTS")
                         self.grad_html = ui.html("")
+                    # Custom layer-tensor strips (`Session.watch_layer_tensor`)
+                    # follow, one labelled row per instrument. The rows are
+                    # (re)built by `apply` only when the instrument set
+                    # changes; in between only their contents update.
+                    self._custom_container = ui.element("div")
+                    self._custom_rows: dict[str, ui.html] = {}
+                    self._custom_labels: tuple[str, ...] = ()
         self._card = card
         self.set_decoupled(decoupled)
         # A page (re)built with layers already in the shown set (e.g.
@@ -1142,9 +1175,29 @@ class _LayerView:
                 "stats)"
             )
 
-    def apply(self, act_html: str, grad_html: str) -> None:
+    def apply(
+        self,
+        act_html: str,
+        grad_html: str,
+        custom: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         self.act_html.set_content(act_html)
         self.grad_html.set_content(grad_html)
+        labels = tuple(label for label, _ in custom)
+        if labels != self._custom_labels:
+            self._custom_labels = labels
+            self._custom_rows.clear()
+            self._custom_container.clear()
+            with self._custom_container:
+                for label in labels:
+                    ui.element("div").classes("h-1")
+                    with ui.element("div").classes(
+                        "flex no-wrap items-stretch"
+                    ):
+                        _strip_marker("bg-sky-500", label.upper())
+                        self._custom_rows[label] = ui.html("")
+        for label, content in custom:
+            self._custom_rows[label].set_content(content)
 
 
 def _input_img_src(image: bytes | None) -> str:

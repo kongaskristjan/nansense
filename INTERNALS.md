@@ -546,6 +546,63 @@ cross the bus as uint8 and are dequantized CPU-side, so the frozen
 stays fp32 for every render path; slots never filled keep their `∓inf`
 values and are masked by the renderer.
 
+## Custom instruments (`nansense.instruments`)
+
+Instruments are user callbacks evaluated per collected layer against the
+live device tensors — the general-purpose extension of the watch path.
+Three kinds, registered through decorators on the session (`watch_metric`,
+`watch_layer_tensor`, `watch_weight_tensor`, all thin wrappers over
+`InstrumentManager.register`; names are unique across kinds):
+
+- **Scalar metrics** run in `_update_watch_stats`, right after the built-in
+  accumulator folds, for the same stats-collection set — so scope gating,
+  the `retain_layers` reaper, and "only watched layers are logged" come for
+  free. Each callback gets a `LayerContext` (live activation, its retained
+  grad, the layer's parameters/optimizer state sliced from per-batch
+  `_instrument_sources` views — no clones) and returns a number, a mapping
+  of named scalars (one trace per key), or `None` to skip. Samples land in
+  the manager's series store keyed `(layer, phase, epoch, metric, series)`
+  as `array("q")`/`array("d")` pairs — raw per-batch floats, cheap enough
+  to keep for every epoch (no eviction analog to the histogram collapse).
+- **Tensor instruments** run in `_publish_snapshot` only (their outputs are
+  render cargo, so non-publishing batches skip them): activation-shaped
+  results land on `BatchSnapshot.custom_activations` (extra strips under
+  the layer card's act/grad rows; probe frames show none — a probe forward
+  never runs instruments), weight-shaped ones on
+  `BatchSnapshot.custom_weight_tensors` (extra `/weights` strips under the
+  panel's axis controls, after the optimizer entries). Shapes are enforced
+  against the activation/parameter; results are CPU-cloned like all
+  snapshot cargo.
+
+The GRAPHS view reads `Session.watch_metrics_snapshot()` (fetched by the
+stats page's refresh worker only while GRAPHS is showing): the manager
+copies the raw arrays under its lock, then assembles frozen `MetricSeries`
+outside it — `on="epoch"` series fold each epoch's values through the
+registered reduce (`mean`/`sum`/`min`/`max`/`last` or a callable) into one
+point, `on="batch"` series place each sample at `epoch + batch/n` so batch
+curves share the per-epoch x-axis. One lazily-created plot per metric
+(`_MetricPlot`), restyled in place like the built-in figures and rebuilt
+only when the trace set changes.
+
+Failure isolation is the load-bearing property: a raising callback, an
+uncoercible return, or a shape mismatch disables that instrument (it drops
+out of the lock-free enabled caches the per-batch checks read), records the
+error (`Session.instrument_errors`, shown under the GRAPHS plots, one
+console line), and never touches the training thread's health. Collected
+data outlives the disable.
+
+Lifecycle mirrors the accumulator: `unwatch`/`retain_layers` drop a layer's
+series, time travel drops `epoch >=` buckets and additionally calls the
+optional `on_rewind(epoch)` hook on stateful callables (state from the
+abandoned timeline must not leak into the replay). Frozen moments store the
+*reduced* snapshot (`InstrumentManager.state_dict` — a callable reduce
+can't be serialized, its reduced points can) plus the snapshot's custom
+tensors, spliced back like the optimizer state on load; a restored manager
+serves that overlay read-only. Under DDP instruments are leader-only
+(rank-local, like patches). `lock()` makes registration raise — a locked
+demo registers before locking. Recordings don't include the custom strips
+(the recorders render through their own frame builders).
+
 ## Numerical-error debugger (`nansense.debugger`)
 
 The debugger watches for two numerical failures and pauses training when it

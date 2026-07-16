@@ -27,6 +27,11 @@ The public surface of the `nansense` package. Everything here is importable as `
         - freeze_moment
         - set_patch_layers
         - park
+        - watch_metric
+        - watch_layer_tensor
+        - watch_weight_tensor
+        - watch_metrics_snapshot
+        - instrument_errors
 
 ## PyTorch Lightning integration
 
@@ -62,6 +67,18 @@ The public surface of the `nansense` package. Everything here is importable as `
 ::: nansense.LayerStatsSnapshot
 
 ::: nansense.TensorStatsSnapshot
+
+## Custom instruments
+
+See the [Custom metrics & tensors guide](instruments.md) for usage; the registration decorators live on the session (`Session.watch_metric`, `Session.watch_layer_tensor`, `Session.watch_weight_tensor` above).
+
+::: nansense.LayerContext
+
+::: nansense.WeightContext
+
+::: nansense.MetricsSnapshot
+
+::: nansense.MetricSeries
 
 ## Time travel
 

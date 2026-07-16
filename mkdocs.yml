@@ -15,6 +15,7 @@ nav:
   - Integrate with one prompt: integrate.md
   - Wiring guide: wiring.md
   - UI guide: ui.md
+  - Custom metrics & tensors: instruments.md
   - API reference: api.md
 
 theme:

@@ -158,6 +158,14 @@ def write_moment(session: Session, path: Path, *, batch_item: Any) -> None:
         },
         "watched_layers": sorted(session.watched_layers),
         "watch": session._watch_accumulator.state_dict(),
+        # Custom-instrument outputs the replay cannot regenerate (the
+        # callbacks are code, not data): the scalar-metric series as
+        # already-reduced points, and the snapshot's custom tensors.
+        "instruments": session._instruments.state_dict(),
+        "custom_tensors": {
+            "activations": snapshot.custom_activations,
+            "weights": snapshot.custom_weight_tensors,
+        },
         "schedule": session.schedule.state_dict(),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -247,10 +255,16 @@ def _replay_batch(
         snapshot = session._snapshot
         assert snapshot is not None
         optimizer = payload["optimizer"]
+        # Stored custom-instrument tensors are spliced in like the optimizer
+        # state: the loading session has no registered callbacks to
+        # regenerate them. `.get` tolerates files frozen before they existed.
+        custom = payload.get("custom_tensors", {})
         session._snapshot = replace(
             snapshot,
             optimizer_state=optimizer["state"],
             optimizer_hyperparams=optimizer["hyperparams"],
+            custom_activations=custom.get("activations", {}),
+            custom_weight_tensors=custom.get("weights", {}),
         )
     finally:
         session._activations.clear()
@@ -314,6 +328,9 @@ def load_moment(
     }
     session._watch_performance = _watch_performance(payload["watch"])
     session._watch_accumulator.load_state_dict(payload["watch"])
+    instruments_state = payload.get("instruments")
+    if instruments_state is not None:
+        session._instruments.load_state_dict(instruments_state)
     session._schedule.load_state_dict(payload["schedule"])
     # Frozen buckets stay browsable under scope "none" while nothing
     # accumulates; `lock()` later forces "all", equivalent here since no

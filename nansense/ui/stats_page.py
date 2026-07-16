@@ -15,6 +15,7 @@ from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 
 from nansense import debugger
+from nansense.instruments import MetricSeries, MetricsSnapshot
 from nansense.patches import PatchType
 from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session, StatsScope
@@ -36,6 +37,9 @@ from nansense.ui.epoch_stats import (
     epoch_axis_dtick,
     epoch_stat_series,
     make_epoch_stats_figure,
+    make_metric_figure,
+    metric_epochs,
+    metric_trace_data,
     weight_stat_series,
 )
 from nansense.ui.histograms import (
@@ -787,36 +791,46 @@ def _build_stats_page(
                     rebuild_cards()
                 panels = dict(layer_panels)
                 minmax = state.view == _VIEW_MINMAX
+                graphs = state.view == _VIEW_GRAPHS
                 current_batch = state.selected_phase == _PHASE_CURRENT_BATCH
 
                 def compute(
                     panels: dict[str, _WatchLayerPanel] = panels,
                     minmax: bool = minmax,
+                    graphs: bool = graphs,
                     current_batch: bool = current_batch,
                 ) -> tuple[
                     WatchSnapshot,
                     dict[str, tuple[tuple[object, ...], str] | None],
+                    MetricsSnapshot | None,
                 ]:
                     # "Current batch" computes stats from the last snapshot for
                     # exactly the visible layers; a phase reads the running
                     # watch aggregates. Either way the patch GPU→CPU work is
-                    # only paid when the MIN/MAX view will consume it.
+                    # only paid when the MIN/MAX view will consume it, and the
+                    # custom-metric copy only when the GRAPHS view shows it
+                    # (Current batch never does — a batch has no epoch series).
+                    metrics: MetricsSnapshot | None = None
                     if current_batch:
                         snap = session.current_batch_stats(
                             layers=list(panels), include_patches=minmax
                         )
                     else:
                         snap = session.watch_snapshot(include_patches=minmax)
+                        if graphs:
+                            metrics = session.watch_metrics_snapshot(
+                                layers=list(panels)
+                            )
                     grids: dict[str, tuple[tuple[object, ...], str] | None] = {}
                     if minmax:
                         for name, panel in panels.items():
                             grids[name] = panel.prepare_grids(snap)
-                    return snap, grids
+                    return snap, grids, metrics
 
-                snap, grids = await asyncio.to_thread(compute)
+                snap, grids, metrics = await asyncio.to_thread(compute)
                 for name, panel in panels.items():
                     if layer_panels.get(name) is panel:  # not rebuilt meanwhile
-                        panel.update(snap, grids.get(name))
+                        panel.update(snap, grids.get(name), metrics)
                 if not state.refresh_dirty:
                     return
         finally:
@@ -1478,6 +1492,52 @@ class _EpochStatsPlot:
         _plotly_restyle(self.element, update, list(range(len(series))), layout)
 
 
+class _MetricPlot:
+    """One custom-metric figure that restyles in place between structure changes.
+
+    The trace set is the metric's series names, which can grow mid-run (a
+    dict-returning metric may add keys); a change rebuilds the figure through
+    the element — also how the first data lands, exactly like
+    `_EpochStatsPlot`'s initial delivery. In between, refreshes are in-place
+    `Plotly.update`s so legend selections and zoom survive.
+    """
+
+    def __init__(self, metric: str) -> None:
+        self._metric = metric
+        self._traces: tuple[str, ...] = ()
+        self.element = ui.plotly(
+            _figure_payload(make_metric_figure(metric, {}))
+        ).classes("w-full")
+
+    def update(self, series_map: dict[str, MetricSeries]) -> None:
+        names = tuple(series_map)
+        if not names:
+            return
+        if names != self._traces:
+            self._traces = names
+            self.element.update_figure(
+                _figure_payload(make_metric_figure(self._metric, series_map))
+            )
+            return
+        xs: list[list[float]] = []
+        ys: list[list[float | None]] = []
+        custom: list[list[list[object]]] = []
+        for series in series_map.values():
+            x, y, c = metric_trace_data(series)
+            xs.append(x)
+            ys.append(y)
+            custom.append(c)
+        _plotly_restyle(
+            self.element,
+            {"x": xs, "y": ys, "customdata": custom},
+            list(range(len(names))),
+            {
+                "xaxis.dtick": epoch_axis_dtick(metric_epochs(series_map)),
+                "xaxis.tick0": 0,
+            },
+        )
+
+
 class _WatchLayerPanel:
     """One card per watched layer — histograms or extreme-patch grids.
 
@@ -1603,6 +1663,21 @@ class _WatchLayerPanel:
                 )
                 self._weights_label.set_visibility(False)
                 self._weight_plots: dict[str, _EpochStatsPlot] = {}
+                # One plot per custom metric (`Session.watch_metric`),
+                # created lazily like the weight plots — the metric set is
+                # only known from the data.
+                self._metrics_label = ui.label("Custom metrics").classes(
+                    "font-mono text-sm text-slate-600"
+                )
+                self._metrics_container = ui.column().classes("w-full gap-3")
+                self._metrics_label.set_visibility(False)
+                self._metric_plots: dict[str, _MetricPlot] = {}
+                # Instruments disabled by a raising callback are reported
+                # here (they also print once to the console).
+                self._metrics_error = ui.label("").classes(
+                    "text-xs text-red-600"
+                )
+                self._metrics_error.set_visibility(False)
             self._hist_section.set_visibility(state.view == _VIEW_HISTOGRAM)
             self._patch_section.set_visibility(state.view == _VIEW_MINMAX)
             self._epochs_section.set_visibility(state.view == _VIEW_GRAPHS)
@@ -1611,11 +1686,14 @@ class _WatchLayerPanel:
         self,
         snap: WatchSnapshot,
         grids: tuple[tuple[object, ...], str] | None = None,
+        metrics: MetricsSnapshot | None = None,
     ) -> None:
         """Refresh the visible view. Runs on the UI event loop.
 
         `grids` is the output of `prepare_grids` (computed off the event
         loop by the page's refresh); `None` means the grids are unchanged.
+        `metrics` is the custom-metric series for the GRAPHS view (`None`
+        outside it — the other views never render them).
         """
         view = self._state.view
         # The epoch-stats view draws the phase's whole epoch series; the
@@ -1641,6 +1719,7 @@ class _WatchLayerPanel:
             self._act_epochs.update(history)
             self._grad_epochs.update(history)
             self._update_weight_plots(snap)
+            self._update_metric_plots(metrics)
             return
         if view == _VIEW_MINMAX:
             if grids is not None:
@@ -1691,6 +1770,36 @@ class _WatchLayerPanel:
                 "setTimeout(() => go('smooth'), 1600);"
                 "}"
             )
+
+    def _update_metric_plots(self, metrics: MetricsSnapshot | None) -> None:
+        """Refresh the GRAPHS view's custom-metric plots.
+
+        Plots are created lazily on the first refresh with data for their
+        metric (mirroring `_update_weight_plots`); a metric without data in
+        the selected phase hides its plot rather than showing another
+        phase's curves. Disabled instruments are reported below the plots.
+        """
+        if metrics is None:
+            return
+        plots = metrics.plots(self.name, self._state.selected_phase)
+        self._metrics_label.set_visibility(bool(plots))
+        for metric, series_map in plots.items():
+            plot = self._metric_plots.get(metric)
+            if plot is None:
+                with self._metrics_container:
+                    plot = _MetricPlot(metric)
+                self._metric_plots[metric] = plot
+            plot.update(series_map)
+        for metric, plot in self._metric_plots.items():
+            plot.element.set_visibility(metric in plots)
+        errors = self._session.instrument_errors
+        text = "; ".join(
+            f"{name}: {error}" for name, error in sorted(errors.items())
+        )
+        self._metrics_error.set_text(
+            f"instrument disabled after an error — {text}" if text else ""
+        )
+        self._metrics_error.set_visibility(bool(text))
 
     def _phase_view(self, snap: WatchSnapshot) -> dict[str, LayerStatsSnapshot]:
         """The layer's stats for the current selection.

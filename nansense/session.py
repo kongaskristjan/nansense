@@ -37,7 +37,7 @@ import sys
 import threading
 import warnings
 from collections import OrderedDict, deque
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
@@ -68,6 +68,13 @@ from nansense.experiments import (
     ExperimentRequest,
     ExperimentResult,
     _AutoExperiment,
+)
+from nansense.instruments import (
+    InstrumentManager,
+    LayerContext,
+    MetricReduce,
+    MetricsSnapshot,
+    WeightContext,
 )
 from nansense.probe import PerturbationMap, ProbeResult
 from nansense.restore import (
@@ -159,6 +166,19 @@ FREQUENCY_UNITS: tuple[str, ...] = ("batch", "epoch")
 # would require Python 3.12; this keeps the floor at 3.10).
 _BatchItem = TypeVar("_BatchItem")
 
+# The `watch_metric` / `watch_layer_tensor` / `watch_weight_tensor`
+# decorators return the callable unchanged, so stacking and direct calls
+# (`session.watch_metric("x")(fn)`) both keep the original type.
+_InstrumentFn = TypeVar("_InstrumentFn", bound="Callable[..., object]")
+
+# Live (uncloned) views for instrument contexts: named parameters, each
+# parameter's optimizer state, and its group's numeric hyperparameters.
+_InstrumentSources = tuple[
+    dict[str, Tensor],
+    dict[str, dict[str, Tensor | float]],
+    dict[str, dict[str, float]],
+]
+
 
 @dataclass(frozen=True)
 class UpdateFrequency:
@@ -219,6 +239,12 @@ class BatchSnapshot:
     entries like Adam's `step` become 0-dim tensors); hyperparams are the
     numeric knobs of the parameter's group (`lr`, `momentum`, ...), read at
     the same instant — so a scheduler-driven `lr` is the batch's actual one.
+
+    `custom_activations` / `custom_weight_tensors` carry the tensor
+    instruments' outputs (see `Session.watch_layer_tensor` /
+    `watch_weight_tensor`): activation-shaped tensors keyed
+    `layer -> instrument name`, weight-shaped ones `param -> instrument
+    name`. Empty without registered instruments (or when nothing collects).
     """
 
     position: BatchPosition
@@ -228,6 +254,10 @@ class BatchSnapshot:
     weight_gradients: dict[str, Tensor]
     optimizer_state: dict[str, dict[str, Tensor]] = field(default_factory=dict)
     optimizer_hyperparams: dict[str, dict[str, float]] = field(default_factory=dict)
+    custom_activations: dict[str, dict[str, Tensor]] = field(default_factory=dict)
+    custom_weight_tensors: dict[str, dict[str, Tensor]] = field(
+        default_factory=dict
+    )
 
 
 class Session:
@@ -365,6 +395,9 @@ class Session:
         # global setting refuse to change once locked (see `lock`).
         self._locked = False
         self._watch_accumulator = WatchAccumulator()
+        # User-registered instruments (custom metrics / tensors) and their
+        # scalar series store — see `nansense.instruments`.
+        self._instruments = InstrumentManager()
         # Per-channel watch caps (GPU VRAM); the accumulator defaults already
         # match, so no initial `configure` flush is needed.
         self._watch_performance = WatchPerformance()
@@ -660,6 +693,121 @@ class Session:
             self._watched_layers.discard(layer)
             self._watch_version += 1
         self._watch_accumulator.forget_layer(layer)
+        self._instruments.forget_layer(layer)
+
+    def watch_metric(
+        self,
+        name: str,
+        *,
+        on: str = "batch",
+        reduce: MetricReduce | None = None,
+    ) -> Callable[[_InstrumentFn], _InstrumentFn]:
+        """Register a custom scalar metric, evaluated per collected layer.
+
+        Use as a decorator (or call the returned registrar directly with any
+        callable — a stateful object works too):
+
+            @session.watch_metric("sparsity")
+            def sparsity(ctx: nansense.LayerContext) -> float:
+                return (ctx.activation > 0).float().mean().item()
+
+        The callback runs on the training thread, under `torch.no_grad()`,
+        once per stats batch for every layer the stats scope collects (the
+        watched set by default) — it receives a `LayerContext` with the
+        batch's live activation, its gradient, and the layer's weights /
+        optimizer state, and must not mutate them. It may return a number
+        (or 1-element tensor), a mapping of named scalars (one plot trace
+        per key), or `None` to skip the layer.
+
+        `on="batch"` plots every batch's value; `on="epoch"` folds each
+        epoch's values through `reduce` — `"mean"` (default), `"sum"`,
+        `"min"`, `"max"`, `"last"`, or any `values -> float` callable — into
+        one point. The series appear in the `/stats` GRAPHS view, one plot
+        per metric. A raising callback is disabled (training continues) and
+        reported via `instrument_errors`. Raises `ValueError` on invalid
+        arguments and `RuntimeError` on a locked session.
+        """
+        return self._register_instrument(
+            name, kind="metric", on=on, reduce=reduce
+        )
+
+    def watch_layer_tensor(
+        self, name: str
+    ) -> Callable[[_InstrumentFn], _InstrumentFn]:
+        """Register a custom activation-shaped tensor per collected layer.
+
+            @session.watch_layer_tensor("zscore")
+            def zscore(ctx: nansense.LayerContext) -> Tensor:
+                a = ctx.activation
+                return (a - a.mean()) / (a.std() + 1e-6)
+
+        The callback follows `watch_metric`'s contract (training thread,
+        `torch.no_grad()`, live tensors, `None` skips) but runs on publish
+        batches only and must return a tensor of the activation's shape —
+        it lands on `BatchSnapshot.custom_activations` and renders as an
+        extra strip under the layer card's activation/gradient strips.
+        """
+        return self._register_instrument(name, kind="layer_tensor")
+
+    def watch_weight_tensor(
+        self, name: str
+    ) -> Callable[[_InstrumentFn], _InstrumentFn]:
+        """Register a custom weight-shaped tensor per collected parameter.
+
+            @session.watch_weight_tensor("adam_update")
+            def adam_update(ctx: nansense.WeightContext) -> Tensor | None:
+                if "exp_avg" not in ctx.optimizer_state:
+                    return None
+                m = ctx.optimizer_state["exp_avg"]
+                v = ctx.optimizer_state["exp_avg_sq"]
+                return m / (v.sqrt() + 1e-8)
+
+        The callback follows `watch_metric`'s contract but runs on publish
+        batches only, once per (collected layer, parameter), receiving a
+        `WeightContext`; it must return a tensor of the parameter's shape —
+        it lands on `BatchSnapshot.custom_weight_tensors` and renders on the
+        `/weights` page alongside the weight/gradient/optimizer strips.
+        """
+        return self._register_instrument(name, kind="weight_tensor")
+
+    def _register_instrument(
+        self,
+        name: str,
+        *,
+        kind: str,
+        on: str = "batch",
+        reduce: MetricReduce | None = None,
+    ) -> Callable[[_InstrumentFn], _InstrumentFn]:
+        if self._locked:
+            # Unlike the UI-driven setters (which no-op quietly), registering
+            # from the hosting script after `lock()` is a programming error —
+            # fail loudly instead of silently never evaluating.
+            raise RuntimeError(
+                "cannot register instruments on a locked session"
+            )
+
+        def register(fn: _InstrumentFn) -> _InstrumentFn:
+            self._instruments.register(
+                name, kind=kind, fn=fn, on=on, reduce=reduce
+            )
+            return fn
+
+        return register
+
+    @property
+    def instrument_errors(self) -> dict[str, str]:
+        """`instrument name -> error` for instruments disabled by a failure."""
+        return self._instruments.errors()
+
+    def watch_metrics_snapshot(
+        self, *, layers: Iterable[str] | None = None
+    ) -> MetricsSnapshot:
+        """Frozen view of the custom scalar-metric series (see `watch_metric`).
+
+        The GRAPHS view's data source for the custom-metric plots; safe to
+        call from any thread. Pass `layers` to restrict the copy.
+        """
+        return self._instruments.metrics_snapshot(layers=layers)
 
     @property
     def stats_scope(self) -> StatsScope:
@@ -702,6 +850,7 @@ class Session:
             # are dropped, mirroring `unwatch`; the training thread's own
             # `retain_layers` pass covers an update racing this call.
             self._watch_accumulator.retain_layers(watched)
+            self._instruments.retain_layers(watched)
 
     def toggle_stats_collecting(self) -> bool:
         """Flip between `NONE` and the last collecting scope; True = collecting.
@@ -1495,7 +1644,10 @@ class Session:
         - the stats scope is forced to `ALL` — every layer collects, so the
           UI's per-tab show/hide never touches shared state;
         - experiment requests still run, with their parameters clamped and
-          the queue depth capped (see `nansense.experiments`).
+          the queue depth capped (see `nansense.experiments`);
+        - registering instruments (`watch_metric`, `watch_layer_tensor`,
+          `watch_weight_tensor`) raises — register them, like every other
+          host-script setting, *before* locking.
 
         Everything read-only stays available, as do experiments. The lock is
         one-way by design — arm the wanted mode (e.g. `step_run()`), the
@@ -1999,6 +2151,13 @@ class Session:
         # resurrect a just-forgotten bucket; doing it here, on the only
         # `update` caller, makes that leak impossible.
         self._watch_accumulator.retain_layers(watched)
+        self._instruments.retain_layers(watched)
+        # Custom scalar metrics run here too — same collection set, same
+        # cadence as the built-in accumulators. Leader-only under DDP (they
+        # stay rank-local, like the patch buffers), and their live
+        # parameter/optimizer views are built at most once per batch.
+        run_metrics = self.is_leader and self._instruments.has_metrics()
+        instrument_sources = self._instrument_sources() if run_metrics else None
         # Extreme-input patches stay rank-local in distributed runs: only
         # the leader renders them, so followers skip the buffers entirely.
         source = self._patch_source_input() if self.is_leader else None
@@ -2057,6 +2216,120 @@ class Session:
                     act=tensor,
                     x=source,
                 )
+            if instrument_sources is not None:
+                self._instruments.run_metrics(
+                    self._layer_context(name, pos, tensor, instrument_sources)
+                )
+
+    def _instrument_sources(self) -> _InstrumentSources:
+        """Build the per-batch live tensor views instrument contexts slice.
+
+        Unlike the `current_*` snapshot readers these never copy — instrument
+        callbacks read the live device tensors. Training thread, at most once
+        per batch (and only while some instrument is registered).
+        """
+        params: dict[str, Tensor] = dict(self.model.named_parameters())
+        state: dict[str, dict[str, Tensor | float]] = {}
+        hyperparams: dict[str, dict[str, float]] = {}
+        if self._optimizer is not None:
+            names = {id(p): n for n, p in params.items()}
+            for param, entries in self._optimizer.state.items():
+                name = names.get(id(param))
+                if name is not None:
+                    state[name] = dict(entries)
+            hyperparams = capture.current_optimizer_hyperparams(
+                self.model, self._optimizer
+            )
+        return params, state, hyperparams
+
+    def _layer_module(self, name: str) -> nn.Module | None:
+        """The `nn.Module` behind a layer name; `None` for fx intermediates
+        (`relu`, `add`, ...) and graph inputs, which no module owns."""
+        try:
+            return self.model.get_submodule(name)
+        except AttributeError:
+            return None
+
+    def _layer_context(
+        self,
+        name: str,
+        pos: BatchPosition,
+        activation: Tensor,
+        sources: _InstrumentSources,
+    ) -> LayerContext:
+        """Assemble one layer's live `LayerContext` (training thread)."""
+        params, state, _ = sources
+        param_names = self._layer_weights.get(name, [])
+        weights = {p: params[p] for p in param_names if p in params}
+        return LayerContext(
+            layer=name,
+            phase=pos.phase,
+            epoch=pos.epoch,
+            batch_idx=pos.batch_idx,
+            module=self._layer_module(name),
+            activation=activation,
+            gradient=activation.grad,
+            weights=weights,
+            weight_gradients={
+                p: t.grad for p, t in weights.items() if t.grad is not None
+            },
+            optimizer_state={p: state[p] for p in param_names if p in state},
+        )
+
+    def _run_tensor_instruments(
+        self, pos: BatchPosition
+    ) -> tuple[dict[str, dict[str, Tensor]], dict[str, dict[str, Tensor]]]:
+        """Evaluate the tensor instruments for this publish (training thread).
+
+        Covers the stats scope's collection set, like the scalar metrics —
+        "only watched layers are logged" under the default scope. Publish
+        batches only: the results are pure snapshot cargo (rendered strips),
+        so computing them on a non-publishing batch would be wasted work.
+        Returns the two `BatchSnapshot` dicts (empty without instruments).
+        """
+        run_layer = self._instruments.has_layer_tensors()
+        run_weight = self._instruments.has_weight_tensors()
+        if not (run_layer or run_weight):
+            return {}, {}
+        with self._cv:
+            layers = self._stats_collection_layers_locked()
+        if not layers:
+            return {}, {}
+        sources = self._instrument_sources()
+        params, state, hyperparams = sources
+        acts: dict[str, dict[str, Tensor]] = {}
+        weights: dict[str, dict[str, Tensor]] = {}
+        for name in layers:
+            activation = self._activations.get(name)
+            if run_layer and activation is not None:
+                out = self._instruments.run_layer_tensors(
+                    self._layer_context(name, pos, activation, sources)
+                )
+                if out:
+                    acts[name] = out
+            if not run_weight:
+                continue
+            for param_name in self._layer_weights.get(name, []):
+                tensor = params.get(param_name)
+                if tensor is None:
+                    continue
+                out = self._instruments.run_weight_tensors(
+                    WeightContext(
+                        layer=name,
+                        param=param_name,
+                        phase=pos.phase,
+                        epoch=pos.epoch,
+                        batch_idx=pos.batch_idx,
+                        module=self._layer_module(name),
+                        weight=tensor,
+                        gradient=tensor.grad,
+                        optimizer_state=state.get(param_name, {}),
+                        hyperparams=hyperparams.get(param_name, {}),
+                    )
+                )
+                if out:
+                    weights[param_name] = out
+        return acts, weights
 
     def _patch_source_input(self) -> Tensor | None:
         """The live forward input to crop extreme-activation patches from."""
@@ -2095,6 +2368,9 @@ class Session:
         # reads `snapshot` during the build sees `None` and skips a render tick
         # (see the `snapshot` property). Both writes are atomic under the GIL.
         self._snapshot = None
+        # Tensor instruments read the live activations/weights, so they run
+        # here — after the old snapshot is released, before the new clones.
+        custom_acts, custom_weights = self._run_tensor_instruments(pos)
         self._snapshot = BatchSnapshot(
             position=pos,
             activations={
@@ -2111,6 +2387,8 @@ class Session:
             # consistent with the weights above ({} when no optimizer given).
             optimizer_state=self.current_optimizer_state(),
             optimizer_hyperparams=self.current_optimizer_hyperparams(),
+            custom_activations=custom_acts,
+            custom_weight_tensors=custom_weights,
         )
 
     def _take_pending_jump(self) -> int | None:
@@ -2202,6 +2480,11 @@ class Session:
             # timeline; drop it so the re-run starts clean and can stop afresh.
             self._debug_error = None
         self._watch_accumulator.forget_epochs_from(epoch)
+        # Custom-metric series from the abandoned timeline are dropped the
+        # same way, and stateful instrument callables get their optional
+        # `on_rewind` hook so cross-batch state doesn't leak into the replay.
+        self._instruments.forget_epochs_from(epoch)
+        self._instruments.notify_rewind(epoch)
         # Re-running this (or any later) epoch must re-save fresh RNG, so clear
         # the "already saved" marker — otherwise the re-run's pre-iter save in
         # `batches()` would be skipped and the replay would reuse stale state.

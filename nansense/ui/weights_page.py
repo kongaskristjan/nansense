@@ -202,6 +202,7 @@ def _compute_snapshot_renders(
             snap.weight_gradients,
             optimizer_state=snap.optimizer_state,
             optimizer_hyperparams=snap.optimizer_hyperparams,
+            custom_tensors=snap.custom_weight_tensors.get(panel.name),
         )
         for panel in panels
     ]
@@ -231,6 +232,9 @@ class _PanelRender:
     # One (marker label, strip HTML) pair per tensor-valued optimizer entry.
     opt_strips: list[tuple[str, str]] = field(default_factory=list)
     opt_scalar_text: str = ""
+    # One (marker label, strip HTML) pair per custom weight-tensor
+    # instrument (`Session.watch_weight_tensor`).
+    custom_strips: list[tuple[str, str]] = field(default_factory=list)
 
 
 class _WeightPanel:
@@ -255,6 +259,7 @@ class _WeightPanel:
         self._gradients: dict[str, Tensor] | None = None
         self._opt_state: dict[str, dict[str, Tensor]] = {}
         self._opt_hparams: dict[str, dict[str, float]] = {}
+        self._custom: dict[str, Tensor] = {}
         self._role_selects: list[ui.select] = []
         self._index_numbers: dict[int, ui.number] = {}
         self._frozen = False
@@ -327,6 +332,12 @@ class _WeightPanel:
                     # each render. Stays empty — invisible — when the session
                     # has no optimizer.
                     self._opt_container = ui.element("div").classes("w-full")
+                    # Custom weight-tensor strips follow the optimizer's,
+                    # under the same axis layout (the instrument contract
+                    # pins their shape to the weight's).
+                    self._custom_container = ui.element("div").classes(
+                        "w-full"
+                    )
             # Scalar optimizer values: 0-dim state entries (Adam's `step`) and
             # the param group's numeric hyperparameters (`lr`, …).
             self._opt_scalars = ui.label("").classes(
@@ -399,6 +410,7 @@ class _WeightPanel:
         *,
         optimizer_state: dict[str, dict[str, Tensor]],
         optimizer_hyperparams: dict[str, dict[str, float]],
+        custom_tensors: dict[str, Tensor] | None = None,
     ) -> None:
         """Display weight, gradient, and optimizer values (snapshot or live).
 
@@ -412,6 +424,7 @@ class _WeightPanel:
                 gradients,
                 optimizer_state=optimizer_state,
                 optimizer_hyperparams=optimizer_hyperparams,
+                custom_tensors=custom_tensors,
             )
         )
 
@@ -422,6 +435,7 @@ class _WeightPanel:
         *,
         optimizer_state: dict[str, dict[str, Tensor]],
         optimizer_hyperparams: dict[str, dict[str, float]],
+        custom_tensors: dict[str, Tensor] | None = None,
     ) -> _PanelRender:
         """Render the panel's strips to HTML — pure, safe to run in a thread.
 
@@ -429,11 +443,14 @@ class _WeightPanel:
         same weights synchronously when the user remaps an axis, then returns a
         `_PanelRender` the loop applies via `apply_render`. Touches no NiceGUI
         element, so it runs off the event loop (`asyncio.to_thread`).
+        `custom_tensors` is this parameter's custom weight-tensor instrument
+        outputs (`BatchSnapshot.custom_weight_tensors[param]`).
         """
         self._weights = weights
         self._gradients = gradients
         self._opt_state = optimizer_state
         self._opt_hparams = optimizer_hyperparams
+        self._custom = custom_tensors or {}
         return self._compute_render()
 
     def _compute_render(self) -> _PanelRender:
@@ -475,7 +492,34 @@ class _WeightPanel:
             ),
             opt_strips=opt_strips,
             opt_scalar_text=opt_scalar_text,
+            custom_strips=self._compute_custom_strips(
+                x_dim=x_dim, y_dim=y_dim, tile=tile, fixed=fixed
+            ),
         )
+
+    def _compute_custom_strips(
+        self,
+        *,
+        x_dim: int,
+        y_dim: int | None,
+        tile: int | None,
+        fixed: dict[int, int],
+    ) -> list[tuple[str, str]]:
+        """Render the custom weight-tensor strips (pure, worker thread).
+
+        The instrument contract pins each tensor to the weight's shape, so
+        the panel's axis layout always applies — these render exactly like
+        the shape-matched optimizer entries, labelled by instrument name.
+        """
+        strips: list[tuple[str, str]] = []
+        for key, tensor in sorted(self._custom.items()):
+            strip = render_weight(
+                tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
+            )
+            if strip is None:
+                continue
+            strips.append((key.upper(), _strip_html(strip)))
+        return strips
 
     def _compute_optimizer_values(
         self,
@@ -539,6 +583,13 @@ class _WeightPanel:
                 ui.element("div").classes("h-1")
                 with ui.element("div").classes("flex no-wrap items-stretch"):
                     _strip_marker("bg-amber-600", label)
+                    ui.html(strip_html)
+        self._custom_container.clear()
+        with self._custom_container:
+            for label, strip_html in render.custom_strips:
+                ui.element("div").classes("h-1")
+                with ui.element("div").classes("flex no-wrap items-stretch"):
+                    _strip_marker("bg-teal-600", label)
                     ui.html(strip_html)
         self._opt_scalars.text = render.opt_scalar_text
         self._opt_scalars.set_visibility(bool(render.opt_scalar_text))

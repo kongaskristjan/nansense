@@ -128,10 +128,11 @@ def test_compute_frame_renders_strips_and_input() -> None:
         input_std=None,
         cache=_RenderCache(),
     )
-    act, grad = rendered["conv"]
+    act, grad, custom = rendered["conv"]
     assert "<img" in act and "<img" in grad
+    assert custom == ()  # no layer-tensor instruments registered
     assert rendered["x"][1] == ""  # the input has no gradient captured
-    assert rendered["missing"] == ("", "")
+    assert rendered["missing"] == ("", "", ())
     assert input_html.startswith("data:")
 
 
@@ -139,7 +140,9 @@ def test_compute_frame_reuses_cache_within_a_snapshot() -> None:
     cache = _RenderCache()
     snap = _frame_snapshot()
 
-    def frame(sample_idx: int) -> tuple[dict[str, tuple[str, str]], str]:
+    def frame(
+        sample_idx: int,
+    ) -> tuple[dict[str, tuple[str, str, tuple[tuple[str, str], ...]]], str]:
         return _compute_frame(
             ["conv"],
             snap,
@@ -180,10 +183,11 @@ def test_compute_frame_prefers_probe_over_snapshot() -> None:
         input_std=None,
         cache=_RenderCache(),
     )
-    act, grad = rendered["conv"]
+    act, grad, custom = rendered["conv"]
     assert "<img" in act
     # Probes are forward-only: every gradient strip is the placeholder note.
     assert grad == _PROBE_NO_GRADIENTS_HTML
+    assert custom == ()  # probe forwards never run the instruments
     assert rendered["missing"][0] == ""
     assert input_html.startswith("data:")
 
@@ -225,7 +229,9 @@ def test_compute_probe_frame_diff_differs_from_perturbed_view() -> None:
     probe = _frame_probe_perturbed()
     cache = _RenderCache()
 
-    def frame(compare: bool) -> dict[str, tuple[str, str]]:
+    def frame(
+        compare: bool,
+    ) -> dict[str, tuple[str, str, tuple[tuple[str, str], ...]]]:
         rendered, _ = _compute_frame(
             ["x"],
             None,
@@ -349,7 +355,7 @@ def test_compute_frame_empty_layer_does_not_drop_the_frame() -> None:
     )
     assert "<img" in rendered["good"][0]
     assert "<img" in rendered["also_good"][0]
-    assert rendered["empty"] == ("", "")
+    assert rendered["empty"] == ("", "", ())
 
 
 def test_compute_frame_raising_layer_does_not_drop_the_frame(
@@ -397,4 +403,4 @@ def test_compute_frame_raising_layer_does_not_drop_the_frame(
     )
     assert "<img" in rendered["good"][0]
     assert "<img" in rendered["also_good"][0]
-    assert rendered["bad"] == ("", "")
+    assert rendered["bad"] == ("", "", ())
