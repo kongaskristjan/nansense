@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Page not found</title>
+  <script>
+    var versions = ["dev"];
+    var rest = window.location.pathname.slice("/nansense/".length);
+    if (versions.indexOf(rest.split("/")[0]) === -1) {
+      window.location.replace(
+        "/nansense/dev/" + rest + window.location.search + window.location.hash
+      );
+    }
+  </script>
+</head>
+<body>
+  Page not found. Try the <a href="/nansense/">documentation home</a>.
+</body>
+</html>
