@@ -813,9 +813,12 @@ overwriting each other.
 
 **Cancellation.** The runner checks a `should_abort()` predicate between
 steps; it fires on `cancel_experiment(seq)` for the running seq (no seq
-cancels everything; a queued seq is just dropped) and on anything that
-ends the pause — resume commands, a pending time-travel jump, `close()` —
-so the pause loop regains control within one step. Another client's new
+cancels everything; a queued seq is just dropped), once the run outlives
+the `_EXPERIMENT_TIME_LIMIT` wall-clock ceiling (90 s — the training
+thread, and on a locked demo every queued visitor, is held for the whole
+run), and on anything that ends the pause — resume commands, a pending
+time-travel jump, `close()` — so the pause loop regains control within
+one step. Another client's new
 request does *not* abort a running experiment; it waits its turn in the
 queue. Requests queued while training is running stay queued until the
 next pause (`experiment_pending` lets the UI say so). A raising experiment

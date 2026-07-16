@@ -98,6 +98,27 @@ def test_pause_loop_marks_experiment_running_before_running_it(
         assert running_at_entry == [seq]
 
 
+def test_expired_time_limit_cuts_the_run_off_between_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past the wall-clock ceiling `should_abort` fires between steps: the
+    run stops early and the progress so far still publishes as done."""
+    import nansense.experiments as experiments_mod
+
+    monkeypatch.setattr(experiments_mod, "_EXPERIMENT_TIME_LIMIT", 0.0)
+    with _paused_session() as (session, _):
+        session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params()
+        )
+        assert session.wait_for_experiment(timeout=10)
+        result = session.experiment_result
+        assert result is not None and result.error is None
+        # The deadline expired before the first step, so the run was cut off
+        # immediately — but the result still lands, marked done.
+        assert result.done
+        assert result.step == 0 < result.total_steps
+
+
 def test_deep_dream_publishes_done_result_with_image() -> None:
     with _paused_session() as (session, _):
         assert session.input_batch_size == 2

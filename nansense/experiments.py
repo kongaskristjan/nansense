@@ -8,8 +8,8 @@ a generator that yields `ExperimentResult` progress snapshots (the session
 publishes each one, so the UI can stream e.g. the evolving deep-dream
 image). Yielding a generator instead of returning once is what makes
 cancellation cheap: the runner checks `should_abort()` between steps, and
-the session aborts on cancel, on a newer request, and on any resume
-command.
+the session aborts on cancel, on a newer request, on any resume command,
+and once a run outlives the `_EXPERIMENT_TIME_LIMIT` wall-clock ceiling.
 
 Experiments reuse the probe isolation contract (`nansense.probe.isolated_model`):
 eval-mode forwards with flags/buffers restored, a forked RNG, and gradients
@@ -169,6 +169,14 @@ def run(
 # How many per-seq experiment results stay retrievable (oldest evicted
 # first); generous enough for every open client plus a little history.
 _EXPERIMENT_RESULTS_KEPT: int = 8
+
+# Wall-clock ceiling on a single experiment run. The training thread is held
+# for the whole run (and on a locked demo every queued visitor waits behind
+# it), so a request that turns out heavier than its parameters suggested is
+# cancelled instead of holding the pause loop hostage. Checked between steps
+# (`should_abort`), so one long step can still overrun the deadline; the
+# progress streamed so far publishes as the final result.
+_EXPERIMENT_TIME_LIMIT: float = 90.0
 
 # On a locked session (a shared demo, `Session.lock`), the queue is the one
 # resource every visitor contends on — the pause loop runs experiments one at
@@ -372,17 +380,21 @@ def run_experiment_guarded(session: Session, request: ExperimentRequest) -> None
 
     Streams every yielded progress result through `_publish_experiment`.
     The abort predicate stops the run on `cancel_experiment` (for this
-    seq) and on anything that ends the pause — resume commands, a
-    pending time-travel jump, `close()` — so the pause loop regains
-    control promptly; queued requests from other clients wait their
-    turn instead of aborting the run. A failing experiment publishes an
+    seq), on the `_EXPERIMENT_TIME_LIMIT` wall-clock deadline expiring,
+    and on anything that ends the pause — resume commands, a pending
+    time-travel jump, `close()` — so the pause loop regains control
+    promptly; queued requests from other clients wait their turn
+    instead of aborting the run. A failing experiment publishes an
     error result instead of killing the training thread.
     """
     with session._cv:
         resume_seen = session._resume_token
         session._experiment_running = request.seq
+    deadline = time.monotonic() + _EXPERIMENT_TIME_LIMIT
 
     def should_abort() -> bool:
+        if time.monotonic() >= deadline:
+            return True
         with session._cv:
             return (
                 request.seq in session._experiment_cancelled
