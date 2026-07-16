@@ -31,6 +31,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import ctypes.util
+import functools
 import gc
 import re
 from collections.abc import Iterator
@@ -50,6 +51,21 @@ def _mps_available() -> bool:
     return hasattr(torch, "mps") and torch.backends.mps.is_available()
 
 
+@functools.cache
+def _libc() -> ctypes.CDLL | None:
+    """The process's C library, or `None` where it can't be loaded.
+
+    Resolved once and cached: `ctypes.util.find_library` shells out to
+    `ldconfig`/`gcc` on Linux, which is slow to repeat per jump and — being a
+    fork from a process that may hold gloo/OpenMP threads under DDP — is
+    exactly the kind of call a wedged arena lock can deadlock.
+    """
+    try:
+        return ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+    except OSError:
+        return None
+
+
 def release_cpu_memory() -> None:
     """Return freed CPU allocations to the OS after a checkpoint load.
 
@@ -64,10 +80,11 @@ def release_cpu_memory() -> None:
     lingering. A no-op on platforms without `malloc_trim` (musl, macOS).
     """
     gc.collect()
+    libc = _libc()
     try:
-        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
-        libc.malloc_trim(0)
-    except (OSError, AttributeError):
+        if libc is not None:
+            libc.malloc_trim(0)
+    except AttributeError:
         pass
 
 

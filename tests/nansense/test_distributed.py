@@ -3,10 +3,19 @@
 The reduction math is covered single-process by packing two accumulators
 ("ranks") and reducing them by hand; the collective wiring is covered by
 one real 2-rank gloo run spawned with torch.multiprocessing.
+
+The spawned runs are hang-proofed in layers: waits *inside* a collective
+trip gloo's 120s timeout, each worker arms a `faulthandler` watchdog that
+dumps every thread's stack and dies if it wedges *outside* one, and the
+parent's join carries a wall-clock ceiling as the last resort — so a wedged
+run fails loudly with diagnostics instead of hanging pytest forever.
 """
 
 from __future__ import annotations
 
+import faulthandler
+import time
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -136,8 +145,50 @@ def test_unwrap_ddp_passes_plain_model_through() -> None:
     assert distributed.unwrap_ddp(model) is model
 
 
+# Both sit above the workers' 120s gloo timeout so a wait stuck inside a
+# collective still surfaces as the gloo timeout error, not as a watchdog kill.
+_WORKER_WATCHDOG_S = 150.0
+_JOIN_CEILING_S = 240.0
+
+
+def _arm_worker_watchdog() -> None:
+    """Kill this worker with a full stack dump if it wedges for 150s.
+
+    The gloo timeout only bounds waits inside a collective; a rank stuck
+    anywhere else (e.g. a C-level driver call that never returns) would hang
+    the spawn join — and the whole suite — indefinitely. `faulthandler`'s
+    watchdog dumps every thread's traceback to stderr without needing the
+    GIL, so it fires and exits even during such a hang.
+    """
+    faulthandler.dump_traceback_later(_WORKER_WATCHDOG_S, exit=True)
+
+
+def _spawn_two_ranks(worker: Callable[..., None], *args: object) -> None:
+    """`mp.spawn(nprocs=2, join=True)` with a wall-clock ceiling.
+
+    The last line of defence behind the workers' own watchdogs: if a child
+    wedges before it even arms one (e.g. during interpreter startup), the
+    join here still kills it and fails the test instead of hanging pytest.
+    """
+    ctx = mp.spawn(worker, args=args, nprocs=2, join=False)
+    assert ctx is not None
+    deadline = time.monotonic() + _JOIN_CEILING_S
+    while not ctx.join(timeout=deadline - time.monotonic()):
+        if time.monotonic() >= deadline:
+            for process in ctx.processes:
+                if process.is_alive():
+                    process.kill()
+            for process in ctx.processes:
+                process.join()
+            pytest.fail(
+                f"2-rank gloo run still going after {_JOIN_CEILING_S:.0f}s; "
+                "workers killed (their watchdog stack dumps are on stderr)"
+            )
+
+
 def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
     """One rank of the end-to-end gloo run; assertions fail the spawn."""
+    _arm_worker_watchdog()
     dist.init_process_group(
         "gloo",
         init_method=f"file://{init_file}",
@@ -200,10 +251,17 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
         dist.destroy_process_group()
 
 
-def test_two_rank_gloo_end_to_end(tmp_path: Path) -> None:
+def test_two_rank_gloo_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Spawn a real 2-rank gloo group: watch-set sync + global reduction."""
+    # The workers are pure CPU/gloo; hide the GPU so no child ever
+    # initializes a CUDA context (slow, and a driver-level wedge risk on a
+    # GPU shared with a desktop — the CUDA RNG paths are covered by the
+    # in-process time-travel tests).
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     init_file = tmp_path / "ddp_init"
-    mp.spawn(_ddp_worker, args=(2, str(init_file)), nprocs=2, join=True)
+    _spawn_two_ranks(_ddp_worker, 2, str(init_file))
 
 
 def _stochastic_step(
@@ -235,6 +293,7 @@ def _time_travel_worker(rank: int, world_size: int, init_file: str, cache_dir: s
     restored => identical data => identical gradients). A hang would trip the
     gloo timeout and fail the spawn.
     """
+    _arm_worker_watchdog()
     dist.init_process_group(
         "gloo",
         init_method=f"file://{init_file}",
@@ -305,7 +364,9 @@ def _time_travel_worker(rank: int, world_size: int, init_file: str, cache_dir: s
         dist.destroy_process_group()
 
 
-def test_two_rank_gloo_time_travel_deterministic(tmp_path: Path) -> None:
+def test_two_rank_gloo_time_travel_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Spawn a real 2-rank gloo group and jump back an epoch in lockstep.
 
     Exercises the full DDP time-travel path: the leader's armed jump is
@@ -314,14 +375,17 @@ def test_two_rank_gloo_time_travel_deterministic(tmp_path: Path) -> None:
     epoch reproduces the original deterministically — with no deadlock (a hang
     trips the 120s gloo timeout and fails the join).
     """
+    # Without this, `capture_rng` in each child's epoch-start checkpoint
+    # would initialize a full CUDA context just to snapshot GPU RNG the
+    # worker never uses — the only concurrent CUDA init in the suite, and
+    # the prime suspect in an observed indefinite two-rank wedge on a GPU
+    # shared with a desktop. The CPU RNG snapshot is what the determinism
+    # assertions exercise; CUDA RNG capture stays covered by the in-process
+    # time-travel tests.
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     init_file = tmp_path / "tt_init"
     cache_dir = tmp_path / "tt_cache"
-    mp.spawn(
-        _time_travel_worker,
-        args=(2, str(init_file), str(cache_dir)),
-        nprocs=2,
-        join=True,
-    )
+    _spawn_two_ranks(_time_travel_worker, 2, str(init_file), str(cache_dir))
     # Both ranks persisted their own epoch files (rank 0 canonical, rank 1
     # tagged), proving the per-rank checkpoint scheme actually wrote to disk.
     assert (cache_dir / "epoch_1.pt").exists()
