@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/playground/">
+        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/instruments/">
       
       
-        <link rel="prev" href="..">
+        <link rel="prev" href="../ui/">
       
       
-        <link rel="next" href="../showcase/">
+        <link rel="next" href="../api/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Playground - NaNsense</title>
+        <title>Custom metrics & tensors - NaNsense</title>
       
     
     
@@ -81,6 +81,11 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
+        
+        <a href="#custom-metrics-tensors" class="md-skip">
+          Skip to content
+        </a>
+      
     </div>
     <div data-md-component="announce">
       
@@ -116,17 +121,12 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Playground
+              Custom metrics & tensors
             
           </span>
         </div>
       </div>
     </div>
-    
-      <a class="md-header__banner" href="../integrate/">
-        <span class="md-header__banner-icon">✨</span>
-        <span class="md-header__banner-text">Add this visualization to your training script with one prompt</span>
-      </a>
     
     
       
@@ -229,9 +229,7 @@
           
             
               
-                
-              
-              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
                     
@@ -293,17 +291,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../playground/" class="md-nav__link">
         
   
   
@@ -319,7 +310,6 @@
   
 
       </a>
-      
     </li>
   
 
@@ -463,10 +453,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../instruments/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom metrics & tensors
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -482,6 +499,70 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scalar-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scalar metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-tensors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer tensors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#weight-tensors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Weight tensors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -521,9 +602,7 @@
             
             
               
-                
-              
-              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" hidden>
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
                     
@@ -532,6 +611,60 @@
   
   
   
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scalar-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scalar metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layer-tensors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layer tensors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#weight-tensors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Weight tensors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
   
 </nav>
                   </div>
@@ -545,176 +678,98 @@
               <article class="md-content__inner md-typeset">
                 
                   
-  
-
-
-
-  
-  
-
-
-<div class="playground-switch" role="group" aria-label="Playground variant">
-  <button class="pg-btn" type="button" data-variant="imagenette" aria-pressed="true">Imagenette · ResNet</button>
-  <button class="pg-btn" type="button" data-variant="mnist" aria-pressed="false">MNIST · LeNet-5</button>
-</div>
-
-<!-- `clipboard-write` delegates the Clipboard API into the cross-origin app
-     frame: the app's own Share dialog (top bar) copies links, and without the
-     delegation the browser rejects the write inside the iframe. -->
-<iframe id="playground-frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
-
-<style>
-  /* Fullscreen app page: the header collapses to a slim toolbar (logo +
-     variant switch + repo link) and the iframe fills the rest. Scoped to
-     this page — the inline <style> only ships on /playground/. */
-  html,
-  body {
-    overflow: hidden;
-  }
-
-  /* The header row is a centered .md-grid (max-width 61rem) by default,
-     which floats everything in a column with a gap on either side. Let it
-     span the full width so the logo sits flush left and the repo link right. */
-  .md-header__inner {
-    max-width: none;
-  }
-
-  /* Strip the header down to what we keep: hide the wordmark, the version
-     selector, the light/dark toggle and search — leave the logo (home link)
-     and the repo link. */
-  .md-header__title,
-  .md-version,
-  .md-header__option,
-  .md-search,
-  .md-header [for="__search"] {
-    display: none !important;
-  }
-  /* The variant switch, relocated into the header toolbar by the script.
-     Its auto right margin eats the free space, pushing the repo link that
-     follows it to the far right. */
-  .playground-switch {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    margin-right: auto;
-  }
-  .pg-btn {
-    appearance: none;
-    border: 0;
-    border-radius: 0.4rem;
-    background: transparent;
-    color: var(--md-primary-bg-color);
-    font: inherit;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    line-height: 1.2;
-    padding: 0.3rem 0.6rem;
-    white-space: nowrap;
-    cursor: pointer;
-    opacity: 0.7;
-    transition: opacity 0.2s, background-color 0.2s;
-  }
-  .pg-btn:hover {
-    opacity: 1;
-  }
-  .pg-btn[aria-pressed="true"] {
-    opacity: 1;
-    background: rgba(255, 255, 255, 0.18);
-  }
-  /* Iframe fills everything below the header; its top is set from the live
-     header height by the script (robust to zoom and mobile header sizing). */
-  .md-main,
-  .md-content,
-  .md-content__inner {
-    margin: 0;
-    padding: 0;
-  }
-  .md-content__inner::before {
-    display: none;
-  }
-  /* MkDocs auto-adds an <h1> from the page title when the markdown has none;
-     the app shell doesn't want it (the tab title still names the page). */
-  .md-content__inner > h1 {
-    display: none;
-  }
-  .md-footer {
-    display: none;
-  }
-  #playground-frame {
-    position: fixed;
-    top: var(--pg-header-h, 2.4rem);
-    left: 0;
-    right: 0;
-    /* Replaced elements keep their intrinsic height when top/bottom are both
-       set, so size it explicitly from the live header height. */
-    height: calc(100vh - var(--pg-header-h, 2.4rem));
-    width: 100%;
-    border: 0;
-  }
-</style>
-
-<script>
-  (function () {
-    var spaces = {
-      imagenette: "https://kongaskristjan-nansense-playground.hf.space",
-      mnist: "https://kongaskristjan-nansense-playground-mnist.hf.space",
-    };
-    var frame = document.getElementById("playground-frame");
-    var switchEl = document.querySelector(".playground-switch");
-    var buttons = switchEl.querySelectorAll(".pg-btn[data-variant]");
-    var current = "imagenette"; // matches the iframe's HTML src attribute
-
-    // Lift the variant switch into the header, just past the (hidden) title,
-    // so the repo link keeps the far right.
-    var title = document.querySelector(".md-header__title");
-    if (title) {
-      title.insertAdjacentElement("afterend", switchEl);
-    }
-
-    // Keep the iframe sized to the live header height.
-    var header = document.querySelector(".md-header");
-    function sizeFrame() {
-      document.documentElement.style.setProperty("--pg-header-h", header.offsetHeight + "px");
-    }
-    sizeFrame();
-    window.addEventListener("resize", sizeFrame);
-
-    function select(variant) {
-      if (variant === current) return;
-      current = variant;
-      frame.src = spaces[variant];
-      buttons.forEach(function (button) {
-        button.setAttribute("aria-pressed", String(button.dataset.variant === variant));
-      });
-      history.replaceState(null, "", variant === "imagenette" ? location.pathname : "#" + variant);
-    }
-    buttons.forEach(function (button) {
-      button.addEventListener("click", function () {
-        select(button.dataset.variant);
-      });
-    });
-    function selectFromHash() {
-      select(location.hash === "#mnist" ? "mnist" : "imagenette");
-    }
-    window.addEventListener("hashchange", selectFromHash);
-    if (location.hash === "#mnist") selectFromHash();
-  })();
-</script>
-
-
-
-
-
 
 
   
   
 
 
+<h1 id="custom-metrics-tensors">Custom metrics &amp; tensors<a class="headerlink" href="#custom-metrics-tensors" title="Permanent link">&para;</a></h1>
+<p>Instruments let you log your own per-layer quantities and see them in the UI next to the built-in statistics. You register a callback once; the session evaluates it for every <strong>watched</strong> layer on the training thread, against the batch's live activations, gradients, and the layer's weights/optimizer state. They're the escape hatch for research ideas the built-in stats can't anticipate.</p>
+<p>There are three kinds:</p>
+<table>
+<thead>
+<tr>
+<th>Decorator</th>
+<th>Returns</th>
+<th>Shown</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session.watch_metric(name)</code></td>
+<td>scalar(s) per layer</td>
+<td><code>/stats</code> → GRAPHS, one plot per metric</td>
+</tr>
+<tr>
+<td><code>session.watch_layer_tensor(name)</code></td>
+<td>tensor shaped like the activation</td>
+<td>main page, extra strip under activations/gradients</td>
+</tr>
+<tr>
+<td><code>session.watch_weight_tensor(name)</code></td>
+<td>tensor shaped like the parameter</td>
+<td><code>/weights</code>, next to weight/gradient/optimizer strips</td>
+</tr>
+</tbody>
+</table>
+<p>A runnable demo of all three lives in <code>examples/custom_metrics/</code>:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>examples/custom_metrics/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+</code></pre></div>
+<h2 id="scalar-metrics">Scalar metrics<a class="headerlink" href="#scalar-metrics" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">)</span>
+
+<span class="nd">@session</span><span class="o">.</span><span class="n">watch_metric</span><span class="p">(</span><span class="s2">&quot;sparsity&quot;</span><span class="p">)</span>                      <span class="c1"># one point per batch</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">sparsity</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">nansense</span><span class="o">.</span><span class="n">LayerContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="k">return</span> <span class="nb">float</span><span class="p">((</span><span class="n">ctx</span><span class="o">.</span><span class="n">activation</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">float</span><span class="p">()</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
+
+<span class="nd">@session</span><span class="o">.</span><span class="n">watch_metric</span><span class="p">(</span><span class="s2">&quot;grad_rms&quot;</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;epoch&quot;</span><span class="p">,</span> <span class="n">reduce</span><span class="o">=</span><span class="s2">&quot;mean&quot;</span><span class="p">)</span>  <span class="c1"># one point per epoch</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">grad_rms</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">nansense</span><span class="o">.</span><span class="n">LayerContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">ctx</span><span class="o">.</span><span class="n">gradient</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>                           <span class="c1"># e.g. no-grad val forwards</span>
+        <span class="k">return</span> <span class="kc">None</span>                                    <span class="c1"># skip this layer/batch</span>
+    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">gradient</span><span class="o">.</span><span class="n">square</span><span class="p">()</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">sqrt</span><span class="p">())</span>
+</code></pre></div>
+<p>The callback receives a <a href="../api/#nansense.LayerContext"><code>LayerContext</code></a> and may return:</p>
+<ul>
+<li>a number (or a 1-element tensor) — one plot trace,</li>
+<li>a mapping of named scalars (<code>{"lo": ..., "hi": ...}</code>) — one trace per key,</li>
+<li><code>None</code> — skip this layer for this batch (also a natural per-layer filter).</li>
+</ul>
+<p><code>on="batch"</code> keeps every batch's value as its own point, plotted at epoch fractions so the curves line up under the built-in per-epoch figures. <code>on="epoch"</code> folds each epoch's values through <code>reduce</code> — <code>"mean"</code> (default), <code>"sum"</code>, <code>"min"</code>, <code>"max"</code>, <code>"last"</code>, or any <code>values -&gt; float</code> callable — into one point per epoch. The plots appear in <code>/stats</code> → GRAPHS below the built-in statistics, per layer and phase.</p>
+<h2 id="layer-tensors">Layer tensors<a class="headerlink" href="#layer-tensors" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nd">@session</span><span class="o">.</span><span class="n">watch_layer_tensor</span><span class="p">(</span><span class="s2">&quot;zscore&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">zscore</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">nansense</span><span class="o">.</span><span class="n">LayerContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">activation</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">a</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span> <span class="o">/</span> <span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">+</span> <span class="mf">1e-6</span><span class="p">)</span>
+</code></pre></div>
+<p>The result must share the activation's shape; it rides on the published snapshot and renders as an extra labelled strip under the layer card's ACTIVATIONS/GRADIENTS strips. Layer tensors are evaluated only on batches that publish a snapshot (pauses, visualization updates, Refresh) — they are display cargo, not running statistics.</p>
+<h2 id="weight-tensors">Weight tensors<a class="headerlink" href="#weight-tensors" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nd">@session</span><span class="o">.</span><span class="n">watch_weight_tensor</span><span class="p">(</span><span class="s2">&quot;adam_dir&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">adam_dir</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">nansense</span><span class="o">.</span><span class="n">WeightContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">state</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">optimizer_state</span>                        <span class="c1"># this parameter&#39;s entries</span>
+    <span class="k">if</span> <span class="s2">&quot;exp_avg&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">state</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>                                    <span class="c1"># Adam state is lazy</span>
+    <span class="k">return</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg_sq&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sqrt</span><span class="p">()</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">)</span>
+</code></pre></div>
+<p>Weight-tensor callbacks run once per (watched layer, parameter) with a <a href="../api/#nansense.WeightContext"><code>WeightContext</code></a>; the result must share the parameter's shape and renders on <code>/weights</code> under the same axis controls as the weight itself. Also evaluated on publish batches only.</p>
+<h2 id="the-rules">The rules<a class="headerlink" href="#the-rules" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Watched layers only.</strong> Instruments run for the layers the stats scope collects — the watched set by default, every layer under scope <code>"all"</code>, nothing under <code>"none"</code>.</li>
+<li><strong>Training thread, live tensors, <code>no_grad</code>.</strong> Callbacks run inside the batch context against the live device tensors: fast (no copies), but treat every tensor as read-only.</li>
+<li><strong>Errors never kill training.</strong> A raising callback (or a wrong-shaped/typed return) disables that instrument, prints one console line, and reports on the <code>/stats</code> GRAPHS view and <code>session.instrument_errors</code>. Everything else keeps running.</li>
+<li><strong>Stateful instruments are just callables.</strong> Pass any object with <code>__call__</code> — <code>session.watch_metric("drift")(DriftTracker(model))</code>. If it also defines <code>on_rewind(epoch)</code>, the session calls it when time travel rewinds, so cross-batch state doesn't leak across timelines. Stored series from rewound epochs are dropped automatically.</li>
+<li><strong>Names are unique</strong> across all instrument kinds — they label the plots and strips.</li>
+<li>Under DDP, instruments run on the leader rank only (rank-local, like the extreme-input patches). On a locked (shared demo) session, register instruments before <code>session.lock()</code>.</li>
+</ul>
 
 
-  
+
+
+
+
+
+
+
 
 
 
@@ -738,12 +793,10 @@
   
     
       
-        
-      
-      <nav class="md-footer__inner md-grid" aria-label="Footer" hidden>
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href=".." class="md-footer__link md-footer__link--prev" aria-label="Previous: Home">
+          <a href="../ui/" class="md-footer__link md-footer__link--prev" aria-label="Previous: UI guide">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -753,20 +806,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Home
+                UI guide
               </div>
             </div>
           </a>
         
         
           
-          <a href="../showcase/" class="md-footer__link md-footer__link--next" aria-label="Next: Showcase">
+          <a href="../api/" class="md-footer__link md-footer__link--next" aria-label="Next: API reference">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Showcase
+                API reference
               </div>
             </div>
             <div class="md-footer__button md-icon">

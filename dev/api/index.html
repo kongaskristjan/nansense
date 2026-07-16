@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/api/">
       
       
-        <link rel="prev" href="../ui/">
+        <link rel="prev" href="../instruments/">
       
       
       
@@ -451,6 +451,33 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../instruments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom metrics & tensors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -614,6 +641,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#nansense.Session.instrument_errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        instrument_errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#nansense.Session.batches" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -717,6 +755,50 @@
     <span class="md-ellipsis">
       
         park
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_layer_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_layer_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_weight_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_weight_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metrics_snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metrics_snapshot
       
     </span>
   </a>
@@ -1035,6 +1117,78 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-instruments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom instruments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.WeightContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WeightContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricsSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MetricsSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot.plots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plots
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricSeries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricSeries
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1405,6 +1559,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#nansense.Session.instrument_errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        instrument_errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#nansense.Session.batches" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1508,6 +1673,50 @@
     <span class="md-ellipsis">
       
         park
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_layer_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_layer_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_weight_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_weight_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metrics_snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metrics_snapshot
       
     </span>
   </a>
@@ -1826,6 +2035,78 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-instruments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom instruments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.WeightContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WeightContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricsSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MetricsSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot.plots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plots
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricSeries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricSeries
+      
+    </span>
+  </a>
   
 </li>
       
@@ -2375,6 +2656,30 @@ no lock needed (same contract as <code>snapshot</code>).</p>
 
 </div>
 
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Session.instrument_errors" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">instrument_errors</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Session.instrument_errors" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">instrument_errors</span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="str">str</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>instrument name -&gt; error</code> for instruments disabled by a failure.</p>
+
+    </div>
+
+</div>
+
 
 
 
@@ -2608,7 +2913,10 @@ visitors share one session. Once locked:</p>
 <li>the stats scope is forced to <code>ALL</code> — every layer collects, so the
   UI's per-tab show/hide never touches shared state;</li>
 <li>experiment requests still run, with their parameters clamped and
-  the queue depth capped (see <code>nansense.experiments</code>).</li>
+  the queue depth capped (see <code>nansense.experiments</code>);</li>
+<li>registering instruments (<code>watch_metric</code>, <code>watch_layer_tensor</code>,
+  <code>watch_weight_tensor</code>) raises — register them, like every other
+  host-script setting, <em>before</em> locking.</li>
 </ul>
 <p>Everything read-only stays available, as do experiments. The lock is
 one-way by design — arm the wanted mode (e.g. <code>step_run()</code>), the
@@ -2714,6 +3022,147 @@ thread owns the model — this provides that loop. Call it from the
 thread that built the model, typically right after <code>lock()</code>; on an
 unlocked session a Run/Step click simply re-enters the park. Returns
 once the session is closed.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_metric" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_metric</span>
+
+
+<a href="#nansense.Session.watch_metric" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_metric</span><span class="p">(</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">on</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;batch&quot;</span><span class="p">,</span>
+    <span class="n">reduce</span><span class="p">:</span> <span class="n"><span title="nansense.instruments.MetricReduce">MetricReduce</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">],</span> <span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Register a custom scalar metric, evaluated per collected layer.</p>
+<p>Use as a decorator (or call the returned registrar directly with any
+callable — a stateful object works too):</p>
+<div class="highlight"><pre><span></span><code>@session.watch_metric(&quot;sparsity&quot;)
+def sparsity(ctx: nansense.LayerContext) -&gt; float:
+    return (ctx.activation &gt; 0).float().mean().item()
+</code></pre></div>
+<p>The callback runs on the training thread, under <code>torch.no_grad()</code>,
+once per stats batch for every layer the stats scope collects (the
+watched set by default) — it receives a <code>LayerContext</code> with the
+batch's live activation, its gradient, and the layer's weights /
+optimizer state, and must not mutate them. It may return a number
+(or 1-element tensor), a mapping of named scalars (one plot trace
+per key), or <code>None</code> to skip the layer.</p>
+<p><code>on="batch"</code> plots every batch's value; <code>on="epoch"</code> folds each
+epoch's values through <code>reduce</code> — <code>"mean"</code> (default), <code>"sum"</code>,
+<code>"min"</code>, <code>"max"</code>, <code>"last"</code>, or any <code>values -&gt; float</code> callable — into
+one point. The series appear in the <code>/stats</code> GRAPHS view, one plot
+per metric. A raising callback is disabled (training continues) and
+reported via <code>instrument_errors</code>. Raises <code>ValueError</code> on invalid
+arguments and <code>RuntimeError</code> on a locked session.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_layer_tensor" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_layer_tensor</span>
+
+
+<a href="#nansense.Session.watch_layer_tensor" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_layer_tensor</span><span class="p">(</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">],</span> <span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Register a custom activation-shaped tensor per collected layer.</p>
+<div class="highlight"><pre><span></span><code>@session.watch_layer_tensor(&quot;zscore&quot;)
+def zscore(ctx: nansense.LayerContext) -&gt; Tensor:
+    a = ctx.activation
+    return (a - a.mean()) / (a.std() + 1e-6)
+</code></pre></div>
+<p>The callback follows <code>watch_metric</code>'s contract (training thread,
+<code>torch.no_grad()</code>, live tensors, <code>None</code> skips) but runs on publish
+batches only and must return a tensor of the activation's shape —
+it lands on <code>BatchSnapshot.custom_activations</code> and renders as an
+extra strip under the layer card's activation/gradient strips.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_weight_tensor" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_weight_tensor</span>
+
+
+<a href="#nansense.Session.watch_weight_tensor" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_weight_tensor</span><span class="p">(</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">],</span> <span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Register a custom weight-shaped tensor per collected parameter.</p>
+<div class="highlight"><pre><span></span><code>@session.watch_weight_tensor(&quot;adam_update&quot;)
+def adam_update(ctx: nansense.WeightContext) -&gt; Tensor | None:
+    if &quot;exp_avg&quot; not in ctx.optimizer_state:
+        return None
+    m = ctx.optimizer_state[&quot;exp_avg&quot;]
+    v = ctx.optimizer_state[&quot;exp_avg_sq&quot;]
+    return m / (v.sqrt() + 1e-8)
+</code></pre></div>
+<p>The callback follows <code>watch_metric</code>'s contract but runs on publish
+batches only, once per (collected layer, parameter), receiving a
+<code>WeightContext</code>; it must return a tensor of the parameter's shape —
+it lands on <code>BatchSnapshot.custom_weight_tensors</code> and renders on the
+<code>/weights</code> page alongside the weight/gradient/optimizer strips.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_metrics_snapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_metrics_snapshot</span>
+
+
+<a href="#nansense.Session.watch_metrics_snapshot" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_metrics_snapshot</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span> <span class="n">layers</span><span class="p">:</span> <span class="n"><span title="collections.abc.Iterable">Iterable</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.MetricsSnapshot
+
+
+  
+      dataclass
+   (nansense.instruments.MetricsSnapshot)" href="#nansense.MetricsSnapshot">MetricsSnapshot</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Frozen view of the custom scalar-metric series (see <code>watch_metric</code>).</p>
+<p>The GRAPHS view's data source for the custom-metric plots; safe to
+call from any thread. Pass <code>layers</code> to restrict the copy.</p>
 
 
     </div>
@@ -3154,6 +3603,11 @@ State entries are keyed <code>param name -&gt; state key -&gt; tensor</code> (sc
 entries like Adam's <code>step</code> become 0-dim tensors); hyperparams are the
 numeric knobs of the parameter's group (<code>lr</code>, <code>momentum</code>, ...), read at
 the same instant — so a scheduler-driven <code>lr</code> is the batch's actual one.</p>
+<p><code>custom_activations</code> / <code>custom_weight_tensors</code> carry the tensor
+instruments' outputs (see <code>Session.watch_layer_tensor</code> /
+<code>watch_weight_tensor</code>): activation-shaped tensors keyed
+<code>layer -&gt; instrument name</code>, weight-shaped ones <code>param -&gt; instrument
+name</code>. Empty without registered instruments (or when nothing collects).</p>
 
 
 
@@ -3607,6 +4061,257 @@ the count stored at collapse time for an evicted older epoch.</p>
     </div>
 
 </div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="custom-instruments">Custom instruments<a class="headerlink" href="#custom-instruments" title="Permanent link">&para;</a></h2>
+<p>See the <a href="../instruments/">Custom metrics &amp; tensors guide</a> for usage; the registration decorators live on the session (<code>Session.watch_metric</code>, <code>Session.watch_layer_tensor</code>, <code>Session.watch_weight_tensor</code> above).</p>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.LayerContext" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.LayerContext</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.LayerContext" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One watched layer's live tensors for a batch, passed to instruments.</p>
+<p><code>activation</code> / <code>gradient</code> are the layer's captured output and its
+retained grad (<code>None</code> in forward-only phases); <code>weights</code>,
+<code>weight_gradients</code>, and <code>optimizer_state</code> cover the layer's own
+parameters, keyed by qualified parameter name. All tensors are the live
+training-device tensors — treat them as read-only. <code>module</code> is the
+owning <code>nn.Module</code>, or <code>None</code> for fx intermediates (<code>relu</code>, <code>add</code>) and
+graph inputs.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.WeightContext" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.WeightContext</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.WeightContext" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One (layer, parameter) pair's live tensors, passed to weight-tensor
+instruments once per parameter on publish batches.</p>
+<p><code>weight</code> / <code>gradient</code> are the live parameter and its <code>.grad</code> (<code>None</code>
+before the first backward); <code>optimizer_state</code> is this parameter's state
+entries (empty without an optimizer, or before its lazy init) and
+<code>hyperparams</code> its param group's numeric knobs (<code>lr</code>, <code>momentum</code>, ...).
+All tensors are live training-device tensors — treat them as read-only.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.MetricsSnapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.MetricsSnapshot</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.MetricsSnapshot" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Immutable view of every custom-metric series at a point in time.</p>
+<p>Keyed by <code>(layer, phase, metric, series)</code> — <code>series</code> is the mapping key
+for dict-returning metrics and <code>""</code> for plain scalar returns.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.MetricsSnapshot.plots" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">plots</span>
+
+
+<a href="#nansense.MetricsSnapshot.plots" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">plots</span><span class="p">(</span>
+    <span class="n">layer</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n">phase</span><span class="p">:</span> <span class="n"><span title="str">str</span></span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.MetricSeries
+
+
+  
+      dataclass
+   (nansense.instruments.MetricSeries)" href="#nansense.MetricSeries">MetricSeries</a></span><span class="p">]]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>metric -&gt; series name -&gt; series</code> for one layer and phase.</p>
+<p>The per-figure view behind the GRAPHS custom-metric plots, in sorted
+(metric, series) order so trace order is stable across refreshes.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.MetricSeries" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.MetricSeries</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.MetricSeries" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One plot trace of a custom metric: points ordered by (epoch, batch).</p>
+<p><code>xs</code> is the shared epoch-fraction axis: an <code>on="epoch"</code> point sits at
+its integer epoch, an <code>on="batch"</code> point at <code>epoch + batch_idx / n</code>
+where <code>n</code> spans the epoch's observed batches — so batch series line up
+under the per-epoch GRAPHS figures. <code>batches[i]</code> is <code>None</code> for reduced
+epoch points. Values are stored as-is; render paths gap non-finite ones.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
 
 
 
@@ -4295,7 +5000,7 @@ floating-point gradient was scanned for the layer.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../ui/" class="md-footer__link md-footer__link--prev" aria-label="Previous: UI guide">
+          <a href="../instruments/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Custom metrics &amp; tensors">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -4305,7 +5010,7 @@ floating-point gradient was scanned for the layer.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                UI guide
+                Custom metrics & tensors
               </div>
             </div>
           </a>

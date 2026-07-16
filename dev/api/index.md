@@ -110,6 +110,14 @@ Updated on *every* batch's `__enter__` regardless of capture mode, so the UI can
 mode: Mode
 ```
 
+### instrument_errors
+
+```
+instrument_errors: dict[str, str]
+```
+
+`instrument name -> error` for instruments disabled by a failure.
+
 ### batches
 
 ```
@@ -216,7 +224,8 @@ Intended for a publicly hosted playground where many anonymous visitors share on
 
 - the run-control methods (`stop`, every `step_*`, `detach`), `request_time_travel`, `watch`/`unwatch`, the probe surface (`pin_current_batch`, `unpin_batch`, `add_perturbation`, `clear_perturbations`, `set_probe_mode` — all shared state every visitor sees), and the global settings (`set_stats_scope`, `set_update_frequency`, `set_watch_performance`, `set_debug_settings`, `disable_debug_check`, `set_auto_run_experiments`, `set_experiment_defaults`) become no-ops (`request_time_travel` raises `TimeTravelError`, so the UI can show why);
 - the stats scope is forced to `ALL` — every layer collects, so the UI's per-tab show/hide never touches shared state;
-- experiment requests still run, with their parameters clamped and the queue depth capped (see `nansense.experiments`).
+- experiment requests still run, with their parameters clamped and the queue depth capped (see `nansense.experiments`);
+- registering instruments (`watch_metric`, `watch_layer_tensor`, `watch_weight_tensor`) raises — register them, like every other host-script setting, *before* locking.
 
 Everything read-only stays available, as do experiments. The lock is one-way by design — arm the wanted mode (e.g. `step_run()`), the settings, and any demo pin *before* locking. `close()` is not locked; it belongs to the hosting script.
 
@@ -259,6 +268,84 @@ park() -> None
 Hold the calling thread at a pause, serving UI requests, until `close()`.
 
 The showcase counterpart of a training loop: a script that restored a frozen moment (`nansense.load_moment`) has no batches to drive, but experiments and probes still execute on the pause loop of whatever thread owns the model — this provides that loop. Call it from the thread that built the model, typically right after `lock()`; on an unlocked session a Run/Step click simply re-enters the park. Returns once the session is closed.
+
+### watch_metric
+
+```
+watch_metric(
+    name: str,
+    *,
+    on: str = "batch",
+    reduce: MetricReduce | None = None,
+) -> Callable[[_InstrumentFn], _InstrumentFn]
+```
+
+Register a custom scalar metric, evaluated per collected layer.
+
+Use as a decorator (or call the returned registrar directly with any callable — a stateful object works too):
+
+```
+@session.watch_metric("sparsity")
+def sparsity(ctx: nansense.LayerContext) -> float:
+    return (ctx.activation > 0).float().mean().item()
+```
+
+The callback runs on the training thread, under `torch.no_grad()`, once per stats batch for every layer the stats scope collects (the watched set by default) — it receives a `LayerContext` with the batch's live activation, its gradient, and the layer's weights / optimizer state, and must not mutate them. It may return a number (or 1-element tensor), a mapping of named scalars (one plot trace per key), or `None` to skip the layer.
+
+`on="batch"` plots every batch's value; `on="epoch"` folds each epoch's values through `reduce` — `"mean"` (default), `"sum"`, `"min"`, `"max"`, `"last"`, or any `values -> float` callable — into one point. The series appear in the `/stats` GRAPHS view, one plot per metric. A raising callback is disabled (training continues) and reported via `instrument_errors`. Raises `ValueError` on invalid arguments and `RuntimeError` on a locked session.
+
+### watch_layer_tensor
+
+```
+watch_layer_tensor(
+    name: str,
+) -> Callable[[_InstrumentFn], _InstrumentFn]
+```
+
+Register a custom activation-shaped tensor per collected layer.
+
+```
+@session.watch_layer_tensor("zscore")
+def zscore(ctx: nansense.LayerContext) -> Tensor:
+    a = ctx.activation
+    return (a - a.mean()) / (a.std() + 1e-6)
+```
+
+The callback follows `watch_metric`'s contract (training thread, `torch.no_grad()`, live tensors, `None` skips) but runs on publish batches only and must return a tensor of the activation's shape — it lands on `BatchSnapshot.custom_activations` and renders as an extra strip under the layer card's activation/gradient strips.
+
+### watch_weight_tensor
+
+```
+watch_weight_tensor(
+    name: str,
+) -> Callable[[_InstrumentFn], _InstrumentFn]
+```
+
+Register a custom weight-shaped tensor per collected parameter.
+
+```
+@session.watch_weight_tensor("adam_update")
+def adam_update(ctx: nansense.WeightContext) -> Tensor | None:
+    if "exp_avg" not in ctx.optimizer_state:
+        return None
+    m = ctx.optimizer_state["exp_avg"]
+    v = ctx.optimizer_state["exp_avg_sq"]
+    return m / (v.sqrt() + 1e-8)
+```
+
+The callback follows `watch_metric`'s contract but runs on publish batches only, once per (collected layer, parameter), receiving a `WeightContext`; it must return a tensor of the parameter's shape — it lands on `BatchSnapshot.custom_weight_tensors` and renders on the `/weights` page alongside the weight/gradient/optimizer strips.
+
+### watch_metrics_snapshot
+
+```
+watch_metrics_snapshot(
+    *, layers: Iterable[str] | None = None
+) -> MetricsSnapshot
+```
+
+Frozen view of the custom scalar-metric series (see `watch_metric`).
+
+The GRAPHS view's data source for the custom-metric plots; safe to call from any thread. Pass `layers` to restrict the copy.
 
 ## PyTorch Lightning integration
 
@@ -373,6 +460,8 @@ All tensor dicts are independent CPU clones taken at snapshot time, so the snaps
 
 `optimizer_state` / `optimizer_hyperparams` are populated only when the session was given an optimizer at `start()`; otherwise they stay empty. State entries are keyed `param name -> state key -> tensor` (scalar entries like Adam's `step` become 0-dim tensors); hyperparams are the numeric knobs of the parameter's group (`lr`, `momentum`, ...), read at the same instant — so a scheduler-driven `lr` is the batch's actual one.
 
+`custom_activations` / `custom_weight_tensors` carry the tensor instruments' outputs (see `Session.watch_layer_tensor` / `watch_weight_tensor`): activation-shaped tensors keyed `layer -> instrument name`, weight-shaped ones `param -> instrument name`. Empty without registered instruments (or when nothing collects).
+
 ## Watch statistics
 
 ## nansense.StatsScope
@@ -484,6 +573,46 @@ dead_channel_count: int | None
 How many channels only ever hit the zero bin, `None` when unknown.
 
 Live from `channel_hists` while the per-channel histogram exists; the count stored at collapse time for an evicted older epoch.
+
+## Custom instruments
+
+See the [Custom metrics & tensors guide](https://kongaskristjan.github.io/nansense/dev/instruments/index.md) for usage; the registration decorators live on the session (`Session.watch_metric`, `Session.watch_layer_tensor`, `Session.watch_weight_tensor` above).
+
+## nansense.LayerContext
+
+One watched layer's live tensors for a batch, passed to instruments.
+
+`activation` / `gradient` are the layer's captured output and its retained grad (`None` in forward-only phases); `weights`, `weight_gradients`, and `optimizer_state` cover the layer's own parameters, keyed by qualified parameter name. All tensors are the live training-device tensors — treat them as read-only. `module` is the owning `nn.Module`, or `None` for fx intermediates (`relu`, `add`) and graph inputs.
+
+## nansense.WeightContext
+
+One (layer, parameter) pair's live tensors, passed to weight-tensor instruments once per parameter on publish batches.
+
+`weight` / `gradient` are the live parameter and its `.grad` (`None` before the first backward); `optimizer_state` is this parameter's state entries (empty without an optimizer, or before its lazy init) and `hyperparams` its param group's numeric knobs (`lr`, `momentum`, ...). All tensors are live training-device tensors — treat them as read-only.
+
+## nansense.MetricsSnapshot
+
+Immutable view of every custom-metric series at a point in time.
+
+Keyed by `(layer, phase, metric, series)` — `series` is the mapping key for dict-returning metrics and `""` for plain scalar returns.
+
+### plots
+
+```
+plots(
+    layer: str, phase: str
+) -> dict[str, dict[str, MetricSeries]]
+```
+
+`metric -> series name -> series` for one layer and phase.
+
+The per-figure view behind the GRAPHS custom-metric plots, in sorted (metric, series) order so trace order is stable across refreshes.
+
+## nansense.MetricSeries
+
+One plot trace of a custom metric: points ordered by (epoch, batch).
+
+`xs` is the shared epoch-fraction axis: an `on="epoch"` point sits at its integer epoch, an `on="batch"` point at `epoch + batch_idx / n` where `n` spans the epoch's observed batches — so batch series line up under the per-epoch GRAPHS figures. `batches[i]` is `None` for reduced epoch points. Values are stored as-is; render paths gap non-finite ones.
 
 ## Time travel
 
