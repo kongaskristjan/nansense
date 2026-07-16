@@ -52,6 +52,16 @@ jobs:
           uv run --only-group docs mike deploy --push --update-aliases "$minor" latest
           uv run --only-group docs mike set-default --push latest
 
+      # GitHub Pages serves the root 404.html for every missing path, and
+      # mike only redirects the site root — so versionless deep links like
+      # /playground would 404 instead of landing on the default version.
+      # Regenerate the redirecting 404.html on every deploy so its baked-in
+      # version list and default track what mike just published. Must run
+      # before the llms.txt step: both check out gh-pages, and only this
+      # one releases its worktree when done.
+      - name: Install root 404 redirect
+        run: python3 deploy/install_root_404.py
+
       # mike deploys every version into its own subdirectory, so the build's
       # llms.txt lands at /<version>/llms.txt — but the llms.txt convention
       # expects it at the site root. Mirror the default version's copy there:
