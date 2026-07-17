@@ -48,15 +48,16 @@ def test_input_img_src_is_a_data_uri() -> None:
 @pytest.mark.parametrize(
     ("focus_layer", "expected"),
     [
-        # The Back-button deep link adds its layer on top of the seed set.
-        ("conv2", {"conv1", "conv2"}),
-        # Already-seeded and unknown/empty deep links leave the seed alone.
+        # The Back-button deep link shows exactly its layer — not the
+        # default seed set alongside it.
+        ("conv2", {"conv2"}),
         ("conv1", {"conv1"}),
+        # Unknown/empty deep links fall back to the watched seed.
         ("nope", {"conv1"}),
         ("", {"conv1"}),
     ],
 )
-def test_seed_shown_adds_only_a_valid_focus_layer(
+def test_seed_shown_replaces_the_seed_with_a_valid_focus_layer(
     focus_layer: str, expected: set[str]
 ) -> None:
     shown = _seed_shown(frozenset({"conv1"}), focus_layer, ["conv1", "conv2"])

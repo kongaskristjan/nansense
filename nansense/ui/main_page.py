@@ -166,17 +166,18 @@ def _layer_info_script(layer_info: dict[str, str], slugs: dict[str, str]) -> str
 def _seed_shown(
     watched: frozenset[str], focus_layer: str, layer_names: list[str]
 ) -> set[str]:
-    """A new tab's decoupled shown set: the watched seed plus the deep link.
+    """A new tab's decoupled shown set: the deep link, or the watched seed.
 
     `focus_layer` is the `?layer=` query param — the locked playground's
     subpages put the layer they show into their Back button's href, so
-    returning to the main page shows the card the visitor came from even
-    when it isn't part of the seed set. Unknown names are ignored.
+    returning to the main page shows exactly the card the visitor came
+    from (not the default seed alongside it, which would read as two
+    unrelated cards). Without a deep link — or with an unknown name — the
+    watched seed is shown as usual.
     """
-    shown = set(watched)
     if focus_layer in layer_names:
-        shown.add(focus_layer)
-    return shown
+        return {focus_layer}
+    return set(watched)
 
 
 def _build_page(
