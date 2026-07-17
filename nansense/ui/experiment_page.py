@@ -522,8 +522,16 @@ def _build_experiment_page(
                 None,
             )
             if available is not None:
+                old_layer = state.layer
                 state.layer = available
                 _defer_value_write(lambda: layer_select.set_value(available))
+                # The hop would otherwise be silent — the user may not notice
+                # they're now experimenting on a different layer.
+                ui.notify(
+                    f"{EXPERIMENT_KINDS[state.kind]} can't run on {old_layer} "
+                    f"— switched to {available}",
+                    type="info",
+                )
         rebuild_params()
         update_description()
         overlay_switch.set_visibility(state.kind != "deep_dream")
