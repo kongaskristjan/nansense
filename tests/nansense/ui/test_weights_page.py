@@ -21,6 +21,7 @@ from nansense.ui.weights_page import (
     _WeightPanel,
 )
 from tests.nansense.helpers import _make_snapshot, make_session
+from tests.nansense.ui.test_common import _tooltip_texts
 
 
 @pytest.mark.parametrize(
@@ -170,6 +171,22 @@ def test_compute_snapshot_renders_runs_off_the_event_loop() -> None:
     assert len(renders) == 1
     assert renders[0].error is None
     assert renders[0].weight_html
+
+
+def test_weight_strip_marker_carries_descriptive_tooltip() -> None:
+    """The weight marker explains the data, not just the bare label.
+
+    On short strips (1-D biases) the vertical WEIGHT text is hidden and the
+    tooltip is the chip's only explanation, so it must describe what the
+    strip shows rather than echo "Weight".
+    """
+    session, _ = make_session()
+    panel = _first_weight_panel(session)
+    assert panel._img.parent_slot is not None
+    weight_row = panel._img.parent_slot.parent
+    texts = _tooltip_texts(weight_row)
+    assert "The parameter's current values" in texts
+    assert "Weight" not in texts
 
 
 def test_weight_graphs_href_carries_view_scroll_and_watch() -> None:

@@ -355,11 +355,23 @@ class _WeightPanel:
                     with ui.element("div").classes(
                         "flex no-wrap items-stretch"
                     ).props('data-tour="weight-strips"'):
-                        _strip_marker("bg-sky-500", "WEIGHT", header_gap=True)
+                        _strip_marker(
+                            "bg-sky-500",
+                            "WEIGHT",
+                            header_gap=True,
+                            tooltip="The parameter's current values",
+                        )
                         self._img = ui.html("")
                     ui.element("div").classes("h-1")
                     with ui.element("div").classes("flex no-wrap items-stretch"):
-                        _strip_marker("bg-violet-500", "GRADIENT")
+                        _strip_marker(
+                            "bg-violet-500",
+                            "GRADIENT",
+                            tooltip=(
+                                "The parameter's gradient from the last "
+                                "training step"
+                            ),
+                        )
                         self._grad_img = ui.html("")
                     # One marker-barred strip per tensor-valued optimizer
                     # state entry (momentum_buffer, exp_avg, …); rebuilt on
@@ -616,14 +628,34 @@ class _WeightPanel:
             for label, strip_html in render.opt_strips:
                 ui.element("div").classes("h-1")
                 with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-amber-600", label)
+                    # `label` is the optimizer state key upper-cased
+                    # (`_compute_optimizer_values`); lower() restores the
+                    # conventionally-lowercase key (exp_avg, momentum_buffer).
+                    _strip_marker(
+                        "bg-amber-600",
+                        label,
+                        tooltip=(
+                            f"Optimizer state '{label.lower()}' for this "
+                            "parameter"
+                        ),
+                    )
                     ui.html(strip_html)
         self._custom_container.clear()
         with self._custom_container:
             for label, strip_html in render.custom_strips:
                 ui.element("div").classes("h-1")
                 with ui.element("div").classes("flex no-wrap items-stretch"):
-                    _strip_marker("bg-teal-600", label)
+                    # `label` is the instrument name upper-cased
+                    # (`_compute_custom_strips`); lower() restores the
+                    # conventionally-lowercase registration name.
+                    _strip_marker(
+                        "bg-teal-600",
+                        label,
+                        tooltip=(
+                            f"Your custom instrument '{label.lower()}' "
+                            "computed for this parameter"
+                        ),
+                    )
                     ui.html(strip_html)
         self._opt_scalars.text = render.opt_scalar_text
         self._opt_scalars.set_visibility(bool(render.opt_scalar_text))

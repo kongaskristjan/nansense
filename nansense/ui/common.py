@@ -144,7 +144,13 @@ def _refuse_unwatch_while_recording(session: Session) -> bool:
     return True
 
 
-def _strip_marker(color_class: str, label: str, *, header_gap: bool = False) -> None:
+def _strip_marker(
+    color_class: str,
+    label: str,
+    *,
+    header_gap: bool = False,
+    tooltip: str | None = None,
+) -> None:
     """A labelled colored bar marking which kind of strip sits next to it.
 
     Stretches to the strip's height via the flex row (and collapses to
@@ -157,8 +163,10 @@ def _strip_marker(color_class: str, label: str, *, header_gap: bool = False) -> 
     reading bottom-up, and is absolutely positioned so it adds no intrinsic
     height — otherwise a missing strip would leave a floating bar instead
     of an empty row. On strips too short to fit it the label is hidden via
-    the container query in `_STRIP_MARKER_CSS`; the tooltip carries the
-    full name regardless.
+    the container query in `_STRIP_MARKER_CSS`; the tooltip — `tooltip`
+    when given, else the capitalized label — carries the explanation
+    regardless. Pass `tooltip` wherever the bare label is cryptic (raw
+    optimizer-state keys, short strips with the label hidden).
 
     `header_gap` offsets the marker down past the strip's `CHANNEL n` header
     row (the height of a header bar plus its `LABEL_GAP`): the first strip of a
@@ -169,7 +177,7 @@ def _strip_marker(color_class: str, label: str, *, header_gap: bool = False) -> 
     marker = ui.element("div").classes(
         f"nansense-marker w-5 shrink-0 rounded mr-2 sticky left-0 z-10 "
         f"overflow-hidden {color_class}"
-    ).tooltip(label.capitalize())
+    ).tooltip(tooltip if tooltip is not None else label.capitalize())
     if header_gap:
         marker.style(f"margin-top: {LABEL_HEIGHT + LABEL_GAP}px")
     with marker:

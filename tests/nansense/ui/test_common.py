@@ -7,7 +7,16 @@ from typing import Literal
 import pytest
 import torch
 
-from nansense.ui.common import _resizable_pane_props, _resize_handle, _strip_html
+from nicegui import ui
+from nicegui.element import Element
+from nicegui.elements.tooltip import Tooltip
+
+from nansense.ui.common import (
+    _resizable_pane_props,
+    _resize_handle,
+    _strip_html,
+    _strip_marker,
+)
 from nansense.ui.render import image_mime, render_strip
 from nansense.ui.static import (
     _MIN_APP_WIDTH_CSS,
@@ -64,6 +73,43 @@ def test_strip_html_uses_data_mime_for_nonfinite_strip() -> None:
 
 def test_strip_html_empty_for_none() -> None:
     assert _strip_html(None) == ""
+
+
+def _tooltip_texts(root: Element) -> list[str]:
+    """Texts of every Tooltip in `root`'s subtree.
+
+    NiceGUI's `.tooltip()` places the Tooltip element in the slot current at
+    call time (targeting the element by id), so a marker's tooltip may be a
+    sibling of the marker rather than a child — walk the whole container.
+    """
+    texts: list[str] = []
+    stack: list[Element] = [root]
+    while stack:
+        element = stack.pop()
+        if isinstance(element, Tooltip):
+            texts.append(element.text)
+        stack.extend(
+            child for slot in element.slots.values() for child in slot.children
+        )
+    return texts
+
+
+@pytest.mark.parametrize(
+    ("tooltip", "expected"),
+    [
+        # No override: the capitalized label stays the tooltip (main page).
+        (None, "Weight"),
+        # An override replaces it wholesale (weights page's descriptions).
+        ("The parameter's current values", "The parameter's current values"),
+    ],
+)
+def test_strip_marker_tooltip_override_falls_back_to_label(
+    tooltip: str | None, expected: str
+) -> None:
+    container = ui.element("div")
+    with container:
+        _strip_marker("bg-sky-500", "WEIGHT", tooltip=tooltip)
+    assert _tooltip_texts(container) == [expected]
 
 
 @pytest.mark.parametrize("side", ["left", "right"])
