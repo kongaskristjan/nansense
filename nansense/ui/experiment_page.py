@@ -370,6 +370,29 @@ def _minmax_stats_href(layer: str) -> str:
     return f"/stats?layer={quote(layer)}&view=minmax"
 
 
+def _run_tooltip(locked: bool) -> str:
+    """Run-button tooltip. Locked sessions expose no training controls, so
+    the "training must be paused" advice only appears when the user can
+    actually pause; the disabled-state note applies either way."""
+    pause = "" if locked else " (training must be paused)"
+    return (
+        f"Run the experiment{pause}. "
+        "Disabled while auto-run is on or a run is in flight."
+    )
+
+
+def _status_text(auto_run: bool, locked: bool) -> str:
+    """Results-pane hint. Same locked rule as `_run_tooltip`; the auto-run
+    split tells the user whether pressing Run is ever needed."""
+    pause = "" if locked else " (training must be paused)"
+    if auto_run:
+        return f"Adjust parameters — the experiment runs automatically{pause}."
+    return (
+        "The first experiment starts on its own — after changing "
+        f"parameters, press Run{pause}."
+    )
+
+
 def _build_experiment_page(
     session: Session,
     layer: str,
@@ -586,10 +609,7 @@ def _build_experiment_page(
                         ui.button("Run", icon="science", on_click=run, color="yellow-8")
                         .props("dense size=md")
                         .classes("grow")
-                        .tooltip(
-                            "Run the experiment (training must be paused). "
-                            "Disabled while auto-run is on or a run is in flight."
-                        )
+                        .tooltip(_run_tooltip(session.locked))
                     )
                     cancel_button = (
                         ui.button("Cancel", on_click=cancel, color="slate-500")
@@ -660,11 +680,7 @@ def _build_experiment_page(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             ):
                 status_label = ui.label(
-                    "Adjust parameters — the experiment runs automatically "
-                    "(training must be paused)."
-                    if session.auto_run_experiments
-                    else "The first experiment starts on its own — after "
-                    "changing parameters, press Run (training must be paused)."
+                    _status_text(session.auto_run_experiments, session.locked)
                 ).classes("text-sm text-slate-600")
                 error_label = ui.label("").classes("text-sm text-red-600")
                 results_col = ui.column().classes("gap-2 w-full")

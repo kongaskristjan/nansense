@@ -118,6 +118,37 @@ def test_layer_channel_count_reads_snapshot_activation() -> None:
     assert _layer_channel_count(None, "conv") is None
 
 
+@pytest.mark.parametrize("locked", [False, True])
+def test_run_tooltip_mentions_pausing_only_when_unlocked(locked: bool) -> None:
+    from nansense.ui.experiment_page import _run_tooltip
+
+    text = _run_tooltip(locked)
+    # The disabled-state advice applies on locked pages too.
+    assert "auto-run" in text and "in flight" in text
+    if locked:
+        # Locked sessions have no training controls to point at.
+        assert "paused" not in text and "training" not in text
+    else:
+        assert "training must be paused" in text
+
+
+@pytest.mark.parametrize("locked", [False, True])
+@pytest.mark.parametrize("auto_run", [False, True])
+def test_status_text_locked_and_auto_run_variants(
+    auto_run: bool, locked: bool
+) -> None:
+    from nansense.ui.experiment_page import _status_text
+
+    text = _status_text(auto_run, locked)
+    # The auto-run split survives the locked rewording.
+    assert ("runs automatically" in text) == auto_run
+    assert ("press Run" in text) == (not auto_run)
+    if locked:
+        assert "paused" not in text and "training" not in text
+    else:
+        assert "training must be paused" in text
+
+
 def test_minmax_stats_href_encodes_layer_and_targets_minmax_view() -> None:
     # A real `href` (not an `on_click` navigate) keeps the compare button
     # middle-clickable; the link must land on the MIN/MAX grids directly.
