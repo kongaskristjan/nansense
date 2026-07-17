@@ -1009,6 +1009,26 @@ def _hover_attach_js(element_id: int) -> str:
     )
 
 
+def _reveal_samples_js(element_id: int) -> str:
+    """JS that scrolls the just-filled bin-sample strip into view.
+
+    The strip sits under a tall plot, so on a typical viewport it lands
+    below the fold and the first hover looks like a no-op without this
+    nudge. Scrolling only happens when the strip's bottom edge is actually
+    off-screen, and `block: 'nearest'` keeps the scroll minimal so the
+    hovered plot mostly stays put.
+    """
+    return (
+        "(function() {"
+        f"const el = getHtmlElement({element_id});"
+        "if (!el) return;"
+        "const bottom = el.getBoundingClientRect().bottom;"
+        "if (bottom <= window.innerHeight) return;"
+        "el.scrollIntoView({block: 'nearest', behavior: 'smooth'});"
+        "})();"
+    )
+
+
 def _bin_samples_note(text: str) -> str:
     return f'<div class="text-xs text-slate-400 italic py-1">{text}</div>'
 
@@ -1308,6 +1328,7 @@ class _HistPlot:
             self._input_std,
         )
         self._samples.set_content(content)
+        ui.run_javascript(_reveal_samples_js(self._samples.id))
 
     def _under_over_band(
         self, per_phase: dict[str, LayerStatsSnapshot]

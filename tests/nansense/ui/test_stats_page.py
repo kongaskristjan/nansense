@@ -41,6 +41,7 @@ from nansense.ui.stats_page import (
     _reconcile_selected_layer,
     _reconcile_selected_phase,
     _refresh_now,
+    _reveal_samples_js,
     _selectable_layers,
     _should_show_bands,
     _tour_restore_view,
@@ -71,6 +72,18 @@ def test_hover_attach_js_uses_one_shared_event_with_element_id() -> None:
     assert "bin: p.pointNumber" in js
     # The old per-element event name must be gone.
     assert "nansense_hist_hover_42" not in js
+
+
+def test_reveal_samples_js_scrolls_strip_when_below_fold() -> None:
+    """The bin-sample strip sits under a tall plot, so the hover fill lands
+    below the fold and looks like a no-op without a scroll nudge. The nudge
+    targets the strip's own element, keeps the scroll minimal (`nearest`),
+    and tolerates the element not being in the DOM yet."""
+    js = _reveal_samples_js(42)
+    assert "getHtmlElement(42)" in js
+    assert "scrollIntoView" in js
+    assert "'nearest'" in js
+    assert "if (!el) return;" in js
 
 
 @pytest.mark.parametrize("locked", [True, False])
