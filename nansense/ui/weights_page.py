@@ -67,6 +67,23 @@ def _default_roles(ndim: int) -> list[str]:
     return roles
 
 
+def _axes_anchor_param(
+    weight_names: list[str], shapes: dict[str, tuple[int, ...]]
+) -> str | None:
+    """The parameter whose panel anchors the tour's axis-mapping step.
+
+    The first parameter with 2+ dimensions wins over e.g. a leading 1-D
+    bias: the step explains mapping dimensions to X/Y/Tile/Index, and only
+    a multi-dimensional weight has controls where those roles are
+    non-trivial. Falls back to the first parameter; None when there are
+    none.
+    """
+    for name in weight_names:
+        if len(shapes.get(name, ())) >= 2:
+            return name
+    return weight_names[0] if weight_names else None
+
+
 def _weight_graphs_href(layer: str) -> str:
     """Deep-link to `layer`'s GRAPHS view on the Stats page.
 
@@ -165,9 +182,15 @@ def _build_weights_page(session: Session, layer: str) -> None:
                     f"Layer {layer!r} has no weights to show."
                 )
             else:
+                anchor = _axes_anchor_param(weight_names, shapes)
                 for name in weight_names:
                     panels.append(
-                        _WeightPanel(name=name, shape=shapes[name], session=session)
+                        _WeightPanel(
+                            name=name,
+                            shape=shapes[name],
+                            session=session,
+                            tour_anchor=name == anchor,
+                        )
                     )
 
     async def tick() -> None:
@@ -247,7 +270,14 @@ class _WeightPanel:
     touches panels whose `needs_render` reports a fresh snapshot.
     """
 
-    def __init__(self, *, name: str, shape: tuple[int, ...], session: Session) -> None:
+    def __init__(
+        self,
+        *,
+        name: str,
+        shape: tuple[int, ...],
+        session: Session,
+        tour_anchor: bool = False,
+    ) -> None:
         self.name = name
         self._shape = shape
         self._session = session
@@ -272,10 +302,14 @@ class _WeightPanel:
                     "font-mono text-xs text-slate-500"
                 )
             # `data-tour` marks the axis controls as the tour's arrow target
-            # (`tour.weights_tour_steps`); the first panel's visible row wins.
-            with ui.row().classes("items-end gap-4 flex-wrap").props(
-                'data-tour="axes"'
-            ):
+            # (`tour.weights_tour_steps`); only the anchor panel — the first
+            # multi-dimensional parameter (`_axes_anchor_param`) — carries
+            # it, so the arrow skips a leading bias's degenerate lone "X"
+            # dropdown.
+            dim_row = ui.row().classes("items-end gap-4 flex-wrap")
+            if tour_anchor:
+                dim_row.props('data-tour="axes"')
+            with dim_row:
                 for d in range(self._ndim):
                     with ui.column().classes("gap-1"):
                         ui.label(f"dim {d} · {shape[d]}").classes(

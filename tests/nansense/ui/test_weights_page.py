@@ -8,9 +8,12 @@ import asyncio
 import pytest
 import torch
 
+from nicegui.element import Element
+
 from nansense.session import Session
 from nansense.ui.weights_page import (
     _NO_GRADIENT_HTML,
+    _axes_anchor_param,
     _compute_snapshot_renders,
     _default_roles,
     _PanelRender,
@@ -44,6 +47,57 @@ def test_role_options_scale_with_rank(ndim: int, expected: list[str]) -> None:
 )
 def test_default_roles_match_default_dims(ndim: int, roles: list[str]) -> None:
     assert _default_roles(ndim) == roles
+
+
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        # A leading 1-D bias loses to the multi-dim weight: the tour's
+        # dim-mapping step needs controls where X/Y/Tile/Index are
+        # non-trivial.
+        (
+            (("layer.bias", (6,)), ("layer.weight", (6, 1, 5, 5))),
+            "layer.weight",
+        ),
+        # Only 1-D parameters: fall back to the first.
+        ((("a.bias", (3,)), ("b.bias", (4,))), "a.bias"),
+        # No parameters at all: no anchor.
+        ((), None),
+        # Weight-first order still picks the weight.
+        (
+            (("layer.weight", (6, 1, 5, 5)), ("layer.bias", (6,))),
+            "layer.weight",
+        ),
+    ],
+)
+def test_axes_anchor_param_prefers_multi_dim(
+    params: tuple[tuple[str, tuple[int, ...]], ...], expected: str | None
+) -> None:
+    names = [name for name, _ in params]
+    assert _axes_anchor_param(names, dict(params)) == expected
+
+
+def _carries_axes_anchor(panel: _WeightPanel) -> bool:
+    """Whether any ancestor of the panel's dim controls has the tour prop."""
+    element: Element | None = panel._role_selects[0]
+    while element is not None:
+        if element.props.get("data-tour") == "axes":
+            return True
+        element = element.parent_slot.parent if element.parent_slot else None
+    return False
+
+
+@pytest.mark.parametrize("tour_anchor", [True, False])
+def test_panel_axes_anchor_prop_follows_flag(tour_anchor: bool) -> None:
+    """Only the anchor panel's dim-control row carries `data-tour="axes"`."""
+    session, _ = make_session()
+    layer = next(layer for layer, names in session.layer_weights.items() if names)
+    name = session.layer_weights[layer][0]
+    shape = tuple(dict(session.model.named_parameters())[name].shape)
+    panel = _WeightPanel(
+        name=name, shape=shape, session=session, tour_anchor=tour_anchor
+    )
+    assert _carries_axes_anchor(panel) == tour_anchor
 
 
 def _first_weight_panel(session: Session) -> _WeightPanel:
