@@ -336,14 +336,18 @@ def _build_page(
                 color="slate-100",
             ).classes(
                 "ml-auto text-amber-700 font-mono"
-            ).props("dense size=md no-caps").tooltip(
-                "Shown layers — click a layer to open its stats view; "
-                "use the menu to pause stats collection"
-            )
+            ).props("dense size=md no-caps")
             stats_icon: ui.icon
             watch_count_label: ui.label
             watch_list_container: ui.element
             with watch_chip:
+                # The menu opens bottom-right of the chip, so a default
+                # (below-anchored) tooltip would cover its first item — anchor
+                # the tooltip to the chip's left instead.
+                ui.tooltip(
+                    "Shown layers — click a layer to open its stats view; "
+                    "use the menu to pause stats collection"
+                ).props('anchor="center left" self="center right"')
                 # Icon and count are built as button children (rather than the
                 # button's `icon=` / text) so the eye icon carries its own colour
                 # independently of the amber count. `sync_stats_icon` swaps it
