@@ -36,6 +36,7 @@ from nansense.ui.stats_page import (
     _no_stats_message,
     _patch_grids_html,
     _patch_grids_signature,
+    _phase_heading,
     _phase_select_options,
     _reconcile_grid_type,
     _reconcile_selected_layer,
@@ -44,6 +45,7 @@ from nansense.ui.stats_page import (
     _reveal_samples_js,
     _selectable_layers,
     _should_show_bands,
+    _stats_table_content,
     _tour_restore_view,
     _visible_layers,
     _watched_in_order,
@@ -242,6 +244,66 @@ def test_patch_grids_signature_tracks_toggles_and_values() -> None:
     assert base != _patch_grids_signature(per_phase, ["max_pixel"], False)
     other = {"train": _layer_snap_with_patches("train")}  # new random extremes
     assert base != _patch_grids_signature(other, list(PATCH_TYPES), False)
+    # A phase → "Current batch" flip can leave the phase key and the patch
+    # bytes identical while the block headings change, so the mode is part
+    # of the key — otherwise the flip would keep a stale heading.
+    assert base != _patch_grids_signature(
+        per_phase, list(PATCH_TYPES), False, current_batch=True
+    )
+
+
+# --- "Current batch" headings ------------------------------------------------
+# The current-batch snapshot entry is keyed by the captured batch's own
+# phase/epoch, so without a mode-aware heading the view renders exactly like
+# the phase's whole-run aggregate and the Phase dropdown looks ignored.
+
+
+@pytest.mark.parametrize(
+    ("current_batch", "expected"),
+    [
+        (False, "train (ep 19)"),
+        (True, "current batch — train ep 19"),
+    ],
+)
+def test_phase_heading_marks_current_batch_mode(
+    current_batch: bool, expected: str
+) -> None:
+    assert _phase_heading("train", 19, current_batch=current_batch) == expected
+
+
+def test_patch_grids_html_heads_blocks_by_phase_mode() -> None:
+    per_phase = {"train": _layer_snap_with_patches("train", epoch=1)}
+    plain = _patch_grids_html(
+        per_phase, enabled=["max_pixel"], heatmap=False, mean=None, std=None
+    )
+    current = _patch_grids_html(
+        per_phase,
+        enabled=["max_pixel"],
+        heatmap=False,
+        current_batch=True,
+        mean=None,
+        std=None,
+    )
+    assert "train (ep 1)" in plain
+    assert "current batch" not in plain
+    assert "current batch — train ep 1" in current
+    assert "train (ep 1)" not in current
+
+
+@pytest.mark.parametrize("current_batch", [False, True])
+def test_stats_table_content_relabels_corner_header(current_batch: bool) -> None:
+    # The table itself comes from `_stats_table_html` ("{phase} ep {epoch}"
+    # corner headers); only the current-batch mode swaps the header text —
+    # the aggregate mode must pass the rendered table through untouched.
+    table = _stats_table_content(
+        {"train": _layer_snap("train", epoch=3)}, current_batch=current_batch
+    )
+    if current_batch:
+        assert ">current batch — train ep 3</th>" in table
+        assert ">train ep 3</th>" not in table
+    else:
+        assert ">train ep 3</th>" in table
+        assert "current batch" not in table
 
 
 _NAMES = ["a", "b", "c", "d"]

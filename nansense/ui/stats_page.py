@@ -1305,8 +1305,18 @@ class _HistPlot:
             if self._per_channel and self._channel_count is not None
             else ""
         )
+        # In "Current batch" mode the single entry keeps its captured phase
+        # key, so a "train" → "Current batch" flip can leave `update`'s
+        # phase-set rebuild check unchanged — the labels still refresh
+        # because the restyle path re-sends the trace names and subplot
+        # titles on every update.
+        current_batch = self._state.selected_phase == _PHASE_CURRENT_BATCH
         phases = _phases_with_data(view, self._kind)
-        return [f"{p} (ep {view[p].epoch}){suffix}" for p in phases]
+        return [
+            _phase_heading(p, view[p].epoch, current_batch=current_batch)
+            + suffix
+            for p in phases
+        ]
 
     async def _on_hover(self, e: GenericEventArguments) -> None:
         if not self._per_channel:
@@ -1805,7 +1815,13 @@ class _WatchLayerPanel:
                 self._grid_sig, html = grids
                 self._grids.set_content(html)
             return
-        self._stats_table.set_content(_stats_table_html(per_phase))
+        self._stats_table.set_content(
+            _stats_table_content(
+                per_phase,
+                current_batch=self._state.selected_phase
+                == _PHASE_CURRENT_BATCH,
+            )
+        )
         self._act.update(per_phase)
         self._grad.update(per_phase)
 
@@ -1907,13 +1923,17 @@ class _WatchLayerPanel:
         per_phase = self._phase_view(snap)
         enabled = [self._state.grid_type]
         heatmap = self._state.heat_on
-        sig = _patch_grids_signature(per_phase, enabled, heatmap)
+        current_batch = self._state.selected_phase == _PHASE_CURRENT_BATCH
+        sig = _patch_grids_signature(
+            per_phase, enabled, heatmap, current_batch=current_batch
+        )
         if sig == self._grid_sig:
             return None
         html = _patch_grids_html(
             per_phase,
             enabled=enabled,
             heatmap=heatmap,
+            current_batch=current_batch,
             mean=self._input_mean,
             std=self._input_std,
         )
@@ -1933,6 +1953,46 @@ def _filter_phase(
 # control char) so it can be compared in the option slot's Vue template.
 _PHASE_CURRENT_BATCH: str = "::current-batch::"
 _PHASE_CURRENT_BATCH_LABEL: str = "Current batch"
+
+
+def _phase_heading(phase: str, epoch: int, *, current_batch: bool) -> str:
+    """The heading of one rendered phase block (histogram subplot titles,
+    MIN/MAX grid headers, stats-table corner headers).
+
+    In "Current batch" mode the single entry is keyed by the captured
+    batch's own phase/epoch, so the default heading would read exactly like
+    the phase's whole-run aggregate and make the Phase dropdown look
+    ignored — that mode leads with "current batch" and keeps the batch's
+    position as detail.
+    """
+    if current_batch:
+        return f"current batch — {phase} ep {epoch}"
+    return f"{phase} (ep {epoch})"
+
+
+def _stats_table_content(
+    per_phase: dict[str, LayerStatsSnapshot], *, current_batch: bool
+) -> str:
+    """The stats tables' HTML with mode-aware corner headers.
+
+    `_stats_table_html` (nansense.ui.histograms) renders each corner header
+    as "{phase} ep {epoch}" and keys the header tint off the real phase
+    name so it matches the histogram traces below. Rekeying `per_phase` to
+    relabel would lose that tint, so in "Current batch" mode the header
+    cell's text is swapped for `_phase_heading`'s current-batch form after
+    rendering instead. The `</th>` anchor pins the replacement to the
+    corner header — value cells close with `</td>`.
+    """
+    out = _stats_table_html(per_phase)
+    if not current_batch:
+        return out
+    for phase, snap in per_phase.items():
+        heading = _phase_heading(phase, snap.epoch, current_batch=True)
+        out = out.replace(
+            f">{html.escape(phase)} ep {snap.epoch}</th>",
+            f">{html.escape(heading)}</th>",
+        )
+    return out
 
 def _phase_select_options(view: str, phase_names: list[str]) -> dict[str, str]:
     """The Phase dropdown's value→label map for the current view.
@@ -2172,15 +2232,21 @@ def _patch_grids_signature(
     per_phase: dict[str, LayerStatsSnapshot],
     enabled: list[PatchType],
     heatmap: bool,
+    *,
+    current_batch: bool = False,
 ) -> tuple[object, ...]:
     """Cheap change-detection key for a panel's patch grids.
 
     The stored extreme values identify the buffer contents: any accepted
     candidate changes its channel's value row, so unchanged values ⇒
     unchanged patches (within one epoch bucket, which the phase/epoch part
-    of the key pins down).
+    of the key pins down). `current_batch` is part of the key because the
+    block headings render differently in that mode: a Phase-dropdown flip
+    between a phase and "Current batch" can leave the phase key and patch
+    bytes identical, which would otherwise skip the re-render and keep a
+    stale heading.
     """
-    parts: list[object] = [tuple(enabled), heatmap]
+    parts: list[object] = [tuple(enabled), heatmap, current_batch]
     for phase, layer_snap in per_phase.items():
         patches = layer_snap.patches
         if patches is None:
@@ -2198,10 +2264,16 @@ def _patch_grids_html(
     *,
     enabled: list[PatchType],
     heatmap: bool,
+    current_batch: bool = False,
     mean: tuple[float, ...] | None,
     std: tuple[float, ...] | None,
 ) -> str:
-    """The MIN/MAX view body for one layer: per-phase blocks of grids."""
+    """The MIN/MAX view body for one layer: per-phase blocks of grids.
+
+    `current_batch` marks the block headings as "Current batch" content
+    (see `_phase_heading`) — the snapshot entry itself is keyed and tinted
+    by the captured batch's own phase either way.
+    """
     blocks: list[str] = []
     for i, (phase, layer_snap) in enumerate(per_phase.items()):
         patches = layer_snap.patches
@@ -2219,10 +2291,13 @@ def _patch_grids_html(
         if not rows:
             continue
         color = phase_color(phase, i)
+        heading = _phase_heading(
+            phase, layer_snap.epoch, current_batch=current_batch
+        )
         blocks.append(
             '<div class="flex flex-col gap-2 w-full">'
             f'<div class="font-mono text-xs font-bold" style="color:{color}">'
-            f"{phase} (ep {layer_snap.epoch})</div>" + "".join(rows) + "</div>"
+            f"{heading}</div>" + "".join(rows) + "</div>"
         )
     if not blocks:
         collected = any(
