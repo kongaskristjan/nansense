@@ -7,11 +7,16 @@ Every page has its own short tour (`*_tour_steps` below); the main view's
 is the long one, the subpages get one to three steps covering only what a
 first look wouldn't reveal.
 
-The main tour's strips step needs a visible layer card, so advancing to it
-auto-shows one layer (via the same `nansense_toggle_layer` event a diagram
-click emits) when nothing is shown yet — on a locked session that only
-touches the tab's own `shown` set, so playground visitors never affect
-each other.
+The main tour's strips and buttons steps need the right layer card on
+screen, so showing either auto-shows the weights-owning layer (via the
+show-only `nansense_tour_show_layer` event, which never hides a card the
+visitor already opened) whenever one of the step's own anchors has no
+visible target — with no card the strips anchor is missing, and a card
+without weights (e.g. a ReLU) has no Weights button for the buttons step's
+arrow. On a locked session that only touches the tab's own `shown` set, so
+playground visitors never affect each other. The sample step similarly
+re-opens the input pane (`nansense_tour_show_input`) if the top bar's
+image button had hidden it.
 
 The driver is a self-contained JS blob in the `static.py` style: targets
 are plain CSS selectors resolved to their first *visible* match on a 200 ms
@@ -59,16 +64,19 @@ class TourStep:
 
     Each selector contributes one arrow, drawn to its first visible match
     (hidden cards' elements have zero-size rects and are skipped).
-    `ensure_card` marks the step that needs a layer card on screen (main
-    view only); `ensure_view` names the Stats view the step talks about —
-    showing the step switches the page to it (via the
-    `nansense_tour_set_view` event the stats page listens for), so the
-    arrows land on a live example of what the message describes.
+    `ensure_card` marks steps that need the auto-watch layer's card on
+    screen (main view only); `ensure_input` marks the step whose target
+    lives in the input pane, which the top bar's image button can hide;
+    `ensure_view` names the Stats view the step talks about — showing the
+    step switches the page to it (via the `nansense_tour_set_view` event
+    the stats page listens for), so the arrows land on a live example of
+    what the message describes.
     """
 
     text: str
     selectors: tuple[str, ...]
     ensure_card: bool = False
+    ensure_input: bool = False
     ensure_view: str | None = None
 
 
@@ -107,10 +115,15 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
                 '[data-tour="experiment"]',
                 '[data-tour="stats"]',
             ),
+            # The Weights anchor only exists on a card whose layer owns
+            # weights — a shown ReLU card leaves it missing, so this step
+            # must be able to bring the weights-owning card on screen too.
+            ensure_card=True,
         ),
         TourStep(
             "Pick which sample of the batch to inspect.",
             ('[data-tour="sample"]',),
+            ensure_input=True,
         ),
     ]
     if not locked:
@@ -244,6 +257,7 @@ def tour_config(
                 "text": step.text,
                 "selectors": list(step.selectors),
                 "ensureCard": step.ensure_card,
+                "ensureInput": step.ensure_input,
                 "ensureView": step.ensure_view,
             }
             for step in steps
@@ -264,8 +278,9 @@ def add_tour(
     """Install `page`'s tour (config + CSS + driver) into the current page.
 
     `auto_watch_slug` (main page only) is the layer auto-shown for the
-    strips step. Only a locked session (the shared playground) auto-starts,
-    and only when the browser hasn't dismissed this page's tour before
+    card-needing steps (strips and buttons). Only a locked session (the
+    shared playground) auto-starts, and only when the browser hasn't
+    dismissed this page's tour before
     (per-page `seen_key`); everywhere else the tour waits for the top bar's
     `?` button, which replays it regardless of the seen flag.
     """
@@ -513,11 +528,21 @@ _TOUR_JS: str = """
   function showStep(i) {
     stepIdx = i;
     const step = cfg.steps[i];
-    // The strips step needs a card on screen; showing one goes through the
-    // same event as a diagram click (on a locked session this is per-tab).
+    // Card-needing steps: any of this step's own anchors missing — no card
+    // at all, or a shown card whose layer has no Weights button — means the
+    // weights-owning card must come on screen. The event is show-only (a
+    // toggle would hide a card the visitor already opened); on a locked
+    // session the show is per-tab, like a diagram click.
     if (step.ensureCard && cfg.autoWatchSlug &&
-        !findTarget('[data-tour="strips"]')) {
-      emitEvent('nansense_toggle_layer', cfg.autoWatchSlug);
+        step.selectors.some(sel => !findTarget(sel))) {
+      emitEvent('nansense_tour_show_layer', cfg.autoWatchSlug);
+    }
+    // The sample spinner lives in the input pane, which the top bar's image
+    // button can hide; re-open it when the step's target is invisible (the
+    // page's handler is a no-op if the pane is already showing).
+    if (step.ensureInput &&
+        step.selectors.every(sel => !findTarget(sel))) {
+      emitEvent('nansense_tour_show_input');
     }
     // A view-bound step switches the Stats page to the view it describes;
     // the page's handler no-ops when that view is already showing.

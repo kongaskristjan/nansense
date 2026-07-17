@@ -266,10 +266,11 @@ def _build_page(
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
     ui.add_body_html(_layer_info_script(session.layer_info, slugs))
 
-    # The tour points at (and auto-shows, for its strips step) one layer;
-    # preferring one that owns weights makes all three card buttons real
-    # targets for the tour's three-arrow step. Auto-starts only on locked
-    # (playground) sessions — local runs reach it via the `?` button.
+    # The tour points at (and auto-shows, for its strips and buttons steps)
+    # one layer; preferring one that owns weights makes all three card
+    # buttons real targets for the tour's three-arrow step. Auto-starts
+    # only on locked (playground) sessions — local runs reach it via the
+    # `?` button.
     layer_weights = session.layer_weights
     tour_layer = next(
         (n for n in layer_names if layer_weights.get(n)),
@@ -586,6 +587,12 @@ def _build_page(
             architecture_pane.set_visibility(visible)
             architecture_handle.set_visibility(visible)
 
+        def show_input() -> None:
+            # Show-only half of `toggle_input`, for the tour's sample step:
+            # re-showing an already-visible pane is a no-op.
+            input_pane.set_visibility(True)
+            input_handle.set_visibility(True)
+
         def toggle_input() -> None:
             visible = not input_pane.visible
             input_pane.set_visibility(visible)
@@ -606,7 +613,21 @@ def _build_page(
         if name is not None:
             toggle_layer(name)
 
+    def on_tour_show_layer(e: GenericEventArguments) -> None:
+        # The tour's card-needing steps must never hide a card the visitor
+        # already opened, so unlike a diagram click this is show-only;
+        # `toggle_layer` still does the showing, keeping the watch/sync/
+        # scroll logic in one place for both the decoupled and coupled
+        # visibility flavors.
+        name = slug_to_name.get(e.args)
+        if name is not None and name not in shown_layers():
+            toggle_layer(name)
+
     ui.on("nansense_toggle_layer", on_diagram_toggle)
+    ui.on("nansense_tour_show_layer", on_tour_show_layer)
+    # The tour's sample step re-opens the input pane the top bar's image
+    # button may have hidden (a no-op when it is already visible).
+    ui.on("nansense_tour_show_input", show_input)
 
     # Populate the chip menu and, if anything is already watched, push the
     # set into JS so the MutationObserver applies the amber treatment to

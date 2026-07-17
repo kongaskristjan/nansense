@@ -192,15 +192,21 @@ def test_config_carries_driver_contract() -> None:
     payload = config["steps"]
     assert isinstance(payload, list)
     assert len(payload) == len(steps)
-    # Exactly one step may auto-show a card (the main tour's strips step).
-    assert json.dumps(config).count('"ensureCard": true') == 1
+    # Exactly two steps may auto-show a card: the main tour's strips step
+    # and its buttons step (whose Weights anchor only exists on a card
+    # whose layer owns weights).
+    assert json.dumps(config).count('"ensureCard": true') == 2
+    # Exactly one step re-opens the input pane (the sample step).
+    assert json.dumps(config).count('"ensureInput": true') == 1
     subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
     assert subpage["autoStart"] is False
     assert subpage["autoWatchSlug"] is None
     assert subpage["seenKey"] == seen_key("stats")
-    # No subpage step auto-shows a layer card — that's a main-view mechanic —
-    # but the view-bound stats steps serialize their `ensureView`.
+    # No subpage step auto-shows a layer card or re-opens the input pane —
+    # those are main-view mechanics — but the view-bound stats steps
+    # serialize their `ensureView`.
     assert '"ensureCard": true' not in json.dumps(subpage)
+    assert '"ensureInput": true' not in json.dumps(subpage)
     assert '"ensureView": "HISTOGRAM"' in json.dumps(subpage)
 
 
@@ -213,6 +219,12 @@ def test_driver_js_uses_the_config_hooks() -> None:
     assert "cfg.autoWatchSlug" in _TOUR_JS
     # View-bound steps reach the stats page through this event name.
     assert "nansense_tour_set_view" in _TOUR_JS
+    # Card-needing steps auto-show a layer through a show-only event — the
+    # toggle event a diagram click emits would hide an already-open card.
+    assert "nansense_tour_show_layer" in _TOUR_JS
+    assert "nansense_toggle_layer" not in _TOUR_JS
+    # The sample step re-opens the input pane through this event name.
+    assert "nansense_tour_show_input" in _TOUR_JS
     # Fresh runs are bracketed by start/end events — the stats page uses
     # them to restore the view its view-bound steps switched away.
     assert "nansense_tour_start" in _TOUR_JS
@@ -227,4 +239,20 @@ def test_driver_js_uses_the_config_hooks() -> None:
 def test_ensure_card_step_defaults_off() -> None:
     step = TourStep("Text.", ("a",))
     assert step.ensure_card is False
+    assert step.ensure_input is False
     assert step.ensure_view is None
+
+
+@pytest.mark.parametrize("locked", [True, False])
+def test_main_steps_ensure_their_targets_are_visible(locked: bool) -> None:
+    """The strips and buttons steps auto-show the weights-owning card (the
+    buttons step's Weights anchor only exists on that card), and the sample
+    step re-opens the input pane the top bar's image button can hide."""
+    steps = {s.selectors[0]: s for s in main_tour_steps("conv1", locked=locked)}
+    assert steps['[data-tour="strips"]'].ensure_card
+    assert steps['[data-tour="weights"]'].ensure_card
+    assert steps['[data-tour="sample"]'].ensure_input
+    # The pane and card mechanics stay separate per step.
+    assert not steps['[data-tour="sample"]'].ensure_card
+    assert not steps['[data-tour="weights"]'].ensure_input
+    assert not steps['[data-tour="strips"]'].ensure_input
