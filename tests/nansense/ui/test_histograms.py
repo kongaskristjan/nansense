@@ -25,6 +25,7 @@ from nansense.ui.histograms import (
     _min_positive_height,
     _OVERFLOW_MARKER_Y_FRAC,
     _overflow_marks,
+    phase_color,
     _phase_hists,
     _phases_with_data,
     _probabilities,
@@ -814,6 +815,32 @@ def test_stats_table_keeps_empty_kind_column() -> None:
 def test_stats_table_escapes_phase_names() -> None:
     per_phase = {"<b>": _layer_snap("<b>")}
     assert "<b>" not in _stats_table_html(per_phase)
+
+
+@pytest.mark.parametrize(
+    ("headings", "corner", "forbidden"),
+    [
+        # No mapping, or one that doesn't name the phase → the
+        # "{phase} ep {epoch}" default.
+        (None, "train ep 2", "override"),
+        ({"val": "override"}, "train ep 2", "override"),
+        # An override replaces the corner text verbatim.
+        ({"train": "current batch — train ep 2"}, "current batch — train ep 2", None),
+        # Override text is HTML-escaped like the default phase name.
+        ({"train": "<b>train</b>"}, "&lt;b&gt;train&lt;/b&gt;", "<b>"),
+    ],
+)
+def test_stats_table_headings_override_corner_header(
+    headings: dict[str, str] | None, corner: str, forbidden: str | None
+) -> None:
+    table = _stats_table_html(
+        {"train": _layer_snap("train", epoch=2)}, headings=headings
+    )
+    # The corner cell closes the tinted style with the phase color, which
+    # stays keyed on the real phase name no matter what the heading says.
+    assert f'color:{phase_color("train", 0)}">{corner}</th>' in table
+    if forbidden is not None:
+        assert forbidden not in table
 
 
 def _snap_with_channel_hists(

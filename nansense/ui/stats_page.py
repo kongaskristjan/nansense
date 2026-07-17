@@ -1975,24 +1975,23 @@ def _stats_table_content(
 ) -> str:
     """The stats tables' HTML with mode-aware corner headers.
 
-    `_stats_table_html` (nansense.ui.histograms) renders each corner header
-    as "{phase} ep {epoch}" and keys the header tint off the real phase
-    name so it matches the histogram traces below. Rekeying `per_phase` to
-    relabel would lose that tint, so in "Current batch" mode the header
-    cell's text is swapped for `_phase_heading`'s current-batch form after
-    rendering instead. The `</th>` anchor pins the replacement to the
-    corner header — value cells close with `</td>`.
+    In "Current batch" mode each corner header is threaded to
+    `_stats_table_html` (nansense.ui.histograms) as `_phase_heading`'s
+    current-batch form; the default mode keeps the table's own
+    "{phase} ep {epoch}" headers. Either way the header tint stays keyed
+    on the real phase name (see `_stats_table_html`), so a relabeled
+    header still matches the histogram traces below.
     """
-    out = _stats_table_html(per_phase)
-    if not current_batch:
-        return out
-    for phase, snap in per_phase.items():
-        heading = _phase_heading(phase, snap.epoch, current_batch=True)
-        out = out.replace(
-            f">{html.escape(phase)} ep {snap.epoch}</th>",
-            f">{html.escape(heading)}</th>",
-        )
-    return out
+    headings = (
+        {
+            phase: _phase_heading(phase, snap.epoch, current_batch=True)
+            for phase, snap in per_phase.items()
+        }
+        if current_batch
+        else None
+    )
+    return _stats_table_html(per_phase, headings=headings)
+
 
 def _phase_select_options(view: str, phase_names: list[str]) -> dict[str, str]:
     """The Phase dropdown's value→label map for the current view.

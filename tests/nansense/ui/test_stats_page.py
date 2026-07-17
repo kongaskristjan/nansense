@@ -11,7 +11,7 @@ from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
 from nansense.patches import PATCH_TYPES, PatchAccumulator, PatchType
 from nansense.session import BatchSnapshot, StatsScope
-from nansense.ui.histograms import _make_histogram_figure
+from nansense.ui.histograms import _make_histogram_figure, phase_color
 from nansense.ui.stats_page import (
     _ALL_LAYERS_MAX,
     _HOVER_EVENT,
@@ -291,10 +291,12 @@ def test_patch_grids_html_heads_blocks_by_phase_mode() -> None:
 
 
 @pytest.mark.parametrize("current_batch", [False, True])
-def test_stats_table_content_relabels_corner_header(current_batch: bool) -> None:
-    # The table itself comes from `_stats_table_html` ("{phase} ep {epoch}"
-    # corner headers); only the current-batch mode swaps the header text —
-    # the aggregate mode must pass the rendered table through untouched.
+def test_stats_table_content_threads_corner_headings(current_batch: bool) -> None:
+    # The corner headers are threaded into `_stats_table_html` as its
+    # `headings` mapping: current-batch mode renders `_phase_heading`'s
+    # form, the aggregate mode keeps the table's own "{phase} ep {epoch}"
+    # default. Either way the header tint stays keyed on the real phase
+    # name so it matches the histogram traces below.
     table = _stats_table_content(
         {"train": _layer_snap("train", epoch=3)}, current_batch=current_batch
     )
@@ -304,6 +306,7 @@ def test_stats_table_content_relabels_corner_header(current_batch: bool) -> None
     else:
         assert ">train ep 3</th>" in table
         assert "current batch" not in table
+    assert f'color:{phase_color("train", 0)}">' in table
 
 
 _NAMES = ["a", "b", "c", "d"]

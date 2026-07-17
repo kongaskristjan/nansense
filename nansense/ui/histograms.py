@@ -10,7 +10,7 @@ from __future__ import annotations
 import bisect
 import html
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -131,7 +131,11 @@ _STATS_BOX_STYLE: str = (
 )
 
 
-def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot]) -> str:
+def _stats_table_html(
+    per_phase: dict[str, LayerStatsSnapshot],
+    *,
+    headings: Mapping[str, str] | None = None,
+) -> str:
     """Scalar stats as an HTML table: activations and gradients side by side.
 
     One framed table per phase with data, its corner header ("train ep 0")
@@ -142,16 +146,23 @@ def _stats_table_html(per_phase: dict[str, LayerStatsSnapshot]) -> str:
     gradients. The dead-channels row (count, indices on hover) applies to
     activations only. Returns a plain "no data yet" note while no phase
     has samples.
+
+    `headings` overrides a phase's corner-header text (phase name →
+    display heading, HTML-escaped here like the default); phases it
+    doesn't name keep the "{phase} ep {epoch}" default. The header tint
+    stays keyed on the real phase name regardless of the heading text, so
+    a relabeled header still matches the phase's histogram bars below.
     """
     blocks: list[str] = []
     for i, (phase, snap) in enumerate(per_phase.items()):
         if snap.activations.n == 0 and snap.gradients.n == 0:
             continue
+        heading = (headings or {}).get(phase, f"{phase} ep {snap.epoch}")
         header = (
             f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
             f"border-bottom:1px solid #e2e8f0;"
             f'color:{phase_color(phase, i)}">'
-            f"{html.escape(phase)} ep {snap.epoch}</th>"
+            f"{html.escape(heading)}</th>"
             + "".join(
                 f'<th style="{_STATS_CELL_STYLE};font-weight:700;'
                 f'border-bottom:1px solid #e2e8f0;color:#334155">{kind}</th>'
