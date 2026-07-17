@@ -132,6 +132,15 @@ class _WatchPageState:
     # scrolls to the GRAPHS card's Weights section once it first renders);
     # cleared after the scroll fires.
     pending_scroll: str = ""
+    # Tour view-restore bookkeeping (`_tour_start` / `_tour_end` in
+    # `_build_stats_page`): the view showing when the current tour run
+    # started, whether the visitor picked a view themselves during that run
+    # (their choice then wins over the restore), and a one-shot marker
+    # telling `set_mode` the pending View write is the tour's, not the
+    # visitor's.
+    tour_saved_view: str | None = None
+    tour_user_set_view: bool = False
+    tour_view_write: bool = False
     # Single-flight refresh flags (see `refresh` in `_build_stats_page`).
     refresh_running: bool = False
     refresh_dirty: bool = False
@@ -233,6 +242,23 @@ def _apply_watch_param(session: Session, layer: str, watch: str) -> None:
         and layer not in session.watched_layers
     ):
         session.watch(layer)
+
+
+def _tour_restore_view(
+    saved: str | None, user_set_view: bool, current: str
+) -> str | None:
+    """The view to switch back to when a tour run ends, or `None`.
+
+    Dismissing the tour — Skip, Done, or Escape — should land the visitor
+    back on the view they started from, since the view-bound steps cycled
+    the page through every view on their behalf. No restore when nothing
+    was saved (no run started), when the run never left the saved view, or
+    when the visitor picked a view themselves mid-run — an explicit choice
+    the tour must not undo.
+    """
+    if saved is None or user_set_view or saved == current:
+        return None
+    return saved
 
 
 def _build_stats_page(
@@ -368,6 +394,13 @@ def _build_stats_page(
         await refresh()
 
     async def set_mode(value: object) -> None:
+        # Tour-driven View writes (`_tour_set_view`, `_tour_end`) announce
+        # themselves via the one-shot marker; any other write is the
+        # visitor's own choice and cancels the end-of-tour view restore.
+        if state.tour_view_write:
+            state.tour_view_write = False
+        else:
+            state.tour_user_set_view = True
         state.view = str(value)
         # The Phase dropdown's options depend on the view (the stats view
         # has no "Current batch"); reconcile before anything re-renders.
@@ -663,9 +696,32 @@ def _build_stats_page(
             _VIEW_MINMAX,
             _VIEW_GRAPHS,
         ):
+            state.tour_view_write = True
             view_select.set_value(view)
 
+    def _tour_start(_: GenericEventArguments) -> None:
+        """Snapshot the view a fresh tour run starts from.
+
+        The run's view-bound steps switch the page around on the visitor's
+        behalf (`_tour_set_view`); dismissing the tour puts this view back
+        (`_tour_end`) unless the visitor picked one themselves meanwhile.
+        """
+        state.tour_saved_view = state.view
+        state.tour_user_set_view = False
+
+    def _tour_end(_: GenericEventArguments) -> None:
+        """Restore the pre-tour view when the ended run switched it away."""
+        restore = _tour_restore_view(
+            state.tour_saved_view, state.tour_user_set_view, state.view
+        )
+        state.tour_saved_view = None
+        if restore is not None:
+            state.tour_view_write = True
+            view_select.set_value(restore)
+
     ui.on("nansense_tour_set_view", _tour_set_view)
+    ui.on("nansense_tour_start", _tour_start)
+    ui.on("nansense_tour_end", _tour_end)
 
     def sync_phase_select() -> None:
         """Refresh the Phase dropdown's options/value for the current view.

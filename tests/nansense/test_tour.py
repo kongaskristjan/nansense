@@ -213,6 +213,10 @@ def test_driver_js_uses_the_config_hooks() -> None:
     assert "cfg.autoWatchSlug" in _TOUR_JS
     # View-bound steps reach the stats page through this event name.
     assert "nansense_tour_set_view" in _TOUR_JS
+    # Fresh runs are bracketed by start/end events — the stats page uses
+    # them to restore the view its view-bound steps switched away.
+    assert "nansense_tour_start" in _TOUR_JS
+    assert "nansense_tour_end" in _TOUR_JS
     # Quasar fields get their data-tour forwarded to the inner native
     # control; the driver must widen matches to the whole field.
     assert ".q-field" in _TOUR_JS

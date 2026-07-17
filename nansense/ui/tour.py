@@ -17,7 +17,11 @@ The driver is a self-contained JS blob in the `static.py` style: targets
 are plain CSS selectors resolved to their first *visible* match on a 200 ms
 interval, which transparently rides out Mermaid's async render, the
 auto-shown card's server round-trip, pane scrolling, and window resizes.
-Steps whose target hasn't appeared (yet) simply show no arrow.
+Steps whose target hasn't appeared (yet) simply show no arrow. The driver
+brackets each fresh run with `nansense_tour_start` / `nansense_tour_end`
+events: the stats page — whose view-bound steps switch what every card
+shows — uses them to restore the view the visitor was on before the tour,
+unless they picked a view themselves while it ran.
 
 Auto-start policy (see `add_tour`): only a locked session — the hosted
 playground, whose visitors are exactly the people who have never seen the
@@ -536,6 +540,9 @@ _TOUR_JS: str = """
     if (timer) { clearInterval(timer); timer = null; }
     window.removeEventListener('resize', reposition);
     document.removeEventListener('keydown', onKey);
+    // Every way out — Skip, Done, Escape — announces the end, so a page
+    // whose view the tour switched can restore what was showing before.
+    if (overlay) emitEvent('nansense_tour_end');
     if (overlay) overlay.remove();
     overlay = null;
     stepIdx = -1;
@@ -549,6 +556,10 @@ _TOUR_JS: str = """
   window.nansenseStartTour = function() {
     if (overlay) { scrolledStep = -1; showStep(0); return; }
     buildOverlay();
+    // Fresh runs only (a mid-run restart keeps the original tour context):
+    // pages with view-bound steps snapshot their state on this event so
+    // dismissing the tour can put things back (see the stats page).
+    emitEvent('nansense_tour_start');
     showStep(0);
     timer = setInterval(reposition, 200);
     window.addEventListener('resize', reposition);

@@ -42,6 +42,7 @@ from nansense.ui.stats_page import (
     _refresh_now,
     _selectable_layers,
     _should_show_bands,
+    _tour_restore_view,
     _visible_layers,
     _watched_in_order,
 )
@@ -407,6 +408,27 @@ def test_should_show_bands_true_when_under_over_tripped() -> None:
 def test_should_show_bands_false_for_nan_only_issue() -> None:
     # A NaN/Inf-only issue isn't about under/overflow, so the band stays off.
     assert _should_show_bands(_err(("nan",), (debugger.NAN_INF,))) is False
+
+
+@pytest.mark.parametrize(
+    ("saved", "user_set_view", "current", "expected"),
+    [
+        # The tour's view-bound steps left the page on GRAPHS; dismissing
+        # it (Skip / Done / Escape) goes back to the starting view.
+        (_VIEW_HISTOGRAM, False, _VIEW_GRAPHS, _VIEW_HISTOGRAM),
+        (_VIEW_MINMAX, False, _VIEW_HISTOGRAM, _VIEW_MINMAX),
+        # The visitor picked a view themselves mid-run — their choice wins.
+        (_VIEW_HISTOGRAM, True, _VIEW_GRAPHS, None),
+        # Nothing to restore: the run never left the starting view, or no
+        # run ever started.
+        (_VIEW_HISTOGRAM, False, _VIEW_HISTOGRAM, None),
+        (None, False, _VIEW_GRAPHS, None),
+    ],
+)
+def test_tour_restore_view_goes_back_unless_user_chose(
+    saved: str | None, user_set_view: bool, current: str, expected: str | None
+) -> None:
+    assert _tour_restore_view(saved, user_set_view, current) == expected
 
 
 # --- Phase dropdown: options and reconciliation per view ---------------------

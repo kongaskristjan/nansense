@@ -1253,7 +1253,10 @@ long tour for the main view, one-to-three-step tours for the subpages —
 plus an overlay-JS driver that draws arrows to `data-tour`-tagged
 elements; on locked sessions each page's tour auto-starts once per browser
 — a per-page localStorage flag set on dismissal — and every page's top-bar
-`?` button replays its tour anywhere).
+`?` button replays its tour anywhere; the driver brackets each run with
+start/end events, which the stats page — whose view-bound steps cycle the
+View dropdown — uses to restore the pre-tour view on dismissal unless the
+visitor picked a view themselves mid-run).
 Page modules import from the shared modules; `app.py` imports the pages —
 the graph is acyclic.
 
