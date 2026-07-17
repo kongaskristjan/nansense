@@ -172,6 +172,16 @@ def test_weights_tour_leads_with_the_weight_strip() -> None:
     assert second.selectors == ('[data-tour="axes"]',)
 
 
+@pytest.mark.parametrize("locked", [True, False])
+def test_strips_step_explains_the_color_scale(locked: bool) -> None:
+    """The strips step is the only place the diverging color encoding is
+    spelled out (red positive, blue negative, white zero — see
+    `render._diverging_colormap`), so it must keep naming the colors."""
+    steps = {s.selectors[0]: s for s in main_tour_steps("conv1", locked=locked)}
+    text = steps['[data-tour="strips"]'].text
+    assert "red" in text and "blue" in text and "white" in text
+
+
 def test_seen_keys_are_distinct_per_page() -> None:
     keys = [seen_key(p) for p in ("main", "stats", "weights", "experiment")]
     assert len(set(keys)) == len(keys)

@@ -102,7 +102,7 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
         ),
         TourStep(
             "The card shows the layer's activations and gradients for "
-            "each sample.",
+            "each sample — red is positive, blue negative, white zero.",
             ('[data-tour="strips"]',),
             ensure_card=True,
         ),
