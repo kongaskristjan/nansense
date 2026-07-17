@@ -395,13 +395,23 @@ def _build_page(
                                 "either way."
                             )
                         ui.separator()
-                        # "Current batch" submenu: every layer (watched or not),
-                        # each routing straight to that layer's current-batch
-                        # stats view. The nested menu's content root is a block
-                        # div, so the Firefox QMenu caveat above doesn't apply.
+                        # "Current-batch stats" submenu: every layer (watched
+                        # or not), each routing to that layer's stats view —
+                        # the current-batch phase is what makes unwatched
+                        # layers viewable there. The nested menu's content root
+                        # is a block div, so the Firefox QMenu caveat above
+                        # doesn't apply.
                         with ui.menu_item(
-                            "Current batch", auto_close=False
+                            "Current-batch stats", auto_close=False
                         ).classes("text-sm"):
+                            # Anchored left like the chip's own tooltip: the
+                            # layer list opens to the right, and a default
+                            # (below-anchored) tooltip would overlap it.
+                            ui.tooltip(
+                                "Open a layer's stats page — the Current "
+                                "batch phase works for any layer, watched "
+                                "or not"
+                            ).props("anchor='center left' self='center right'")
                             with ui.item_section().props("side"):
                                 ui.icon("chevron_right")
                             with ui.menu().props(
