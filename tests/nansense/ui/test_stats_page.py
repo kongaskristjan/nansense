@@ -33,6 +33,7 @@ from nansense.ui.stats_page import (
     _hover_attach_js,
     _initial_phase,
     _layer_select_options,
+    _no_stats_message,
     _patch_grids_html,
     _patch_grids_signature,
     _phase_select_options,
@@ -70,6 +71,20 @@ def test_hover_attach_js_uses_one_shared_event_with_element_id() -> None:
     assert "bin: p.pointNumber" in js
     # The old per-element event name must be gone.
     assert "nansense_hist_hover_42" not in js
+
+
+@pytest.mark.parametrize("locked", [True, False])
+def test_no_stats_message_matches_session_kind(locked: bool) -> None:
+    """A locked session (the shared demo) can't step, so its variant must
+    not hand out stepping advice — it says the stats are still loading and
+    points at "Current batch", the one phase that works for any layer."""
+    text = _no_stats_message(locked)
+    if locked:
+        assert "step" not in text.lower()
+        assert _PHASE_CURRENT_BATCH_LABEL in text
+    else:
+        assert "step at least one batch" in text
+        assert "running statistics" in text
 
 
 def test_figure_payload_carries_plotly_config() -> None:

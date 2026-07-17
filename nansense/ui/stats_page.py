@@ -1654,7 +1654,9 @@ class _WatchLayerPanel:
             # Shown (with both view sections hidden) until the layer has any
             # collected stats, so an unstepped layer is a single clear notice
             # rather than empty plots and "no data yet" tables.
-            self._no_data = _notice_banner(_NO_STATS_MESSAGE, icon="bar_chart")
+            self._no_data = _notice_banner(
+                _no_stats_message(session.locked), icon="bar_chart"
+            )
             self._no_data.set_visibility(False)
             self._hist_section = ui.column().classes("w-full gap-3")
             with self._hist_section:
@@ -2121,15 +2123,28 @@ _TYPE_NOT_COLLECTED_HTML: str = (
     "Performance settings</div>"
 )
 
-# Shown in a layer card (both views) until the layer has accumulated any
-# stats for the selected phase. Stresses that only batches stepped after
-# the layer is watched feed the running aggregate (it grows rather than
-# overwriting with the last batch).
-_NO_STATS_MESSAGE: str = (
-    "No stats collected for this layer yet — step at least one batch to "
-    "start collecting. Each batch you step after watching the layer adds "
-    "to the running statistics."
-)
+def _no_stats_message(locked: bool) -> str:
+    """The layer-card notice shown until any stats exist for the phase.
+
+    Unlocked, it stresses that only batches stepped after the layer is
+    watched feed the running aggregate (it grows rather than overwriting
+    with the last batch). A locked session (the shared hosted demo) can't
+    step at all, and its per-epoch stats usually do exist and are merely
+    still in flight — so that variant must not claim nothing was collected
+    or advise stepping, and points at "Current batch" (the one phase that
+    works for any layer) as the fallback.
+    """
+    if locked:
+        return (
+            "Stats for this layer haven't loaded yet — they can take a "
+            "moment to arrive on the shared demo. If nothing appears, the "
+            "Current batch phase works for any layer."
+        )
+    return (
+        "No stats collected for this layer yet — step at least one batch to "
+        "start collecting. Each batch you step after watching the layer adds "
+        "to the running statistics."
+    )
 
 
 def _patch_grids_signature(
