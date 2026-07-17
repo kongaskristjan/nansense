@@ -7,8 +7,9 @@ Every page has its own short tour (`*_tour_steps` below); the main view's
 is the long one, the subpages get one to three steps covering only what a
 first look wouldn't reveal.
 
-The main tour's strips and buttons steps need the right layer card on
-screen, so showing either auto-shows the weights-owning layer (via the
+The main tour's framing, strips and buttons steps need the right layer
+card on screen, so showing any of them auto-shows the weights-owning layer
+(via the
 show-only `nansense_tour_show_layer` event, which never hides a card the
 visitor already opened) whenever one of the step's own anchors has no
 visible target — with no card the strips anchor is missing, and a card
@@ -86,7 +87,9 @@ def _mermaid_node_selector(slug: str) -> str:
 
 
 def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
-    """The main view's steps, pointing step 1 at `layer_slug`'s diagram node.
+    """The main view's steps: a framing step naming the three panes, then
+    the mechanics, with the first two steps pointing at `layer_slug`'s
+    diagram node.
 
     Falls back to the first diagram node when no layer is known (a model
     with no captured layers) — the arrow still lands on something sensible.
@@ -96,6 +99,24 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
     """
     node = _mermaid_node_selector(layer_slug) if layer_slug else "g.node"
     steps = [
+        TourStep(
+            "A live look inside the network: the architecture on the "
+            "left, each shown layer's activations in the middle, and "
+            "the input batch on the right.",
+            # The diagram node must stay the first selector — the tour
+            # contract (and its test) reads the first step's first
+            # selector as the `findMermaidNode`-scheme node.
+            (
+                node,
+                '[data-tour="strips"]',
+                '[data-tour="sample"]',
+            ),
+            # With no card shown the middle pane is empty; a card gives
+            # the strips arrow a target. No ensure_input: its trigger
+            # (all selectors missing) can't fire while the diagram is
+            # visible, and the sample step re-opens the pane itself.
+            ensure_card=True,
+        ),
         TourStep(
             "Click a layer in the diagram to show or hide its activations.",
             (node,),
@@ -107,9 +128,9 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
             ensure_card=True,
         ),
         TourStep(
-            "These buttons open the weights and current optimizer state, "
-            "run deep dream and attribution experiments, and show its "
-            "training stats.",
+            "Weights, Experiment, and Stats go deeper: the layer's "
+            "parameters and optimizer state, deep-dream and attribution "
+            "probes, and its training statistics.",
             (
                 '[data-tour="weights"]',
                 '[data-tour="experiment"]',
@@ -147,8 +168,8 @@ def stats_tour_steps() -> list[TourStep]:
     """
     return [
         TourStep(
-            "These pick what every card shows: the view, the phase "
-            "(\"Current batch\" works for any layer), and which layer.",
+            "These pick what every card shows: the view, the phase, "
+            "and which layer.",
             (
                 '[data-tour="view"]',
                 '[data-tour="phase"]',
