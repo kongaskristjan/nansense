@@ -39,13 +39,13 @@ import threading
 import time
 import warnings
 import webbrowser
-from pathlib import Path
 from typing import Protocol
 
 import uvicorn
 from fastapi import FastAPI
 from nicegui import ui
 
+from nansense.assets import logo_small_path
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
@@ -262,9 +262,7 @@ def serve(
     primary_std = resolve_per_input(input_std, input_name)
 
     fastapi_app = FastAPI()
-    favicon_path = (
-        Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
-    )
+    favicon_path = logo_small_path()
     # One cache for all connections: two tabs on the same session share
     # rendered strips instead of re-rendering them per connection.
     render_cache = _RenderCache()

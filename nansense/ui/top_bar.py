@@ -9,13 +9,13 @@ from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 from urllib.parse import quote
 
 import torch
 from nicegui import ui
 
 from nansense import debugger
+from nansense.assets import logo_small_bytes
 from nansense.debugger import DebugError, LayerReport
 from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL
 from nansense.recording import RecordedView
@@ -34,10 +34,6 @@ _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
 _STAR_TOOLTIP: str = (
     "Like NaNsense? A GitHub ★ star ★ means a lot and keeps me hacking."
 )
-_LOGO_PATH: Path = (
-    Path(__file__).resolve().parents[2] / "assets" / "logo" / "logo_small.png"
-)
-
 _DEBUG_DESCRIPTION: str = (
     "A numerical issue was detected: NaN/±Inf values, or gradients whose "
     "magnitude collapsed into a precision-losing under/overflow range. "
@@ -123,7 +119,7 @@ def _logo_data_uri() -> str:
     matches the data-URI pattern the strip images already use (see
     `common._b64_img_src`), so it needs no extra media route.
     """
-    encoded = base64.b64encode(_LOGO_PATH.read_bytes()).decode("ascii")
+    encoded = base64.b64encode(logo_small_bytes()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
 
 

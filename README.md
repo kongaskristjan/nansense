@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="assets/logo/logo_small.png" alt="NaNsense logo" height="36" align="middle"> NaNsense
+  <img src="nansense/assets/logo_small.png" alt="NaNsense logo" height="36" align="middle"> NaNsense
 </h1>
 
 <p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>

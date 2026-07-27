@@ -1258,7 +1258,10 @@ start/end events, which the stats page — whose view-bound steps cycle the
 View dropdown — uses to restore the pre-tour view on dismissal unless the
 visitor picked a view themselves mid-run).
 Page modules import from the shared modules; `app.py` imports the pages —
-the graph is acyclic.
+the graph is acyclic. The favicon and the top-bar logo come from
+`nansense/assets` (the packaged PNG plus `importlib.resources` accessors):
+an installed wheel ships only the `nansense` package, so the UI must not
+resolve paths relative to the repo checkout.
 
 **Render contract shared with recording.** `nansense.recording` renders the
 same content the pages show, so the render model lives in the pure modules:
