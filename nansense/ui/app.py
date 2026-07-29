@@ -47,6 +47,7 @@ from nicegui import ui
 
 from nansense.assets import logo_small_path
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
+from nansense.mcp_server import build_mount
 from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
 from nansense.ui.graph import build_mermaid
@@ -140,12 +141,24 @@ def _format_box(lines: list[str], width: int) -> str:
     return "\n".join([f"┌{rule}┐", *body, f"└{rule}┘"])
 
 
-def _announce(url: str) -> None:
+def _announce(url: str, mcp_url: str | None = None) -> None:
     """Print the UI address inside a box that spans the terminal width (a
     sensible default when output is redirected), padded by blank lines so it
-    is easy to spot between training-log lines."""
+    is easy to spot between training-log lines.
+
+    When the MCP endpoint is served too, the box also carries the command that
+    registers it with a coding agent — the address alone is not actionable, and
+    this is the one moment the user is looking for it.
+    """
     width = shutil.get_terminal_size().columns
-    box = _format_box(["NaNsense UI is running at:", url], width)
+    lines = ["NaNsense UI is running at:", url]
+    if mcp_url is not None:
+        lines += [
+            "",
+            "Debug this run from a coding agent:",
+            f"claude mcp add --transport http nansense {mcp_url}",
+        ]
+    box = _format_box(lines, width)
     print(f"\n{box}\n", flush=True)
 
 
@@ -162,6 +175,7 @@ def _announce_when_ready(
     url: str,
     open_browser: bool,
     *,
+    mcp_url: str | None = None,
     timeout: float = 10.0,
 ) -> None:
     """Announce the UI — and, if `open_browser`, open a focused browser tab —
@@ -187,7 +201,7 @@ def _announce_when_ready(
         time.sleep(0.05)
     if not server.started:
         return  # a concurrent session holds the port — stay silent
-    _announce(url)
+    _announce(url, mcp_url)
     if open_browser:
         try:
             webbrowser.open(url, new=2, autoraise=True)
@@ -202,6 +216,7 @@ def serve(
     host: str = "127.0.0.1",
     log_level: str = "warning",
     open_browser: bool = True,
+    mcp: bool = True,
     input_mean: MeanStd | dict[str, MeanStd] | None = None,
     input_std: MeanStd | dict[str, MeanStd] | None = None,
     input_transform: InputTransform | dict[str, InputTransform] | None = None,
@@ -232,6 +247,13 @@ def serve(
     machine the bind still succeeds, so the banner prints and the browser open
     is a harmless no-op.
 
+    `mcp` (default `True`) also serves the MCP endpoint at `/mcp` on the same
+    port, so a coding agent can drive the debugger through the same session the
+    browser shows (`nansense.mcp_server`). Its route is registered *before*
+    NiceGUI's catch-all mount at `/` — Starlette matches routes in order — and
+    its lifespan is passed to the app at construction, since NiceGUI wraps
+    whatever lifespan it finds and a mounted sub-app never receives one.
+
     `input_mean` / `input_std` are passed to the input-image pane so the
     sample is denormalized (`x * std + mean`) before display. When either
     is `None`, the renderer assumes the input is already in `[0, 1]`.
@@ -261,7 +283,12 @@ def serve(
     primary_mean = resolve_per_input(input_mean, input_name)
     primary_std = resolve_per_input(input_std, input_name)
 
-    fastapi_app = FastAPI()
+    mount = build_mount(session, mermaid=mermaid_src, host=host) if mcp else None
+    fastapi_app = FastAPI(lifespan=None if mount is None else mount.lifespan)
+    if mount is not None:
+        # Ahead of NiceGUI's `/` mount, which `ui.run_with` adds below and
+        # which would otherwise swallow the path.
+        fastapi_app.router.routes.extend(mount.routes)
     favicon_path = logo_small_path()
     # One cache for all connections: two tabs on the same session share
     # rendered strips instead of re-rendering them per connection.
@@ -320,9 +347,11 @@ def serve(
     thread = threading.Thread(target=server.run, name="nansense-ui", daemon=False)
     thread.start()
 
+    url = _display_url(host, port)
     threading.Thread(
         target=_announce_when_ready,
-        args=(server, thread, _display_url(host, port), open_browser),
+        args=(server, thread, url, open_browser),
+        kwargs={"mcp_url": None if mount is None else f"{url}{mount.path}"},
         name="nansense-announce",
         daemon=True,
     ).start()

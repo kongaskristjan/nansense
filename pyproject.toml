@@ -39,6 +39,9 @@ dependencies = [
     # typing.Self landed in 3.11; on 3.10 we import it from typing_extensions.
     "typing-extensions>=4.6 ; python_version < '3.11'",
     "av>=17.1.0",
+    # The MCP server (`nansense.mcp_server`) is written against the 2.0 API:
+    # `MCPServer` replaced 1.x's `FastMCP`, so the floor is a hard one.
+    "mcp>=2.0",
 ]
 
 [project.urls]

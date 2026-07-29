@@ -1492,6 +1492,56 @@ one-shot publish flag (see *On-demand refresh*), and the page's existing timer
 renders the resulting snapshot — so there is no separate live-read path to keep
 consistent with `_publish_snapshot`.
 
+## MCP server (`nansense.mcp_server`, `nansense.mcp_views`)
+
+The agent-facing front end, served on the UI's own port at `/mcp` over MCP's
+streamable-HTTP transport. It is a second reader of the same `Session` — the
+threading contract the UI already relies on (lock-free reads of frozen
+snapshot dataclasses, control methods synchronized on `_cv`) is exactly what
+makes a second controller safe, so the core library needed no changes.
+
+The split mirrors the UI's render/page split. `mcp_views` is pure translation
+— `Session` → plain dicts — with no `mcp` import, so the output shapes are
+unit-testable without the SDK; `mcp_server` is the tool registration over
+those views plus the transport wiring. Neither imports a page module.
+
+**Two invariants shape every tool.** First, *never block the event loop*:
+uvicorn serves NiceGUI's websockets from the same loop on a ~6 s keepalive
+budget, so waiting on the training thread (`wait_until_paused`) and copying
+tensors (`current_batch_stats`, `watch_snapshot`) both go through
+`asyncio.to_thread`, the discipline the `/stats` page already follows. Second,
+*a refusal is an answer*: a locked or closed session silently no-ops its
+control methods, so the tools check for that up front — an agent that reads a
+no-op as success loops forever.
+
+**Serialization decisions that carry meaning.** JSON has no NaN literal, so
+non-finite floats render as the strings `"nan"` / `"inf"` / `"-inf"` rather
+than `null`, which would be indistinguishable from "not measured". The
+accumulators' scalars deliberately describe the *finite* population only (one
+NaN would poison `min`/`max` for good), which means a fully diverged tensor
+arrives with `n == 0` — identical to an unused one. `tensor_stats_view`
+separates the two by reading the histogram's total, since the histogram counts
+every value: it reports `finite_count` / `non_finite_count` and suppresses the
+derived scalars when nothing finite was seen. Histograms ship as
+`[value, count]` pairs over the populated bins only (211 fixed bins are nearly
+all empty on a real layer). Both `live_position` and the snapshot's position
+are always reported: they diverge under `run`/`detach`, and conflating them
+reads stale numbers as current.
+
+**Mounting** (`build_mount`, consumed by `serve`). The transport's Starlette
+app is built only to harvest its route — the route is then registered on the
+UI's own FastAPI app, and its session-manager lifespan is passed to that app at
+construction. Both halves are load-bearing and fail *silently* otherwise: a
+mounted sub-app never receives lifespan events (so the session manager would
+never start), and Starlette matches routes in order, so a `/mcp` route
+registered after `ui.run_with`'s catch-all mount at `/` would surface as a
+NiceGUI 404. Sub-mounting instead of lifting the route would also put a
+Starlette trailing-slash redirect in front of a POST. NiceGUI wraps whatever
+lifespan it finds (`ui_run_with` captures `app.router.lifespan_context` and
+composes), so passing ours at construction is enough. On a loopback bind the
+transport enables DNS-rebinding protection, so a page on another origin cannot
+drive the run.
+
 ## Enabled flag (zero-overhead off switch)
 
 `nansense.start(model, ..., enabled=False)` returns a fully inert session,

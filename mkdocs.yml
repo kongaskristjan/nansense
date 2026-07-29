@@ -15,6 +15,7 @@ nav:
   - Integrate with one prompt: integrate.md
   - Wiring guide: wiring.md
   - UI guide: ui.md
+  - Debug with a coding agent: mcp.md
   - Custom metrics & tensors: instruments.md
   - API reference: api.md
 

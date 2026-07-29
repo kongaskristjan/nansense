@@ -10,6 +10,8 @@ import pytest
 
 import torch
 import torch.distributed as dist
+from fastapi import FastAPI
+from starlette.routing import Mount
 
 import nansense
 from nansense.ui import app
@@ -49,6 +51,66 @@ def test_serve_on_disabled_session_is_noop() -> None:
     model = torch.nn.Linear(4, 2)
     session = nansense.start(model, epochs=1, phases={"train": 1}, enabled=False)
     assert serve(session) is None
+
+
+def test_serve_registers_the_mcp_route_before_niceguis_catch_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Starlette matches routes in order and NiceGUI mounts itself at `/`, so a
+    `/mcp` route registered after it would never be reached — and would fail
+    silently, as a NiceGUI 404 rather than an error.
+
+    Uvicorn is stubbed out so nothing binds a port: the assertion is about how
+    `serve` assembles the app, not about serving it.
+    """
+    captured: dict[str, FastAPI] = {}
+
+    class _StubServer:
+        def __init__(self, config: object) -> None:
+            captured["app"] = getattr(config, "app")
+            self.started = False
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(app.uvicorn, "Server", _StubServer)
+    session = nansense.start(torch.nn.Linear(4, 2), epochs=1, phases={"train": 1})
+    thread = serve(session, port=0, open_browser=False)
+    assert thread is not None
+    thread.join(timeout=10)
+
+    routes = captured["app"].router.routes
+    paths = [getattr(route, "path", None) for route in routes]
+    assert "/mcp" in paths, paths
+    # NiceGUI mounts at "/", which Starlette normalizes to an empty mount path;
+    # it is the catch-all that anything registered after it disappears behind.
+    catch_all = next(
+        index for index, route in enumerate(routes) if isinstance(route, Mount)
+    )
+    assert paths.index("/mcp") < catch_all, paths
+
+
+def test_serve_can_omit_the_mcp_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, FastAPI] = {}
+
+    class _StubServer:
+        def __init__(self, config: object) -> None:
+            captured["app"] = getattr(config, "app")
+            self.started = False
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(app.uvicorn, "Server", _StubServer)
+    session = nansense.start(torch.nn.Linear(4, 2), epochs=1, phases={"train": 1})
+    thread = serve(session, port=0, open_browser=False, mcp=False)
+    assert thread is not None
+    thread.join(timeout=10)
+
+    served = captured["app"]
+    assert "/mcp" not in [
+        getattr(route, "path", None) for route in served.router.routes
+    ]
 
 
 @pytest.mark.parametrize(
