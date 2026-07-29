@@ -504,3 +504,14 @@ def test_non_finite_activations_survive_to_the_agent() -> None:
         assert activations["count"] == 6
         assert activations["non_finite_count"] == 6
         assert "non-finite" in activations["note"]
+
+
+def test_the_server_advertises_the_package_version() -> None:
+    """`version` was accepted but never supplied, so clients saw an empty
+    string in the handshake."""
+    from nansense.mcp_server import _package_version
+
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    assert build_server(session).version == _package_version()
+    assert _package_version()  # the installed distribution is discoverable
+    assert build_server(session, version="1.2.3").version == "1.2.3"

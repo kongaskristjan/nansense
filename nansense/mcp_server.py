@@ -31,6 +31,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from importlib import metadata
 from typing import Any, Literal
 
 from mcp.server import MCPServer
@@ -50,8 +51,8 @@ from nansense.mcp_images import (
 )
 from nansense.mcp_views import (
     architecture_view,
-    default_phase,
     debug_view,
+    default_phase,
     experiment_catalog_view,
     experiment_result_view,
     layer_stats_view,
@@ -126,6 +127,20 @@ class McpMount:
     path: str
     routes: Sequence[BaseRoute]
     lifespan: Callable[[Any], Any]
+
+
+def _package_version() -> str:
+    """NaNsense's installed version, for the server's MCP handshake.
+
+    Empty when the package metadata is missing — a source tree that was never
+    installed. An empty version is what clients get anyway if nothing is passed,
+    so the fallback costs nothing and a missing distribution must not stop the
+    endpoint from serving.
+    """
+    try:
+        return metadata.version("nansense")
+    except metadata.PackageNotFoundError:  # pragma: no cover - uninstalled tree
+        return ""
 
 
 def _clamp_timeout(timeout: float) -> float:
@@ -208,7 +223,7 @@ def build_server(
     session: Session,
     *,
     mermaid: str | None = None,
-    version: str = "",
+    version: str | None = None,
     input_mean: MeanStd | dict[str, MeanStd] | None = None,
     input_std: MeanStd | dict[str, MeanStd] | None = None,
     input_transform: InputTransform | dict[str, InputTransform] | None = None,
@@ -227,7 +242,7 @@ def build_server(
         name="nansense",
         title="NaNsense training debugger",
         instructions=_INSTRUCTIONS,
-        version=version,
+        version=_package_version() if version is None else version,
     )
     display = InputDisplay(
         mean=input_mean, std=input_std, transform=input_transform
@@ -1633,7 +1648,7 @@ def build_mount(
     mermaid: str | None = None,
     host: str = "127.0.0.1",
     path: str = DEFAULT_MCP_PATH,
-    version: str = "",
+    version: str | None = None,
     input_mean: MeanStd | dict[str, MeanStd] | None = None,
     input_std: MeanStd | dict[str, MeanStd] | None = None,
     input_transform: InputTransform | dict[str, InputTransform] | None = None,
