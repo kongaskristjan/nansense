@@ -410,6 +410,18 @@ def stats_history_view(
         "phases_with_data": available,
         "history": history,
     }
+    # Weight samples are taken once per epoch, at its first watched batch, and
+    # carry no phase — the same parameter is in play across all of them.
+    weights = {
+        name: [_history_point(epoch, stats) for epoch, stats in points]
+        for name, points in snapshot.weight_history(layer).items()
+    }
+    if weights:
+        view["weight_history"] = weights
+        view["weight_note"] = (
+            "One sample per epoch, taken at that epoch's first watched batch, "
+            "so these track the parameters drifting rather than any one batch."
+        )
     if unknown_phase:
         view["unknown_phases"] = unknown_phase
     return view
@@ -780,6 +792,7 @@ def settings_view(session: Session) -> dict[str, Any]:
         },
         "stats_scope": str(session.stats_scope),
         "stats_collecting": session.stats_collecting,
+        "auto_run_experiments": session.auto_run_experiments,
         "experiment_defaults": session.experiment_defaults,
     }
 

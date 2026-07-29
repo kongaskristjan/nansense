@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from nansense.input_config import InputDisplay
-from nansense.mcp_views import position_view
+from nansense.mcp_views import _num, position_view
 from nansense.patches import PATCH_TYPES
 from nansense.session import Session
 
@@ -408,6 +408,93 @@ def patches_image(
     if heatmap:
         note += " The channel's activation map is blended over each patch."
     return RenderedImage(png, note + caveat)
+
+
+def bin_samples_image(
+    session: Session,
+    *,
+    layer: str,
+    channel: int,
+    bin_index: int,
+    kind: str = "activation",
+    count: int = 4,
+    display: InputDisplay,
+    input_name: str | None = None,
+) -> tuple[RenderedImage, list[dict[str, Any]]]:
+    """The inputs behind one histogram bar: which samples landed in it.
+
+    A histogram says how many values fell in a bin; this says *which* — up to
+    `count` random elements of `(layer, channel)` that land in `bin_index`,
+    each with the input crop around where it came from. It is how you get from
+    "there is a spike in the overflow bin" to "these three digits cause it".
+
+    The population is narrower than the bar: histograms aggregate a whole
+    epoch, but only the last captured batch still has its activations and input
+    around to sample from. Returns the picture and the per-sample values.
+    """
+    from nansense.ui.bin_samples import sample_bin
+    from nansense.ui.compose import stack_sections, upscaled_image
+    from nansense.ui.render import render_image
+
+    snapshot = session.snapshot
+    if snapshot is None:
+        return _no_snapshot(), []
+    tensors = (
+        snapshot.activations if kind == "activation" else snapshot.activation_gradients
+    )
+    tensor = tensors.get(layer)
+    if tensor is None:
+        return (
+            RenderedImage(
+                None,
+                f"No captured {kind}s for {layer!r} on the last batch "
+                f"({_position_note(session)}).",
+            ),
+            [],
+        )
+    base = snapshot.activations.get(input_name) if input_name else None
+    samples = sample_bin(
+        tensor, base, channel=channel, bin_idx=bin_index, k=count
+    )
+    if not samples:
+        return (
+            RenderedImage(
+                None,
+                f"Nothing in bin {bin_index} of {layer!r} channel {channel} on "
+                f"the last captured batch ({_position_note(session)}). The "
+                "histogram bar may be counting earlier batches, whose values "
+                "are not retained.",
+            ),
+            [],
+        )
+    values = [
+        {"sample": sample.sample_idx, "value": _num(sample.value)}
+        for sample in samples
+    ]
+    mean, std = display.stats(input_name)
+    sections = [
+        (
+            f"sample {sample.sample_idx} · value {sample.value:.4g}",
+            upscaled_image(
+                render_image(sample.image.unsqueeze(0), 0, mean=mean, std=std)
+            )
+            if sample.image is not None
+            else None,
+        )
+        for sample in samples
+    ]
+    png, caveat = _encode(stack_sections(sections))
+    note = (
+        f"{len(samples)} random elements of {layer} channel {channel} landing in "
+        f"bin {bin_index}, from the last captured batch only "
+        f"({_position_note(session)}) — the bar itself may aggregate a whole epoch."
+    )
+    if png is None:
+        note += (
+            " No crops to show: the model's input is not image-like, so only "
+            "the values are reported."
+        )
+    return RenderedImage(png, note + caveat), values
 
 
 def experiment_image(

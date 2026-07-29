@@ -26,6 +26,7 @@ Two invariants shape every tool below:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
@@ -38,6 +39,7 @@ from starlette.routing import BaseRoute
 from nansense import experiments
 from nansense.input_config import InputDisplay, InputTransform, MeanStd
 from nansense.mcp_images import (
+    bin_samples_image,
     experiment_image,
     histogram_image,
     image_reply,
@@ -441,6 +443,42 @@ def build_server(
             )
         )
 
+    @server.tool(structured_output=False)
+    async def render_bin_samples(
+        layer: str,
+        channel: int,
+        bin_index: int,
+        kind: Literal["activation", "gradient"] = "activation",
+        count: int = 4,
+    ) -> list[Any]:
+        """Picture of the inputs behind one histogram bar.
+
+        A histogram says how many values fell in a bin; this says *which* —
+        random elements of `(layer, channel)` landing in `bin_index`, each with
+        the input crop around where it came from. The way to get from "there is
+        a spike in the overflow bin" to "these three inputs cause it".
+
+        Sampled from the last captured batch only, since that is the one whose
+        activations and input still exist, while the bar itself may count a
+        whole epoch. Bin indices are the positions in the `histogram` array
+        `get_layer_stats(include_histogram=True)` returns.
+        """
+        rendered, values = await asyncio.to_thread(
+            bin_samples_image,
+            session,
+            layer=layer,
+            channel=channel,
+            bin_index=bin_index,
+            kind=kind,
+            count=count,
+            display=display,
+            input_name=primary_input,
+        )
+        reply = image_reply(rendered)
+        if values:
+            reply.insert(1, json.dumps({"samples": values}))
+        return reply
+
     # ---- Run control -------------------------------------------------
 
     @server.tool()
@@ -721,6 +759,20 @@ def build_server(
                 "dropped. Let training advance before reading them again."
             )
         return view
+
+    @server.tool()
+    async def set_auto_run_experiments(enabled: bool) -> dict[str, Any]:
+        """Whether open experiment *pages* re-run on every parameter change.
+
+        A session-wide preference shared with the browser. Worth turning off
+        while working: an auto-running page competes for the same paused
+        training thread your own `run_experiment` needs.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        session.set_auto_run_experiments(enabled)
+        return settings_view(session)
 
     @server.tool()
     async def get_weight_stats(
