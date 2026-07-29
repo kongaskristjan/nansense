@@ -16,6 +16,8 @@ import asyncio
 import json
 from collections.abc import Coroutine
 from pathlib import Path
+
+import pytest
 from typing import Any, TypeVar
 
 import torch
@@ -182,18 +184,100 @@ def test_a_perturbation_is_applied_and_reported() -> None:
         assert "perturbed" in view["hint"]
 
 
-def test_a_perturbation_that_does_not_fit_is_reported_not_swallowed() -> None:
-    """Entries that don't match the base input are dropped at apply time, which
-    on its own looks exactly like success."""
+def test_a_perturbation_that_does_not_fit_is_refused_before_it_is_recorded() -> None:
+    """A misfit is skipped silently at apply time and stays in the map, so
+    afterwards nothing can tell "your edit was dropped" from "someone else's
+    edit landed". Catch it up front and say what the input wanted."""
     with paused_session(TinyClassifier(), _image_step) as session:
         view = _call(
             session,
             "add_perturbation",
-            # A 3-channel image needs three values, not one.
+            # A 3-channel 4x4 image needs three values and an in-range pixel.
             {"index": [99, 99], "values": [1.0], "timeout_seconds": 5.0},
         )
-        assert view["perturbations_applied"] is False
-        assert "No perturbation reached the input" in view["error"]
+        assert "does not fit" in view["error"]
+        assert "[4, 4]" in view["error"] and "3 values" in view["error"]
+        # Nothing was recorded, so the probe is not left carrying a dead entry.
+        assert view["perturbations"] == []
+
+
+def test_a_second_bad_perturbation_cannot_hide_behind_a_good_one() -> None:
+    """`perturbations_applied` only says whether *some* entry landed, so a bad
+    edit added after a good one would otherwise report success."""
+    with paused_session(TinyClassifier(), _image_step) as session:
+        good = _call(
+            session,
+            "add_perturbation",
+            {"index": [0, 0], "values": [1.0, 1.0, 1.0], "timeout_seconds": 5.0},
+        )
+        assert "error" not in good
+        bad = _call(
+            session,
+            "add_perturbation",
+            {"index": [0, 0], "values": [1.0], "timeout_seconds": 5.0},
+        )
+        assert "does not fit" in bad["error"]
+        assert len(bad["perturbations"]) == 1  # only the good one
+
+
+def test_perturbing_an_unknown_input_names_the_real_ones() -> None:
+    with paused_session(TinyClassifier(), _image_step) as session:
+        view = _call(
+            session,
+            "add_perturbation",
+            {
+                "index": [0, 0],
+                "values": [1.0, 1.0, 1.0],
+                "input_name": "nope",
+                "timeout_seconds": 5.0,
+            },
+        )
+        assert "No input named 'nope'" in view["error"]
+        assert "'x'" in view["error"]
+
+
+def test_reselecting_the_same_probe_mode_returns_at_once() -> None:
+    """`set_probe_mode` returns early when the mode is already in force, so no
+    probe is armed — waiting for one would burn the whole timeout on an
+    idempotent retry."""
+    with paused_session(TinyClassifier(), _image_step) as session:
+        _call(session, "set_probe_mode", {"mode": "eval", "timeout_seconds": 5.0})
+        again = _call(
+            session, "set_probe_mode", {"mode": "eval", "timeout_seconds": 5.0}
+        )
+        assert again["mode"] == "eval"
+        assert "waiting" not in again
+
+
+def test_probe_tools_refuse_once_training_has_finished() -> None:
+    """Probes run on the training thread's pause loop. After close() the
+    setters still record state but nothing serves it — and `wait_for_probe`
+    returns immediately on a closed session, so it would look like success."""
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session.detach()
+        session.close()
+        for tool, args in [
+            ("pin_batch", {"timeout_seconds": 1.0}),
+            ("set_probe_mode", {"mode": "eval", "timeout_seconds": 1.0}),
+            ("add_perturbation", {"index": [0, 0], "values": [1.0, 1.0, 1.0]}),
+            ("unpin_batch", {}),
+            ("clear_perturbations", {}),
+        ]:
+            view = _call(session, tool, args)
+            assert view["state"] == "finished", tool
+            assert "pause loop" in view["error"], tool
+
+
+def test_releasing_a_pin_reports_the_probe_that_replaced_it() -> None:
+    """Unpinning re-runs the probe when a mode keeps it active, so returning
+    the pre-change view would describe the input that was just released."""
+    with paused_session(TinyClassifier(), _image_step) as session:
+        _call(session, "set_probe_mode", {"mode": "eval", "timeout_seconds": 5.0})
+        _call(session, "pin_batch", {"timeout_seconds": 5.0})
+        before = session.probe_count
+        view = _call(session, "unpin_batch", {"timeout_seconds": 5.0})
+        assert view["pinned"] is False
+        assert view["runs_completed"] > before  # the replacement probe ran
 
 
 def test_clearing_perturbations_returns_to_the_plain_input() -> None:
@@ -663,3 +747,243 @@ def test_stats_history_includes_the_weight_trend() -> None:
     assert point["epoch"] == 0
     assert isinstance(point["mean"], float)
     assert "first watched batch" in view["weight_note"]
+
+
+# --- regressions found by review --------------------------------------
+
+
+def test_weight_stats_use_float64_so_a_huge_double_is_not_an_inf() -> None:
+    """Casting to float32 before the finite check turns a legitimate ~1e39
+    double into an Inf — reporting a phantom divergence for the very
+    measurement that shows the real one."""
+    from nansense.mcp_views import _tensor_summary
+
+    summary = _tensor_summary(torch.tensor([1e40, 1.0], dtype=torch.float64))
+    assert "non_finite_count" not in summary
+    assert summary["max"] == 1e40
+
+
+def test_the_two_weight_views_agree_on_standard_deviation() -> None:
+    """`get_weight_stats` and `get_stats_history`'s weight trend describe the
+    same tensor; an unbiased std in one and a population std in the other would
+    have them disagree, worst on the small bias vectors."""
+    from nansense.mcp_views import _tensor_summary
+    from nansense.watch import TensorStatsSnapshot
+
+    values = torch.tensor([0.0, 2.0])
+    direct = _tensor_summary(values)
+    accumulated = TensorStatsSnapshot(
+        n=2, sum=2.0, sum_sq=4.0, min=0.0, max=2.0, hist=None
+    )
+    assert direct["std"] == pytest.approx(accumulated.std)
+
+
+def test_a_frozen_parameter_is_not_blamed_on_the_training_loop() -> None:
+    """"Nothing has run backward yet" sends a reader hunting a bug in their
+    loop; the real reason is that the parameter is frozen."""
+    from nansense.mcp_views import weight_stats_view
+
+    model = TinyNet()
+    model.fc1.requires_grad_(False)
+    with paused_session(model) as session:
+        view = weight_stats_view(session, layer="fc1")
+        entry = view["parameters"][0]
+        assert entry["requires_grad"] is False
+        assert "frozen" in entry["gradient_note"]
+        assert "frozen" in view["optimizer_note"]
+
+
+def test_an_all_unknown_parameter_request_does_not_blame_the_optimizer() -> None:
+    from nansense.mcp_views import weight_stats_view
+
+    with paused_session(TinyNet()) as session:
+        view = weight_stats_view(session, layer="fc1", parameters=["typo"])
+        assert view["unknown_parameters"] == ["typo"]
+        assert "optimizer_note" not in view
+
+
+def test_an_all_nonfinite_epoch_does_not_report_min_above_max() -> None:
+    """With nothing finite the accumulator holds its ±inf placeholders; passing
+    them through gives `min` above `max` and a fabricated std of 0."""
+    from nansense.mcp_views import _history_point
+    from nansense.watch import TensorStatsSnapshot
+
+    # The accumulator's own empty state: ±inf placeholders for min/max.
+    empty = TensorStatsSnapshot(
+        n=0, sum=0.0, sum_sq=0.0, min=float("inf"), max=float("-inf"), hist=None
+    )
+    point = _history_point(3, empty)
+    assert point == {"epoch": 3, "count": 0, "note": point["note"]}
+    assert "all NaN" in point["note"]
+
+
+def test_the_default_phase_is_the_one_training_is_in() -> None:
+    """Alphabetically last would answer a question about a paused `eval` run
+    with the `train` numbers."""
+    from nansense.mcp_views import default_phase
+
+    model = TinyNet()
+    session = nansense.start(model, epochs=1, phases={"train": 1, "eval": 1})
+    session.detach()
+    session.watch("fc1")
+    for phase in ("train", "eval"):
+        with session.batch(phase=phase, epoch=0):
+            train_step(model)
+    # "eval" sorts before "train", so only the live position picks it out.
+    assert session.live_position is not None
+    assert session.live_position.phase == "eval"
+    assert default_phase(session, ["fc1"]) == "eval"
+
+
+def test_the_default_phase_spans_every_requested_layer() -> None:
+    from nansense.mcp_views import phases_with_data
+
+    model = TinyNet()
+    session = nansense.start(model, epochs=1, phases={"train": 1, "eval": 1})
+    session.detach()
+    session.watch("fc1")
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+    session.watch("fc2")
+    with session.batch(phase="eval", epoch=0):
+        train_step(model)
+    # fc1 has train, fc2 has both; asking about fc1 alone must not hide eval
+    # from a call that named both.
+    assert phases_with_data(session, ["fc1", "fc2"]) == ["eval", "train"]
+
+
+def test_experiment_defaults_reach_the_catalog() -> None:
+    """An agent budgeting a run from the catalog must read the value that will
+    actually be used, not the built-in one the session overrode."""
+    from nansense.mcp_views import experiment_catalog_view
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session.set_experiment_defaults(steps=7)
+        catalog = experiment_catalog_view(session)
+        dream = next(k for k in catalog["kinds"] if k["kind"] == "deep_dream")
+        steps = next(p for p in dream["params"] if p["key"] == "steps")
+        assert steps["default"] == 7
+
+
+def test_the_catalog_does_not_offer_the_graph_input_as_a_target() -> None:
+    """Dreaming the input against itself is a no-op; the page filters inputs
+    out of its layer selector for exactly that reason."""
+    from nansense.mcp_views import experiment_catalog_view
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        catalog = experiment_catalog_view(session)
+        for entry in catalog["kinds"]:
+            assert "x" not in entry["layers"], entry["kind"]
+        assert "conv" in catalog["kinds"][0]["layers"]
+
+
+def test_settings_survive_an_unserializable_experiment_default() -> None:
+    """`set_experiment_defaults` takes whatever the hosting script passes;
+    handing a tensor to the JSON serializer would take the whole tool down."""
+    with paused_session(TinyNet()) as session:
+        session.set_experiment_defaults(weird=torch.zeros(2), spike=float("inf"))
+        view = _call(session, "get_settings")
+        assert isinstance(view["experiment_defaults"]["weird"], str)
+        assert view["experiment_defaults"]["spike"] == "inf"
+
+
+def test_a_failed_probe_is_not_reported_as_never_set_up() -> None:
+    from nansense.mcp_views import probe_view
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._probe_error = "boom"
+        view = probe_view(session)
+        assert "last probe failed" in view["hint"]
+
+
+def test_recording_the_layers_view_defaults_to_the_watched_ones() -> None:
+    """The page records the cards on screen. Falling back to every layer with
+    statistics would, under stats scope "all", record the whole model."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyNet()) as session:
+        session._recording_manager = RecordingManager(directory=Path("/tmp"))
+        session.set_stats_scope("all")
+        session.watch("fc2")
+        started = _call(session, "start_recording", {"view": "layers"})
+        assert started["started"] == "main"
+        recorded = session.recording.statuses()[0].view
+        assert recorded.params["layers"] == ("fc2",)
+        session.recording.delete_all()
+
+
+def test_recorded_layers_keep_the_models_own_order() -> None:
+    """A set from `watched_layers` would stack the strips alphabetically, so
+    the video would not match the page it mirrors."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyNet()) as session:
+        session._recording_manager = RecordingManager(directory=Path("/tmp"))
+        started = _call(
+            session, "start_recording", {"view": "layers", "layers": ["fc2", "fc1"]}
+        )
+        assert started["started"] == "main"
+        recorded = session.recording.statuses()[0].view
+        assert recorded.params["layers"] == ("fc1", "fc2")
+        session.recording.delete_all()
+
+
+def test_a_duplicate_experiment_recording_leaves_the_live_one_alone(
+    tmp_path: Path,
+) -> None:
+    """Registering replaces the entry under the key with a *new* seq, and the
+    running recording holds the old one in its frozen params — so discovering
+    the duplicate afterwards would leave it pointed at a seq nothing reruns."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        request = {
+            "view": "experiment",
+            "layer": "conv",
+            "kind": "deep_dream",
+            "params": {"channels": 1, "steps": 2},
+        }
+        _call(session, "start_recording", request)
+        recorded = session.recording.statuses()[0].view
+        again = _call(session, "start_recording", request)
+        assert "already recording" in again["error"]
+        # The live recording's seq still owns the registration.
+        assert session._auto_experiments["experiment:conv"].request.seq == (
+            recorded.params["seq"]
+        )
+        _call(session, "stop_recording", {"key": "experiment:conv"})
+
+
+def test_stopping_releases_the_auto_experiment_by_its_own_key(
+    tmp_path: Path,
+) -> None:
+    """A browser-started recording keys its auto experiment by a per-page uuid,
+    not by the recording key; unpinning the wrong one leaves it pinned and
+    re-running for the rest of the training run."""
+    from nansense.recording import RecordedView, RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        auto_key = "experiment-page-abc123"
+        seq = session.register_auto_experiment(
+            auto_key, kind="deep_dream", layer="conv", params={"channels": 1, "steps": 2}
+        )
+        session.pin_auto_experiment(auto_key)
+        session.recording.start(
+            RecordedView(
+                key="experiment:conv",
+                page="experiment",
+                label="Experiment",
+                params={"layer": "conv", "seq": seq, "auto_key": auto_key},
+            )
+        )
+        _call(session, "stop_recording", {"key": "experiment:conv"})
+        assert auto_key not in session._auto_experiments
+
+
+def test_stopping_nothing_does_not_claim_a_recording_existed() -> None:
+    with paused_session(TinyNet()) as session:
+        view = _call(session, "stop_recording")
+        assert view["stopped"] == []
+        assert view["note"] == "Nothing was recording."

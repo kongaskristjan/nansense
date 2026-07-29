@@ -346,18 +346,52 @@ def layer_stats_view(
     return view
 
 
+def phases_with_data(session: Session, layers: Iterable[str]) -> list[str]:
+    """Every phase any of `layers` has collected statistics for, sorted."""
+    return sorted({phase for layer in layers for phase in session.stats_phases(layer)})
+
+
+def default_phase(session: Session, layers: Iterable[str]) -> str | None:
+    """The phase to show when the caller named none, or `None` if there is no
+    data at all.
+
+    The phase training is *currently* in, when it has data — the same choice
+    the `/stats` page opens on, and the one an agent means by "the histogram
+    for this layer". Falling back to the alphabetically last phase would answer
+    a question about a paused `eval` run with the `train` numbers.
+    """
+    available = phases_with_data(session, layers)
+    if not available:
+        return None
+    position = session.live_position
+    if position is None:
+        snapshot = session.snapshot
+        position = snapshot.position if snapshot is not None else None
+    if position is not None and position.phase in available:
+        return position.phase
+    return available[-1]
+
+
 def _history_point(
     epoch: int, stats: TensorStatsSnapshot
 ) -> dict[str, Any]:
-    point: dict[str, Any] = {
-        "epoch": epoch,
-        "count": stats.n,
-        "mean": _num(stats.mean),
-        "std": _num(stats.std),
-        "min": _num(stats.min),
-        "max": _num(stats.max),
-        "median": _num(stats.median),
-    }
+    point: dict[str, Any] = {"epoch": epoch, "count": stats.n}
+    if stats.n == 0:
+        # With nothing finite the accumulator's scalars are its ±inf
+        # placeholders, which would come out as `min` above `max` and a
+        # fabricated `std` of 0 — for exactly the epoch a reader most needs to
+        # understand. Say what happened instead.
+        point["note"] = "no finite values in this epoch (all NaN or ±Inf)"
+        return point
+    point.update(
+        {
+            "mean": _num(stats.mean),
+            "std": _num(stats.std),
+            "min": _num(stats.min),
+            "max": _num(stats.max),
+            "median": _num(stats.median),
+        }
+    )
     dead = stats.dead_channel_count
     if dead is not None:
         point["dead_channels"] = dead
@@ -379,7 +413,13 @@ def stats_history_view(
             "hint": "Call get_architecture for the valid layer names.",
         }
     available = sorted(session.stats_phases(layer))
-    if not available:
+    snapshot = session.watch_snapshot(layers=[layer], include_patches=False)
+    # Weight samples are kept per epoch with no phase, and `stats_phases`
+    # deliberately does not count them — so a layer whose activation was never
+    # captured (a module returning a tuple, say) can still have a weight trend,
+    # and bailing on the phase check alone would hide it.
+    weight_points = snapshot.weight_history(layer)
+    if not available and not weight_points:
         return {
             "layer": layer,
             "history": {},
@@ -391,7 +431,6 @@ def stats_history_view(
         }
     phases = [phase] if phase is not None else available
     unknown_phase = [name for name in phases if name not in available]
-    snapshot = session.watch_snapshot(layers=[layer], include_patches=False)
     history: dict[str, Any] = {}
     for name in phases:
         buckets = snapshot.phase_history(layer, name)
@@ -414,7 +453,7 @@ def stats_history_view(
     # carry no phase — the same parameter is in play across all of them.
     weights = {
         name: [_history_point(epoch, stats) for epoch, stats in points]
-        for name, points in snapshot.weight_history(layer).items()
+        for name, points in weight_points.items()
     }
     if weights:
         view["weight_history"] = weights
@@ -422,6 +461,12 @@ def stats_history_view(
             "One sample per epoch, taken at that epoch's first watched batch, "
             "so these track the parameters drifting rather than any one batch."
         )
+        if not available:
+            view["hint"] = (
+                f"{layer!r} has a weight trend but no activation statistics — "
+                "its output was never captured, so watching it further will not "
+                "add any."
+            )
     if unknown_phase:
         view["unknown_phases"] = unknown_phase
     return view
@@ -434,9 +479,14 @@ def _tensor_summary(tensor: torch.Tensor) -> dict[str, Any]:
     pages draw them as strips and read the extremes off the colorbar — so their
     numbers have to be computed here. Non-finite values are separated out and
     the scalars describe the finite population, matching what
-    `tensor_stats_view` reports for activations so the two read alike.
+    `tensor_stats_view` reports for activations so the two read alike — down to
+    the *population* standard deviation the accumulators use, so a parameter's
+    `get_weight_stats` number and its `get_stats_history` trend agree.
     """
-    values = tensor.detach().float().flatten()
+    # float64, not float32: a double-precision run whose gradient has reached
+    # ~1e39 is finite, and casting down would report it as an Inf — turning the
+    # very measurement that shows the explosion into a phantom divergence.
+    values = tensor.detach().to(torch.float64).flatten()
     total = int(values.numel())
     finite_mask = torch.isfinite(values)
     finite = values[finite_mask]
@@ -453,9 +503,7 @@ def _tensor_summary(tensor: torch.Tensor) -> dict[str, Any]:
         )
         return view
     view["mean"] = _num(finite.mean().item())
-    # A single-element tensor has no unbiased standard deviation; report 0
-    # rather than the NaN torch produces, which would read as a divergence.
-    view["std"] = _num(finite.std().item() if count > 1 else 0.0)
+    view["std"] = _num(finite.std(unbiased=False).item())
     view["min"] = _num(finite.min().item())
     view["max"] = _num(finite.max().item())
     view["abs_max"] = _num(finite.abs().max().item())
@@ -503,11 +551,21 @@ def weight_stats_view(
         }
     requested = list(dict.fromkeys(parameters)) if parameters else list(available)
     unknown = [name for name in requested if name not in available]
+    # A frozen parameter has no gradient and no optimizer state for a reason
+    # that has nothing to do with the training loop's timing, and "nothing has
+    # run backward yet" would send a reader looking for a bug in their loop.
+    trainable = {
+        name: param.requires_grad
+        for name, param in session.model.named_parameters()
+    }
     entries: list[dict[str, Any]] = []
     for name in requested:
         if name in unknown:
             continue
+        frozen = trainable.get(name) is False
         entry: dict[str, Any] = {"parameter": name}
+        if frozen:
+            entry["requires_grad"] = False
         weight = snapshot.weights.get(name)
         if weight is not None:
             entry["weight"] = _tensor_summary(weight)
@@ -517,8 +575,12 @@ def weight_stats_view(
         else:
             entry["gradient"] = None
             entry["gradient_note"] = (
-                "no gradient captured — nothing has run backward yet, or "
-                "zero_grad(set_to_none=True) cleared it before the capture"
+                "no gradient: this parameter is frozen (requires_grad=False)"
+                if frozen
+                else (
+                    "no gradient captured — nothing has run backward yet, or "
+                    "zero_grad(set_to_none=True) cleared it before the capture"
+                )
             )
         state = snapshot.optimizer_state.get(name, {})
         if state:
@@ -544,11 +606,20 @@ def weight_stats_view(
     if unknown:
         view["unknown_parameters"] = unknown
         view["hint"] = f"{layer!r} has {available}."
-    if not any(entry.get("optimizer_state") for entry in entries):
+    if entries and not any(entry.get("optimizer_state") for entry in entries):
+        # Say which of the three it is where we can tell: a frozen parameter or
+        # one outside every param group will never gain state, and telling the
+        # reader to wait for the first step() would be a dead end.
         view["optimizer_note"] = (
-            "No optimizer state. Either no optimizer was passed to "
-            "nansense.start(), or it has not stepped yet — torch.optim "
-            "initialises per-parameter state lazily on the first step()."
+            "No optimizer state — every parameter here is frozen "
+            "(requires_grad=False), so no optimizer tracks it."
+            if all(entry.get("requires_grad") is False for entry in entries)
+            else (
+                "No optimizer state. Either no optimizer was passed to "
+                "nansense.start(), this layer is not in any of its param "
+                "groups, or it has not stepped yet — torch.optim initialises "
+                "per-parameter state lazily on the first step()."
+            )
         )
     return view
 
@@ -594,9 +665,7 @@ def probe_view(session: Session) -> dict[str, Any]:
                 "index": list(index),
                 "values": [_num(value) for value in values],
             }
-            for (input_name, sample, index), values in sorted(
-                perturbations.items(), key=lambda item: str(item[0])
-            )
+            for (input_name, sample, index), values in sorted(perturbations.items())
         ],
         "active": session.probe_result is not None,
     }
@@ -613,9 +682,21 @@ def probe_view(session: Session) -> dict[str, Any]:
         view["error"] = session.probe_error
     if not view["active"]:
         view["hint"] = (
-            "No probe is running. pin_batch() holds the current input and "
-            "re-runs the model on it at every capture; set_probe_mode('eval') "
-            "activates one without pinning."
+            "The last probe failed; see `error`. The pin/perturbations/mode "
+            "below are still in force."
+            if session.probe_error is not None
+            else (
+                "Probing is set up but has produced no result yet — probes run "
+                "on the training thread, so pause() or step() to get one."
+                if session.is_pinned
+                or perturbations
+                or session.probe_mode != "unchanged"
+                else (
+                    "No probe is running. pin_batch() holds the current input "
+                    "and re-runs the model on it at every capture; "
+                    "set_probe_mode('eval') activates one without pinning."
+                )
+            )
         )
     elif perturbations:
         view["hint"] = (
@@ -625,11 +706,16 @@ def probe_view(session: Session) -> dict[str, Any]:
     return view
 
 
-def _param_spec_view(spec: experiments.ExperimentParam) -> dict[str, Any]:
+def _param_spec_view(
+    spec: experiments.ExperimentParam, defaults: dict[str, object]
+) -> dict[str, Any]:
     view: dict[str, Any] = {
         "key": spec.key,
         "type": spec.kind,
-        "default": spec.default,
+        # The value actually in force: a hosted playground seeds cheaper
+        # defaults, and reporting the built-in one would have an agent reason
+        # about a cost the run will not pay.
+        "default": defaults.get(spec.key, spec.default),
         "description": spec.tooltip or spec.label,
     }
     if spec.options:
@@ -641,10 +727,20 @@ def _param_spec_view(spec: experiments.ExperimentParam) -> dict[str, Any]:
 
 def experiment_catalog_view(session: Session) -> dict[str, Any]:
     """Every experiment kind, what it does, and the knobs it takes."""
-    layers = session.layer_names
+    # The graph's own inputs are layer names but not experiment targets —
+    # dreaming an input against itself is a no-op, and the page filters them
+    # out of its selector for that reason.
+    inputs = set(session.input_names)
+    layers = [name for name in session.layer_names if name not in inputs]
+    # `layer_available` rebuilds `named_modules()` on every call; hoisting it
+    # turns a kinds x layers x modules sweep — seconds on a large model, on the
+    # event loop — into one pass.
+    modules = set(dict(session.model.named_modules()))
+    defaults = session.experiment_defaults
     kinds: list[dict[str, Any]] = []
     for kind, title in experiments.available_experiment_kinds().items():
         summary, detail = experiments.EXPERIMENT_DESCRIPTIONS.get(kind, ("", ""))
+        needs_module = kind in experiments._MODULE_KINDS or not session.fx_traced
         kinds.append(
             {
                 "kind": kind,
@@ -652,12 +748,10 @@ def experiment_catalog_view(session: Session) -> dict[str, Any]:
                 "summary": summary,
                 "description": detail,
                 "layers": [
-                    name
-                    for name in layers
-                    if experiments.layer_available(session, name, kind)
+                    name for name in layers if not needs_module or name in modules
                 ],
                 "params": [
-                    _param_spec_view(spec)
+                    _param_spec_view(spec, defaults)
                     for spec in experiments.EXPERIMENT_PARAMS[kind]
                 ],
             }
@@ -765,6 +859,15 @@ def metrics_view(
     return view
 
 
+def _json_safe(value: object) -> Any:
+    """`value` as something JSON can carry, with non-finite floats as strings."""
+    if isinstance(value, bool) or value is None or isinstance(value, (int, str)):
+        return value
+    if isinstance(value, float):
+        return _num(value)
+    return repr(value)
+
+
 def settings_view(session: Session) -> dict[str, Any]:
     """The knobs behind the UI's settings dialog."""
     frequency = session.update_frequency
@@ -793,7 +896,14 @@ def settings_view(session: Session) -> dict[str, Any]:
         "stats_scope": str(session.stats_scope),
         "stats_collecting": session.stats_collecting,
         "auto_run_experiments": session.auto_run_experiments,
-        "experiment_defaults": session.experiment_defaults,
+        # `set_experiment_defaults` takes whatever the hosting script passes,
+        # so this is arbitrary Python; anything the wire cannot carry is
+        # rendered rather than handed to the serializer, which would take the
+        # whole tool down with it.
+        "experiment_defaults": {
+            key: _json_safe(value)
+            for key, value in sorted(session.experiment_defaults.items())
+        },
     }
 
 

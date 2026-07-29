@@ -456,7 +456,7 @@ def _main_frame(view: RecordedView, session: Session) -> Image.Image | None:
 
 
 def _weights_frame(view: RecordedView, session: Session) -> Image.Image | None:
-    from nansense.ui.frames import WeightPanel, weights_frame
+    from nansense.ui.frames import PanelAxes, WeightPanel, weights_frame
     from nansense.ui.render import dims_from_roles
 
     panels = view.params.get("panels")
@@ -481,9 +481,9 @@ def _weights_frame(view: RecordedView, session: Session) -> Image.Image | None:
         specs.append(
             WeightPanel(
                 name=str(spec[0]),
-                x_dim=x_dim,
-                y_dim=y_dim,
-                tile_dim=tile_dim,
+                # Always explicit: these came from the page's role selects, so
+                # even an all-unassigned triple is a choice the user made.
+                axes=PanelAxes(x_dim=x_dim, y_dim=y_dim, tile_dim=tile_dim),
                 fixed=fixed,
             )
         )

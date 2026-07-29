@@ -132,29 +132,44 @@ def apply_perturbations(
     return result if applied else None
 
 
-def _write_perturbation(
+def perturbation_fits(
     target: Tensor, sample: int, index: tuple[int, ...], values: tuple[float, ...]
 ) -> bool:
-    """Write one perturbation into `target` in place; `False` if it doesn't fit."""
+    """Whether this perturbation addresses a real position of `target`.
+
+    Split out of `_write_perturbation` so a caller can ask *before* recording an
+    entry: the writer skips a misfit silently (the batch may have changed shape
+    since a click was registered), which is right for replaying stored edits and
+    useless to anyone who wants to know whether the edit they just made landed.
+    """
     if target.ndim == 4:
         b, c, h, w = target.shape
         if len(index) != 2 or len(values) != c:
             return False
         y, x = index
-        if not (0 <= sample < b and 0 <= y < h and 0 <= x < w):
-            return False
-        target[sample, :, y, x] = torch.tensor(values, dtype=target.dtype)
-        return True
+        return 0 <= sample < b and 0 <= y < h and 0 <= x < w
     if target.ndim == 2:
         b, c = target.shape
         if len(index) != 1 or len(values) != 1:
             return False
         (channel,) = index
-        if not (0 <= sample < b and 0 <= channel < c):
-            return False
-        target[sample, channel] = values[0]
-        return True
+        return 0 <= sample < b and 0 <= channel < c
     return False
+
+
+def _write_perturbation(
+    target: Tensor, sample: int, index: tuple[int, ...], values: tuple[float, ...]
+) -> bool:
+    """Write one perturbation into `target` in place; `False` if it doesn't fit."""
+    if not perturbation_fits(target, sample, index, values):
+        return False
+    if target.ndim == 4:
+        y, x = index
+        target[sample, :, y, x] = torch.tensor(values, dtype=target.dtype)
+    else:
+        (channel,) = index
+        target[sample, channel] = values[0]
+    return True
 
 
 def pin_current_batch(session: Session) -> bool:

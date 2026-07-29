@@ -233,14 +233,24 @@ def batch_image_row(
 
 def stack_sections(
     sections: Sequence[tuple[str, Image.Image | None]],
+    *,
+    require_image: bool = False,
 ) -> Image.Image | None:
     """Stack labelled images vertically onto one background.
 
     A section whose image is `None` contributes its label alone — that is how a
     view says "this part had nothing to draw" without collapsing the layout, and
     how a caller adds a bare text line (an experiment's progress, say).
+
+    That is right for a recording, whose frame should keep its shape even on an
+    empty update. It is wrong for a caller that has to decide between sending a
+    picture and sending an explanation, because a canvas of nothing but captions
+    *is* a valid image and would be sent as one. `require_image` returns `None`
+    for that case instead, so the caller can say what was missing.
     """
     if not sections:
+        return None
+    if require_image and all(image is None for _, image in sections):
         return None
     font = ImageFont.load_default()
     width = _FRAME_PAD * 2 + min(

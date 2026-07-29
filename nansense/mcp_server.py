@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -50,6 +50,7 @@ from nansense.mcp_images import (
 )
 from nansense.mcp_views import (
     architecture_view,
+    default_phase,
     debug_view,
     experiment_catalog_view,
     experiment_result_view,
@@ -171,28 +172,33 @@ async def _run_control(
     command: Callable[[], None],
     *,
     timeout: float,
-    wait: bool = True,
+    wait: bool | None = True,
 ) -> dict[str, Any]:
     """Issue a control command and report where the run ended up.
 
     Waiting is skipped when the command does not lead to a pause — `detach`
     never pauses again, and `pause` on an already-paused run has nothing to
-    resume, so waiting for a *new* pause would just burn the timeout.
+    resume, so waiting for a *new* pause would just burn the timeout. `None`
+    defers that decision to here, where it can be made against the same
+    `pause_count` the wait will use.
     """
     refusal = _control_refusal(session)
     if refusal is not None:
         return refusal
     before = session.pause_count
+    # `wait=None` means "decide now": sampling `is_running` at the call site
+    # would read it *before* `pause_count`, and a pause landing in between
+    # would leave us waiting for a second one that never comes.
+    should_wait = session.is_running if wait is None else wait
     command()
     reached = True
-    if wait:
-        reached = await _await_pause(
-            session, after=before, timeout=_clamp_timeout(timeout)
-        )
+    waited = _clamp_timeout(timeout)
+    if should_wait:
+        reached = await _await_pause(session, after=before, timeout=waited)
     view = status_view(session)
     if not reached:
         view["waiting"] = (
-            f"Training was still running {timeout:g}s after the command. "
+            f"Training was still running {waited:g}s after the command. "
             "Call get_status to check again; the command remains in effect."
         )
     return view
@@ -561,10 +567,7 @@ def build_server(
         A no-op that returns immediately when the run is already paused.
         """
         return await _run_control(
-            session,
-            session.stop,
-            timeout=timeout_seconds,
-            wait=session.is_running,
+            session, session.stop, timeout=timeout_seconds, wait=None
         )
 
     @server.tool()
@@ -858,7 +861,7 @@ def build_server(
         with a different batch each step. Probes are forward-only, so pinned
         views have activations but no gradients.
         """
-        refusal = _settings_refusal(session)
+        refusal = _probe_refusal(session)
         if refusal is not None:
             return refusal
         before = session.probe_count
@@ -872,13 +875,14 @@ def build_server(
         return await _probe_result(session, after=before, timeout=timeout_seconds)
 
     @server.tool()
-    async def unpin_batch() -> dict[str, Any]:
+    async def unpin_batch(timeout_seconds: float = 10.0) -> dict[str, Any]:
         """Release the pinned input; captures go back to showing the live batch."""
-        refusal = _settings_refusal(session)
+        refusal = _probe_refusal(session)
         if refusal is not None:
             return refusal
+        before = session.probe_count
         session.unpin_batch()
-        return probe_view(session)
+        return await _probe_result(session, after=before, timeout=timeout_seconds)
 
     @server.tool()
     async def set_probe_mode(
@@ -894,12 +898,17 @@ def build_server(
         mode activates probing on its own, no pin required. Training state is
         always restored afterwards.
         """
-        refusal = _settings_refusal(session)
+        refusal = _probe_refusal(session)
         if refusal is not None:
             return refusal
         before = session.probe_count
+        # Re-selecting the mode already in force returns early inside the
+        # session and arms no probe; waiting for one would burn the timeout.
+        rearmed = session.probe_mode != mode
         session.set_probe_mode(mode)
-        return await _probe_result(session, after=before, timeout=timeout_seconds)
+        return await _probe_result(
+            session, after=before, timeout=timeout_seconds, expected=rearmed
+        )
 
     @server.tool()
     async def add_perturbation(
@@ -920,35 +929,39 @@ def build_server(
         While any perturbation is active the layer strips switch to showing
         `perturbed − original`, which is what makes the affected path visible.
         """
-        refusal = _settings_refusal(session)
+        refusal = _probe_refusal(session)
         if refusal is not None:
             return refusal
+        target = input_name or primary_input or ""
+        # Check the edit *before* recording it. A misfit is skipped silently at
+        # apply time and stays in the map, so afterwards nothing distinguishes
+        # "your edit was dropped" from "someone else's edit landed" — and the
+        # agent would be told its perturbation is active when it is inert.
+        misfit = _perturbation_misfit(
+            session, input_name=target, sample=sample, index=index, values=values
+        )
+        if misfit is not None:
+            view = probe_view(session)
+            view["error"] = misfit
+            return view
         before = session.probe_count
         session.add_perturbation(
-            input_name=input_name or primary_input or "",
+            input_name=target,
             sample=sample,
             index=tuple(index),
             values=tuple(values),
         )
-        view = await _probe_result(session, after=before, timeout=timeout_seconds)
-        if not view.get("perturbations_applied", True):
-            view["error"] = (
-                "No perturbation reached the input. Entries that do not fit are "
-                "skipped silently: check the input name against "
-                "get_architecture, and that `index` and `values` match its "
-                "shape — an image input needs [y, x] and one value per channel, "
-                "a flat one [channel] and a single value."
-            )
-        return view
+        return await _probe_result(session, after=before, timeout=timeout_seconds)
 
     @server.tool()
-    async def clear_perturbations() -> dict[str, Any]:
+    async def clear_perturbations(timeout_seconds: float = 10.0) -> dict[str, Any]:
         """Drop every perturbation; the probe goes back to the unedited input."""
-        refusal = _settings_refusal(session)
+        refusal = _probe_refusal(session)
         if refusal is not None:
             return refusal
+        before = session.probe_count
         session.clear_perturbations()
-        return probe_view(session)
+        return await _probe_result(session, after=before, timeout=timeout_seconds)
 
     # ---- Experiments -------------------------------------------------
 
@@ -959,7 +972,7 @@ def build_server(
         Call before `run_experiment` — the parameter keys, defaults and the
         layers each kind accepts all come from here.
         """
-        return experiment_catalog_view(session)
+        return await asyncio.to_thread(experiment_catalog_view, session)
 
     @server.tool()
     async def run_experiment(
@@ -1081,6 +1094,78 @@ def build_server(
     return server
 
 
+def _probe_refusal(session: Session) -> dict[str, Any] | None:
+    """Why arming a probe would do nothing here, or `None` if it works.
+
+    Locked sessions no-op the probe setters. A *closed* one is worse than a
+    no-op: the setters still record their state, but the pause loop that runs
+    probes is gone, so the request is armed and never served — and
+    `wait_for_probe` returns immediately on a closed session, which would make
+    that look like a completed run.
+    """
+    if session.locked:
+        return {
+            "error": "This session is locked (a shared demo); probes are disabled.",
+            "state": "locked",
+        }
+    if session.closed:
+        return {
+            "error": (
+                "Training has finished, so no further probe can run — probes "
+                "execute on the training thread's pause loop. The last "
+                "captured batch stays inspectable."
+            ),
+            "state": "finished",
+        }
+    return None
+
+
+def _perturbation_misfit(
+    session: Session,
+    *,
+    input_name: str,
+    sample: int,
+    index: Sequence[int],
+    values: Sequence[float],
+) -> str | None:
+    """Why this edit would not reach the probe input, or `None` if it fits.
+
+    Checked against the tensor the probe will actually run on: the pinned batch
+    when one is held, otherwise the current snapshot's input.
+    """
+    from nansense.probe import perturbation_fits
+
+    probe = session.probe_result
+    base = None
+    if probe is not None:
+        base = probe.base_input(input_name)
+    if base is None:
+        snapshot = session.snapshot
+        base = None if snapshot is None else snapshot.activations.get(input_name)
+    if base is None:
+        return (
+            f"No input named {input_name!r} to perturb. Known inputs: "
+            f"{session.input_names}."
+        )
+    if perturbation_fits(base, sample, tuple(index), tuple(values)):
+        return None
+    shape = list(base.shape)
+    channels = shape[1] if base.ndim == 4 else 0
+    wanted = (
+        f"index [y, x] within {shape[2:]} and "
+        f"{channels} value{'' if channels == 1 else 's'} (one per channel)"
+        if base.ndim == 4
+        else f"index [channel] within [{shape[1]}] and 1 value"
+        if base.ndim == 2
+        else "a 4-D image or 2-D flat input, which this is not"
+    )
+    return (
+        f"That perturbation does not fit input {input_name!r} of shape {shape}: "
+        f"it needs sample < {shape[0]}, {wanted}. "
+        f"Given sample {sample}, index {list(index)}, {len(values)} value(s)."
+    )
+
+
 def _probe_will_run(session: Session) -> bool:
     """Whether the mutation just made will actually produce a probe run.
 
@@ -1099,10 +1184,16 @@ def _probe_will_run(session: Session) -> bool:
 
 
 async def _probe_result(
-    session: Session, *, after: int, timeout: float
+    session: Session, *, after: int, timeout: float, expected: bool = True
 ) -> dict[str, Any]:
-    """Wait for the probe the caller's change triggered, then report it."""
-    if _probe_will_run(session):
+    """Wait for the probe the caller's change triggered, then report it.
+
+    `expected` is the caller's own knowledge that its change armed a probe at
+    all — a setter given the value already in force returns early and arms
+    nothing, and no amount of state inspection afterwards can distinguish that
+    from a probe still pending.
+    """
+    if expected and _probe_will_run(session):
         ran = await asyncio.to_thread(
             session.wait_for_probe,
             after_count=after,
@@ -1116,7 +1207,7 @@ async def _probe_result(
             )
         return view
     view = probe_view(session)
-    if session.is_running:
+    if expected and session.is_running:
         view["waiting"] = (
             "Training is advancing, so the probe will run at the next capture "
             "rather than now. Call pause() to run it immediately."
@@ -1172,12 +1263,18 @@ def _await_experiment(
     would otherwise satisfy this wait with someone else's result.
     """
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while True:
         result = session.experiment_result_for(seq)
         if result is not None and result.done:
             return True
+        # Experiments run on the training thread's pause loop; once the run is
+        # closed nothing will ever pick this request up.
+        if session.closed or time.monotonic() >= deadline:
+            # One last look: a result published during the final sleep would
+            # otherwise be reported as a timeout beside its own `done: true`.
+            result = session.experiment_result_for(seq)
+            return result is not None and result.done
         time.sleep(_EXPERIMENT_POLL_SECONDS)
-    return False
 
 
 async def _run_experiment(
@@ -1223,6 +1320,11 @@ async def _run_experiment(
     view["params"] = {
         key: value for key, value in resolved.items() if key not in ("mean", "std")
     }
+    if session.locked:
+        view["params_note"] = (
+            "This is a locked demo, which caps the heavier knobs (steps, "
+            "channels, inputs); the run may have used lower values than these."
+        )
     if unknown:
         view["ignored_params"] = unknown
         view["hint"] = f"{kind} takes only its own knobs; see list_experiments."
@@ -1262,10 +1364,18 @@ def _recorded_view(
     from nansense.recording import RecordedView
 
     mean, std = display.stats(input_name)
-    chosen = list(layers) if layers else sorted(session.stats_layers)
     if view == "layers":
+        # The main page records the cards on screen, i.e. the watched layers —
+        # *not* every layer with statistics, which under stats scope "all" is
+        # the whole model and would compose a frame thousands of pixels tall.
+        chosen = _ordered(session, layers if layers else session.watched_layers)
         if not chosen:
-            return {"error": "Give `layers` — there is nothing to record."}
+            return {
+                "error": (
+                    "Nothing to record: give `layers`, or watch some first — "
+                    "this view records the layers being watched."
+                )
+            }
         return RecordedView(
             key="main",
             page="main",
@@ -1297,6 +1407,10 @@ def _recorded_view(
             },
         )
     if view in ("histograms", "patches"):
+        # These read the watch accumulators, whose browsable universe is the
+        # `/stats` page's own: collecting layers plus any whose buckets are
+        # still retained.
+        chosen = _ordered(session, layers if layers else session.stats_layers)
         if not chosen:
             return {
                 "error": (
@@ -1350,6 +1464,16 @@ def _recorded_view(
     if not experiments.layer_available(session, layer, kind):
         return {"error": f"{kind} cannot run on {layer!r}; see list_experiments."}
     key = f"experiment:{layer}"
+    # Registering replaces any entry under `key` with a *new* seq, and the
+    # recording already running holds the old one in its frozen params. So
+    # check for the duplicate here, before mutating: letting `_start_recording`
+    # discover it afterwards would leave the live recording pointed at a seq
+    # nothing reruns any more, and it would quietly stop producing frames.
+    if session.recording.is_recording(key):
+        return {
+            "error": f"{key!r} is already recording.",
+            "hint": "One recording per view; stop_recording ends it.",
+        }
     resolved, _ = _experiment_params(
         session, kind=kind, overrides=params, display=display, input_name=input_name
     )
@@ -1371,10 +1495,20 @@ def _recorded_view(
     )
 
 
+def _ordered(session: Session, layers: Iterable[str]) -> list[str]:
+    """`layers` in the model's own order, deduplicated.
+
+    The pages lay layers out in graph order and record them that way; a set
+    from `watched_layers` / `stats_layers` would otherwise stack a recording's
+    strips alphabetically, so the video would not match the page it mirrors.
+    """
+    wanted = set(layers)
+    return [name for name in session.layer_names if name in wanted]
+
+
 def _newest_phase(session: Session, layers: Sequence[str]) -> str | None:
-    """The last phase any of `layers` has statistics for."""
-    phases = sorted({phase for layer in layers for phase in session.stats_phases(layer)})
-    return phases[-1] if phases else None
+    """The phase to record when the caller named none (see `default_phase`)."""
+    return default_phase(session, layers)
 
 
 def _start_recording(
@@ -1420,39 +1554,57 @@ def _start_recording(
     return result
 
 
+def _auto_keys(views: Iterable[Any]) -> list[str]:
+    """The auto-experiment registrations these recorded views are holding open.
+
+    An experiment recording pins its auto-rerun so the request survives without
+    a page heartbeat, and the registration is keyed by the view's own
+    `auto_key` — which is *not* the recording key. A browser-started recording
+    uses a per-page uuid there, so unpinning by recording key would silently
+    leave it pinned and re-running for the rest of the training run.
+    """
+    keys: list[str] = []
+    for view in views:
+        auto_key = view.params.get("auto_key")
+        if isinstance(auto_key, str) and auto_key:
+            keys.append(auto_key)
+    return keys
+
+
 def _stop_recording(session: Session, *, key: str | None) -> dict[str, Any]:
     manager = session.recording
+    # Ask *before* ending: a recording that captured no frames finalizes to no
+    # files at all, which is indistinguishable afterwards from a key that was
+    # never recording — and the views carry the `auto_key`s to release.
+    active = manager.statuses()
     if key is None:
-        keys = [status.view.key for status in manager.statuses()]
+        views = [status.view for status in active]
         paths = manager.end_all()
     else:
-        # Ask *before* ending: a recording that captured no frames finalizes to
-        # no files at all, which is indistinguishable afterwards from a key that
-        # was never recording — and treating it as the latter would skip the
-        # auto-experiment cleanup below.
-        if not manager.is_recording(key):
+        views = [status.view for status in active if status.view.key == key]
+        if not views:
             return {
                 "error": f"Nothing was recording under {key!r}.",
                 "hint": "list_recordings has the active keys.",
             }
-        keys = [key]
         paths = manager.end(key)
-    for stopped in keys:
-        # An experiment recording pinned its auto-rerun so the request would
-        # survive without a page heartbeat; release it, or it reruns forever.
-        session.unpin_auto_experiment(stopped)
-        session.unregister_auto_experiment(stopped)
-    return {
-        "stopped": keys,
+    for auto_key in _auto_keys(views):
+        session.unpin_auto_experiment(auto_key)
+        session.unregister_auto_experiment(auto_key)
+    stopped = [view.key for view in views]
+    result: dict[str, Any] = {
+        "stopped": stopped,
         "files": [str(path) for path in paths],
-        "note": (
+    }
+    if not stopped:
+        result["note"] = "Nothing was recording."
+    elif not paths:
+        result["note"] = (
             "Empty file list: the recording captured no frames. Frames come "
             "from visualization updates, so a run that stayed paused produces "
             "none."
         )
-        if not paths
-        else None,
-    }
+    return result
 
 
 def _wait_for_snapshot(session: Session, previous: object, timeout: float) -> bool:
@@ -1463,12 +1615,16 @@ def _wait_for_snapshot(session: Session, previous: object, timeout: float) -> bo
     and this runs on a worker thread where a short sleep costs nothing.
     """
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while True:
         current = session.snapshot
         if current is not None and current is not previous:
             return True
+        if time.monotonic() >= deadline:
+            # A snapshot published during the final sleep would otherwise come
+            # back as `refreshed: false` next to the fresh numbers themselves.
+            current = session.snapshot
+            return current is not None and current is not previous
         time.sleep(_SNAPSHOT_POLL_SECONDS)
-    return False
 
 
 def build_mount(

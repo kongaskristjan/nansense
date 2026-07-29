@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from nansense.input_config import InputDisplay
-from nansense.mcp_views import _num, position_view
+from nansense.mcp_views import _num, default_phase, phases_with_data, position_view
 from nansense.patches import PATCH_TYPES
 from nansense.session import Session
 
@@ -147,10 +147,16 @@ def layer_image(
             session,
             layers=resolved,
             sample_idx=sample,
-            input_name=input_name if include_input or not resolved else None,
+            input_name=input_name,
+            # Without layers there is nothing else to draw, so the input is the
+            # picture. `show_input` is deliberately separate from `input_name`:
+            # the name also carries the input's spatial size, which is what
+            # unflattens a token-shaped activation back onto its patch grid.
+            show_input=include_input or not resolved,
             mean=mean,
             std=std,
             transform=display.transform(input_name),
+            require_image=True,
         )
     )
     note = f"Sample {sample} of the batch at {_position_note(session)}."
@@ -198,6 +204,7 @@ def input_image(
             mean=mean,
             std=std,
             transform=display.transform(input_name),
+            require_image=True,
         )
     )
     if png is None:
@@ -236,7 +243,7 @@ def weights_image(
     pins every axis they leave over — for a 4-D conv weight that is the output
     channel, so `index` is how you page through filters.
     """
-    from nansense.ui.frames import WeightPanel, weights_frame
+    from nansense.ui.frames import PanelAxes, WeightPanel, weights_frame
 
     snapshot = session.snapshot
     if snapshot is None:
@@ -264,23 +271,31 @@ def weights_image(
     # an out-of-range one, so a too-large index shows the last slice rather
     # than failing. Every axis gets it — only the unassigned ones are read.
     fixed = dict.fromkeys(range(_MAX_WEIGHT_RANK), index)
+    # No override at all means "whatever the page opens with"; one override
+    # means the caller is choosing the axes, and the rest fall back like the
+    # page's do.
+    axes = (
+        None
+        if x_dim is None and y_dim is None and tile_dim is None
+        else PanelAxes(x_dim=x_dim, y_dim=y_dim, tile_dim=tile_dim)
+    )
     png, caveat = _encode(
         weights_frame(
             session,
-            panels=[
-                WeightPanel(
-                    name=name,
-                    x_dim=x_dim,
-                    y_dim=y_dim,
-                    tile_dim=tile_dim,
-                    fixed=fixed,
-                )
-                for name in names
-            ],
+            panels=[WeightPanel(name=name, axes=axes, fixed=fixed) for name in names],
+            require_image=True,
         )
     )
     note = f"{layer} — {', '.join(names)}, at {_position_note(session)}."
-    if index:
+    # A 2-D weight has both axes on screen, so `index` pinned nothing; saying
+    # otherwise would have the agent page through a view that never changes.
+    shown_axes = 3 if axes is None else sum(
+        dim is not None for dim in (axes.x_dim, axes.y_dim, axes.tile_dim)
+    )
+    if index and any(
+        (weight := snapshot.weights.get(name)) is not None and weight.ndim > shown_axes
+        for name in names
+    ):
         note += f" Axes not shown are pinned to index {index}."
     if unknown:
         note += f" Not parameters of this layer, skipped: {unknown}."
@@ -318,12 +333,9 @@ def histogram_image(
             "and let training advance at least one batch."
             + (f" Unknown layers: {unknown}." if unknown else ""),
         )
-    chosen = phase
-    if chosen is None:
-        # Without a phase the newest one with data is the useful default; a
-        # picture of an empty phase is the one answer nobody wants.
-        available = sorted(session.stats_phases(collected[0]))
-        chosen = available[-1] if available else ""
+    # Without a phase, the one training is actually in — across *all* the
+    # requested layers, not just the first, and not whichever sorts last.
+    chosen = phase if phase is not None else (default_phase(session, collected) or "")
     png, caveat = _encode(
         histogram_frame(
             session, layers=collected, phase=chosen, log_x=log_x, log_y=log_y
@@ -341,7 +353,7 @@ def histogram_image(
         return RenderedImage(
             None,
             note + f" No bucket for phase {chosen!r}; phases with data: "
-            f"{sorted(session.stats_phases(collected[0]))}.",
+            f"{phases_with_data(session, collected)}.",
         )
     return RenderedImage(png, note + caveat)
 
@@ -377,7 +389,7 @@ def patches_image(
             f"watch accumulators: call watch_layers(['{layer}']) and let training "
             "advance at least one batch.",
         )
-    chosen = phase if phase is not None else available[-1]
+    chosen = phase if phase is not None else (default_phase(session, [layer]) or "")
     mean, std = display.stats(input_name)
     frames = patch_frames(
         session,
@@ -392,6 +404,7 @@ def patches_image(
     # separately; an agent asked for one picture, so the crops win when both
     # exist — they are the grids the page shows by default.
     image = frames.get("pixel") or frames.get("average")
+    dropped = [group for group in frames if image is not frames[group]]
     png, caveat = _encode(image)
     if png is None:
         return RenderedImage(
@@ -407,6 +420,13 @@ def patches_image(
     )
     if heatmap:
         note += " The channel's activation map is blended over each patch."
+    if dropped:
+        # Crops and whole-input grids compose separately (different cell
+        # sizes); only one picture goes back, so name what was left out.
+        note += (
+            f" The {dropped} grids also have data but are not shown — ask for "
+            "them with `grids`."
+        )
     return RenderedImage(png, note + caveat)
 
 
@@ -449,6 +469,11 @@ def bin_samples_image(
     if snapshot is None:
         return _no_snapshot(), []
     bin_index = int(_bin_indices(torch.tensor([float(value)]))[0])
+    if kind not in ("activation", "gradient"):
+        return (
+            RenderedImage(None, f"Unknown kind {kind!r}; expected activation or gradient."),
+            [],
+        )
     tensors = (
         snapshot.activations if kind == "activation" else snapshot.activation_gradients
     )
@@ -493,7 +518,7 @@ def bin_samples_image(
         )
         for sample in samples
     ]
-    png, caveat = _encode(stack_sections(sections))
+    png, caveat = _encode(stack_sections(sections, require_image=True))
     note = (
         f"{len(samples)} random elements of {layer} channel {channel} in the "
         f"histogram bin holding {value:g}, from the last captured batch only "
@@ -526,7 +551,11 @@ def experiment_image(
             "have been evicted.",
         )
     mean, std = display.stats(input_name)
-    png, caveat = _encode(experiment_frame(session, seq=seq, mean=mean, std=std))
+    png, caveat = _encode(
+        experiment_frame(
+            session, seq=seq, mean=mean, std=std, require_image=True
+        )
+    )
     note = (
         f"{result.kind} on {result.layer}, step {result.step}/{result.total_steps}"
         f"{'' if result.done else ' (still running)'}."

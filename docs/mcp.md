@@ -78,9 +78,10 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | Tool | What it does |
 | --- | --- |
 | `time_travel`, `get_time_travel_status` | Restart at an earlier epoch, with the model, optimizer and scheduler restored |
-| `pin_batch`, `unpin_batch`, `set_probe_mode` | Re-run the model on one fixed input at every capture |
+| `pin_batch`, `unpin_batch`, `set_probe_mode`, `get_probe_status` | Re-run the model on one fixed input at every capture |
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
-| `list_experiments`, `run_experiment`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions |
+| `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions |
+| `set_auto_run_experiments` | Stop open experiment pages re-running on the thread you need |
 | `start_recording`, `stop_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update |
 
 **Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks(interval_batches=1)` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.

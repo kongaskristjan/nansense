@@ -39,7 +39,7 @@ from nansense.mcp_images import (
 )
 from nansense.mcp_server import build_server
 from nansense.session import Session
-from nansense.ui.frames import WeightPanel
+from nansense.ui.frames import PanelAxes, WeightPanel
 
 from .helpers import TinyNet, paused_session
 
@@ -161,11 +161,26 @@ def test_unconfigured_panel_takes_the_pages_default_layout(
 
 
 def test_an_explicit_axis_choice_is_honoured() -> None:
-    """Choosing any axis switches to explicit mode: x falls back to the last
+    """Explicit axes keep the page's own fallbacks: x falls back to the last
     axis, and without a Y axis there is nothing left to lay out as tiles."""
-    assert WeightPanel(name="w", y_dim=0).layout(4) == (3, 0, None)
-    assert WeightPanel(name="w", x_dim=0, y_dim=1, tile_dim=2).layout(4) == (0, 1, 2)
-    assert WeightPanel(name="w", tile_dim=2).layout(4) == (3, None, None)
+    assert WeightPanel(name="w", axes=PanelAxes(y_dim=0)).layout(4) == (3, 0, None)
+    assert WeightPanel(
+        name="w", axes=PanelAxes(x_dim=0, y_dim=1, tile_dim=2)
+    ).layout(4) == (0, 1, 2)
+    assert WeightPanel(name="w", axes=PanelAxes(tile_dim=2)).layout(4) == (3, None, None)
+
+
+def test_all_axes_unassigned_is_not_the_same_as_choosing_nothing() -> None:
+    """The weights page can reach a state where every dimension is set to
+    Index, which `dims_from_roles` reports as all-`None`. That is a choice the
+    user made and has always rendered as a flattened heatmap row — it must not
+    be confused with an MCP caller who simply expressed no preference and wants
+    the default kernel view."""
+    unassigned = WeightPanel(name="w", axes=PanelAxes()).layout(4)
+    unspecified = WeightPanel(name="w").layout(4)
+    assert unassigned == (3, None, None)
+    assert unspecified == (3, 2, 1)
+    assert unassigned != unspecified
 
 
 def test_conv_weights_render_as_kernels_not_a_flattened_row() -> None:
@@ -276,3 +291,121 @@ def test_input_render_warns_when_no_normalization_was_given() -> None:
         rendered = input_image(session, display=_DISPLAY, input_name="x")
         assert rendered.png is not None
         assert "input_mean" in rendered.note
+
+
+# --- regressions found by review --------------------------------------
+
+
+class TokenNet(nn.Module):
+    """Emits a token-shaped `[B, tokens, dim]` activation, as a ViT block does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.proj = nn.Linear(1, 6)
+        self.head = nn.Linear(6, 3)
+
+    def forward(self, x: Tensor) -> Tensor:
+        tokens = x.flatten(2).transpose(1, 2)  # [B, H*W, 1]
+        return self.head(self.proj(tokens).mean(1))
+
+
+def _token_step(model: TokenNet) -> None:
+    model(torch.rand(2, 1, 4, 4)).square().mean().backward()
+
+
+def test_hiding_the_input_image_does_not_flatten_token_activations() -> None:
+    """The input name carries the input's spatial size, which is what unflattens
+    a `[B, tokens, dim]` activation back onto its patch grid. Dropping the name
+    to hide the picture would silently turn those strips into one flat heatmap
+    — on the *default* path, with nothing saying so."""
+    with paused_session(TokenNet(), _token_step) as session:
+        without = layer_image(
+            session, layers=["proj"], display=_DISPLAY, input_name="x"
+        )
+        with_input = layer_image(
+            session,
+            layers=["proj"],
+            display=_DISPLAY,
+            input_name="x",
+            include_input=True,
+        )
+        assert without.png is not None and with_input.png is not None
+        # Same strip either way: the only difference is the input row on top.
+        narrow = Image.open(io.BytesIO(without.png))
+        wide = Image.open(io.BytesIO(with_input.png))
+        assert narrow.width == wide.width
+        assert narrow.height < wide.height
+
+
+def test_a_layer_with_no_2d_view_explains_itself_instead_of_drawing_captions() -> None:
+    """A composed canvas of nothing but captions is still a valid image and
+    would be sent as one; the prepared explanation must actually fire."""
+
+    class Volumetric(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.c3 = nn.Conv3d(1, 2, 3, padding=1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            return self.c3(x)
+
+    def step(model: Volumetric) -> None:
+        model(torch.rand(2, 1, 4, 4, 4)).square().mean().backward()
+
+    with paused_session(Volumetric(), step) as session:
+        rendered = layer_image(
+            session, layers=["c3"], display=_DISPLAY, input_name="x"
+        )
+        assert rendered.png is None
+        assert "no 2-D view" in rendered.note
+
+
+def test_a_scalar_parameter_answers_instead_of_raising() -> None:
+    """`default_weight_dims` rejects a 0-dim tensor outright, which would come
+    back as a tool error rather than the module's "a reason, never a blank"."""
+
+    class Scaled(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fc = nn.Linear(4, 2)
+            self.temperature = nn.Parameter(torch.tensor(1.0))
+
+        def forward(self, x: Tensor) -> Tensor:
+            return self.fc(x) * self.temperature
+
+    def step(model: Scaled) -> None:
+        model(torch.rand(2, 4)).square().mean().backward()
+
+    with paused_session(Scaled(), step) as session:
+        assert WeightPanel(name="temperature").layout(0) == (-1, None, None)
+        # Whichever layer owns the scalar, the call answers rather than raises.
+        for layer in session.layer_names:
+            weights_image(session, layer=layer)
+
+
+def test_the_index_note_is_omitted_when_nothing_was_pinned() -> None:
+    """A 2-D linear weight shows both axes, so `index` pinned nothing — saying
+    otherwise has the agent paging through a view that never changes."""
+    with paused_session(TinyNet()) as session:
+        rendered = weights_image(
+            session, layer="fc1", parameters=["fc1.weight"], index=2
+        )
+        assert rendered.png is not None
+        assert "pinned to index" not in rendered.note
+
+
+def test_bin_samples_without_image_crops_say_so() -> None:
+    """With a non-image-like input every crop is None, and the picture would be
+    nothing but the values the JSON already carries."""
+    from nansense.mcp_images import bin_samples_image
+
+    with paused_session(TinyNet()) as session:
+        snapshot = session.snapshot
+        assert snapshot is not None
+        value = float(snapshot.activations["fc1"][:, 0].reshape(-1)[0])
+        rendered, values = bin_samples_image(
+            session, layer="fc1", channel=0, value=value, display=_DISPLAY, input_name="x"
+        )
+        assert values  # the numbers still come back
+        assert rendered.png is None
+        assert "not image-like" in rendered.note

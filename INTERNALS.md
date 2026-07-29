@@ -935,13 +935,13 @@ carry a `disable` flag (`_patched_update_options` reassigns
 graying out layers the current kind can't run; switching to a shorter layer
 clips the channel selectors (deep dream's Channels count to the channel
 count, Captum's Channel index to one less). The rest of each kind's knobs are
-declared in `_EXPERIMENT_PARAMS` (`_ExperimentParam` specs rendered as
+declared in `experiments.EXPERIMENT_PARAMS` (`ExperimentParam` specs rendered as
 number/switch/select widgets) ordered, for deep dream, Channels → Start from →
 Sample → method knobs (Minimize sits just above Clamp; Sample shows only for the
 current-batch start) and, for Captum, Channel/Target → Inputs → method knobs; values persist
 across kind switches via a shared `state.values`, seeded from each knob's
 default with `session.experiment_defaults` overrides applied
-(`_default_param_values`) — how a hosted playground serves cheaper
+(`experiments.default_param_values`) — how a hosted playground serves cheaper
 deep-dream defaults without lowering the locked ceilings. Beneath the description, a
 deep-dream-only **"Compare with MIN/MAX"** button jumps to the same layer's
 `/stats?view=minmax` grids (the MIN/MAX view carries a symmetric "Compare with
@@ -1556,15 +1556,44 @@ that something is actually pinned, perturbed or mode-forced *and* that training
 is paused, since a free-running session lands its probe at the next capture
 rather than now.
 
-Two failure modes are invisible without help and are surfaced explicitly. A
-perturbation that doesn't fit its base input (out of range, wrong value count)
-is skipped at apply time and stays in the map, so the map alone cannot say
-whether an edit took — `probe_view` reports `perturbations_applied`, read off
-the probe's `perturbed_inputs`. And a recording that captured no frames
-finalizes to no files, which afterwards is indistinguishable from a key that
-was never recording; `_stop_recording` therefore asks `is_recording` *before*
-ending, or it would take the error path and skip releasing the pinned auto
-experiment.
+Several failure modes are invisible unless deliberately surfaced, and each has
+cost a bug:
+
+- A perturbation that doesn't fit its base input is skipped at apply time and
+  *stays in the map*, so afterwards nothing distinguishes "your edit was
+  dropped" from "someone else's edit landed". The tool validates against the
+  probe's own base tensor (`probe.perturbation_fits`, shared with the writer so
+  the rules cannot drift) and refuses before recording anything.
+- A closed session no-ops differently from a locked one: the probe setters
+  still record state, but the pause loop that serves them is gone — and
+  `wait_for_probe` returns *immediately* on a closed session, so an unguarded
+  wait reads as a completed run. Hence `_probe_refusal` checks both.
+- A setter given the value already in force returns early and arms nothing;
+  no amount of state inspection afterwards distinguishes that from a probe
+  still pending, so `_probe_result` takes the caller's own `expected` flag.
+- A recording that captured no frames finalizes to no files, which is
+  indistinguishable afterwards from a key that was never recording. Stopping
+  therefore reads `statuses()` *before* ending — which is also where the
+  `auto_key` lives. Releasing the pinned auto experiment by the *recording*
+  key would miss a browser-started recording entirely, since the page keys its
+  registration by a per-tab uuid.
+- Registering an auto experiment replaces the entry under its key with a *new*
+  seq, while a running recording holds the old one in its frozen params. So a
+  duplicate `start_recording` is rejected before that mutation, not after.
+
+Two shapes of "empty" also need care. `stack_sections` composes label-only
+sections into a perfectly valid picture of nothing but captions — right for a
+video frame, wrong for a caller choosing between a picture and an explanation,
+so `require_image` lets the MCP side ask for `None` instead. And an all-non-
+finite epoch leaves the accumulator's ±inf placeholders in place, which would
+report `min` above `max` and a fabricated `std` of 0 for exactly the epoch a
+reader most needs to understand.
+
+Statistics computed here rather than by an accumulator (`_tensor_summary`, for
+weights and optimizer state) match the accumulators' conventions deliberately:
+float64 throughout, so a double-precision gradient near 1e39 is not truncated
+into a phantom Inf, and the *population* standard deviation, so a parameter's
+`get_weight_stats` number agrees with its `get_stats_history` trend.
 
 **Mounting** (`build_mount`, consumed by `serve`). The transport's Starlette
 app is built only to harvest its route — the route is then registered on the
