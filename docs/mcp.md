@@ -50,6 +50,22 @@ Ask in plain language — "why has my loss stopped falling?" — and the agent w
 
 Statistics come from two places, and the distinction matters when you read the agent's reasoning. `get_layer_stats` reads the last captured batch and covers **any** layer. `get_stats_history` reads the running accumulators, which only cover **watched** layers — so the agent watches a layer first, lets a few epochs run, and then asks for the trend.
 
+## What the agent can see
+
+The `render_*` tools return the views as pictures — the same ones the browser draws, rendered server-side and sent as images the agent looks at directly.
+
+| Tool | The view |
+| --- | --- |
+| `render_layer` | Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes |
+| `render_input` | One sample of the model's input, denormalized |
+| `render_weights` | A layer's kernels, gradients and optimizer state, plus the live learning rate |
+| `render_histogram` | Value distributions of watched layers, over the signed-log bins |
+| `render_extreme_patches` | The inputs that most (and least) excite each channel |
+
+This is worth its tokens when the numbers say *that* something is wrong but not *where*. A layer's mean and standard deviation look healthy while one channel of sixty-four is dead; the strip shows that at a glance. A conv filter that has collapsed to noise, an activation saturating along one edge of the image, a gradient histogram with a spike in the overflow bin — all are shapes, not scalars.
+
+Pictures are capped at 1568 pixels on the longest side and downscaled past it, with a note saying so, since a wide layer would otherwise arrive as an unreadably large image.
+
 ## A worked example
 
 A typical exchange, once the run is paused:

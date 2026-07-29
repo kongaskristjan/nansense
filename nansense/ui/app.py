@@ -261,7 +261,8 @@ def serve(
     image. Each of the three is either a single value applied to every input,
     or a `dict` keyed by input name for a multi-input model (see
     `nansense.input_config`); the stats and experiment panes use the primary
-    input's resolved values.
+    input's resolved values, and so does the MCP server, whose image tools
+    render the same views.
     """
     if not session.enabled:
         return None
@@ -283,7 +284,18 @@ def serve(
     primary_mean = resolve_per_input(input_mean, input_name)
     primary_std = resolve_per_input(input_std, input_name)
 
-    mount = build_mount(session, mermaid=mermaid_src, host=host) if mcp else None
+    mount = (
+        build_mount(
+            session,
+            mermaid=mermaid_src,
+            host=host,
+            input_mean=input_mean,
+            input_std=input_std,
+            input_transform=input_transform,
+        )
+        if mcp
+        else None
+    )
     fastapi_app = FastAPI(lifespan=None if mount is None else mount.lifespan)
     if mount is not None:
         # Ahead of NiceGUI's `/` mount, which `ui.run_with` adds below and

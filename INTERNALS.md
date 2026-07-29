@@ -1492,7 +1492,7 @@ one-shot publish flag (see *On-demand refresh*), and the page's existing timer
 renders the resulting snapshot — so there is no separate live-read path to keep
 consistent with `_publish_snapshot`.
 
-## MCP server (`nansense.mcp_server`, `nansense.mcp_views`)
+## MCP server (`nansense.mcp_server`, `nansense.mcp_views`, `nansense.mcp_images`)
 
 The agent-facing front end, served on the UI's own port at `/mcp` over MCP's
 streamable-HTTP transport. It is a second reader of the same `Session` — the
@@ -1502,8 +1502,23 @@ makes a second controller safe, so the core library needed no changes.
 
 The split mirrors the UI's render/page split. `mcp_views` is pure translation
 — `Session` → plain dicts — with no `mcp` import, so the output shapes are
-unit-testable without the SDK; `mcp_server` is the tool registration over
-those views plus the transport wiring. Neither imports a page module.
+unit-testable without the SDK; `mcp_images` is the same for pictures,
+`Session` → PNG bytes; `mcp_server` is the tool registration over both plus
+the transport wiring. None of them imports a page module.
+
+**Pictures** (`mcp_images`) come from `nansense.ui.frames`, the shared
+per-view renderer the recordings also use, so what an agent sees is what the
+page shows. Three things are added on top for the wire. They are encoded as
+PNG rather than the browser's BMP: BMP is the right localhost trade
+(near-memcpy encode at ~2× the bytes) but an MCP reply base64s those bytes
+inside JSON, paying for them twice. They are downscaled past `MAX_SIDE`
+(1568px, what a vision model resamples to anyway) with the caveat returned as
+*text*, since silently averaging neighbouring channels together would let a
+reader mistake the smoothing for data. And a render that produces nothing
+returns a reason instead — "no image" and "an image of nothing" are the same
+thing on the wire and very different to a reader. `mcp_images` imports
+`nansense.ui.*` lazily inside its functions: `nansense.ui.app` imports
+`mcp_server` while `nansense.ui.__init__` is still executing.
 
 **Two invariants shape every tool.** First, *never block the event loop*:
 uvicorn serves NiceGUI's websockets from the same loop on a ~6 s keepalive

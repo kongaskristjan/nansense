@@ -35,6 +35,17 @@ from typing import Any, Literal
 from mcp.server import MCPServer
 from starlette.routing import BaseRoute
 
+from nansense.input_config import InputTransform, MeanStd
+from nansense.mcp_images import (
+    InputDisplay,
+    experiment_image,
+    histogram_image,
+    image_reply,
+    input_image,
+    layer_image,
+    patches_image,
+    weights_image,
+)
 from nansense.mcp_views import (
     architecture_view,
     debug_view,
@@ -42,6 +53,7 @@ from nansense.mcp_views import (
     stats_history_view,
     status_view,
 )
+from nansense.patches import PATCH_TYPES
 from nansense.session import Session, StatsScope
 
 #: Where the MCP endpoint sits on the UI's server.
@@ -75,6 +87,12 @@ Statistics come from two places. `get_layer_stats` reads the last captured
 batch and works for any layer. `get_stats_history` reads the running
 accumulators for the epoch-by-epoch trend, which only cover layers that are
 being watched — call `watch_layers` first.
+
+The `render_*` tools return the same views as pictures — the strips, weight
+maps, histograms and patch grids the browser draws. Statistics tell you how
+big a problem is; a picture tells you where in the tensor it lives (one dead
+channel, a saturated edge, a stuck kernel), which is often not visible in a
+mean. Reach for one when the numbers say something is wrong but not what.
 """
 
 
@@ -165,12 +183,23 @@ async def _run_control(
 
 
 def build_server(
-    session: Session, *, mermaid: str | None = None, version: str = ""
+    session: Session,
+    *,
+    mermaid: str | None = None,
+    version: str = "",
+    input_mean: MeanStd | dict[str, MeanStd] | None = None,
+    input_std: MeanStd | dict[str, MeanStd] | None = None,
+    input_transform: InputTransform | dict[str, InputTransform] | None = None,
 ) -> MCPServer:
     """An `MCPServer` whose tools drive and inspect `session`.
 
     `mermaid` is the architecture graph source, built once by the caller (it is
     fixed for the session's lifetime, so re-tracing per call would be waste).
+
+    `input_mean` / `input_std` / `input_transform` are `serve`'s, and are used
+    for the same thing: turning an input tensor back into a viewable image for
+    the `render_*` tools. They live on the training script rather than on the
+    session, so they have to be handed down here too.
     """
     server = MCPServer(
         name="nansense",
@@ -178,6 +207,11 @@ def build_server(
         instructions=_INSTRUCTIONS,
         version=version,
     )
+    display = InputDisplay(
+        mean=input_mean, std=input_std, transform=input_transform
+    )
+    input_names = session.input_names
+    primary_input = input_names[0] if input_names else None
 
     # ---- Orientation -------------------------------------------------
 
@@ -250,6 +284,148 @@ def build_server(
         a run diverges or stops learning.
         """
         return debug_view(session)
+
+    # ---- Rendered views ----------------------------------------------
+
+    @server.tool(structured_output=False)
+    async def render_layer(
+        layers: list[str],
+        sample: int = 0,
+        include_input: bool = False,
+    ) -> list[Any]:
+        """Picture of what these layers computed on the last captured batch.
+
+        One row of per-channel tiles per layer for its activations and another
+        for its gradients, on a shared symmetric scale — red positive, blue
+        negative, NaN/±Inf left as transparent holes over a checkerboard. This
+        is where a dead channel, a saturated border or a single diverged feature
+        map is obvious in a way a mean never is. `sample` picks the sample
+        within the batch; `include_input` adds the input image above.
+        """
+        return image_reply(
+            await asyncio.to_thread(
+                layer_image,
+                session,
+                layers=layers,
+                sample=sample,
+                display=display,
+                input_name=primary_input,
+                include_input=include_input,
+            )
+        )
+
+    @server.tool(structured_output=False)
+    async def render_input(
+        sample: int = 0, input_name: str | None = None
+    ) -> list[Any]:
+        """Picture of one sample of the model's input.
+
+        Denormalized with the statistics the training script passed to `serve`.
+        `input_name` selects among a multi-input model's inputs (default: the
+        first, which is the one the pages call primary).
+        """
+        return image_reply(
+            await asyncio.to_thread(
+                input_image,
+                session,
+                sample=sample,
+                display=display,
+                input_name=input_name or primary_input,
+            )
+        )
+
+    @server.tool(structured_output=False)
+    async def render_weights(
+        layer: str,
+        parameters: list[str] | None = None,
+        index: int = 0,
+        x_dim: int | None = None,
+        y_dim: int | None = None,
+        tile_dim: int | None = None,
+    ) -> list[Any]:
+        """Picture of a layer's parameters, gradients and optimizer state.
+
+        Conv kernels are drawn as `kH×kW` tiles laid out across the input
+        channels, so a filter that has gone flat or saturated shows up
+        directly; a linear weight is one `[out, in]` image. Optimizer state
+        shaped like the parameter is drawn the same way (Adam's `exp_avg`
+        beside the weight it moves), and scalar state and hyperparameters —
+        including the live learning rate — come back as a text line.
+
+        Defaults to every parameter of the layer. `index` pins the axes the
+        layout does not show, which for a conv weight is the output channel:
+        raise it to page through filters. `x_dim` / `y_dim` / `tile_dim`
+        re-assign the axes themselves when the default view is the wrong cut.
+        """
+        return image_reply(
+            await asyncio.to_thread(
+                weights_image,
+                session,
+                layer=layer,
+                parameters=parameters,
+                index=index,
+                x_dim=x_dim,
+                y_dim=y_dim,
+                tile_dim=tile_dim,
+            )
+        )
+
+    @server.tool(structured_output=False)
+    async def render_histogram(
+        layers: list[str],
+        phase: str | None = None,
+        log_x: bool = False,
+        log_y: bool = False,
+    ) -> list[Any]:
+        """Picture of the value distributions of watched layers.
+
+        Activations and gradients, one subplot each, over the signed-log bins.
+        Shape is the point: a gradient histogram collapsing toward zero, a
+        bimodal activation, a spike in the overflow bin. Covers watched layers
+        only — call `watch_layers` first. `log_x` spreads the bins evenly by
+        magnitude, `log_y` reveals sparse tails. Defaults to the newest phase
+        with data.
+        """
+        return image_reply(
+            await asyncio.to_thread(
+                histogram_image,
+                session,
+                layers=layers,
+                phase=phase,
+                log_x=log_x,
+                log_y=log_y,
+            )
+        )
+
+    @server.tool(structured_output=False)
+    async def render_extreme_patches(
+        layer: str,
+        phase: str | None = None,
+        grids: list[Literal["max_pixel", "min_pixel", "max_average", "min_average"]]
+        | None = None,
+        heatmap: bool = False,
+    ) -> list[Any]:
+        """Picture of the inputs that most excite (or least excite) each channel.
+
+        Columns are channels, rows the top-scoring samples for that channel —
+        the view that answers "what has this unit learned to look for", and the
+        one that shows a channel responding to nothing at all. Needs a watched
+        layer and an image-like input. `heatmap` blends the channel's activation
+        map over each patch; the `*_average` grids need
+        `set_watch_performance(average_patches=True)`.
+        """
+        return image_reply(
+            await asyncio.to_thread(
+                patches_image,
+                session,
+                layer=layer,
+                phase=phase,
+                grids=PATCH_TYPES if grids is None else grids,
+                heatmap=heatmap,
+                display=display,
+                input_name=primary_input,
+            )
+        )
 
     # ---- Run control -------------------------------------------------
 
@@ -495,6 +671,9 @@ def build_mount(
     host: str = "127.0.0.1",
     path: str = DEFAULT_MCP_PATH,
     version: str = "",
+    input_mean: MeanStd | dict[str, MeanStd] | None = None,
+    input_std: MeanStd | dict[str, MeanStd] | None = None,
+    input_transform: InputTransform | dict[str, InputTransform] | None = None,
 ) -> McpMount:
     """Build the MCP endpoint for `session` as routes plus a lifespan.
 
@@ -502,8 +681,18 @@ def build_mount(
     DNS-rebinding protection it configures for a loopback `host`); the route is
     then served by the UI's own app, which is what keeps the endpoint on the
     UI's port without a sub-mount's trailing-slash redirect on POST.
+
+    The `input_*` arguments are `serve`'s, forwarded to `build_server` for the
+    image tools.
     """
-    server = build_server(session, mermaid=mermaid, version=version)
+    server = build_server(
+        session,
+        mermaid=mermaid,
+        version=version,
+        input_mean=input_mean,
+        input_std=input_std,
+        input_transform=input_transform,
+    )
     app = server.streamable_http_app(streamable_http_path=path, host=host)
     manager = server.session_manager
 

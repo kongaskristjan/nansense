@@ -67,9 +67,13 @@ _Section = tuple[str, Image.Image | None]
 class WeightPanel:
     """One parameter's strip on the weights view, under a chosen axis layout.
 
-    `name` is a `named_parameters()` key. The axis roles follow
-    `nansense.ui.render.render_weight`; leaving `x_dim` `None` takes the
-    tensor's last axis, which is what the page defaults to.
+    `name` is a `named_parameters()` key and the axis roles follow
+    `nansense.ui.render.render_weight`. Leaving *all three* axes `None` means
+    "no layout chosen" and takes `default_weight_dims` for the tensor's rank —
+    conv kernels as `kH×kW` tiles rather than a flattened row. Setting any of
+    them selects a layout explicitly, and then a `None` `x_dim` falls back to
+    the last axis and a `None` `y_dim` drops the tile axis with it, since a
+    strip with no vertical axis is a single heatmap row with nothing to tile.
     """
 
     name: str
@@ -77,6 +81,14 @@ class WeightPanel:
     y_dim: int | None = None
     tile_dim: int | None = None
     fixed: dict[int, int] = field(default_factory=dict)
+
+    def layout(self, ndim: int) -> tuple[int, int | None, int | None]:
+        """This panel's `(x_dim, y_dim, tile_dim)` for a rank-`ndim` tensor."""
+        if self.x_dim is None and self.y_dim is None and self.tile_dim is None:
+            dims = default_weight_dims(ndim)
+            return dims.x_dim, dims.y_dim, dims.tile_dim
+        x_dim = self.x_dim if self.x_dim is not None else ndim - 1
+        return x_dim, self.y_dim, self.tile_dim if self.y_dim is not None else None
 
 
 def main_frame(
@@ -173,13 +185,10 @@ def weights_frame(
         if tensor is None:
             sections.append((f"{panel.name} — no weights captured", None))
             continue
-        x_dim = panel.x_dim if panel.x_dim is not None else tensor.ndim - 1
-        # A strip with no Y axis is a single heatmap row; there is nothing left
-        # to lay out across tiles, so the tile axis is dropped with it.
-        tile_dim = panel.tile_dim if panel.y_dim is not None else None
+        x_dim, y_dim, tile_dim = panel.layout(tensor.ndim)
         layout = {
             "x_dim": x_dim,
-            "y_dim": panel.y_dim,
+            "y_dim": y_dim,
             "tile_dim": tile_dim,
             "fixed": panel.fixed,
         }
