@@ -24,7 +24,7 @@ from nansense.ui.histograms import (
     _make_histogram_figure,
     _min_positive_height,
     _OVERFLOW_MARKER_Y_FRAC,
-    _overflow_marks,
+    overflow_marks,
     phase_color,
     _phase_hists,
     _phases_with_data,
@@ -547,7 +547,7 @@ def test_overflow_marks_flag_only_bars_above_the_cap() -> None:
     y_range = _linear_y_range(hists, density=True)
     assert y_range is not None
     y_top = y_range[1]
-    (xs, ys), = _overflow_marks(hists, list(range(N_BINS)), True, y_top)
+    (xs, ys), = overflow_marks(hists, list(range(N_BINS)), True, y_top)
     # Only the spike overflows the cap; the ordinary bars stay under it.
     assert xs == [float(ZERO_BIN)]
     # The marker sits just inside the top edge so the whole glyph is visible.
@@ -557,7 +557,7 @@ def test_overflow_marks_flag_only_bars_above_the_cap() -> None:
 def test_overflow_marks_empty_without_a_cap() -> None:
     # No cap (log-y autorange) → nothing is clipped, so no markers.
     hists = _phase_hists(_clipped_spike_per_phase(), "activation")
-    assert _overflow_marks(hists, list(range(N_BINS)), True, None) == [([], [])]
+    assert overflow_marks(hists, list(range(N_BINS)), True, None) == [([], [])]
 
 
 def test_overflow_marks_skip_blanked_off_view_bins() -> None:
@@ -566,7 +566,7 @@ def test_overflow_marks_skip_blanked_off_view_bins() -> None:
     hists = _phase_hists(_clipped_spike_per_phase(), "activation")
     y_range = _linear_y_range(hists, density=True)
     assert y_range is not None
-    (xs, ys), = _overflow_marks(hists, [math.nan] * N_BINS, True, y_range[1])
+    (xs, ys), = overflow_marks(hists, [math.nan] * N_BINS, True, y_range[1])
     assert xs == [] and ys == []
 
 

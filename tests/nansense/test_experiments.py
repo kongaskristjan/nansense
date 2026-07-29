@@ -527,3 +527,59 @@ def test_zoom_in_keeps_shape(size: int, zoom: float, changes: bool) -> None:
 
 def test_available_kinds_offers_everything() -> None:
     assert available_experiment_kinds() == EXPERIMENT_KINDS
+
+
+def test_experiment_params_cover_every_kind() -> None:
+    from nansense.experiments import EXPERIMENT_KINDS
+    from nansense.experiments import EXPERIMENT_PARAMS
+
+    assert set(EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
+    for kind, specs in EXPERIMENT_PARAMS.items():
+        assert specs, kind  # every experiment exposes at least one knob
+        for spec in specs:
+            assert spec.kind in ("int", "float", "bool", "select"), spec.key
+            if spec.kind == "select":
+                assert spec.options and spec.default in spec.options, spec.key
+            if spec.kind in ("int", "float"):
+                assert isinstance(spec.default, (int, float)), spec.key
+
+
+def test_experiment_param_order_targeting_then_inputs() -> None:
+    from nansense.experiments import EXPERIMENT_PARAMS
+
+    for kind, specs in EXPERIMENT_PARAMS.items():
+        keys = [s.key for s in specs]
+        if kind == "deep_dream":
+            # Channels first; Start from with Sample directly below it (Sample's
+            # visibility follows Start). Minimize sits directly above Clamp.
+            assert keys[0] == "channels", kind
+            start_idx = keys.index("start")
+            assert keys[start_idx + 1] == "sample", kind
+            assert keys[keys.index("clamp") - 1] == "minimize", kind
+        else:
+            # Captum: the targeting knob first, Inputs directly below it.
+            assert keys[0] in ("channel", "target"), kind
+            assert keys[1] == "batch", kind
+
+
+def test_deep_dream_exposes_minimize_toggle() -> None:
+    from nansense.experiments import EXPERIMENT_PARAMS
+
+    specs = {s.key: s for s in EXPERIMENT_PARAMS["deep_dream"]}
+    assert "minimize" in specs
+    minimize = specs["minimize"]
+    assert minimize.kind == "bool" and minimize.default is False
+
+
+def testdefault_param_values_apply_session_overrides() -> None:
+    from nansense.experiments import EXPERIMENT_PARAMS, default_param_values
+
+    plain = default_param_values({})
+    assert plain["steps"] == 300 and plain["channels"] == 8
+    seeded = default_param_values({"steps": 150, "channels": 4})
+    assert seeded["steps"] == 150 and seeded["channels"] == 4
+    # Everything not overridden keeps its built-in default, and every knob
+    # of every kind gets a value.
+    assert seeded["lr"] == plain["lr"]
+    every_key = {s.key for specs in EXPERIMENT_PARAMS.values() for s in specs}
+    assert set(seeded) == every_key

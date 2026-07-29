@@ -380,11 +380,11 @@ def _linear_y_range(
 # flags every such bar as continuing above — its true height/count stays in the
 # bar's hover. Slate-900 so the glyph reads as an annotation against any bar
 # color; drawn just inside the top edge so the whole triangle stays visible.
-_OVERFLOW_MARKER_COLOR: str = "#0f172a"
+OVERFLOW_MARKER_COLOR: str = "#0f172a"
 _OVERFLOW_MARKER_Y_FRAC: float = 0.97
 
 
-def _overflow_marks(
+def overflow_marks(
     phase_hists: _PhaseHists,
     x_values: Sequence[float],
     density: bool,
@@ -920,7 +920,7 @@ def _make_histogram_figure(
     # nothing is clipped, but always present so the trace count stays 2n.
     marker_y_top = y_range[1] if (y_range is not None and not log_y) else None
     for i, (xs, ys) in enumerate(
-        _overflow_marks(phase_hists, x_values, density, marker_y_top)
+        overflow_marks(phase_hists, x_values, density, marker_y_top)
     ):
         fig.add_trace(
             go.Scatter(
@@ -930,7 +930,7 @@ def _make_histogram_figure(
                 marker=dict(
                     symbol="triangle-up",
                     size=9,
-                    color=_OVERFLOW_MARKER_COLOR,
+                    color=OVERFLOW_MARKER_COLOR,
                     line=dict(width=1, color="white"),
                 ),
                 hoverinfo="skip",

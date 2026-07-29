@@ -78,6 +78,199 @@ EXPERIMENT_KINDS: dict[str, str] = {
 # activation through the fx interpreter, so they accept any captured layer.
 _MODULE_KINDS = frozenset({"gradcam", "neuron_gradient", "neuron_ig"})
 
+# How many intermediate publishes a deep-dream run spreads over its steps.
+_PUBLISH_COUNT: int = 20
+
+# Default count for deep dream channels and the Captum input batch — a cap a
+# layer with fewer channels (or a smaller input batch) shrinks to; it is also
+# the default `EXPERIMENT_PARAMS` shows for both knobs.
+_DEFAULT_DREAM_BATCH: int = 8
+
+
+@dataclass(frozen=True)
+class ExperimentParam:
+    """One configurable knob of an experiment.
+
+    Both front-ends read these: the experiment page renders one form widget per
+    spec, and the MCP server describes and validates a tool call's `params`
+    against them. `default` is the value `run` falls back to when the key is
+    absent, so the two stay in step — a knob is described in exactly one place.
+    """
+
+    key: str
+    label: str
+    kind: str  # "int" | "float" | "bool" | "select"
+    default: object
+    options: dict[str, str] | None = None
+    minimum: float | None = None
+    step: float | None = None
+    tooltip: str = ""
+
+
+# Shared knobs reused across kinds. A param is shared *by key*, so its value
+# survives switching experiment type (point 1): set "channel" for Neuron
+# Gradient and it carries over to Occlusion, "Inputs" carries everywhere, …
+_CHANNEL_PARAM = ExperimentParam(
+    "channel",
+    "Channel (-1 = whole layer)",
+    "int",
+    0,
+    minimum=-1,
+    tooltip="Which channel / feature of the selected layer to target",
+)
+_CHANNELS_PARAM = ExperimentParam(
+    "channels",
+    "Channels",
+    "int",
+    _DEFAULT_DREAM_BATCH,
+    minimum=1,
+    tooltip=(
+        "Dream on this many of the layer's first channels — one synthesized "
+        "sample per channel (capped at the layer's channel count)"
+    ),
+)
+_MINIMIZE_PARAM = ExperimentParam(
+    "minimize",
+    "Minimize activations",
+    "bool",
+    False,
+    tooltip=(
+        "Descend the objective instead of ascending it — synthesize an input "
+        "that suppresses each channel rather than excites it"
+    ),
+)
+_SAMPLE_PARAM = ExperimentParam(
+    "sample",
+    "Sample",
+    "int",
+    0,
+    minimum=0,
+    tooltip="Which input-batch sample every channel's dream starts from",
+)
+_TARGET_PARAM = ExperimentParam(
+    "target",
+    "Target class (-1 = argmax)",
+    "int",
+    -1,
+    minimum=-1,
+    tooltip="Class index Grad-CAM explains; -1 uses each sample's prediction",
+)
+_BATCH_PARAM = ExperimentParam(
+    "batch",
+    "Inputs",
+    "int",
+    _DEFAULT_DREAM_BATCH,
+    minimum=1,
+    tooltip=(
+        "How many inputs to run on (defaults to the current batch size, "
+        f"capped at {_DEFAULT_DREAM_BATCH})"
+    ),
+)
+_START_PARAM = ExperimentParam(
+    "start",
+    "Start from",
+    "select",
+    "noise",
+    options={"noise": "Noise", "sample": "Current batch"},
+    tooltip=(
+        "Noise draws fresh inputs shaped and scaled like the network's real "
+        "input — different on every run; Current batch starts from the real "
+        "input batch itself"
+    ),
+)
+_CLAMP_PARAM = ExperimentParam(
+    "clamp",
+    "Clamp to displayable range",
+    "bool",
+    True,
+    tooltip="Keep pixels inside the [0, 1] display range mapped through the input mean/std",
+)
+_DIFFUSION_PARAM = ExperimentParam(
+    "diffusion",
+    "Diffusion",
+    "float",
+    0.05,
+    minimum=0,
+    step=0.01,
+    tooltip="Per-step blend with a 3×3 blur; damps high-frequency noise",
+)
+_JITTER_PARAM = ExperimentParam(
+    "jitter",
+    "Jitter (px)",
+    "int",
+    2,
+    minimum=0,
+    tooltip="Random shift each step, undone after the update; reduces pixel-grid artifacts",
+)
+_ZOOM_PARAM = ExperimentParam(
+    "zoom",
+    "Zoom multiplier per step",
+    "float",
+    1.0,
+    minimum=1,
+    step=0.01,
+    tooltip=(
+        "Per-step center zoom-in factor (1 = no zoom; on small inputs it "
+        "only takes effect above ~1 + 1/size)"
+    ),
+)
+
+# Ordered per kind: the targeting knob first (deep dream's Channels, Captum's
+# Channel/Target), then Inputs (Captum) or Start from + Sample (deep dream),
+# then the method-specific knobs (point 1). The Layer selector is rendered
+# above this list (point 2). Deep dream's Sample knob only shows when starting
+# from the current batch (toggled in `rebuild_params`).
+EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
+    "deep_dream": [
+        _CHANNELS_PARAM,
+        _START_PARAM,
+        _SAMPLE_PARAM,
+        ExperimentParam("steps", "Steps", "int", 300, minimum=1),
+        ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0, step=0.01),
+        _DIFFUSION_PARAM,
+        _JITTER_PARAM,
+        _ZOOM_PARAM,
+        # The objective-direction toggle sits with the value-range knob below it.
+        _MINIMIZE_PARAM,
+        _CLAMP_PARAM,
+    ],
+    "gradcam": [_TARGET_PARAM, _BATCH_PARAM],
+    "neuron_gradient": [_CHANNEL_PARAM, _BATCH_PARAM],
+    "neuron_ig": [
+        _CHANNEL_PARAM,
+        _BATCH_PARAM,
+        ExperimentParam("ig_steps", "Integration steps", "int", 32, minimum=2),
+    ],
+    "occlusion": [
+        _CHANNEL_PARAM,
+        _BATCH_PARAM,
+        ExperimentParam(
+            "window",
+            "Window (px)",
+            "int",
+            4,
+            minimum=1,
+            tooltip="Side length of the occluding patch",
+        ),
+        ExperimentParam("stride", "Stride (px)", "int", 2, minimum=1),
+    ],
+}
+
+def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
+    """Every kind's per-key defaults, with session overrides applied.
+
+    `overrides` is `Session.experiment_defaults` — e.g. a hosted playground
+    seeds cheaper deep-dream defaults; anything not overridden keeps its
+    `ExperimentParam.default`.
+    """
+    values: dict[str, object] = {}
+    for specs in EXPERIMENT_PARAMS.values():
+        for spec in specs:
+            values.setdefault(spec.key, overrides.get(spec.key, spec.default))
+    return values
+
+
+
 
 def available_experiment_kinds() -> dict[str, str]:
     """Experiment kinds the UI should offer.
@@ -100,14 +293,6 @@ def layer_available(session: Session, layer: str, kind: str) -> bool:
     if kind in _MODULE_KINDS or not session.fx_traced:
         return layer in dict(session.model.named_modules())
     return True
-
-# How many intermediate publishes a deep-dream run spreads over its steps.
-_PUBLISH_COUNT: int = 20
-
-# Default count for deep dream channels and the Captum input batch — a cap a
-# layer with fewer channels (or a smaller input batch) shrinks to. The UI
-# mirrors it.
-_DEFAULT_DREAM_BATCH: int = 8
 
 
 @dataclass(frozen=True)

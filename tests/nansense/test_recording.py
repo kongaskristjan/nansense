@@ -14,21 +14,17 @@ from torch import Tensor, nn
 import nansense
 import nansense.recording
 from nansense.recording import (
-    _CHECKER_DARK,
-    _CHECKER_LIGHT,
     RecordedView,
     RecordingManager,
     _POSITION_BANNER_HEIGHT,
-    _checkerboard,
     _fit_frame,
-    _render_main_frame,
+    _main_frame,
     _sanitize,
     _stamp_position,
-    _strip_section,
     _VideoStream,
 )
 from nansense.session import Session
-from nansense.ui.render import render_strip
+from nansense.ui.compose import _CHECKER_DARK, _CHECKER_LIGHT
 
 
 class TinyConvNet(nn.Module):
@@ -116,42 +112,6 @@ def test_stamp_position_adds_banner() -> None:
     assert (stamped[_POSITION_BANNER_HEIGHT:] == 0).all()  # frame below, intact
 
 
-def test_checkerboard_is_two_grays_in_4px_boxes() -> None:
-    cb = np.asarray(_checkerboard(8, 8))
-    assert cb.shape == (8, 8, 4)
-    assert (cb[..., 3] == 255).all()  # opaque backdrop
-    assert tuple(cb[0, 0, :3]) == _CHECKER_LIGHT
-    assert tuple(cb[0, 4, :3]) == _CHECKER_DARK  # box flips at 4px
-    assert tuple(cb[4, 0, :3]) == _CHECKER_DARK
-    assert tuple(cb[4, 4, :3]) == _CHECKER_LIGHT
-
-
-def test_strip_section_bakes_checkerboard_behind_nan_cells() -> None:
-    # An all-NaN strip is fully transparent RGBA; the recorded section must
-    # show the two checkerboard grays behind it, not white and not one gray.
-    strip = render_strip(torch.full((1, 1, 8, 8), float("nan")), sample_idx=0)
-    assert strip is not None
-    section = _strip_section(strip)
-    assert section is not None
-    arr = np.asarray(section)
-    colors = {tuple(c) for row in arr for c in row}
-    assert _CHECKER_LIGHT in colors
-    assert _CHECKER_DARK in colors
-    # No fully-white data region (the old whitewash bug) over the NaN cells.
-    nan_region = arr[:, arr.shape[1] // 2 :]  # right of the legend, in the tile
-    assert not (nan_region == 255).all()
-
-
-def test_strip_section_keeps_plain_path_for_finite_strip() -> None:
-    # An all-finite strip is opaque RGB; no checkerboard gray leaks in.
-    strip = render_strip(torch.zeros(1, 1, 8, 8), sample_idx=0)
-    assert strip is not None
-    section = _strip_section(strip)
-    assert section is not None
-    colors = {tuple(c) for row in np.asarray(section) for c in row}
-    assert _CHECKER_DARK not in colors
-
-
 def test_main_frame_shows_checkerboard_for_nan_activation(tmp_path: Path) -> None:
     # End to end: a snapshot with a NaN activation produces a main frame whose
     # strip region shows both checkerboard grays (not a single gray, not white).
@@ -175,9 +135,9 @@ def test_main_frame_shows_checkerboard_for_nan_activation(tmp_path: Path) -> Non
         weights={},
         weight_gradients={},
     )
-    frame = _render_main_frame(_main_view(), session)
-    assert frame is not None
-    colors = {tuple(c) for row in frame for c in row}
+    image = _main_frame(_main_view(), session)
+    assert image is not None
+    colors = {tuple(c) for row in np.asarray(image) for c in row}
     assert _CHECKER_LIGHT in colors and _CHECKER_DARK in colors
 
 

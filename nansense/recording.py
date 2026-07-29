@@ -36,6 +36,11 @@ View pages map to videos as follows:
   experiment (same seq on every rerun, so deep dream redraws the same
   seeded noise each update).
 
+The images themselves are rendered by `nansense.ui.frames`, which the MCP
+server's image tools also call — the functions here only unpack a view's
+frozen params and hand the result to the encoder, so a recorded frame and
+an agent's picture of the same view stay identical by construction.
+
 MP4 files are fixed-size: the first frame decides each stream's
 dimensions (rounded up to even, as libx264's yuv420p requires) and later
 frames are padded/cropped to fit.
@@ -43,7 +48,6 @@ frames are padded/cropped to fit.
 
 from __future__ import annotations
 
-import io
 import re
 import threading
 import time
@@ -53,17 +57,11 @@ from typing import TYPE_CHECKING, cast
 
 import av
 import numpy as np
-from matplotlib.axes import Axes
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.figure import Figure
 from PIL import Image, ImageDraw, ImageFont
-from torch import Tensor
 
 from nansense.input_config import InputTransform
 from nansense.params import float_tuple, int_param, str_tuple
-from nansense.patches import PATCH_TYPES, PatchType
 from nansense.schedule import BatchPosition, format_position
-from nansense.watch import N_BINS, LayerStatsSnapshot, TensorStatsSnapshot
 
 if TYPE_CHECKING:
     from nansense.session import Session
@@ -75,8 +73,10 @@ RECORDINGS_DIR: Path = Path("nansense_recordings")
 # Every recording plays back at this rate: one visualization update per frame.
 VIDEO_FPS: int = 10
 
-# Hard cap on frame width/height; very wide layers (many channels) are
-# cropped rather than producing GB-sized videos.
+# Hard cap on video width/height, matching the cap `nansense.ui.compose`
+# already applies to the composed image: a stream wider than this is beyond
+# what libx264 will encode, and a very wide layer (many channels) is cropped
+# rather than producing a GB-sized file.
 MAX_FRAME_SIZE: int = 4096
 
 # libx264 settings (used in-process via PyAV — see `_VideoStream`). The default
@@ -93,17 +93,10 @@ _X264_PRESET: str = "ultrafast"
 _X264_THREADS: int = 2
 _X264_CRF: int = 10
 
-_SECTION_GAP: int = 10
+# Only the position stamp is drawn here; the frame's own layout (padding,
+# section gaps, the NaN checkerboard) belongs to `nansense.ui.compose`.
 _FRAME_PAD: int = 10
 _LABEL_COLOR: tuple[int, int, int] = (30, 41, 59)  # slate-800
-
-# GIMP-style transparency backdrop baked behind a strip's transparent
-# NaN/±Inf cells, matching the live UI's CSS checkerboard
-# (`static._STRIP_CHECKERBOARD_STYLE`): two slate grays in 4px boxes at
-# display resolution. All-finite (opaque RGB) strips never see it.
-_CHECKER_BOX: int = 4
-_CHECKER_LIGHT: tuple[int, int, int] = (249, 250, 251)  # slate-50  (#f9fafb)
-_CHECKER_DARK: tuple[int, int, int] = (229, 231, 235)  # slate-200 (#e5e7eb)
 
 
 @dataclass(frozen=True)
@@ -425,281 +418,59 @@ class RecordingManager:
 def _render_view_frames(
     view: RecordedView, session: Session
 ) -> dict[str, np.ndarray | None]:
+    """Every video stream this view writes, as `suffix -> RGB frame`.
+
+    Each branch only unpacks the view's frozen params; the rendering itself
+    lives in `nansense.ui.frames`, shared with the MCP server's image tools so
+    a recorded frame and an agent's picture can't drift apart.
+    """
     if view.page == "main":
-        return {"": _render_main_frame(view, session)}
+        return {"": _array(_main_frame(view, session))}
     if view.page == "weights":
-        return {"": _render_weights_frame(view, session)}
+        return {"": _array(_weights_frame(view, session))}
     if view.page == "watch_histogram":
-        return {"": _render_histogram_frame(view, session)}
+        return {"": _array(_histogram_frame(view, session))}
     if view.page == "watch_minmax":
-        return _render_minmax_frames(view, session)
+        return _minmax_frames(view, session)
     if view.page == "experiment":
-        return {"": _render_experiment_frame(view, session)}
+        return {"": _array(_experiment_frame(view, session))}
     raise ValueError(f"unknown recorded view page {view.page!r}")
 
 
-def _compose_captioned_columns(
-    legend: Image.Image | None, columns: list[tuple[Image.Image, str]]
-) -> Image.Image | None:
-    """Lay out a legend plus captioned column images into one PIL frame.
-
-    Shared by the activation strips (`_strip_section`) and the MIN/MAX patch
-    grids (`_patch_grid_section`): the optional `legend` leads the row under a
-    blank caption-height band, then each column image is placed left to right
-    with its caption (already collapsed to fit) centered above it. Columns are
-    accumulated until the row would exceed `MAX_FRAME_SIZE`, the same width cap
-    the old single-image path used.
-    """
-    from nansense.ui.render import LABEL_HEIGHT
-
-    if not columns:
-        return None
-    gap = 2
-    x = legend.width + gap if legend is not None else 0
-    body_height = legend.height if legend is not None else 0
-    placements: list[tuple[Image.Image, str, int]] = []
-    for img, label in columns:
-        if x >= MAX_FRAME_SIZE:
-            break
-        placements.append((img, label, x))
-        body_height = max(body_height, img.height)
-        x += img.width + gap
-    total_width = min(x, MAX_FRAME_SIZE)
-    canvas = Image.new("RGB", (total_width, LABEL_HEIGHT + body_height), (255, 255, 255))
-    if legend is not None:
-        canvas.paste(legend, (0, LABEL_HEIGHT))
-    draw = ImageDraw.Draw(canvas)
-    font = ImageFont.load_default()
-    for img, label, col_x in placements:
-        if label:
-            text_w = draw.textlength(label, font=font)
-            draw.text(
-                (col_x + max(0, (img.width - text_w) / 2), 1),
-                label,
-                fill=_LABEL_COLOR,
-                font=font,
-            )
-        canvas.paste(img, (col_x, LABEL_HEIGHT))
-    return canvas
+def _array(image: Image.Image | None) -> np.ndarray | None:
+    return None if image is None else np.asarray(image)
 
 
-def _strip_section(strip: object) -> Image.Image | None:
-    """Decode a `StripRender` to one display-resolution PIL image.
+def _main_frame(view: RecordedView, session: Session) -> Image.Image | None:
+    from nansense.ui.frames import main_frame
 
-    Each tile is nearest-upscaled to its CSS display size (matching the
-    browser's `image-rendering: pixelated`) and laid out left to right after
-    the crisp legend by `_compose_captioned_columns`, with its column caption
-    drawn above it — reproducing the captioned columns the page shows.
-
-    An RGBA tile carries transparent NaN/±Inf cells: it is composited over a
-    baked gray checkerboard the same size as the upscaled tile (`_checkerboard`),
-    so recorded frames show the same GIMP-style backdrop the live UI paints
-    with CSS. Opaque RGB tiles keep the plain path.
-    """
-    from nansense.ui.render import StripRender
-
-    if not isinstance(strip, StripRender) or not strip.tiles:
-        return None
-    legend = Image.open(io.BytesIO(strip.legend_image)).convert("RGB")
-    columns: list[tuple[Image.Image, str]] = []
-    for tile in strip.tiles:
-        decoded = Image.open(io.BytesIO(tile.image))
-        if decoded.mode == "RGBA":
-            up = decoded.resize((tile.width, tile.height), Image.Resampling.NEAREST)
-            up = Image.alpha_composite(
-                _checkerboard(tile.width, tile.height), up
-            ).convert("RGB")
-        else:
-            up = decoded.convert("RGB").resize(
-                (tile.width, tile.height), Image.Resampling.NEAREST
-            )
-        columns.append((up, tile.label))
-    return _compose_captioned_columns(legend, columns)
-
-
-def _patch_grid_section(grid: object) -> Image.Image | None:
-    """Decode a `PatchGridRender` to one display-resolution PIL image.
-
-    Each channel's cells are nearest-upscaled to their CSS square and stacked
-    with a `PATCH_CELL_GAP` gutter into a column image, then laid out after the
-    optional heat legend by `_compose_captioned_columns` under a "CHANNEL N"
-    caption — the recording mirror of the MIN/MAX view's captioned cell grid.
-    """
-    from nansense.ui.render import PATCH_CELL_GAP, PatchGridRender
-
-    if not isinstance(grid, PatchGridRender) or not grid.columns:
-        return None
-    legend = (
-        Image.open(io.BytesIO(grid.heat_legend)).convert("RGB")
-        if grid.heat_legend is not None
-        else None
-    )
-    columns: list[tuple[Image.Image, str]] = []
-    for column in grid.columns:
-        size = column.cell_size
-        cell_imgs = [
-            Image.open(io.BytesIO(cell))
-            .convert("RGB")
-            .resize((size, size), Image.Resampling.NEAREST)
-            for cell in column.cells
-        ]
-        if not cell_imgs:
-            continue
-        height = len(cell_imgs) * size + (len(cell_imgs) - 1) * PATCH_CELL_GAP
-        stack = Image.new("RGB", (size, height), (255, 255, 255))
-        y = 0
-        for cell_img in cell_imgs:
-            stack.paste(cell_img, (0, y))
-            y += size + PATCH_CELL_GAP
-        columns.append((stack, column.label))
-    return _compose_captioned_columns(legend, columns)
-
-
-def _checkerboard(width: int, height: int) -> Image.Image:
-    """An opaque `_CHECKER_BOX`-square gray checkerboard, `width × height` RGBA.
-
-    Mirrors the live UI's CSS backdrop so a recorded NaN/±Inf cell shows the
-    same two slate grays. Built vectorised: the box-parity of each pixel's
-    `(row, col)` picks the light/dark color.
-    """
-    ys = (np.arange(height) // _CHECKER_BOX)[:, None]
-    xs = (np.arange(width) // _CHECKER_BOX)[None, :]
-    dark = (ys + xs) % 2 == 1
-    rgb = np.empty((height, width, 3), dtype=np.uint8)
-    rgb[...] = _CHECKER_LIGHT
-    rgb[dark] = _CHECKER_DARK
-    rgba = np.concatenate(
-        [rgb, np.full((height, width, 1), 255, dtype=np.uint8)], axis=-1
-    )
-    return Image.fromarray(rgba, mode="RGBA")
-
-
-def _compose_sections(
-    sections: list[tuple[str, Image.Image | None]],
-) -> np.ndarray | None:
-    """Stack labelled images vertically onto one white frame."""
-    if not sections:
-        return None
-    font = ImageFont.load_default()
-    label_height = 14
-    width = _FRAME_PAD * 2 + min(
-        MAX_FRAME_SIZE,
-        max(
-            [img.width for _, img in sections if img is not None]
-            + [320],
-        ),
-    )
-    height = _FRAME_PAD
-    for label, img in sections:
-        if label:
-            height += label_height + 2
-        if img is not None:
-            height += min(img.height, MAX_FRAME_SIZE) + _SECTION_GAP
-        else:
-            height += _SECTION_GAP
-    height = min(height + _FRAME_PAD, MAX_FRAME_SIZE)
-    canvas = Image.new("RGB", (width, height), (255, 255, 255))
-    draw = ImageDraw.Draw(canvas)
-    y = _FRAME_PAD
-    for label, img in sections:
-        if label:
-            draw.text((_FRAME_PAD, y), label, fill=_LABEL_COLOR, font=font)
-            y += label_height + 2
-        if img is not None:
-            canvas.paste(img, (_FRAME_PAD, y))
-            y += min(img.height, MAX_FRAME_SIZE) + _SECTION_GAP
-        else:
-            y += _SECTION_GAP
-    return np.asarray(canvas)
-
-
-def _render_main_frame(view: RecordedView, session: Session) -> np.ndarray | None:
-    """Input image plus per-layer activation/gradient strips, one frame."""
-    from nansense.ui.render import (
-        probe_act_tensor,
-        render_image,
-        render_strip,
-        tensor_hw,
+    return main_frame(
+        session,
+        layers=str_tuple(view.params.get("layers")),
+        sample_idx=int_param(view.params, "sample_idx"),
+        input_name=str(view.params.get("input_name") or "") or None,
+        mean=float_tuple(view.params.get("input_mean")),
+        std=float_tuple(view.params.get("input_std")),
+        transform=cast(InputTransform | None, view.params.get("input_transform")),
     )
 
-    snap = session.snapshot
-    probe = session.probe_result
-    if snap is None and probe is None:
-        return None
-    layers = str_tuple(view.params.get("layers"))
-    sample_idx = int_param(view.params, "sample_idx")
-    mean = float_tuple(view.params.get("input_mean"))
-    std = float_tuple(view.params.get("input_std"))
-    transform = cast(InputTransform | None, view.params.get("input_transform"))
-    input_name = str(view.params.get("input_name") or "") or None
-    compare = bool(session.perturbations)
 
-    sections: list[tuple[str, Image.Image | None]] = []
-    if probe is not None:
-        shown_input = probe.shown_input(input_name)
-        input_hw = tensor_hw(probe.base_input(input_name))
-    else:
-        assert snap is not None
-        shown_input = (
-            snap.activations.get(input_name) if input_name is not None else None
-        )
-        input_hw = tensor_hw(shown_input)
-    input_img = render_image(
-        shown_input, sample_idx, mean=mean, std=std, transform=transform
-    )
-    if input_img is not None:
-        img = Image.open(io.BytesIO(input_img)).convert("RGB")
-        from nansense.ui.render import INPUT_IMAGE_SIZE
+def _weights_frame(view: RecordedView, session: Session) -> Image.Image | None:
+    from nansense.ui.frames import WeightPanel, weights_frame
+    from nansense.ui.render import dims_from_roles
 
-        scale = INPUT_IMAGE_SIZE / max(img.width, 1)
-        img = img.resize(
-            (INPUT_IMAGE_SIZE, max(1, round(img.height * scale))), Image.Resampling.NEAREST
-        )
-        sections.append(("input", img))
-    for name in layers:
-        if probe is not None:
-            act = probe_act_tensor(probe, name, compare=compare)
-            act_img = _strip_section(
-                render_strip(act, sample_idx, input_hw=input_hw)
-            )
-            sections.append((f"{name} — activations (probe)", act_img))
-        else:
-            assert snap is not None
-            act_img = _strip_section(
-                render_strip(
-                    snap.activations.get(name), sample_idx, input_hw=input_hw
-                )
-            )
-            grad_img = _strip_section(
-                render_strip(
-                    snap.activation_gradients.get(name),
-                    sample_idx,
-                    input_hw=input_hw,
-                )
-            )
-            sections.append((f"{name} — activations", act_img))
-            sections.append((f"{name} — gradients", grad_img))
-    return _compose_sections(sections)
-
-
-def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | None:
-    """One layer's weight / gradient / optimizer strips under frozen axes."""
-    from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
-
-    snap = session.snapshot
-    if snap is None:
-        return None
     panels = view.params.get("panels")
     if not isinstance(panels, (list, tuple)):
         return None
-    sections: list[tuple[str, Image.Image | None]] = []
+    specs: list[WeightPanel] = []
     for spec in panels:
         # Each spec is `(name, roles, index pairs)` — see the weights page's
         # record-view factory.
         if not (isinstance(spec, (list, tuple)) and len(spec) == 3):
             continue
-        name = str(spec[0])
-        roles = [str(r) for r in str_tuple(spec[1])]
+        x_dim, y_dim, tile_dim = dims_from_roles(
+            [str(role) for role in str_tuple(spec[1])]
+        )
         fixed: dict[int, int] = {}
         if isinstance(spec[2], (list, tuple)):
             for pair in spec[2]:
@@ -707,295 +478,53 @@ def _render_weights_frame(view: RecordedView, session: Session) -> np.ndarray | 
                     dim, idx = pair
                     if isinstance(dim, int) and isinstance(idx, int):
                         fixed[dim] = idx
-        tensor = snap.weights.get(name)
-        if tensor is None:
-            sections.append((f"{name} — no weights captured", None))
-            continue
-        x_dim, y_dim, tile_dim = dims_from_roles(roles)
-        if x_dim is None:
-            x_dim = tensor.ndim - 1
-        tile = tile_dim if y_dim is not None else None
-        sections.append(
-            (
-                f"{name} — weight",
-                _strip_section(
-                    render_weight(
-                        tensor, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
-                    )
-                ),
+        specs.append(
+            WeightPanel(
+                name=str(spec[0]),
+                x_dim=x_dim,
+                y_dim=y_dim,
+                tile_dim=tile_dim,
+                fixed=fixed,
             )
         )
-        grad = snap.weight_gradients.get(name)
-        if grad is not None:
-            sections.append(
-                (
-                    f"{name} — gradient",
-                    _strip_section(
-                        render_weight(
-                            grad, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
-                        )
-                    ),
-                )
-            )
-        scalar_parts: list[str] = []
-        for key, state in sorted(snap.optimizer_state.get(name, {}).items()):
-            if state.ndim == 0:
-                scalar_parts.append(f"{key} = {float(state):.4g}")
-                continue
-            if tuple(state.shape) == tuple(tensor.shape):
-                strip = render_weight(
-                    state, x_dim=x_dim, y_dim=y_dim, tile_dim=tile, fixed=fixed
-                )
-            else:
-                dims = default_weight_dims(state.ndim)
-                strip = render_weight(
-                    state,
-                    x_dim=dims.x_dim,
-                    y_dim=dims.y_dim,
-                    tile_dim=dims.tile_dim,
-                    fixed={},
-                )
-            sections.append((f"{name} — {key}", _strip_section(strip)))
-        scalar_parts += [
-            f"{key} = {value:.4g}"
-            for key, value in sorted(
-                snap.optimizer_hyperparams.get(name, {}).items()
-            )
-        ]
-        if scalar_parts:
-            sections.append(("  ·  ".join(scalar_parts), None))
-    sections.insert(0, (format_position(snap.position), None))
-    return _compose_sections(sections)
+    return weights_frame(session, panels=specs)
 
 
-# Matplotlib histogram geometry: inches per subplot row at `_HIST_DPI`.
-_HIST_DPI: int = 100
-_HIST_ROW_INCHES: float = 2.4
-_HIST_WIDTH_INCHES: float = 9.0
+def _histogram_frame(view: RecordedView, session: Session) -> Image.Image | None:
+    from nansense.ui.frames import histogram_frame
 
-
-def _render_histogram_frame(
-    view: RecordedView, session: Session
-) -> np.ndarray | None:
-    """Matplotlib re-render of the frozen layers' histograms (one phase)."""
-    layers = str_tuple(view.params.get("layers"))
-    phase = str(view.params.get("phase") or "")
-    log_x = bool(view.params.get("log_x"))
-    log_y = bool(view.params.get("log_y"))
-    if not layers:
-        return None
-    snap = session._watch_accumulator.snapshot(
-        layers=layers, include_patches=False
-    )
-    rows: list[tuple[str, str, LayerStatsSnapshot]] = []
-    for layer in layers:
-        per_phase = snap.latest_per_phase(layer)
-        stats = per_phase.get(phase)
-        if stats is None:
-            continue
-        for kind in ("activation", "gradient"):
-            rows.append((layer, kind, stats))
-    if not rows:
-        return None
-    fig = Figure(
-        figsize=(_HIST_WIDTH_INCHES, _HIST_ROW_INCHES * len(rows)), dpi=_HIST_DPI
-    )
-    axes = fig.subplots(len(rows), 1, squeeze=False)
-    for ax_row, (layer, kind, stats) in zip(axes, rows, strict=True):
-        _draw_histogram_axes(
-            ax_row[0], layer, kind, phase, stats, log_x=log_x, log_y=log_y
-        )
-    fig.tight_layout()
-    canvas = FigureCanvasAgg(fig)
-    canvas.draw()
-    return np.asarray(canvas.buffer_rgba())[..., :3].copy()
-
-
-def _draw_histogram_axes(
-    ax: Axes,
-    layer: str,
-    kind: str,
-    phase: str,
-    stats: LayerStatsSnapshot,
-    *,
-    log_x: bool,
-    log_y: bool,
-) -> None:
-    """One subplot: the same bars/ranges the watch page draws with Plotly."""
-    from nansense.ui.histograms import (
-        _OVERFLOW_MARKER_COLOR,
-        BIN_CENTERS,
-        BIN_WIDTHS,
-        _overflow_marks,
-        axis_ranges,
-        kind_stats,
-        phase_color,
-        trace_heights,
-        use_density,
-        x_tick_layout,
+    return histogram_frame(
+        session,
+        layers=str_tuple(view.params.get("layers")),
+        phase=str(view.params.get("phase") or ""),
+        log_x=bool(view.params.get("log_x")),
+        log_y=bool(view.params.get("log_y")),
     )
 
-    tensor_stats: TensorStatsSnapshot = kind_stats(stats, kind)
-    density = use_density(log_x)
-    # A collapsed bucket (epoch-evicted bins) renders as an empty histogram.
-    hist = tensor_stats.hist if tensor_stats.hist is not None else (0,) * N_BINS
-    heights = trace_heights(hist, density)
-    color = phase_color(phase, 0)
-    x_values = list(range(N_BINS)) if log_x else list(BIN_CENTERS)
-    if log_x:
-        ax.bar(x_values, heights, width=1.0, color=color)
-        tick_vals, tick_text = x_tick_layout()
-        ax.set_xticks(tick_vals, tick_text, fontsize=6)
-    else:
-        ax.bar(x_values, heights, width=BIN_WIDTHS, color=color)
-    per_phase = {phase: stats}
-    x_range, y_range = axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
-    if x_range is not None:
-        ax.set_xlim((x_range[0], x_range[1]))
-    if log_y:
-        ax.set_yscale("log")
-    elif y_range is not None:
-        ax.set_ylim((y_range[0], y_range[1]))
-        # Flag bars clipped by the cap so they don't read as ending at the top
-        # edge (mirrors the Plotly view's overflow markers).
-        (mark_xs, mark_ys), = _overflow_marks(
-            [(phase, hist)], x_values, density, y_range[1]
-        )
-        if mark_xs:
-            ax.scatter(
-                mark_xs, mark_ys, marker="^", s=18,
-                color=_OVERFLOW_MARKER_COLOR, edgecolors="white",
-                linewidths=0.5, zorder=3, clip_on=False,
-            )
-    title = (
-        f"{layer} — {kind}s · {phase} (ep {stats.epoch}) · "
-        f"n={tensor_stats.n:,} mean={tensor_stats.mean:.3g} "
-        f"std={tensor_stats.std:.3g}"
-    )
-    ax.set_title(title, fontsize=8)
-    ax.tick_params(labelsize=6)
 
-
-# Which video file each patch grid records into: crops ("pixel" grids) and
-# whole-input grids ("average") have different cell sizes.
-_PATCH_GROUPS: dict[PatchType, str] = {
-    "max_pixel": "pixel",
-    "min_pixel": "pixel",
-    "max_average": "average",
-    "min_average": "average",
-}
-
-
-def _render_minmax_frames(
+def _minmax_frames(
     view: RecordedView, session: Session
 ) -> dict[str, np.ndarray | None]:
-    """The frozen patch grids, split into pixel/average video streams."""
-    from nansense.ui.render import render_patch_grid
+    from nansense.ui.frames import patch_frames
 
-    layers = str_tuple(view.params.get("layers"))
-    phase = str(view.params.get("phase") or "")
-    enabled = [t for t in PATCH_TYPES if t in str_tuple(view.params.get("grids"))]
-    heatmap = bool(view.params.get("heatmap"))
-    mean = float_tuple(view.params.get("input_mean"))
-    std = float_tuple(view.params.get("input_std"))
-    snap = session._watch_accumulator.snapshot(layers=layers, include_patches=True)
-    sections: dict[str, list[tuple[str, Image.Image | None]]] = {}
-    for layer in layers:
-        stats = snap.latest_per_phase(layer).get(phase)
-        if stats is None or stats.patches is None:
-            continue
-        patches = stats.patches
-        for ptype in enabled:
-            tp = patches.by_type.get(ptype)
-            if tp is None:
-                continue
-            grid = render_patch_grid(tp, mean=mean, std=std, heatmap=heatmap)
-            if grid is None:
-                continue
-            img = _patch_grid_section(grid)
-            if img is None:
-                continue
-            group = _PATCH_GROUPS[ptype]
-            sections.setdefault(group, []).append(
-                (f"{layer} — {ptype} · {phase} (ep {stats.epoch})", img)
-            )
-    return {
-        group: _compose_sections(group_sections)
-        for group, group_sections in sections.items()
-    }
+    frames = patch_frames(
+        session,
+        layers=str_tuple(view.params.get("layers")),
+        phase=str(view.params.get("phase") or ""),
+        grids=str_tuple(view.params.get("grids")),
+        heatmap=bool(view.params.get("heatmap")),
+        mean=float_tuple(view.params.get("input_mean")),
+        std=float_tuple(view.params.get("input_std")),
+    )
+    return {group: _array(image) for group, image in frames.items()}
 
 
-def _render_experiment_frame(
-    view: RecordedView, session: Session
-) -> np.ndarray | None:
-    """The freshest result of the view's pinned auto experiment."""
-    from nansense.ui.render import render_strip, tensor_hw
+def _experiment_frame(view: RecordedView, session: Session) -> Image.Image | None:
+    from nansense.ui.frames import experiment_frame
 
-    seq = int_param(view.params, "seq")
-    mean = float_tuple(view.params.get("input_mean"))
-    std = float_tuple(view.params.get("input_std"))
-    result = session.experiment_result_for(seq)
-    if result is None:
-        return None
-    sections: list[tuple[str, Image.Image | None]] = []
-    status = f"{result.kind} · {result.layer} · step {result.step}/{result.total_steps}"
-    if result.objective is not None:
-        status += f" · objective {result.objective:.4g}"
-    if result.error is not None:
-        status += f" · error: {result.error}"
-    sections.append((status, None))
-    if result.image is not None:
-        sections.append(
-            ("result", _batch_image_row(result.image, mean=mean, std=std))
-        )
-    if result.attribution is not None:
-        sections.append(
-            (
-                "attribution",
-                _strip_section(
-                    render_strip(
-                        result.attribution, 0, input_hw=tensor_hw(result.reference)
-                    )
-                ),
-            )
-        )
-    if result.reference is not None:
-        sections.append(
-            ("input", _batch_image_row(result.reference, mean=mean, std=std))
-        )
-    return _compose_sections(sections)
-
-
-def _batch_image_row(
-    tensor: Tensor,
-    *,
-    mean: tuple[float, ...] | None,
-    std: tuple[float, ...] | None,
-) -> Image.Image | None:
-    """Every sample of `tensor` as one horizontal row of upscaled images."""
-    from nansense.ui.render import INPUT_IMAGE_SIZE, render_image
-
-    images: list[Image.Image] = []
-    for i in range(int(tensor.shape[0])):
-        data = render_image(tensor, i, mean=mean, std=std)
-        if data is None:
-            continue
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-        scale = INPUT_IMAGE_SIZE / max(img.width, 1)
-        images.append(
-            img.resize(
-                (INPUT_IMAGE_SIZE, max(1, round(img.height * scale))),
-                Image.Resampling.NEAREST,
-            )
-        )
-    if not images:
-        return None
-    gap = 6
-    width = sum(img.width for img in images) + gap * (len(images) - 1)
-    height = max(img.height for img in images)
-    canvas = Image.new("RGB", (min(width, MAX_FRAME_SIZE), height), (255, 255, 255))
-    x = 0
-    for img in images:
-        canvas.paste(img, (x, 0))
-        x += img.width + gap
-    return canvas
+    return experiment_frame(
+        session,
+        seq=int_param(view.params, "seq"),
+        mean=float_tuple(view.params.get("input_mean")),
+        std=float_tuple(view.params.get("input_std")),
+    )

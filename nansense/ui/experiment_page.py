@@ -16,8 +16,11 @@ from torch import Tensor
 from nansense.experiments import (
     _DEFAULT_DREAM_BATCH,
     EXPERIMENT_KINDS,
+    EXPERIMENT_PARAMS,
+    ExperimentParam,
     ExperimentResult,
     available_experiment_kinds,
+    default_param_values,
     layer_available,
 )
 from nansense.recording import RecordedView
@@ -56,183 +59,6 @@ from nansense.ui.top_bar import (
     _top_bar_row,
 )
 from nansense.ui.tour import add_tour, experiment_tour_steps
-
-
-@dataclass(frozen=True)
-class _ExperimentParam:
-    """One configurable knob of an experiment, rendered as a form widget."""
-
-    key: str
-    label: str
-    kind: str  # "int" | "float" | "bool" | "select"
-    default: object
-    options: dict[str, str] | None = None
-    minimum: float | None = None
-    step: float | None = None
-    tooltip: str = ""
-
-
-# Shared knobs reused across kinds. A param is shared *by key*, so its value
-# survives switching experiment type (point 1): set "channel" for Neuron
-# Gradient and it carries over to Occlusion, "Inputs" carries everywhere, …
-_CHANNEL_PARAM = _ExperimentParam(
-    "channel",
-    "Channel (-1 = whole layer)",
-    "int",
-    0,
-    minimum=-1,
-    tooltip="Which channel / feature of the selected layer to target",
-)
-_CHANNELS_PARAM = _ExperimentParam(
-    "channels",
-    "Channels",
-    "int",
-    _DEFAULT_DREAM_BATCH,
-    minimum=1,
-    tooltip=(
-        "Dream on this many of the layer's first channels — one synthesized "
-        "sample per channel (capped at the layer's channel count)"
-    ),
-)
-_MINIMIZE_PARAM = _ExperimentParam(
-    "minimize",
-    "Minimize activations",
-    "bool",
-    False,
-    tooltip=(
-        "Descend the objective instead of ascending it — synthesize an input "
-        "that suppresses each channel rather than excites it"
-    ),
-)
-_SAMPLE_PARAM = _ExperimentParam(
-    "sample",
-    "Sample",
-    "int",
-    0,
-    minimum=0,
-    tooltip="Which input-batch sample every channel's dream starts from",
-)
-_TARGET_PARAM = _ExperimentParam(
-    "target",
-    "Target class (-1 = argmax)",
-    "int",
-    -1,
-    minimum=-1,
-    tooltip="Class index Grad-CAM explains; -1 uses each sample's prediction",
-)
-_BATCH_PARAM = _ExperimentParam(
-    "batch",
-    "Inputs",
-    "int",
-    _DEFAULT_DREAM_BATCH,
-    minimum=1,
-    tooltip=(
-        "How many inputs to run on (defaults to the current batch size, "
-        f"capped at {_DEFAULT_DREAM_BATCH})"
-    ),
-)
-_START_PARAM = _ExperimentParam(
-    "start",
-    "Start from",
-    "select",
-    "noise",
-    options={"noise": "Noise", "sample": "Current batch"},
-    tooltip=(
-        "Noise draws fresh inputs shaped and scaled like the network's real "
-        "input — different on every run; Current batch starts from the real "
-        "input batch itself"
-    ),
-)
-_CLAMP_PARAM = _ExperimentParam(
-    "clamp",
-    "Clamp to displayable range",
-    "bool",
-    True,
-    tooltip="Keep pixels inside the [0, 1] display range mapped through the input mean/std",
-)
-_DIFFUSION_PARAM = _ExperimentParam(
-    "diffusion",
-    "Diffusion",
-    "float",
-    0.05,
-    minimum=0,
-    step=0.01,
-    tooltip="Per-step blend with a 3×3 blur; damps high-frequency noise",
-)
-_JITTER_PARAM = _ExperimentParam(
-    "jitter",
-    "Jitter (px)",
-    "int",
-    2,
-    minimum=0,
-    tooltip="Random shift each step, undone after the update; reduces pixel-grid artifacts",
-)
-_ZOOM_PARAM = _ExperimentParam(
-    "zoom",
-    "Zoom multiplier per step",
-    "float",
-    1.0,
-    minimum=1,
-    step=0.01,
-    tooltip=(
-        "Per-step center zoom-in factor (1 = no zoom; on small inputs it "
-        "only takes effect above ~1 + 1/size)"
-    ),
-)
-
-# Ordered per kind: the targeting knob first (deep dream's Channels, Captum's
-# Channel/Target), then Inputs (Captum) or Start from + Sample (deep dream),
-# then the method-specific knobs (point 1). The Layer selector is rendered
-# above this list (point 2). Deep dream's Sample knob only shows when starting
-# from the current batch (toggled in `rebuild_params`).
-_EXPERIMENT_PARAMS: dict[str, list[_ExperimentParam]] = {
-    "deep_dream": [
-        _CHANNELS_PARAM,
-        _START_PARAM,
-        _SAMPLE_PARAM,
-        _ExperimentParam("steps", "Steps", "int", 300, minimum=1),
-        _ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0, step=0.01),
-        _DIFFUSION_PARAM,
-        _JITTER_PARAM,
-        _ZOOM_PARAM,
-        # The objective-direction toggle sits with the value-range knob below it.
-        _MINIMIZE_PARAM,
-        _CLAMP_PARAM,
-    ],
-    "gradcam": [_TARGET_PARAM, _BATCH_PARAM],
-    "neuron_gradient": [_CHANNEL_PARAM, _BATCH_PARAM],
-    "neuron_ig": [
-        _CHANNEL_PARAM,
-        _BATCH_PARAM,
-        _ExperimentParam("ig_steps", "Integration steps", "int", 32, minimum=2),
-    ],
-    "occlusion": [
-        _CHANNEL_PARAM,
-        _BATCH_PARAM,
-        _ExperimentParam(
-            "window",
-            "Window (px)",
-            "int",
-            4,
-            minimum=1,
-            tooltip="Side length of the occluding patch",
-        ),
-        _ExperimentParam("stride", "Stride (px)", "int", 2, minimum=1),
-    ],
-}
-
-def _default_param_values(overrides: dict[str, object]) -> dict[str, object]:
-    """Every kind's per-key form defaults, with session overrides applied.
-
-    `overrides` is `Session.experiment_defaults` — e.g. a hosted playground
-    seeds cheaper deep-dream defaults; anything not overridden keeps its
-    `_ExperimentParam.default`.
-    """
-    values: dict[str, object] = {}
-    for specs in _EXPERIMENT_PARAMS.values():
-        for spec in specs:
-            values.setdefault(spec.key, overrides.get(spec.key, spec.default))
-    return values
 
 
 # Per kind: (short tooltip on the dropdown, long description shown at the
@@ -289,7 +115,7 @@ def _caption_bar_color(caption: str) -> str:
     return _CAPTION_COLORS.get(head, "#64748b")
 
 
-def _coerce_number(spec: _ExperimentParam, *candidates: object) -> int | float:
+def _coerce_number(spec: ExperimentParam, *candidates: object) -> int | float:
     """The first numeric `candidate` cast to the spec's type. A cleared number
     field reads back from NiceGUI as None, so callers pass the widget value, the
     persisted value and finally the always-numeric default — the cast then can
@@ -440,7 +266,7 @@ def _build_experiment_page(
     # Seed persisted values with every kind's defaults (session overrides
     # first) so a freshly-shown widget always has a value, even for a key
     # the user hasn't touched.
-    state.values.update(_default_param_values(session.experiment_defaults))
+    state.values.update(default_param_values(session.experiment_defaults))
 
     # This page's auto-experiment registration: a run registers the request so
     # it also re-runs on every visualization update (same seq → same seeded
@@ -454,7 +280,7 @@ def _build_experiment_page(
 
     def collect_params() -> dict[str, object]:
         params: dict[str, object] = {"mean": input_mean, "std": input_std}
-        for spec in _EXPERIMENT_PARAMS[state.kind]:
+        for spec in EXPERIMENT_PARAMS[state.kind]:
             value: object = getattr(widgets.get(spec.key), "value", None)
             if spec.kind in ("int", "float"):
                 # `run` blocks the call while a numeric field is empty; the
@@ -761,7 +587,7 @@ def _build_experiment_page(
         """Labels of numeric params whose widget holds no usable number — an
         empty or non-numeric field reads back from NiceGUI as None."""
         invalid: list[str] = []
-        for spec in _EXPERIMENT_PARAMS[state.kind]:
+        for spec in EXPERIMENT_PARAMS[state.kind]:
             if spec.kind not in ("int", "float"):
                 continue
             value = getattr(widgets.get(spec.key), "value", None)
@@ -792,7 +618,7 @@ def _build_experiment_page(
         widgets.clear()
         params_pane.clear()
         with params_pane:
-            for spec in _EXPERIMENT_PARAMS[state.kind]:
+            for spec in EXPERIMENT_PARAMS[state.kind]:
                 initial = state.values.get(spec.key, spec.default)
                 if spec.kind == "bool":
                     widget: ValueElement = ui.switch(

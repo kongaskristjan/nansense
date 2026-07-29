@@ -51,7 +51,7 @@ from nansense.ui.histograms import (
     _linear_bar_x,
     _make_histogram_figure,
     _min_positive_height,
-    _overflow_marks,
+    overflow_marks,
     phase_color,
     _phase_hists,
     _phases_with_data,
@@ -1455,7 +1455,7 @@ class _HistPlot:
                 if (self._y_range is not None and not log_y)
                 else None
             )
-            marks = _overflow_marks(phase_hists, x_values, density, y_top)
+            marks = overflow_marks(phase_hists, x_values, density, y_top)
             _plotly_restyle(
                 self.element,
                 {"x": [m[0] for m in marks], "y": [m[1] for m in marks]},
