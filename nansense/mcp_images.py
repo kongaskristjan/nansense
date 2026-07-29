@@ -415,7 +415,7 @@ def bin_samples_image(
     *,
     layer: str,
     channel: int,
-    bin_index: int,
+    value: float,
     kind: str = "activation",
     count: int = 4,
     display: InputDisplay,
@@ -424,21 +424,31 @@ def bin_samples_image(
     """The inputs behind one histogram bar: which samples landed in it.
 
     A histogram says how many values fell in a bin; this says *which* — up to
-    `count` random elements of `(layer, channel)` that land in `bin_index`,
-    each with the input crop around where it came from. It is how you get from
-    "there is a spike in the overflow bin" to "these three digits cause it".
+    `count` random elements of `(layer, channel)` near `value`, each with the
+    input crop around where it came from. It is how you get from "there is a
+    spike in the overflow bin" to "these three digits cause it".
+
+    `value` is snapped to its histogram bin through the accumulator's own
+    binning, so a value copied straight out of `get_layer_stats`' histogram
+    pairs selects exactly the bar it came from. Taking a value rather than a
+    bin index is what makes that possible: the pairs report midpoints, and the
+    bins are a fixed signed-log scale an agent has no other way to invert.
 
     The population is narrower than the bar: histograms aggregate a whole
     epoch, but only the last captured batch still has its activations and input
     around to sample from. Returns the picture and the per-sample values.
     """
+    import torch
+
     from nansense.ui.bin_samples import sample_bin
     from nansense.ui.compose import stack_sections, upscaled_image
     from nansense.ui.render import render_image
+    from nansense.watch import _bin_indices
 
     snapshot = session.snapshot
     if snapshot is None:
         return _no_snapshot(), []
+    bin_index = int(_bin_indices(torch.tensor([float(value)]))[0])
     tensors = (
         snapshot.activations if kind == "activation" else snapshot.activation_gradients
     )
@@ -460,10 +470,10 @@ def bin_samples_image(
         return (
             RenderedImage(
                 None,
-                f"Nothing in bin {bin_index} of {layer!r} channel {channel} on "
-                f"the last captured batch ({_position_note(session)}). The "
-                "histogram bar may be counting earlier batches, whose values "
-                "are not retained.",
+                f"Nothing near {value:g} in {layer!r} channel {channel} on the "
+                f"last captured batch ({_position_note(session)}). The histogram "
+                "bar may be counting earlier batches, whose values are not "
+                "retained — or the value may belong to a different channel.",
             ),
             [],
         )
@@ -485,8 +495,8 @@ def bin_samples_image(
     ]
     png, caveat = _encode(stack_sections(sections))
     note = (
-        f"{len(samples)} random elements of {layer} channel {channel} landing in "
-        f"bin {bin_index}, from the last captured batch only "
+        f"{len(samples)} random elements of {layer} channel {channel} in the "
+        f"histogram bin holding {value:g}, from the last captured batch only "
         f"({_position_note(session)}) — the bar itself may aggregate a whole epoch."
     )
     if png is None:

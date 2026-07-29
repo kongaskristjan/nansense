@@ -546,25 +546,25 @@ def test_recordings_view_of_an_idle_session_explains_the_frame_source() -> None:
 # --- histogram bin samples --------------------------------------------
 
 
+def _populated_value(session: Session, layer: str = "conv") -> float:
+    """A value the last batch actually produced for channel 0 of `layer`."""
+    snapshot = session.snapshot
+    assert snapshot is not None
+    return float(snapshot.activations[layer][:, 0].reshape(-1)[0])
+
+
 def test_bin_samples_name_the_inputs_behind_a_bar() -> None:
     """A histogram says how many values fell in a bin; this says which — the
     step from "there is a spike in the overflow bin" to "these inputs cause it"."""
     from nansense.input_config import InputDisplay
     from nansense.mcp_images import bin_samples_image
-    from nansense.watch import _bin_indices
 
     with paused_session(TinyClassifier(), _image_step) as session:
-        snapshot = session.snapshot
-        assert snapshot is not None
-        activation = snapshot.activations["conv"]
-        # Pick a bin that channel 0 actually populates, so the sampling has
-        # something to find.
-        bin_index = int(_bin_indices(activation[:, 0].reshape(-1))[0])
         rendered, values = bin_samples_image(
             session,
             layer="conv",
             channel=0,
-            bin_index=bin_index,
+            value=_populated_value(session),
             display=InputDisplay(),
             input_name="x",
         )
@@ -572,6 +572,32 @@ def test_bin_samples_name_the_inputs_behind_a_bar() -> None:
         assert rendered.png is not None
         # The population is narrower than the bar, and saying so is the point.
         assert "last captured batch only" in rendered.note
+
+
+def test_a_histogram_value_selects_the_bar_it_came_from() -> None:
+    """The tool takes a *value*, not a bin index: the histogram pairs report
+    midpoints over a fixed signed-log scale an agent cannot invert, so an index
+    parameter would be unreachable from anything the agent has seen."""
+    from nansense.input_config import InputDisplay
+    from nansense.mcp_images import bin_samples_image
+    from nansense.mcp_views import layer_stats_view
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        histogram = layer_stats_view(session, layers=["conv"], include_histogram=True)[
+            "layers"
+        ][0]["activations"]["histogram"]
+        busiest, _count = max(histogram, key=lambda pair: pair[1])
+        rendered, values = bin_samples_image(
+            session,
+            layer="conv",
+            channel=0,
+            # A midpoint copied straight out of the reported pairs.
+            value=busiest,
+            display=InputDisplay(),
+            input_name="x",
+        )
+        assert values, rendered.note
+        assert rendered.png is not None
 
 
 def test_bin_samples_of_an_empty_bin_explain_the_narrower_population() -> None:
@@ -585,7 +611,7 @@ def test_bin_samples_of_an_empty_bin_explain_the_narrower_population() -> None:
             session,
             layer="conv",
             channel=0,
-            bin_index=0,  # the extreme-negative end bin
+            value=-1e30,  # far into the extreme-negative end bin
             display=InputDisplay(),
             input_name="x",
         )
@@ -595,19 +621,15 @@ def test_bin_samples_of_an_empty_bin_explain_the_narrower_population() -> None:
 
 
 def test_bin_samples_reach_the_agent_as_values_beside_the_picture() -> None:
-    from nansense.watch import _bin_indices
-
     async def go() -> Any:
         async with Client(build_server(session)) as client:
             return await client.call_tool(
                 "render_bin_samples",
-                {"layer": "conv", "channel": 0, "bin_index": bin_index},
+                {"layer": "conv", "channel": 0, "value": value},
             )
 
     with paused_session(TinyClassifier(), _image_step) as session:
-        snapshot = session.snapshot
-        assert snapshot is not None
-        bin_index = int(_bin_indices(snapshot.activations["conv"][:, 0].reshape(-1))[0])
+        value = _populated_value(session)
         result = _run(go())
         texts = [b.text for b in result.content if getattr(b, "type", "") == "text"]
         images = [b for b in result.content if getattr(b, "type", "") == "image"]

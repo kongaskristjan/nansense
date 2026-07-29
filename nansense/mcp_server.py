@@ -447,28 +447,29 @@ def build_server(
     async def render_bin_samples(
         layer: str,
         channel: int,
-        bin_index: int,
+        value: float,
         kind: Literal["activation", "gradient"] = "activation",
         count: int = 4,
     ) -> list[Any]:
         """Picture of the inputs behind one histogram bar.
 
         A histogram says how many values fell in a bin; this says *which* —
-        random elements of `(layer, channel)` landing in `bin_index`, each with
-        the input crop around where it came from. The way to get from "there is
-        a spike in the overflow bin" to "these three inputs cause it".
+        random elements of `(layer, channel)` near `value`, each with the input
+        crop around where it came from. The way to get from "there is a spike
+        in the overflow bin" to "these three inputs cause it".
 
-        Sampled from the last captured batch only, since that is the one whose
-        activations and input still exist, while the bar itself may count a
-        whole epoch. Bin indices are the positions in the `histogram` array
-        `get_layer_stats(include_histogram=True)` returns.
+        Pass a value straight from the `histogram` pairs of
+        `get_layer_stats(include_histogram=True)` (or `render_histogram`); it
+        is snapped to the bin it came from. Sampled from the last captured
+        batch only — the one whose activations and input still exist — while
+        the bar itself may count a whole epoch.
         """
         rendered, values = await asyncio.to_thread(
             bin_samples_image,
             session,
             layer=layer,
             channel=channel,
-            bin_index=bin_index,
+            value=value,
             kind=kind,
             count=count,
             display=display,
