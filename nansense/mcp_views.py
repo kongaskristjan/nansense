@@ -30,7 +30,7 @@ from typing import Any
 
 import torch
 
-from nansense import debugger
+from nansense import debugger, experiments, instruments
 from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.session import Session
 from nansense.watch import TensorStatsSnapshot, bin_midpoint
@@ -412,6 +412,406 @@ def stats_history_view(
     }
     if unknown_phase:
         view["unknown_phases"] = unknown_phase
+    return view
+
+
+def _tensor_summary(tensor: torch.Tensor) -> dict[str, Any]:
+    """Scalars for a tensor read straight off a snapshot, not an accumulator.
+
+    Weights and optimizer state never go through the watch accumulators — the
+    pages draw them as strips and read the extremes off the colorbar — so their
+    numbers have to be computed here. Non-finite values are separated out and
+    the scalars describe the finite population, matching what
+    `tensor_stats_view` reports for activations so the two read alike.
+    """
+    values = tensor.detach().float().flatten()
+    total = int(values.numel())
+    finite_mask = torch.isfinite(values)
+    finite = values[finite_mask]
+    count = int(finite.numel())
+    view: dict[str, Any] = {"shape": list(tensor.shape), "count": total}
+    if count < total:
+        view["finite_count"] = count
+        view["non_finite_count"] = total - count
+    if count == 0:
+        view["note"] = (
+            "every value is non-finite (NaN or ±Inf)"
+            if total
+            else "the tensor is empty"
+        )
+        return view
+    view["mean"] = _num(finite.mean().item())
+    # A single-element tensor has no unbiased standard deviation; report 0
+    # rather than the NaN torch produces, which would read as a divergence.
+    view["std"] = _num(finite.std().item() if count > 1 else 0.0)
+    view["min"] = _num(finite.min().item())
+    view["max"] = _num(finite.max().item())
+    view["abs_max"] = _num(finite.abs().max().item())
+    dtype = _dtype_name(tensor.dtype)
+    if dtype is not None:
+        view["dtype"] = dtype
+    return view
+
+
+def weight_stats_view(
+    session: Session, *, layer: str, parameters: Iterable[str] | None = None
+) -> dict[str, Any]:
+    """A layer's parameters as numbers: values, gradients, optimizer state.
+
+    The numeric counterpart of the `/weights` page, which draws the same
+    tensors as strips. Optimizer state is whatever the optimizer keeps per
+    parameter (SGD's `momentum_buffer`, Adam's `exp_avg` / `exp_avg_sq` /
+    `step`) and the hyperparameters are read live, so a scheduler-mutated
+    learning rate shows its current value rather than the one it started with.
+    """
+    snapshot = session.snapshot
+    if snapshot is None:
+        return {
+            "error": "No batch has been captured yet.",
+            "hint": (
+                "A session pauses on its first batch; if training is running "
+                "free, call pause() or refresh() first."
+            ),
+        }
+    available = session.layer_weights.get(layer, [])
+    if not available:
+        known = layer in set(session.layer_names)
+        return {
+            "error": (
+                f"Layer {layer!r} has no parameters."
+                if known
+                else f"Unknown layer {layer!r}."
+            ),
+            "hint": (
+                "Intermediates like `relu` or `add` carry activations but no "
+                "weights."
+                if known
+                else "Call get_architecture for the valid layer names."
+            ),
+        }
+    requested = list(dict.fromkeys(parameters)) if parameters else list(available)
+    unknown = [name for name in requested if name not in available]
+    entries: list[dict[str, Any]] = []
+    for name in requested:
+        if name in unknown:
+            continue
+        entry: dict[str, Any] = {"parameter": name}
+        weight = snapshot.weights.get(name)
+        if weight is not None:
+            entry["weight"] = _tensor_summary(weight)
+        gradient = snapshot.weight_gradients.get(name)
+        if gradient is not None:
+            entry["gradient"] = _tensor_summary(gradient)
+        else:
+            entry["gradient"] = None
+            entry["gradient_note"] = (
+                "no gradient captured — nothing has run backward yet, or "
+                "zero_grad(set_to_none=True) cleared it before the capture"
+            )
+        state = snapshot.optimizer_state.get(name, {})
+        if state:
+            entry["optimizer_state"] = {
+                key: (
+                    _num(float(value))
+                    if value.ndim == 0
+                    else _tensor_summary(value)
+                )
+                for key, value in sorted(state.items())
+            }
+        hyperparams = snapshot.optimizer_hyperparams.get(name, {})
+        if hyperparams:
+            entry["optimizer_hyperparameters"] = {
+                key: _num(value) for key, value in sorted(hyperparams.items())
+            }
+        entries.append(entry)
+    view: dict[str, Any] = {
+        "layer": layer,
+        "position": position_view(snapshot.position, schedule=session.schedule),
+        "parameters": entries,
+    }
+    if unknown:
+        view["unknown_parameters"] = unknown
+        view["hint"] = f"{layer!r} has {available}."
+    if not any(entry.get("optimizer_state") for entry in entries):
+        view["optimizer_note"] = (
+            "No optimizer state. Either no optimizer was passed to "
+            "nansense.start(), or it has not stepped yet — torch.optim "
+            "initialises per-parameter state lazily on the first step()."
+        )
+    return view
+
+
+def time_travel_view(session: Session) -> dict[str, Any]:
+    """Whether the run can jump back, and to which epochs."""
+    status = session.time_travel_status()
+    view: dict[str, Any] = {
+        "available": status.available,
+        "cached_epochs": status.cached_epochs,
+        "total_epochs": status.total_epochs,
+    }
+    if status.reason is not None:
+        view["reason"] = status.reason
+    if status.available:
+        view["hint"] = (
+            "Jumping restores the model, optimizer and scheduler state saved "
+            "at the start of that epoch and pauses on its first batch. "
+            "Training re-runs from there, so anything after it is discarded."
+        )
+    return view
+
+
+def probe_view(session: Session) -> dict[str, Any]:
+    """The probe: what fixed input the model is being re-run on, and how.
+
+    A probe re-runs the model on one held input at every capture, so stepping
+    shows the network's changing response to a *constant* stimulus instead of
+    to a new batch each time. Perturbations edit that input in place.
+    """
+    perturbations = session.perturbations
+    view: dict[str, Any] = {
+        "pinned": session.is_pinned,
+        "pinned_position": position_view(
+            session.pinned_position, schedule=session.schedule
+        ),
+        "mode": session.probe_mode,
+        "runs_completed": session.probe_count,
+        "perturbations": [
+            {
+                "input": input_name,
+                "sample": sample,
+                "index": list(index),
+                "values": [_num(value) for value in values],
+            }
+            for (input_name, sample, index), values in sorted(
+                perturbations.items(), key=lambda item: str(item[0])
+            )
+        ],
+        "active": session.probe_result is not None,
+    }
+    result = session.probe_result
+    if perturbations:
+        # An entry that doesn't fit the base — out of range, wrong value count,
+        # an input that isn't there — is skipped when the probe applies it, and
+        # stays in the map regardless. So the map alone cannot tell an agent
+        # whether its edit took; the probe's second forward can.
+        view["perturbations_applied"] = (
+            result is not None and result.perturbed_inputs is not None
+        )
+    if session.probe_error is not None:
+        view["error"] = session.probe_error
+    if not view["active"]:
+        view["hint"] = (
+            "No probe is running. pin_batch() holds the current input and "
+            "re-runs the model on it at every capture; set_probe_mode('eval') "
+            "activates one without pinning."
+        )
+    elif perturbations:
+        view["hint"] = (
+            "With perturbations active the layer strips show "
+            "perturbed − original, so an unchanged layer reads as flat zero."
+        )
+    return view
+
+
+def _param_spec_view(spec: experiments.ExperimentParam) -> dict[str, Any]:
+    view: dict[str, Any] = {
+        "key": spec.key,
+        "type": spec.kind,
+        "default": spec.default,
+        "description": spec.tooltip or spec.label,
+    }
+    if spec.options:
+        view["options"] = sorted(spec.options)
+    if spec.minimum is not None:
+        view["minimum"] = _num(spec.minimum)
+    return view
+
+
+def experiment_catalog_view(session: Session) -> dict[str, Any]:
+    """Every experiment kind, what it does, and the knobs it takes."""
+    layers = session.layer_names
+    kinds: list[dict[str, Any]] = []
+    for kind, title in experiments.available_experiment_kinds().items():
+        summary, detail = experiments.EXPERIMENT_DESCRIPTIONS.get(kind, ("", ""))
+        kinds.append(
+            {
+                "kind": kind,
+                "title": title,
+                "summary": summary,
+                "description": detail,
+                "layers": [
+                    name
+                    for name in layers
+                    if experiments.layer_available(session, name, kind)
+                ],
+                "params": [
+                    _param_spec_view(spec)
+                    for spec in experiments.EXPERIMENT_PARAMS[kind]
+                ],
+            }
+        )
+    return {
+        "kinds": kinds,
+        "hint": (
+            "Experiments run on the paused training thread, so pause first. "
+            "`layers` lists what each kind accepts — Grad-CAM and the neuron "
+            "methods need a real nn.Module, so fx intermediates are excluded."
+        ),
+        "time_limit_seconds": experiments._EXPERIMENT_TIME_LIMIT,
+    }
+
+
+def experiment_result_view(
+    session: Session, *, seq: int
+) -> dict[str, Any]:
+    """One experiment request's latest published progress or outcome."""
+    result = session.experiment_result_for(seq)
+    if result is None:
+        return {
+            "seq": seq,
+            "error": (
+                "No result published for this request — it may still be queued "
+                "(experiments run on the paused training thread), or old enough "
+                "to have been evicted."
+            ),
+        }
+    view: dict[str, Any] = {
+        "seq": result.seq,
+        "kind": result.kind,
+        "layer": result.layer,
+        "step": result.step,
+        "total_steps": result.total_steps,
+        "done": result.done,
+        "produced": (
+            "image"
+            if result.image is not None
+            else "attribution"
+            if result.attribution is not None
+            else None
+        ),
+    }
+    if result.objective is not None:
+        view["objective"] = _num(result.objective)
+    if result.error is not None:
+        view["error"] = result.error
+    if result.done and result.step < result.total_steps and result.error is None:
+        view["note"] = (
+            "Stopped before its last step — cancelled, superseded, or past the "
+            "wall-clock limit. The result so far is still valid."
+        )
+    if result.attribution is not None:
+        view["attribution"] = _tensor_summary(result.attribution)
+    if result.image is not None:
+        view["image"] = _tensor_summary(result.image)
+    view["hint"] = "render_experiment(seq) draws this result."
+    return view
+
+
+def _series_view(series: instruments.MetricSeries) -> dict[str, Any]:
+    return {
+        "cadence": series.on,
+        "points": [
+            {"epoch": epoch, "batch": batch, "value": _num(value)}
+            for epoch, batch, value in zip(
+                series.epochs, series.batches, series.values, strict=True
+            )
+        ],
+    }
+
+
+def metrics_view(
+    session: Session, *, layers: Iterable[str] | None = None
+) -> dict[str, Any]:
+    """Custom scalar metrics registered by the training script.
+
+    These come from `session.watch_metric(...)` in the user's own code, so what
+    is here is entirely up to that script — and the fact that a metric *exists*
+    is itself a signal about what its author was worried about.
+    """
+    snapshot = session.watch_metrics_snapshot(layers=layers)
+    series: list[dict[str, Any]] = []
+    for (layer, phase, metric, name), values in sorted(snapshot.series.items()):
+        entry: dict[str, Any] = {"layer": layer, "phase": phase, "metric": metric}
+        if name:
+            entry["series"] = name
+        entry.update(_series_view(values))
+        series.append(entry)
+    view: dict[str, Any] = {"series": series}
+    errors = session.instrument_errors
+    if errors:
+        view["failed_instruments"] = errors
+        view["hint"] = (
+            "A raising instrument is disabled rather than taking the run down; "
+            "these stopped collecting at the error shown."
+        )
+    elif not series:
+        view["hint"] = (
+            "No custom metrics. The training script registers them with "
+            "session.watch_metric(name); they are only collected for layers "
+            "the stats scope covers."
+        )
+    return view
+
+
+def settings_view(session: Session) -> dict[str, Any]:
+    """The knobs behind the UI's settings dialog."""
+    frequency = session.update_frequency
+    performance = session.watch_performance
+    return {
+        "update_frequency": {
+            "unit": frequency.unit,
+            "n": frequency.n,
+            "phase": frequency.phase,
+            "description": (
+                "How often views refresh while training runs — without pausing. "
+                "Each update publishes a snapshot, re-runs the probe and any "
+                "auto experiments, and appends a recording frame."
+            ),
+        },
+        "watch_performance": {
+            "channel_limit_enabled": performance.channel_limit_enabled,
+            "channel_limit": performance.channel_limit,
+            "samples_per_channel": performance.samples_per_channel,
+            "average_patches": performance.average_patches,
+            "description": (
+                "Per-channel caps on watch memory. Changing any of them "
+                "reshapes the buffers, which flushes every collected statistic."
+            ),
+        },
+        "stats_scope": str(session.stats_scope),
+        "stats_collecting": session.stats_collecting,
+        "experiment_defaults": session.experiment_defaults,
+    }
+
+
+def recordings_view(session: Session) -> dict[str, Any]:
+    """Every recording in progress, with its frame count and files."""
+    statuses = session.recording.statuses()
+    view: dict[str, Any] = {
+        "directory": str(session.recording.directory),
+        "recordings": [
+            {
+                "key": status.view.key,
+                "label": status.view.label,
+                "frames": status.frames,
+                "files": [str(path) for path in status.paths],
+                **({"error": status.error} if status.error is not None else {}),
+            }
+            for status in statuses
+        ],
+    }
+    if not statuses:
+        view["hint"] = (
+            "Nothing recording. A recording appends one frame per "
+            "visualization update, so set_update_frequency controls its frame "
+            "rate — and a paused run produces no frames at all."
+        )
+    else:
+        frequency = session.update_frequency
+        view["frame_cadence"] = (
+            f"one frame per {frequency.n} {frequency.unit}"
+            + (f" of phase {frequency.phase!r}" if frequency.phase else "")
+        )
     return view
 
 

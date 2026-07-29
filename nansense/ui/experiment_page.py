@@ -15,6 +15,7 @@ from torch import Tensor
 
 from nansense.experiments import (
     _DEFAULT_DREAM_BATCH,
+    EXPERIMENT_DESCRIPTIONS,
     EXPERIMENT_KINDS,
     EXPERIMENT_PARAMS,
     ExperimentParam,
@@ -59,43 +60,6 @@ from nansense.ui.top_bar import (
     _top_bar_row,
 )
 from nansense.ui.tour import add_tour, experiment_tour_steps
-
-
-# Per kind: (short tooltip on the dropdown, long description shown at the
-# bottom of the left pane) — point 4.
-_EXPERIMENT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
-    "deep_dream": (
-        "Synthesize one input per channel that maximally excites it.",
-        "Deep Dream runs gradient ascent on the input to maximize each of the "
-        "layer's first channels' mean activation — one synthesized sample per "
-        "channel, a picture of what each unit 'wants' to see.",
-    ),
-    "gradcam": (
-        "Coarse class heatmap localized onto the selected layer.",
-        "Grad-CAM weights the selected layer's feature maps by the gradient "
-        "of the target class score, giving a coarse heatmap of where that "
-        "layer supports the class.",
-    ),
-    "neuron_gradient": (
-        "Raw input gradient of one channel — tends to look grainy.",
-        "Neuron Gradient is the raw input-space gradient of one channel's "
-        "activation — the gradient view of its receptive field. It tends to "
-        "produce noisy, high-frequency (grainy) attribution maps; Neuron "
-        "Integrated Gradients is the smoother alternative.",
-    ),
-    "neuron_ig": (
-        "Path-integrated input attribution of one channel (cleaner).",
-        "Neuron Integrated Gradients integrates one channel's input gradient "
-        "along a path from a zero baseline, giving a cleaner, less noisy "
-        "version of Neuron Gradient.",
-    ),
-    "occlusion": (
-        "Drop in a channel's activation as input regions are occluded.",
-        "Occlusion slides a patch over the input and measures how much the "
-        "selected layer-channel's mean activation drops — a perturbation "
-        "view of that channel's receptive field.",
-    ),
-}
 
 
 # Experiment cell caption colors, echoing the main view's activation (green) /
@@ -675,7 +639,7 @@ def _build_experiment_page(
         return controls
 
     def update_description() -> None:
-        short, long = _EXPERIMENT_DESCRIPTIONS.get(state.kind, ("", ""))
+        short, long = EXPERIMENT_DESCRIPTIONS.get(state.kind, ("", ""))
         description_label.text = long
         kind_tooltip.set_text(short)
 

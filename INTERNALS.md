@@ -1543,6 +1543,29 @@ all empty on a real layer). Both `live_position` and the snapshot's position
 are always reported: they diverge under `run`/`detach`, and conflating them
 reads stale numbers as current.
 
+**Tools that act, not just read.** Probes, experiments and time travel all
+execute on the *training* thread — probes and experiments inside
+`_wait_for_proceed`, a jump at the next batch boundary — so a tool that fires
+one and returns immediately would report the state before it happened. Each
+waits off-loop for its own completion signal: `wait_for_probe` for probes, a
+per-seq poll of `experiment_result_for` for experiments (not
+`wait_for_experiment`, which waits on the *latest* request and would be
+satisfied by a concurrent browser tab's), `wait_until_paused` for a jump. Each
+also decides whether waiting is meaningful at all — `_probe_will_run` checks
+that something is actually pinned, perturbed or mode-forced *and* that training
+is paused, since a free-running session lands its probe at the next capture
+rather than now.
+
+Two failure modes are invisible without help and are surfaced explicitly. A
+perturbation that doesn't fit its base input (out of range, wrong value count)
+is skipped at apply time and stays in the map, so the map alone cannot say
+whether an edit took — `probe_view` reports `perturbations_applied`, read off
+the probe's `perturbed_inputs`. And a recording that captured no frames
+finalizes to no files, which afterwards is indistinguishable from a key that
+was never recording; `_stop_recording` therefore asks `is_recording` *before*
+ending, or it would take the error path and skip releasing the pinned auto
+experiment.
+
 **Mounting** (`build_mount`, consumed by `serve`). The transport's Starlette
 app is built only to harvest its route — the route is then registered on the
 UI's own FastAPI app, and its session-manager lifespan is passed to that app at

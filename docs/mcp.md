@@ -48,6 +48,10 @@ Ask in plain language — "why has my loss stopped falling?" — and the agent w
 | `watch_layers`, `unwatch_layers`, `set_stats_scope` | Choose which layers collect running statistics |
 | `configure_debug_checks`, `silence_debug_check` | Tune the numerical-error checks |
 
+| `get_weight_stats` | A layer's parameters, their gradients, and the optimizer state moving them |
+| `get_metrics` | Custom scalar metrics the training script registered with `watch_metric` |
+| `get_settings`, `set_update_frequency`, `set_watch_performance` | The settings dialog |
+
 Statistics come from two places, and the distinction matters when you read the agent's reasoning. `get_layer_stats` reads the last captured batch and covers **any** layer. `get_stats_history` reads the running accumulators, which only cover **watched** layers — so the agent watches a layer first, lets a few epochs run, and then asks for the trend.
 
 ## What the agent can see
@@ -65,6 +69,26 @@ The `render_*` tools return the views as pictures — the same ones the browser 
 This is worth its tokens when the numbers say *that* something is wrong but not *where*. A layer's mean and standard deviation look healthy while one channel of sixty-four is dead; the strip shows that at a glance. A conv filter that has collapsed to noise, an activation saturating along one edge of the image, a gradient histogram with a spike in the overflow bin — all are shapes, not scalars.
 
 Pictures are capped at 1568 pixels on the longest side and downscaled past it, with a note saying so, since a wide layer would otherwise arrive as an unreadably large image.
+
+## What the agent can try
+
+Reading a paused run is one thing; the rest of the UI is about *interrogating* it.
+
+| Tool | What it does |
+| --- | --- |
+| `time_travel`, `get_time_travel_status` | Restart at an earlier epoch, with the model, optimizer and scheduler restored |
+| `pin_batch`, `unpin_batch`, `set_probe_mode` | Re-run the model on one fixed input at every capture |
+| `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
+| `list_experiments`, `run_experiment`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions |
+| `start_recording`, `stop_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update |
+
+**Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks(interval_batches=1)` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.
+
+**Probes hold the input still.** Stepping normally changes the weights *and* the batch at once, which makes it hard to say which caused a change. Pinning a batch re-runs the model on that one input at every capture, so what you see between steps is the weights alone. `set_probe_mode("eval")` runs the probe with BatchNorm on its running statistics — a model that looks fine in train mode and broken in eval usually has statistics that have drifted.
+
+**Experiments run on the paused training thread**, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and `run_experiment` returns statistics while `render_experiment` draws the result.
+
+**Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human.
 
 ## A worked example
 

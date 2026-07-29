@@ -25,9 +25,9 @@ from PIL import Image
 from torch import Tensor, nn
 
 import nansense
+from nansense.input_config import InputDisplay
 from nansense.mcp_images import (
     MAX_SIDE,
-    InputDisplay,
     RenderedImage,
     _encode,
     histogram_image,

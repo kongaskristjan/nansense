@@ -272,6 +272,45 @@ def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
 
 
 
+# Per kind: (one-line summary, full description). The page shows the first
+# as the dropdown's tooltip and the second at the bottom of its left pane;
+# the MCP server returns both from `list_experiments`, which is the only
+# way an agent learns what these methods actually do.
+EXPERIMENT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "deep_dream": (
+        "Synthesize one input per channel that maximally excites it.",
+        "Deep Dream runs gradient ascent on the input to maximize each of the "
+        "layer's first channels' mean activation — one synthesized sample per "
+        "channel, a picture of what each unit 'wants' to see.",
+    ),
+    "gradcam": (
+        "Coarse class heatmap localized onto the selected layer.",
+        "Grad-CAM weights the selected layer's feature maps by the gradient "
+        "of the target class score, giving a coarse heatmap of where that "
+        "layer supports the class.",
+    ),
+    "neuron_gradient": (
+        "Raw input gradient of one channel — tends to look grainy.",
+        "Neuron Gradient is the raw input-space gradient of one channel's "
+        "activation — the gradient view of its receptive field. It tends to "
+        "produce noisy, high-frequency (grainy) attribution maps; Neuron "
+        "Integrated Gradients is the smoother alternative.",
+    ),
+    "neuron_ig": (
+        "Path-integrated input attribution of one channel (cleaner).",
+        "Neuron Integrated Gradients integrates one channel's input gradient "
+        "along a path from a zero baseline, giving a cleaner, less noisy "
+        "version of Neuron Gradient.",
+    ),
+    "occlusion": (
+        "Drop in a channel's activation as input regions are occluded.",
+        "Occlusion slides a patch over the input and measures how much the "
+        "selected layer-channel's mean activation drops — a perturbation "
+        "view of that channel's receptive field.",
+    ),
+}
+
+
 def available_experiment_kinds() -> dict[str, str]:
     """Experiment kinds the UI should offer.
 

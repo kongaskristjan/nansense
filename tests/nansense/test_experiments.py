@@ -583,3 +583,13 @@ def testdefault_param_values_apply_session_overrides() -> None:
     assert seeded["lr"] == plain["lr"]
     every_key = {s.key for specs in EXPERIMENT_PARAMS.values() for s in specs}
     assert set(seeded) == every_key
+
+
+def test_experiment_descriptions_cover_every_kind() -> None:
+    from nansense.experiments import EXPERIMENT_DESCRIPTIONS, EXPERIMENT_KINDS
+
+    assert set(EXPERIMENT_DESCRIPTIONS) == set(EXPERIMENT_KINDS)
+    for short, long in EXPERIMENT_DESCRIPTIONS.values():
+        assert short and long  # both a tooltip and a pane description
+    # Neuron Gradient calls out its grainy maps (point 4).
+    assert "grain" in EXPERIMENT_DESCRIPTIONS["neuron_gradient"][1].lower()

@@ -8,17 +8,6 @@ import torch
 from tests.nansense.helpers import _frame_snapshot
 
 
-def test_experiment_descriptions_cover_every_kind() -> None:
-    from nansense.experiments import EXPERIMENT_KINDS
-    from nansense.ui.experiment_page import _EXPERIMENT_DESCRIPTIONS
-
-    assert set(_EXPERIMENT_DESCRIPTIONS) == set(EXPERIMENT_KINDS)
-    for short, long in _EXPERIMENT_DESCRIPTIONS.values():
-        assert short and long  # both a tooltip and a pane description
-    # Neuron Gradient calls out its grainy maps (point 4).
-    assert "grain" in _EXPERIMENT_DESCRIPTIONS["neuron_gradient"][1].lower()
-
-
 @pytest.mark.parametrize(
     ("kind", "candidates", "expected"),
     [

@@ -34,7 +34,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from nansense.input_config import InputTransform, MeanStd, resolve_per_input
+from nansense.input_config import InputDisplay
 from nansense.mcp_views import position_view
 from nansense.patches import PATCH_TYPES
 from nansense.session import Session
@@ -64,35 +64,6 @@ class RenderedImage:
 
     png: bytes | None
     note: str
-
-
-class InputDisplay:
-    """How input tensors are turned into displayable images.
-
-    `serve` receives `input_mean` / `input_std` / `input_transform` from the
-    training script — each either one value for every input or a dict keyed by
-    input name — and the pages resolve them per input they show. The MCP tools
-    need the same resolution, so it lives here rather than being re-derived at
-    every call site.
-    """
-
-    def __init__(
-        self,
-        *,
-        mean: MeanStd | dict[str, MeanStd] | None = None,
-        std: MeanStd | dict[str, MeanStd] | None = None,
-        transform: InputTransform | dict[str, InputTransform] | None = None,
-    ) -> None:
-        self._mean = mean
-        self._std = std
-        self._transform = transform
-
-    def stats(self, name: str | None) -> tuple[MeanStd | None, MeanStd | None]:
-        """The `(mean, std)` denormalization pair for input `name`."""
-        return resolve_per_input(self._mean, name), resolve_per_input(self._std, name)
-
-    def transform(self, name: str | None) -> InputTransform | None:
-        return resolve_per_input(self._transform, name)
 
 
 def _encode(image: Image | None) -> tuple[bytes | None, str]:

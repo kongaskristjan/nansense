@@ -35,9 +35,9 @@ from typing import Any, Literal
 from mcp.server import MCPServer
 from starlette.routing import BaseRoute
 
-from nansense.input_config import InputTransform, MeanStd
+from nansense import experiments
+from nansense.input_config import InputDisplay, InputTransform, MeanStd
 from nansense.mcp_images import (
-    InputDisplay,
     experiment_image,
     histogram_image,
     image_reply,
@@ -49,11 +49,20 @@ from nansense.mcp_images import (
 from nansense.mcp_views import (
     architecture_view,
     debug_view,
+    experiment_catalog_view,
+    experiment_result_view,
     layer_stats_view,
+    metrics_view,
+    probe_view,
+    recordings_view,
+    settings_view,
     stats_history_view,
     status_view,
+    time_travel_view,
+    weight_stats_view,
 )
 from nansense.patches import PATCH_TYPES
+from nansense.restore import TimeTravelError
 from nansense.session import Session, StatsScope
 
 #: Where the MCP endpoint sits on the UI's server.
@@ -68,6 +77,11 @@ _MAX_WAIT_SECONDS = 300.0
 
 # Poll interval while waiting for a requested snapshot to be published.
 _SNAPSHOT_POLL_SECONDS = 0.05
+
+# Poll interval while waiting for one experiment request to finish. Coarser
+# than the snapshot poll: an experiment takes seconds to minutes, and its
+# progress publishes are already visible to `get_experiment_result`.
+_EXPERIMENT_POLL_SECONDS = 0.2
 
 _INSTRUCTIONS = """\
 NaNsense is a PyTorch debugger attached to a live training run. It pauses the
@@ -645,7 +659,747 @@ def build_server(
         session.disable_debug_check(category)
         return debug_view(session)
 
+    @server.tool()
+    async def get_settings() -> dict[str, Any]:
+        """The visualization-update and watch-memory knobs, and their meaning."""
+        return settings_view(session)
+
+    @server.tool()
+    async def set_update_frequency(
+        unit: Literal["epoch", "batch"] = "epoch",
+        n: int = 1,
+        phase: str | None = None,
+    ) -> dict[str, Any]:
+        """How often the views refresh while training runs, without pausing.
+
+        Each update publishes a snapshot, re-runs the probe and any auto
+        experiments, and appends a frame to every recording — so this is also
+        a recording's frame rate. `phase` restricts the batch count to one
+        phase and only applies with `unit="batch"`.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        try:
+            session.set_update_frequency(unit=unit, n=n, phase=phase)
+        except ValueError as error:
+            return {"error": str(error), "known_phases": session.schedule.phase_order}
+        return settings_view(session)
+
+    @server.tool()
+    async def set_watch_performance(
+        channel_limit_enabled: bool | None = None,
+        channel_limit: int | None = None,
+        samples_per_channel: int | None = None,
+        average_patches: bool | None = None,
+    ) -> dict[str, Any]:
+        """Bound what watching a layer costs in memory; only given fields change.
+
+        Watched layers keep a histogram and a gallery of extreme input patches
+        *per channel*, so cost scales with the channel count.
+        `channel_limit` caps the per-channel data to the first N channels (the
+        layer-wide histogram and scalars always cover all of them);
+        `average_patches` enables the whole-input grids, off by default.
+
+        Every one of these fixes a buffer shape, so changing any of them
+        **discards all statistics collected so far** and starts over.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        flushed = session.set_watch_performance(
+            channel_limit_enabled=channel_limit_enabled,
+            channel_limit=channel_limit,
+            samples_per_channel=samples_per_channel,
+            average_patches=average_patches,
+        )
+        view = settings_view(session)
+        view["statistics_flushed"] = flushed
+        if flushed:
+            view["note"] = (
+                "The buffer shapes changed, so every collected statistic was "
+                "dropped. Let training advance before reading them again."
+            )
+        return view
+
+    @server.tool()
+    async def get_weight_stats(
+        layer: str, parameters: list[str] | None = None
+    ) -> dict[str, Any]:
+        """A layer's parameters as numbers: values, gradients, optimizer state.
+
+        Covers what `get_layer_stats` does not: the parameters themselves
+        rather than what they produced. Includes each parameter's optimizer
+        state (Adam's `exp_avg` / `exp_avg_sq`, SGD's `momentum_buffer`) and
+        the live hyperparameters — so a learning rate a scheduler has driven to
+        zero, or a second-moment estimate that has blown up, is visible here.
+        """
+        return await asyncio.to_thread(
+            weight_stats_view, session, layer=layer, parameters=parameters
+        )
+
+    @server.tool()
+    async def get_metrics(layers: list[str] | None = None) -> dict[str, Any]:
+        """Custom scalar metrics the training script registered.
+
+        These come from `session.watch_metric(...)` in the user's own code, so
+        what exists here is specific to this project — and worth reading early,
+        since a metric someone bothered to add usually marks what they were
+        worried about.
+        """
+        return await asyncio.to_thread(metrics_view, session, layers=layers)
+
+    # ---- Time travel -------------------------------------------------
+
+    @server.tool()
+    async def get_time_travel_status() -> dict[str, Any]:
+        """Whether the run can jump back to an earlier epoch, and to which."""
+        return time_travel_view(session)
+
+    @server.tool()
+    async def time_travel(
+        epoch: int, timeout_seconds: float = _DEFAULT_WAIT_SECONDS
+    ) -> dict[str, Any]:
+        """Restart training at the beginning of `epoch` and pause there.
+
+        Restores the model, optimizer and scheduler state checkpointed at that
+        epoch's start, so the run continues from there and everything after it
+        is discarded. This is how you get *back* to the batch before a
+        divergence once you have run past it — with `configure_debug_checks`
+        tightened, or a layer newly watched, so the second pass sees what the
+        first one missed. Needs the training loop to be driven by
+        `session.epochs()` with `session.restore_point()`.
+        """
+        before = session.pause_count
+        try:
+            session.request_time_travel(epoch)
+        except TimeTravelError as error:
+            view = time_travel_view(session)
+            view["error"] = str(error)
+            return view
+        reached = await _await_pause(
+            session, after=before, timeout=_clamp_timeout(timeout_seconds)
+        )
+        view = status_view(session)
+        view["travelled_to_epoch"] = epoch
+        if not reached:
+            view["waiting"] = (
+                "The jump is armed but training has not reached a batch "
+                "boundary yet. Poll get_status."
+            )
+        return view
+
+    # ---- Probes and perturbations ------------------------------------
+
+    @server.tool()
+    async def get_probe_status() -> dict[str, Any]:
+        """What fixed input the model is being re-run on, and how."""
+        return probe_view(session)
+
+    @server.tool()
+    async def pin_batch(timeout_seconds: float = 10.0) -> dict[str, Any]:
+        """Hold the current input and re-run the model on it at every capture.
+
+        Stepping then shows how the network's response to one *constant*
+        stimulus evolves as the weights change, instead of confounding that
+        with a different batch each step. Probes are forward-only, so pinned
+        views have activations but no gradients.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        before = session.probe_count
+        if not session.pin_current_batch():
+            view = probe_view(session)
+            view["error"] = (
+                "Nothing to pin: no batch has been captured yet, or the "
+                "snapshot carries no input tensor."
+            )
+            return view
+        return await _probe_result(session, after=before, timeout=timeout_seconds)
+
+    @server.tool()
+    async def unpin_batch() -> dict[str, Any]:
+        """Release the pinned input; captures go back to showing the live batch."""
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        session.unpin_batch()
+        return probe_view(session)
+
+    @server.tool()
+    async def set_probe_mode(
+        mode: Literal["unchanged", "eval", "train"],
+        timeout_seconds: float = 10.0,
+    ) -> dict[str, Any]:
+        """Choose the train/eval mode probe forwards run under.
+
+        `"eval"` is the useful one: BatchNorm uses its running statistics and
+        dropout is off, which is how the model will actually behave at
+        inference — and a model that looks healthy in train mode and broken in
+        eval usually has BatchNorm statistics that have drifted. Selecting a
+        mode activates probing on its own, no pin required. Training state is
+        always restored afterwards.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        before = session.probe_count
+        session.set_probe_mode(mode)
+        return await _probe_result(session, after=before, timeout=timeout_seconds)
+
+    @server.tool()
+    async def add_perturbation(
+        index: list[int],
+        values: list[float],
+        sample: int = 0,
+        input_name: str | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> dict[str, Any]:
+        """Pin one position of the probe input to fixed values and re-run.
+
+        Counterfactuals on a paused model: edit a pixel, see which layers move.
+        `index` is `[y, x]` for an image input (with `values` its length-`C`
+        channel vector) or `[channel]` for a flat one (a single value).
+        `values` are in the model's own input space — already normalized — so
+        `get_layer_stats` on the input layer tells you the range to aim at.
+
+        While any perturbation is active the layer strips switch to showing
+        `perturbed − original`, which is what makes the affected path visible.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        before = session.probe_count
+        session.add_perturbation(
+            input_name=input_name or primary_input or "",
+            sample=sample,
+            index=tuple(index),
+            values=tuple(values),
+        )
+        view = await _probe_result(session, after=before, timeout=timeout_seconds)
+        if not view.get("perturbations_applied", True):
+            view["error"] = (
+                "No perturbation reached the input. Entries that do not fit are "
+                "skipped silently: check the input name against "
+                "get_architecture, and that `index` and `values` match its "
+                "shape — an image input needs [y, x] and one value per channel, "
+                "a flat one [channel] and a single value."
+            )
+        return view
+
+    @server.tool()
+    async def clear_perturbations() -> dict[str, Any]:
+        """Drop every perturbation; the probe goes back to the unedited input."""
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        session.clear_perturbations()
+        return probe_view(session)
+
+    # ---- Experiments -------------------------------------------------
+
+    @server.tool()
+    async def list_experiments() -> dict[str, Any]:
+        """Every experiment kind, what it shows, and the knobs it takes.
+
+        Call before `run_experiment` — the parameter keys, defaults and the
+        layers each kind accepts all come from here.
+        """
+        return experiment_catalog_view(session)
+
+    @server.tool()
+    async def run_experiment(
+        kind: Literal[
+            "deep_dream", "gradcam", "neuron_gradient", "neuron_ig", "occlusion"
+        ],
+        layer: str,
+        params: dict[str, Any] | None = None,
+        timeout_seconds: float = 120.0,
+    ) -> dict[str, Any]:
+        """Run an interpretability experiment on the paused model.
+
+        Deep dream synthesizes the input that most excites each channel — what
+        the unit "wants" to see; the Captum methods attribute a prediction back
+        onto the input. Both answer questions statistics cannot: whether a
+        channel has learned anything, and what the model is actually looking at.
+
+        Runs on the training thread, so **training must be paused** — otherwise
+        it is queued until the next pause. Returns once the run finishes,
+        `timeout_seconds` elapses, or the server's own wall-clock ceiling stops
+        it. `render_experiment` draws the result.
+        """
+        return await _run_experiment(
+            session,
+            kind=kind,
+            layer=layer,
+            params=params,
+            display=display,
+            input_name=primary_input,
+            timeout=timeout_seconds,
+        )
+
+    @server.tool()
+    async def get_experiment_result(seq: int) -> dict[str, Any]:
+        """The latest progress or outcome published for one experiment request."""
+        return experiment_result_view(session, seq=seq)
+
+    @server.tool()
+    async def cancel_experiment(seq: int | None = None) -> dict[str, Any]:
+        """Cancel one queued or running experiment, or every one when `seq` is
+        omitted. A running experiment stops at its next abort check."""
+        session.cancel_experiment(seq)
+        return {"cancelled": "all" if seq is None else seq}
+
+    @server.tool(structured_output=False)
+    async def render_experiment(seq: int) -> list[Any]:
+        """Picture of an experiment's result: the synthesized inputs or the
+        attribution maps, beside the inputs they came from."""
+        return image_reply(
+            await asyncio.to_thread(
+                experiment_image,
+                session,
+                seq=seq,
+                display=display,
+                input_name=primary_input,
+            )
+        )
+
+    # ---- Recordings --------------------------------------------------
+
+    @server.tool()
+    async def list_recordings() -> dict[str, Any]:
+        """Recordings in progress, with their frame counts and output files."""
+        return recordings_view(session)
+
+    @server.tool()
+    async def start_recording(
+        view: Literal["layers", "weights", "histograms", "patches", "experiment"],
+        layers: list[str] | None = None,
+        layer: str | None = None,
+        phase: str | None = None,
+        sample: int = 0,
+        heatmap: bool = False,
+        log_x: bool = False,
+        log_y: bool = False,
+        kind: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record a view to MP4, one frame per visualization update.
+
+        The way to show a human *change over time* rather than a single
+        moment — a channel dying, a weight distribution drifting, a deep dream
+        sharpening epoch by epoch. Start it, let training run, then
+        `stop_recording` for the file path.
+
+        Frames come from visualization updates, so `set_update_frequency` is
+        the frame rate and a paused run records nothing. Each view takes its
+        own arguments: `layers` for "layers"/"histograms"/"patches", `layer`
+        for "weights"/"experiment", `phase` for "histograms"/"patches", and
+        `kind` + `params` for "experiment" (which registers its own
+        continuously re-running experiment, as the page does).
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        return await asyncio.to_thread(
+            _start_recording,
+            session,
+            view=view,
+            layers=layers,
+            layer=layer,
+            phase=phase,
+            sample=sample,
+            heatmap=heatmap,
+            log_x=log_x,
+            log_y=log_y,
+            kind=kind,
+            params=params,
+            display=display,
+            input_name=primary_input,
+        )
+
+    @server.tool()
+    async def stop_recording(key: str | None = None) -> dict[str, Any]:
+        """Finalize a recording and return its file path (all of them if
+        `key` is omitted). `list_recordings` has the keys."""
+        return await asyncio.to_thread(_stop_recording, session, key=key)
+
     return server
+
+
+def _probe_will_run(session: Session) -> bool:
+    """Whether the mutation just made will actually produce a probe run.
+
+    Probes only execute on the training thread, and only when something wants
+    one. Waiting when nothing is pinned, perturbed or mode-forced — or while
+    training is running free, where the run lands at the next capture rather
+    than now — would just burn the timeout for a result that was already final.
+    """
+    if session.is_running:
+        return False
+    return (
+        session.is_pinned
+        or bool(session.perturbations)
+        or session.probe_mode != "unchanged"
+    )
+
+
+async def _probe_result(
+    session: Session, *, after: int, timeout: float
+) -> dict[str, Any]:
+    """Wait for the probe the caller's change triggered, then report it."""
+    if _probe_will_run(session):
+        ran = await asyncio.to_thread(
+            session.wait_for_probe,
+            after_count=after,
+            timeout=_clamp_timeout(timeout),
+        )
+        view = probe_view(session)
+        if not ran:
+            view["waiting"] = (
+                "No probe run completed within the timeout. Probes run on the "
+                "training thread; poll get_probe_status."
+            )
+        return view
+    view = probe_view(session)
+    if session.is_running:
+        view["waiting"] = (
+            "Training is advancing, so the probe will run at the next capture "
+            "rather than now. Call pause() to run it immediately."
+        )
+    return view
+
+
+def _experiment_params(
+    session: Session,
+    *,
+    kind: str,
+    overrides: dict[str, Any] | None,
+    display: InputDisplay,
+    input_name: str | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """The full parameter set for one run, plus any keys this kind ignores.
+
+    Layered the way the page layers them: every knob's declared default, then
+    the session's own overrides (a hosted playground seeds cheaper ones), then
+    the caller's. The display statistics ride along because the runners need
+    them to clamp and denormalize into input space.
+    """
+    known = {spec.key for spec in experiments.EXPERIMENT_PARAMS[kind]}
+    params: dict[str, Any] = {
+        spec.key: spec.default for spec in experiments.EXPERIMENT_PARAMS[kind]
+    }
+    params.update(
+        {
+            key: value
+            for key, value in session.experiment_defaults.items()
+            if key in known
+        }
+    )
+    unknown: list[str] = []
+    for key, value in (overrides or {}).items():
+        if key in known:
+            params[key] = value
+        else:
+            unknown.append(key)
+    mean, std = display.stats(input_name)
+    params["mean"] = mean
+    params["std"] = std
+    return params, unknown
+
+
+def _await_experiment(
+    session: Session, *, seq: int, timeout: float
+) -> bool:
+    """Block until request `seq` publishes a final result, or time out.
+
+    Polled per-seq rather than through `wait_for_experiment`, which waits on
+    the *latest* request: a concurrent browser tab arming its own experiment
+    would otherwise satisfy this wait with someone else's result.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = session.experiment_result_for(seq)
+        if result is not None and result.done:
+            return True
+        time.sleep(_EXPERIMENT_POLL_SECONDS)
+    return False
+
+
+async def _run_experiment(
+    session: Session,
+    *,
+    kind: str,
+    layer: str,
+    params: dict[str, Any] | None,
+    display: InputDisplay,
+    input_name: str | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Validate, arm and await one experiment; report whatever it published."""
+    if kind not in experiments.EXPERIMENT_KINDS:
+        return {
+            "error": f"Unknown experiment kind {kind!r}.",
+            "known_kinds": sorted(experiments.EXPERIMENT_KINDS),
+        }
+    if layer not in set(session.layer_names):
+        return {
+            "error": f"Unknown layer {layer!r}.",
+            "hint": "Call get_architecture for the valid layer names.",
+        }
+    if not experiments.layer_available(session, layer, kind):
+        return {
+            "error": (
+                f"{kind} cannot run on {layer!r}: it needs the layer's "
+                "nn.Module, and this is an fx intermediate (or the model did "
+                "not trace, leaving only named modules hookable)."
+            ),
+            "hint": "list_experiments reports the layers each kind accepts.",
+        }
+    resolved, unknown = _experiment_params(
+        session, kind=kind, overrides=params, display=display, input_name=input_name
+    )
+    running = session.is_running
+    seq = session.request_experiment(kind=kind, layer=layer, params=resolved)
+    finished = await asyncio.to_thread(
+        _await_experiment, session, seq=seq, timeout=_clamp_timeout(timeout)
+    )
+    view = experiment_result_view(session, seq=seq)
+    view["seq"] = seq
+    view["params"] = {
+        key: value for key, value in resolved.items() if key not in ("mean", "std")
+    }
+    if unknown:
+        view["ignored_params"] = unknown
+        view["hint"] = f"{kind} takes only its own knobs; see list_experiments."
+    if not finished:
+        view["waiting"] = (
+            "Training was still running, so the experiment is queued until the "
+            "next pause. Call pause(), then get_experiment_result."
+            if running
+            else "Did not finish within the timeout. Poll get_experiment_result "
+            f"with seq {seq}, or cancel_experiment({seq})."
+        )
+    return view
+
+
+def _recorded_view(
+    session: Session,
+    *,
+    view: str,
+    layers: Sequence[str] | None,
+    layer: str | None,
+    phase: str | None,
+    sample: int,
+    heatmap: bool,
+    log_x: bool,
+    log_y: bool,
+    kind: str | None,
+    params: dict[str, Any] | None,
+    display: InputDisplay,
+    input_name: str | None,
+) -> Any:
+    """The `RecordedView` for one agent-facing view name, or an error dict.
+
+    The page equivalents build these from their own widget state; here the
+    arguments come from the tool call, but the `params` payloads must match
+    exactly — `nansense.recording` unpacks them by key.
+    """
+    from nansense.recording import RecordedView
+
+    mean, std = display.stats(input_name)
+    chosen = list(layers) if layers else sorted(session.stats_layers)
+    if view == "layers":
+        if not chosen:
+            return {"error": "Give `layers` — there is nothing to record."}
+        return RecordedView(
+            key="main",
+            page="main",
+            label=f"Main view ({len(chosen)} layers, sample {sample})",
+            params={
+                "layers": tuple(chosen),
+                "sample_idx": sample,
+                "input_name": input_name or "",
+                "input_mean": mean,
+                "input_std": std,
+                "input_transform": display.transform(input_name),
+            },
+        )
+    if view == "weights":
+        if layer is None:
+            return {"error": "Give `layer` — a weights recording covers one layer."}
+        parameters = session.layer_weights.get(layer, [])
+        if not parameters:
+            return {"error": f"Layer {layer!r} has no parameters to record."}
+        return RecordedView(
+            key=f"weights:{layer}",
+            page="weights",
+            label=f"Weights · {layer}",
+            params={
+                "layer": layer,
+                # `(name, roles, indices)` per panel; empty roles mean the
+                # default axis layout, the same thing the page opens with.
+                "panels": tuple((name, (), ()) for name in parameters),
+            },
+        )
+    if view in ("histograms", "patches"):
+        if not chosen:
+            return {
+                "error": (
+                    "Nothing to record: these views read the watch "
+                    "accumulators, so watch some layers first."
+                )
+            }
+        resolved_phase = phase or _newest_phase(session, chosen)
+        if resolved_phase is None:
+            return {
+                "error": (
+                    f"No statistics collected for {chosen} yet. Let training "
+                    "advance at least one batch after watching."
+                )
+            }
+        if view == "histograms":
+            return RecordedView(
+                key="watch_histogram",
+                page="watch_histogram",
+                label=f"Watch · histograms ({resolved_phase})",
+                params={
+                    "layers": tuple(chosen),
+                    "phase": resolved_phase,
+                    "log_x": log_x,
+                    "log_y": log_y,
+                },
+            )
+        return RecordedView(
+            key="watch_minmax",
+            page="watch_minmax",
+            label=f"Watch · MIN/MAX grids ({resolved_phase})",
+            params={
+                "layers": tuple(chosen),
+                "phase": resolved_phase,
+                "grids": PATCH_TYPES,
+                "heatmap": heatmap,
+                "input_mean": mean,
+                "input_std": std,
+            },
+        )
+    # "experiment": the page keeps its request alive across updates with an
+    # auto experiment so each frame is a fresh rerun of the *same* seq (deep
+    # dream then redraws the same seeded noise); do the same here.
+    if layer is None or kind is None:
+        return {"error": "Give `kind` and `layer` for an experiment recording."}
+    if kind not in experiments.EXPERIMENT_KINDS:
+        return {
+            "error": f"Unknown experiment kind {kind!r}.",
+            "known_kinds": sorted(experiments.EXPERIMENT_KINDS),
+        }
+    if not experiments.layer_available(session, layer, kind):
+        return {"error": f"{kind} cannot run on {layer!r}; see list_experiments."}
+    key = f"experiment:{layer}"
+    resolved, _ = _experiment_params(
+        session, kind=kind, overrides=params, display=display, input_name=input_name
+    )
+    seq = session.register_auto_experiment(
+        key, kind=kind, layer=layer, params=resolved
+    )
+    session.pin_auto_experiment(key)
+    return RecordedView(
+        key=key,
+        page="experiment",
+        label=f"Experiment · {experiments.EXPERIMENT_KINDS[kind]} · {layer}",
+        params={
+            "layer": layer,
+            "seq": seq,
+            "auto_key": key,
+            "input_mean": mean,
+            "input_std": std,
+        },
+    )
+
+
+def _newest_phase(session: Session, layers: Sequence[str]) -> str | None:
+    """The last phase any of `layers` has statistics for."""
+    phases = sorted({phase for layer in layers for phase in session.stats_phases(layer)})
+    return phases[-1] if phases else None
+
+
+def _start_recording(
+    session: Session,
+    *,
+    view: str,
+    layers: Sequence[str] | None,
+    layer: str | None,
+    phase: str | None,
+    sample: int,
+    heatmap: bool,
+    log_x: bool,
+    log_y: bool,
+    kind: str | None,
+    params: dict[str, Any] | None,
+    display: InputDisplay,
+    input_name: str | None,
+) -> dict[str, Any]:
+    recorded = _recorded_view(
+        session,
+        view=view,
+        layers=layers,
+        layer=layer,
+        phase=phase,
+        sample=sample,
+        heatmap=heatmap,
+        log_x=log_x,
+        log_y=log_y,
+        kind=kind,
+        params=params,
+        display=display,
+        input_name=input_name,
+    )
+    if isinstance(recorded, dict):
+        return recorded
+    if not session.recording.start(recorded):
+        return {
+            "error": f"{recorded.key!r} is already recording.",
+            "hint": "One recording per view; stop_recording ends it.",
+        }
+    result = recordings_view(session)
+    result["started"] = recorded.key
+    return result
+
+
+def _stop_recording(session: Session, *, key: str | None) -> dict[str, Any]:
+    manager = session.recording
+    if key is None:
+        keys = [status.view.key for status in manager.statuses()]
+        paths = manager.end_all()
+    else:
+        # Ask *before* ending: a recording that captured no frames finalizes to
+        # no files at all, which is indistinguishable afterwards from a key that
+        # was never recording — and treating it as the latter would skip the
+        # auto-experiment cleanup below.
+        if not manager.is_recording(key):
+            return {
+                "error": f"Nothing was recording under {key!r}.",
+                "hint": "list_recordings has the active keys.",
+            }
+        keys = [key]
+        paths = manager.end(key)
+    for stopped in keys:
+        # An experiment recording pinned its auto-rerun so the request would
+        # survive without a page heartbeat; release it, or it reruns forever.
+        session.unpin_auto_experiment(stopped)
+        session.unregister_auto_experiment(stopped)
+    return {
+        "stopped": keys,
+        "files": [str(path) for path in paths],
+        "note": (
+            "Empty file list: the recording captured no frames. Frames come "
+            "from visualization updates, so a run that stayed paused produces "
+            "none."
+        )
+        if not paths
+        else None,
+    }
 
 
 def _wait_for_snapshot(session: Session, previous: object, timeout: float) -> bool:
