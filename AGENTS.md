@@ -27,6 +27,15 @@
   - For complex/manual merges, run the tests/checks again. For UI conflicts, verify with Playwright.
   - Fast forward merges if there's no conflicts.
 
+## MCP server
+
+- `nansense/mcp_server.py` (tools) + `nansense/mcp_views.py` (JSON views) expose the
+  debugger to coding agents; `serve()` mounts it alongside the UI.
+- **Keep the MCP surface at feature parity with the UI** — both are front-ends onto
+  the same `Session`. Add or change the matching tool in the same commit as a UI
+  capability. Parity is about capability, not presentation: agents get JSON/text
+  where a page draws pixels.
+
 ## Code quality
 
 - Consider moving files to subdirectories if a large number of files appear in `lib/` or `tests/`
