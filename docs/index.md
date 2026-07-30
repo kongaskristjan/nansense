@@ -1,3 +1,8 @@
+---
+hide:
+  - toc
+---
+
 # NaNsense
 
 *Don't guess why your neural network fails to learn. Instead, have a look inside.*
@@ -8,9 +13,14 @@
     <button class="pg-embed__btn" type="button" data-variant="imagenette" aria-pressed="true">Imagenette · ResNet</button>
     <button class="pg-embed__btn" type="button" data-variant="mnist" aria-pressed="false">MNIST · LeNet-5</button>
   </div>
-  <!-- `clipboard-write` delegates the Clipboard API into the cross-origin app
+  <!-- The app is desktop-first (`body { min-width: 800px }`) and pans instead of
+       reflowing, so the frame is given a fixed logical viewport and scaled to fit
+       the column — cropping it would cut the input pane off mid-word.
+       `clipboard-write` delegates the Clipboard API into the cross-origin app
        frame, so the app's own Share dialog can copy links. -->
-  <iframe class="pg-embed__frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
+  <div class="pg-embed__screen">
+    <iframe class="pg-embed__frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
+  </div>
   <p class="pg-embed__note">The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.</p>
 </div>
 

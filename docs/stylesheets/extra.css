@@ -123,19 +123,43 @@
   color: var(--md-primary-bg-color);
 }
 
-.pg-embed__frame {
-  display: block;
-  width: 100%;
-  /* Tall enough for the app's own toolbar plus a layer view; capped so the
-     page still shows the video underneath on a laptop screen. */
-  height: clamp(360px, 62vh, 620px);
+/* The visible box. The frame inside is laid out at a fixed logical width and
+   scaled down to fit, because the app is desktop-first: below 800px it pans
+   horizontally rather than reflowing, so a narrow frame would crop the input
+   pane. `--pg-scale` is set by playground-embed.js from the live box width. */
+.pg-embed__screen {
+  position: relative;
+  overflow: hidden;
+  /* Tall enough for the app's toolbar plus a layer card; capped so the video
+     underneath still shows on a laptop screen. */
+  height: clamp(400px, 64vh, 620px);
   border: 0.05rem solid var(--md-default-fg-color--lightest);
   border-radius: 0.2rem;
   background: var(--md-code-bg-color);
+}
+
+.pg-embed__frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% / var(--pg-scale, 1));
+  height: calc(100% / var(--pg-scale, 1));
+  transform: scale(var(--pg-scale, 1));
+  transform-origin: top left;
+  border: 0;
 }
 
 .pg-embed__note {
   margin: 0.5rem 0 0;
   font-size: 0.7rem;
   color: var(--md-default-fg-color--light);
+}
+
+/* Phones and small tablets: scaling a 960px-wide app down to a 320px column
+   makes it unreadable, so drop the embed entirely — the "Try the Playground"
+   button below the video already leads there. */
+@media screen and (max-width: 44.9em) {
+  .pg-embed {
+    display: none;
+  }
 }
