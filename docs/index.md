@@ -2,6 +2,18 @@
 
 *Don't guess why your neural network fails to learn. Instead, have a look inside.*
 
+<div class="pg-embed">
+  <div class="pg-embed__bar" role="group" aria-label="Playground variant">
+    <span class="pg-embed__label">Live playground</span>
+    <button class="pg-embed__btn" type="button" data-variant="imagenette" aria-pressed="true">Imagenette · ResNet</button>
+    <button class="pg-embed__btn" type="button" data-variant="mnist" aria-pressed="false">MNIST · LeNet-5</button>
+  </div>
+  <!-- `clipboard-write` delegates the Clipboard API into the cross-origin app
+       frame, so the app's own Share dialog can copy links. -->
+  <iframe class="pg-embed__frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
+  <p class="pg-embed__note">The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.</p>
+</div>
+
 <video controls muted style="max-width: 100%;" src="https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44"></video>
 
 *NaNsense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.

@@ -70,3 +70,72 @@
   margin-top: 0.12rem;
   flex-shrink: 0;
 }
+
+/* Playground embedded on the home page (`.pg-embed` in docs/index.md). The
+   standalone /playground/ page styles its own fullscreen frame inline; this is
+   the boxed, in-content variant that sits above the hero video. */
+
+.pg-embed {
+  margin: 1.2rem 0 1.5rem;
+}
+
+.pg-embed__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.pg-embed__label {
+  margin-right: 0.2rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+}
+
+.pg-embed__btn {
+  appearance: none;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--md-default-fg-color--light);
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0.3rem 0.7rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.pg-embed__btn:hover {
+  color: var(--md-default-fg-color);
+  border-color: var(--md-default-fg-color--light);
+}
+
+.pg-embed__btn[aria-pressed="true"] {
+  background: var(--md-primary-fg-color);
+  border-color: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+}
+
+.pg-embed__frame {
+  display: block;
+  width: 100%;
+  /* Tall enough for the app's own toolbar plus a layer view; capped so the
+     page still shows the video underneath on a laptop screen. */
+  height: clamp(360px, 62vh, 620px);
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  background: var(--md-code-bg-color);
+}
+
+.pg-embed__note {
+  margin: 0.5rem 0 0;
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
