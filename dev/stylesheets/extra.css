@@ -77,6 +77,12 @@
 
 .pg-embed {
   margin: 1.2rem 0 1.5rem;
+  /* Zoom level of the embedded app. The frame is laid out at `1 / --pg-scale`
+     of the box and scaled back down, so the app sees a viewport that much wider
+     than the column: at 0.8 a 1100px box gives it ~1375px to lay out in, well
+     clear of its 800px floor (nansense/ui/static.py — below that it pans
+     instead of reflowing). Lower = more app on screen, smaller text. */
+  --pg-scale: 0.8;
 }
 
 .pg-embed__bar {
@@ -123,19 +129,49 @@
   color: var(--md-primary-bg-color);
 }
 
-.pg-embed__frame {
-  display: block;
-  width: 100%;
-  /* Tall enough for the app's own toolbar plus a layer view; capped so the
-     page still shows the video underneath on a laptop screen. */
-  height: clamp(360px, 62vh, 620px);
+/* The visible box; the frame inside is scaled to `--pg-scale` around it. */
+.pg-embed__screen {
+  position: relative;
+  overflow: hidden;
+  /* Tall enough for the app's toolbar plus a layer card; capped so the video
+     underneath still shows on a laptop screen. */
+  height: clamp(400px, 64vh, 620px);
   border: 0.05rem solid var(--md-default-fg-color--lightest);
   border-radius: 0.2rem;
   background: var(--md-code-bg-color);
+}
+
+/* `zoom` rather than `transform: scale()`: it shrinks the rendering *and*
+   enlarges the frame's own viewport, so `width/height: 100%` keeps filling the
+   box while the app inside lays out at `box / --pg-scale`. A transform would
+   only shrink what the app already drew at the box's width. */
+.pg-embed__frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  zoom: var(--pg-scale, 1);
+  border: 0;
 }
 
 .pg-embed__note {
   margin: 0.5rem 0 0;
   font-size: 0.7rem;
   color: var(--md-default-fg-color--light);
+}
+
+/* Phones and small tablets: scaling a 960px-wide app down to a 320px column
+   makes it unreadable, so drop the embed entirely — the "Try the Playground"
+   button below the video already leads there. */
+@media screen and (max-width: 44.9em) {
+  .pg-embed {
+    display: none;
+  }
+}
+
+/* A wider content column than Material's stock 61rem. The home page embeds the
+   playground, which is a desktop app with an 800px floor (nansense/ui/static.py)
+   — at 61rem it had to be scaled down to fit the column. Prose pages trade a
+   longer measure for it, so this is deliberately moderate rather than full-width. */
+.md-grid {
+  max-width: 76rem;
 }
