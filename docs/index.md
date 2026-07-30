@@ -8,13 +8,14 @@
 
 [🕹️ Try the Playground](playground.md){ .md-button .md-button--primary }
 [✨ Integrate with one prompt](integrate.md){ .md-button .md-button--primary }
+[🤖 Debug with a coding agent](mcp.md){ .md-button .md-button--primary }
 
 Here's how *NaNsense* can help:
 
 - **See what is actually going on.** [Visualize activations and gradients](showcase.md#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](showcase.md#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](showcase.md#simulate-what-a-neuron-is-searching-for-deep-dream).
 - **Spot optimization bottlenecks.** [Discover insufficient receptive fields](showcase.md#measure-the-receptive-field-of-a-neuron), [measure neuron death](showcase.md#investigate-dead-neurons), [discover padding artifacts](showcase.md#padding-artifacts) and [spot gradient underflow](showcase.md#spot-gradient-underflow).
 
-The [Showcase](showcase.md) walks through all of these with real screenshots. [Getting started](getting-started.md) runs an example in minutes, the [UI guide](ui.md) tours every page, and the [Wiring guide](wiring.md) adds NaNsense to your own training loop — it's just a few lines of code.
+The [Showcase](showcase.md) walks through all of these with real screenshots. [Getting started](getting-started.md) runs an example in minutes, the [UI guide](ui.md) tours every page, and the [Wiring guide](wiring.md) adds NaNsense to your own training loop — it's just a few lines of code. It also speaks [MCP](mcp.md), so a coding agent can drive the debugger itself and look at the same views you do.
 
 ## How is this different from wandb or TensorBoard?
 

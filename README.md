@@ -11,6 +11,7 @@ https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44
 <p align="center">
   <a href="https://kongaskristjan.github.io/nansense/dev/playground/"><b>🕹️ Try the Playground</b></a> — inspect a trained network in your browser, no install<br>
   <a href="https://kongaskristjan.github.io/nansense/dev/integrate/"><b>✨ Integrate with one prompt</b></a> — a coding agent wires it into your training loop<br>
+  <a href="https://kongaskristjan.github.io/nansense/dev/mcp/"><b>🤖 Debug with a coding agent</b></a> — it speaks MCP, so the agent drives the debugger and sees the same views you do<br>
   <a href="https://kongaskristjan.github.io/nansense/"><b>📚 Documentation</b></a> — showcase, guides and the full Python API (also as <a href="https://kongaskristjan.github.io/nansense/llms.txt">llms.txt</a>)
 </p>
 
