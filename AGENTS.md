@@ -69,10 +69,9 @@
 
 - Every user requested change should be accompanied by a commit. Don't ask for permission, just do it as the last step.
   - If multiple unrelated changes are requested within one prompt, the separate commits should be created.
-  - You can amend the last commit if it clearly introduced a bug.
 - Most commits should include corresponding test additions or changes. High level changes should incorporate documentation changes.
 - Before committing: `uv run --group cuda pytest && uv run --group cuda ty check`
-- Before committing: run the code. For UI testing, you can run some of the examples and use the playwright MCP.
+- Before committing: run the code. For any UI changes, you can run some of the examples and use the playwright MCP. If you're changing interactive or non-trivial parts of the documentation, verify with Playwright that these also render well.
   - Use any `--nansense-port [NUMBER]`. If a port has been taken, just try another one. Don't kill sessions on other ports, as they may have been started by the user or other concurrent agents.
 - Keep `README.md` short and lean: only update it when previously documented behaviour becomes invalid, not to advertise every new feature. Keep `INTERNALS.md` up to date.
 - Don't push unless explicitly commanded so.
