@@ -454,6 +454,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debug with a coding agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../instruments/" class="md-nav__link">
         
   
@@ -2456,6 +2483,7 @@ their own per-rank checkpoints.</p>
     <span class="n">host</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span>
     <span class="n">log_level</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;warning&quot;</span><span class="p">,</span>
     <span class="n">open_browser</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">mcp</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
     <span class="n">input_mean</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">input_std</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">input_transform</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span>
@@ -2487,6 +2515,12 @@ fails, so the banner and the browser tab are both suppressed — only
 uvicorn's own <code>address already in use</code> error is shown. On a headless
 machine the bind still succeeds, so the banner prints and the browser open
 is a harmless no-op.</p>
+<p><code>mcp</code> (default <code>True</code>) also serves the MCP endpoint at <code>/mcp</code> on the same
+port, so a coding agent can drive the debugger through the same session the
+browser shows (<code>nansense.mcp_server</code>). Its route is registered <em>before</em>
+NiceGUI's catch-all mount at <code>/</code> — Starlette matches routes in order — and
+its lifespan is passed to the app at construction, since NiceGUI wraps
+whatever lifespan it finds and a mounted sub-app never receives one.</p>
 <p><code>input_mean</code> / <code>input_std</code> are passed to the input-image pane so the
 sample is denormalized (<code>x * std + mean</code>) before display. When either
 is <code>None</code>, the renderer assumes the input is already in <code>[0, 1]</code>.
@@ -2494,7 +2528,8 @@ is <code>None</code>, the renderer assumes the input is already in <code>[0, 1]<
 image. Each of the three is either a single value applied to every input,
 or a <code>dict</code> keyed by input name for a multi-input model (see
 <code>nansense.input_config</code>); the stats and experiment panes use the primary
-input's resolved values.</p>
+input's resolved values, and so does the MCP server, whose image tools
+render the same views.</p>
 
 
     </div>

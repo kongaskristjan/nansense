@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/showcase/">
+        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/mcp/">
       
       
-        <link rel="prev" href="../playground/">
+        <link rel="prev" href="../ui/">
       
       
-        <link rel="next" href="../getting-started/">
+        <link rel="next" href="../instruments/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Showcase - NaNsense</title>
+        <title>Debug with a coding agent - NaNsense</title>
       
     
     
@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#showcase" class="md-skip">
+        <a href="#debug-with-a-coding-agent-mcp" class="md-skip">
           Skip to content
         </a>
       
@@ -121,7 +121,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Showcase
+              Debug with a coding agent
             
           </span>
         </div>
@@ -318,37 +318,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Showcase
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../showcase/" class="md-nav__link">
         
   
   
@@ -364,114 +337,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#visualize-activations-and-gradients-throughout-training" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Visualize activations and gradients throughout training
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#padding-artifacts" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Padding artifacts
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#minmax-activation-patches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Min/max activation patches
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#simulate-what-a-neuron-is-searching-for-deep-dream" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Simulate what a neuron is searching for (deep dream)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#measure-the-receptive-field-of-a-neuron" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Measure the receptive field of a neuron
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#investigate-dead-neurons" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Investigate dead neurons
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#spot-gradient-underflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Spot gradient underflow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#under-the-hood" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Under the hood
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -588,10 +453,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../mcp/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debug with a coding agent
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -607,6 +499,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#connect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connect
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-agent-can-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the agent can do
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-agent-can-see" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the agent can see
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-agent-can-try" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the agent can try
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A worked example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-worth-knowing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Things worth knowing
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -692,10 +670,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#visualize-activations-and-gradients-throughout-training" class="md-nav__link">
+  <a href="#connect" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Visualize activations and gradients throughout training
+        Connect
       
     </span>
   </a>
@@ -703,10 +681,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#padding-artifacts" class="md-nav__link">
+  <a href="#what-the-agent-can-do" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Padding artifacts
+        What the agent can do
       
     </span>
   </a>
@@ -714,10 +692,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#minmax-activation-patches" class="md-nav__link">
+  <a href="#what-the-agent-can-see" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Min/max activation patches
+        What the agent can see
       
     </span>
   </a>
@@ -725,10 +703,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#simulate-what-a-neuron-is-searching-for-deep-dream" class="md-nav__link">
+  <a href="#what-the-agent-can-try" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Simulate what a neuron is searching for (deep dream)
+        What the agent can try
       
     </span>
   </a>
@@ -736,10 +714,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#measure-the-receptive-field-of-a-neuron" class="md-nav__link">
+  <a href="#a-worked-example" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Measure the receptive field of a neuron
+        A worked example
       
     </span>
   </a>
@@ -747,32 +725,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#investigate-dead-neurons" class="md-nav__link">
+  <a href="#things-worth-knowing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Investigate dead neurons
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#spot-gradient-underflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Spot gradient underflow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#under-the-hood" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Under the hood
+        Things worth knowing
       
     </span>
   </a>
@@ -799,42 +755,170 @@
   
 
 
-<h1 id="showcase">Showcase<a class="headerlink" href="#showcase" title="Permanent link">&para;</a></h1>
-<p>What NaNsense shows you, with real screenshots from the bundled examples. Every one of these is a few clicks away in the <a href="../playground/">Playground</a> — no install needed.</p>
-<h2 id="visualize-activations-and-gradients-throughout-training">Visualize activations and gradients throughout training<a class="headerlink" href="#visualize-activations-and-gradients-throughout-training" title="Permanent link">&para;</a></h2>
-<p>A layer's activations (top row) and gradients (bottom row) for a single input. Each column is a channel, drawn on a diverging red/blue scale. Step through training to watch what each channel responds to and how strong the backward signal reaching it is.</p>
-<p><img alt="Activations and gradients of an intermediate layer" src="../images/activations_gradients.png" /></p>
-<p><em>Figure 1. An intermediate layer's activations and gradient from an image of a golf ball. Each column is a separate channel. Due to the next layer being a ReLU, the gradient exists only where the activation is positive.</em></p>
-<h2 id="padding-artifacts">Padding artifacts<a class="headerlink" href="#padding-artifacts" title="Permanent link">&para;</a></h2>
-<p><img alt="Activations lighting up along zero-padded edges" src="../images/augmented_activation.png" /></p>
-<p><em>Figure 2. Activations of a CIFAR10-trained network layer, with the input shown for comparison as the rightmost image. The augmentation used here zero-pads on the left and bottom of the image, which lights up as strong edge activations on every channel. Maybe use reflection padding next time?</em></p>
-<h2 id="minmax-activation-patches">Min/max activation patches<a class="headerlink" href="#minmax-activation-patches" title="Permanent link">&para;</a></h2>
-<p>For any channel, NaNsense collects the input patches that drove it to its strongest (and weakest) responses over an epoch. Reading off the gallery is the quickest way to tell what a specific neuron has learned to detect.</p>
-<p><img alt="Patches that maximally activate channels of a hidden layer" src="../images/max_activations_imagenette.png" /></p>
-<p><em>Figure 3. For each of the 6 first channels/neurons in a specific layer, the 4 strongest activating patches from the training set have been collected. The heatmap coloring shows the activation strength. Both <code>CHANNEL 1</code> and <code>CHANNEL 4</code> seem optimized for detecting french horns, however <code>CHANNEL 1</code> is more centered on the instrument itself, while <code>CHANNEL 4</code> also fires on human faces. See also Figure 4.</em></p>
-<h2 id="simulate-what-a-neuron-is-searching-for-deep-dream">Simulate what a neuron is searching for (deep dream)<a class="headerlink" href="#simulate-what-a-neuron-is-searching-for-deep-dream" title="Permanent link">&para;</a></h2>
-<p>Deep dream optimizes the input itself to maximally excite a chosen neuron, synthesizing the pattern it is looking for.</p>
-<p><img alt="Deep dream on the same channels as the patch gallery" src="../images/deep_dream_imagenette.png" /></p>
-<p><em>Figure 4. Deep dream on exactly the same channels/neurons that were used to select maximally activating patches in Figure 3. <code>CHANNEL 0</code> creates a lot of vertical red structures, loosely resembling a typical gas station. In <code>CHANNEL 1</code> we see yellowish curved structures, picked up from french horns. <code>3</code> and <code>5</code> have circular structures with dots inside, analogous to golf balls.</em></p>
-<p>Any layer can be visualized this way, but the network's final output layer is easiest to interpret. On MNIST, it produces ghostly digits between 0 and 9:</p>
-<p><img alt="Deep dream images for each of the 10 MNIST output classes" src="../images/deep_dream_mnist.png" /></p>
-<p><em>Figure 5. Deep dream on the final layer of a lenet network on the MNIST dataset.</em></p>
-<p>Those numbers look strange because deep dream does not necessarily make the features realistic; it maximizes them. A good example is the number 4: there are many different ways you could combine these strokes into a 4, which is why it excites the neuron even more than a typical 4 would.</p>
-<p>Here's a video visualizing other layers:</p>
-<video controls muted style="max-width: 100%;" src="https://github.com/user-attachments/assets/327e0f36-4b80-4c6f-8bd0-639606a9338b"></video>
-
-<h2 id="measure-the-receptive-field-of-a-neuron">Measure the receptive field of a neuron<a class="headerlink" href="#measure-the-receptive-field-of-a-neuron" title="Permanent link">&para;</a></h2>
-<p>To measure the receptive field of a neuron, <em>NaNsense</em> can perturb a single pixel and show the diff between the original and perturbed activations as it propagates through the network.</p>
-<p><img alt="A single pixel is perturbed and the diff propagates through the layers" src="../images/receptive_field.gif" /></p>
-<p><em>Figure 6. Here we perturb a single pixel of an image, and visualize how the perturbation transmits through the network. As we go deeper down the layers, the diff spreads throughout most of the image, which indicates a reasonably healthy receptive field (at least some part of the network can see the whole image).</em></p>
-<h2 id="investigate-dead-neurons">Investigate dead neurons<a class="headerlink" href="#investigate-dead-neurons" title="Permanent link">&para;</a></h2>
-<p><em>NaNsense</em> can measure each channel's activation and gradient distribution over a full epoch. This makes it easy to discover optimization problems, such as some neurons being driven to zero.</p>
-<p><img alt="A layer whose activations are all below zero, just before a ReLU" src="../images/dead_neuron_histogram.png" /></p>
-<p><em>Figure 7. The activation histogram of a dead channel in a layer. Apparently all activations are negative, which causes the next ReLU layer to clamp everything to zero. Because this eliminates any gradients, the channel will likely never recover from this state.</em></p>
-<h2 id="spot-gradient-underflow">Spot gradient underflow<a class="headerlink" href="#spot-gradient-underflow" title="Permanent link">&para;</a></h2>
-<p>In low-precision training (fp16) a layer's gradients can collapse into the <em>subnormal</em> range (below the dtype's smallest normal value) where precision drains toward zero and the layer's learning quality quietly drops. <em>NaNsense</em> checks activations and gradients for NaNs, infinities and this subnormal/overflow band every few batches, and pauses with a warning banner once a meaningful share of a layer's gradient magnitude lands there.</p>
-<h2 id="under-the-hood">Under the hood<a class="headerlink" href="#under-the-hood" title="Permanent link">&para;</a></h2>
-<p>Curious how it works? The repository's <a href="https://github.com/kongaskristjan/nansense/blob/main/INTERNALS.md">INTERNALS.md</a> is a deep dive into the threading model, capture hooks, time travel and the UI layer.</p>
+<h1 id="debug-with-a-coding-agent-mcp">Debug with a coding agent (MCP)<a class="headerlink" href="#debug-with-a-coding-agent-mcp" title="Permanent link">&para;</a></h1>
+<p>NaNsense speaks <a href="https://modelcontextprotocol.io">MCP</a>, so a coding agent can drive the debugger itself: pause your training run, read any layer's activations and gradients, and find out which layer started producing NaNs — without you clicking through the UI and pasting screenshots back into the chat.</p>
+<p>The agent connects to the same session the browser shows. Both are front-ends onto one paused training loop, so you can watch in the UI while the agent works.</p>
+<h2 id="connect">Connect<a class="headerlink" href="#connect" title="Permanent link">&para;</a></h2>
+<p>The endpoint is served alongside the UI, on the same port. Start your run as usual:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cuda<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+</code></pre></div>
+<p>The startup banner prints the command to register it:</p>
+<div class="highlight"><pre><span></span><code>┌──────────────────────────────────────────────────────────────┐
+│ NaNsense UI is running at:                                   │
+│ http://127.0.0.1:8080                                        │
+│                                                              │
+│ Debug this run from a coding agent:                          │
+│ claude mcp add --transport http nansense http://127.0.0.1:8080/mcp │
+└──────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<p>Run that command in the directory you're working in, and the agent has the tools. Other MCP clients take the same URL — the transport is streamable HTTP.</p>
+<p>To turn the endpoint off, pass <code>mcp=False</code> to <a class="autorefs autorefs-internal" title="nansense.serve" href="../api/#nansense.serve"><code>serve</code></a>.</p>
+<div class="admonition note">
+<p class="admonition-title">It listens on localhost</p>
+<p>The endpoint is bound wherever you bound the UI, and it can control your training run. On the default loopback bind it also rejects requests carrying a foreign <code>Host</code> header, so a web page you visit cannot reach it. Don't expose the port to an untrusted network.</p>
+</div>
+<h2 id="what-the-agent-can-do">What the agent can do<a class="headerlink" href="#what-the-agent-can-do" title="Permanent link">&para;</a></h2>
+<p>Ask in plain language — "why has my loss stopped falling?" — and the agent works through the tools below.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_status</code></td>
+<td>Where the run sits: paused or running, position, watched layers, any numerical warning</td>
+</tr>
+<tr>
+<td><code>get_architecture</code></td>
+<td>Layer names, hyperparameters and the compute graph</td>
+</tr>
+<tr>
+<td><code>get_layer_stats</code></td>
+<td>Activation and gradient statistics for the last captured batch, for any layer</td>
+</tr>
+<tr>
+<td><code>get_stats_history</code></td>
+<td>One layer's statistics per epoch — the trend across the run</td>
+</tr>
+<tr>
+<td><code>get_debug_report</code></td>
+<td>Which layers produced NaN/Inf or collapsing gradients, with per-layer percentages</td>
+</tr>
+<tr>
+<td><code>step</code>, <code>run</code>, <code>run_until</code>, <code>pause</code>, <code>detach</code></td>
+<td>The top bar's run controls</td>
+</tr>
+<tr>
+<td><code>refresh</code></td>
+<td>Publish a fresh snapshot from a free-running session without pausing it</td>
+</tr>
+<tr>
+<td><code>watch_layers</code>, <code>unwatch_layers</code>, <code>set_stats_scope</code></td>
+<td>Choose which layers collect running statistics</td>
+</tr>
+<tr>
+<td><code>configure_debug_checks</code>, <code>silence_debug_check</code></td>
+<td>Tune the numerical-error checks</td>
+</tr>
+</tbody>
+</table>
+<p>| <code>get_weight_stats</code> | A layer's parameters, their gradients, and the optimizer state moving them |
+| <code>get_metrics</code> | Custom scalar metrics the training script registered with <code>watch_metric</code> |
+| <code>get_settings</code>, <code>set_update_frequency</code>, <code>set_watch_performance</code> | The settings dialog |</p>
+<p>Statistics come from two places, and the distinction matters when you read the agent's reasoning. <code>get_layer_stats</code> reads the last captured batch and covers <strong>any</strong> layer. <code>get_stats_history</code> reads the running accumulators, which only cover <strong>watched</strong> layers — so the agent watches a layer first, lets a few epochs run, and then asks for the trend.</p>
+<h2 id="what-the-agent-can-see">What the agent can see<a class="headerlink" href="#what-the-agent-can-see" title="Permanent link">&para;</a></h2>
+<p>The <code>render_*</code> tools return the views as pictures — the same ones the browser draws, rendered server-side and sent as images the agent looks at directly.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>The view</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>render_layer</code></td>
+<td>Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes</td>
+</tr>
+<tr>
+<td><code>render_input</code></td>
+<td>One sample of the model's input, denormalized</td>
+</tr>
+<tr>
+<td><code>render_weights</code></td>
+<td>A layer's kernels, gradients and optimizer state, plus the live learning rate</td>
+</tr>
+<tr>
+<td><code>render_histogram</code></td>
+<td>Value distributions of watched layers, over the signed-log bins</td>
+</tr>
+<tr>
+<td><code>render_extreme_patches</code></td>
+<td>The inputs that most (and least) excite each channel</td>
+</tr>
+<tr>
+<td><code>render_bin_samples</code></td>
+<td>The inputs behind one histogram bar — which samples landed in it</td>
+</tr>
+</tbody>
+</table>
+<p>This is worth its tokens when the numbers say <em>that</em> something is wrong but not <em>where</em>. A layer's mean and standard deviation look healthy while one channel of sixty-four is dead; the strip shows that at a glance. A conv filter that has collapsed to noise, an activation saturating along one edge of the image, a gradient histogram with a spike in the overflow bin — all are shapes, not scalars.</p>
+<p>Pictures are capped at 1568 pixels on the longest side and downscaled past it, with a note saying so, since a wide layer would otherwise arrive as an unreadably large image.</p>
+<h2 id="what-the-agent-can-try">What the agent can try<a class="headerlink" href="#what-the-agent-can-try" title="Permanent link">&para;</a></h2>
+<p>Reading a paused run is one thing; the rest of the UI is about <em>interrogating</em> it.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>time_travel</code>, <code>get_time_travel_status</code></td>
+<td>Restart at an earlier epoch, with the model, optimizer and scheduler restored</td>
+</tr>
+<tr>
+<td><code>pin_batch</code>, <code>unpin_batch</code>, <code>set_probe_mode</code>, <code>get_probe_status</code></td>
+<td>Re-run the model on one fixed input at every capture</td>
+</tr>
+<tr>
+<td><code>add_perturbation</code>, <code>clear_perturbations</code></td>
+<td>Edit that input and see which layers move</td>
+</tr>
+<tr>
+<td><code>list_experiments</code>, <code>run_experiment</code>, <code>get_experiment_result</code>, <code>render_experiment</code>, <code>cancel_experiment</code></td>
+<td>Deep dream and the Captum attributions</td>
+</tr>
+<tr>
+<td><code>set_auto_run_experiments</code></td>
+<td>Stop open experiment pages re-running on the thread you need</td>
+</tr>
+<tr>
+<td><code>start_recording</code>, <code>stop_recording</code>, <code>list_recordings</code></td>
+<td>Record a view to MP4, one frame per visualization update</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Time travel is the one that changes how debugging goes.</strong> An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with <code>configure_debug_checks(interval_batches=1)</code> and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by <code>session.epochs()</code> with <code>session.restore_point()</code>; <code>get_time_travel_status</code> says whether yours is.</p>
+<p><strong>Probes hold the input still.</strong> Stepping normally changes the weights <em>and</em> the batch at once, which makes it hard to say which caused a change. Pinning a batch re-runs the model on that one input at every capture, so what you see between steps is the weights alone. <code>set_probe_mode("eval")</code> runs the probe with BatchNorm on its running statistics — a model that looks fine in train mode and broken in eval usually has statistics that have drifted.</p>
+<p><strong>Experiments run on the paused training thread</strong>, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and <code>run_experiment</code> returns statistics while <code>render_experiment</code> draws the result.</p>
+<p><strong>Recordings capture change over time.</strong> One frame per visualization update — so <code>set_update_frequency</code> is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human.</p>
+<h2 id="a-worked-example">A worked example<a class="headerlink" href="#a-worked-example" title="Permanent link">&para;</a></h2>
+<p>A typical exchange, once the run is paused:</p>
+<blockquote>
+<p><strong>You:</strong> Training loss goes to NaN around epoch 3. Find out where it starts.</p>
+</blockquote>
+<p>The agent calls <code>get_status</code> to see the run is paused at epoch 0, then <code>configure_debug_checks(interval_batches=1)</code> so the checks run on every batch instead of every hundredth, then <code>run</code> and polls until the debugger trips. <code>get_debug_report</code> names the layer and the fraction of its gradient that went non-finite, and <code>get_layer_stats</code> on that layer and the one feeding it shows which of the two was already unhealthy a batch earlier.</p>
+<p>Because the agent is driving the same session, you can open the UI at any point and see exactly the batch it stopped on.</p>
+<h2 id="things-worth-knowing">Things worth knowing<a class="headerlink" href="#things-worth-knowing" title="Permanent link">&para;</a></h2>
+<p><strong>Two positions.</strong> <code>live_position</code> is where training is now; <code>snapshot_position</code> is the batch the statistics describe. They're identical while paused and diverge once the run advances freely — the tools report both so the agent doesn't read stale numbers as current.</p>
+<p><strong>Non-finite values survive.</strong> JSON has no NaN literal, so the tools report them as the strings <code>"nan"</code>, <code>"inf"</code> and <code>"-inf"</code> rather than as nulls. A layer whose values are <em>all</em> non-finite reports a <code>non_finite_count</code> instead of pretending it captured nothing — the statistics themselves only ever describe the finite values.</p>
+<p><strong>Long steps don't hang.</strong> A <code>step</code> over a slow epoch returns after a timeout with a note that the run is still going; the command stays in effect and the agent polls <code>get_status</code>.</p>
+<p><strong>Locked sessions refuse.</strong> On a <a href="../playground/">locked</a> demo session the control tools return an explicit refusal rather than silently doing nothing, so an agent can't loop forever stepping a run that never moves. Inspection keeps working.</p>
 
 
 
@@ -870,7 +954,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../playground/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Playground">
+          <a href="../ui/" class="md-footer__link md-footer__link--prev" aria-label="Previous: UI guide">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -880,20 +964,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Playground
+                UI guide
               </div>
             </div>
           </a>
         
         
           
-          <a href="../getting-started/" class="md-footer__link md-footer__link--next" aria-label="Next: Getting started">
+          <a href="../instruments/" class="md-footer__link md-footer__link--next" aria-label="Next: Custom metrics &amp; tensors">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Getting started
+                Custom metrics & tensors
               </div>
             </div>
             <div class="md-footer__button md-icon">

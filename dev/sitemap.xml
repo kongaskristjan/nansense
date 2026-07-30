@@ -2,38 +2,42 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/api/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/getting-started/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/instruments/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/integrate/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
+    </url>
+    <url>
+         <loc>https://kongaskristjan.github.io/nansense/dev/mcp/</loc>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/playground/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/showcase/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/ui/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
     <url>
          <loc>https://kongaskristjan.github.io/nansense/dev/wiring/</loc>
-         <lastmod>2026-07-27</lastmod>
+         <lastmod>2026-07-30</lastmod>
     </url>
 </urlset>
