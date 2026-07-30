@@ -7,6 +7,7 @@ from urllib.parse import quote
 import pytest
 import torch
 from nicegui import ui
+from nicegui.element import Element
 
 from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
@@ -19,6 +20,7 @@ from nansense.ui.top_bar import (
     _SHARE_TARGETS,
     _STAR_TOOLTIP,
     _add_share_button,
+    _add_step_controls,
     _at_last_batch,
     _back_href,
     _best_effort_ui_update,
@@ -441,3 +443,36 @@ def test_platform_icons_cover_every_platform_but_email() -> None:
     x_svg = _platform_icon_html("X")
     assert x_svg is not None
     assert 'fill="currentColor"' in x_svg
+
+
+def _step_controls_children(*, locked: bool) -> list[Element]:
+    """Build the step-control cluster for a fresh session and return its children."""
+    session, _model = make_session(epochs=1, phases={"train": 2})
+    if locked:
+        session.lock()
+    dialog = ui.dialog()  # built outside the card so it is not counted
+    with ui.card() as card:
+        _add_step_controls(session, dialog)
+    return list(card.default_slot.children)
+
+
+def test_locked_step_controls_are_a_demo_chip_without_a_position_label() -> None:
+    """Parked training never advances, so a live position readout would sit at
+    a fixed "epoch 49/50 | train batch 590/591" forever — noise on a hosted
+    playground. The lock chip alone states why the controls are gone."""
+    children = _step_controls_children(locked=True)
+    # The readout was a bare label appended after the chip (and its tooltip).
+    assert [c for c in children if isinstance(c, ui.label)] == []
+    chip = children[0]
+    labels = [c for c in chip.default_slot.children if isinstance(c, ui.label)]
+    assert [label.text for label in labels] == [
+        "playground — training controls disabled"
+    ]
+
+
+def test_unlocked_step_controls_keep_the_live_position_label() -> None:
+    """The counterpart: while training is steppable the position readout is the
+    only thing saying where the run is, so it must survive."""
+    children = _step_controls_children(locked=False)
+    labels = [c for c in children if isinstance(c, ui.label)]
+    assert [label.text for label in labels] == ["(waiting for first batch)"]

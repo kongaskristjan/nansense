@@ -453,7 +453,9 @@ def _add_step_controls(
 
     On a locked session the whole control cluster is replaced by a demo
     notice — the session refuses the calls anyway (`Session.lock`), so the
-    buttons would only mislead.
+    buttons would only mislead. The position label goes with them: parked
+    training never advances, so it would read as a fixed, unexplained
+    "epoch 49/50 | train batch 590/591" forever.
     """
     if session.locked:
         with ui.element("div").classes(
@@ -467,7 +469,6 @@ def _add_step_controls(
         ):
             ui.icon("lock").classes("text-base")
             ui.label("playground — training controls disabled")
-        _add_position_label(session)
         return
     last_batch_confirm = _build_last_batch_confirm_dialog(session)
 

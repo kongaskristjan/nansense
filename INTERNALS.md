@@ -1389,7 +1389,9 @@ totals to `format_position` — `schedule.epochs` and the live phase's
 `schedule.phase_count(phase)` — which append an "epoch 0/50 | train batch
 0/196" suffix to whichever is known (a fully-lazy schedule shows no epoch
 total until `session.epochs(n)`, and no batch total until the phase's count is
-learned at the end of the first epoch).
+learned at the end of the first epoch). A locked session drops the label along
+with the step controls: parked training never advances, so it would read as a
+fixed position forever — the demo chip carries that meaning instead.
 
 **`/stats` page.** One `_WatchLayerPanel` per watched layer, switchable
 between a HISTOGRAM view, a MIN/MAX extreme-patch view, and a GRAPHS
