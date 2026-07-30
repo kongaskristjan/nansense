@@ -649,13 +649,14 @@
 
 <p><em>NaNsense</em> is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can <strong>pause, step batch-by-batch, and time-travel to a different epoch while training</strong>, and see exactly what every layer is doing.</p>
 <p><a class="md-button md-button--primary" href="playground/">🕹️ Try the Playground</a>
-<a class="md-button md-button--primary" href="integrate/">✨ Integrate with one prompt</a></p>
+<a class="md-button md-button--primary" href="integrate/">✨ Integrate with one prompt</a>
+<a class="md-button md-button--primary" href="mcp/">🤖 Debug with a coding agent</a></p>
 <p>Here's how <em>NaNsense</em> can help:</p>
 <ul>
 <li><strong>See what is actually going on.</strong> <a href="showcase/#visualize-activations-and-gradients-throughout-training">Visualize activations and gradients</a>, <a href="showcase/#minmax-activation-patches">find image patches with minimal or maximal activation for a given channel</a> and <a href="showcase/#simulate-what-a-neuron-is-searching-for-deep-dream">simulate what each neuron is searching for (deep dream)</a>.</li>
 <li><strong>Spot optimization bottlenecks.</strong> <a href="showcase/#measure-the-receptive-field-of-a-neuron">Discover insufficient receptive fields</a>, <a href="showcase/#investigate-dead-neurons">measure neuron death</a>, <a href="showcase/#padding-artifacts">discover padding artifacts</a> and <a href="showcase/#spot-gradient-underflow">spot gradient underflow</a>.</li>
 </ul>
-<p>The <a href="showcase/">Showcase</a> walks through all of these with real screenshots. <a href="getting-started/">Getting started</a> runs an example in minutes, the <a href="ui/">UI guide</a> tours every page, and the <a href="wiring/">Wiring guide</a> adds NaNsense to your own training loop — it's just a few lines of code.</p>
+<p>The <a href="showcase/">Showcase</a> walks through all of these with real screenshots. <a href="getting-started/">Getting started</a> runs an example in minutes, the <a href="ui/">UI guide</a> tours every page, and the <a href="wiring/">Wiring guide</a> adds NaNsense to your own training loop — it's just a few lines of code. It also speaks <a href="mcp/">MCP</a>, so a coding agent can drive the debugger itself and look at the same views you do.</p>
 <h2 id="how-is-this-different-from-wandb-or-tensorboard">How is this different from wandb or TensorBoard?<a class="headerlink" href="#how-is-this-different-from-wandb-or-tensorboard" title="Permanent link">&para;</a></h2>
 <p>Loggers record external metrics — the loss and accuracy curves you scroll through after the run. NaNsense is focused on understanding the internals of the network. A logger tells you <em>that</em> the loss stopped falling; NaNsense shows you <em>why</em> — say, half a layer's channels died after epoch three, or fp16 gradients are underflowing.</p>
 
