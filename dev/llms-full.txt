@@ -10,6 +10,10 @@ NaNsense is a PyTorch debugger that works inside the live training loop: it paus
 
 *Don't guess why your neural network fails to learn. Instead, have a look inside.*
 
+Live playground Imagenette · ResNet MNIST · LeNet-5
+
+The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.
+
 [](https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44)
 
 *NaNsense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
