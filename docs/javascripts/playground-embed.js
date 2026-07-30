@@ -1,7 +1,9 @@
-/* The playground embedded on the home page: variant switch, plus fitting the
-   app into the content column. The full-page playground (/playground/) carries
-   its own copy of the switch inline, since there it also has to be relocated
-   into the header toolbar; it needs no scaling because it owns the viewport. */
+/* Variant switch for the playground embedded on the home page. The full-page
+   playground (/playground/) carries its own copy of this logic inline, since
+   there the switch also has to be relocated into the header toolbar.
+
+   The embed's zoom is pure CSS (`--pg-scale` in stylesheets/extra.css) — the
+   frame is laid out wide and scaled down, so it needs no JS to stay fitted. */
 
 (function () {
   var SPACES = {
@@ -9,29 +11,12 @@
     mnist: "https://kongaskristjan-nansense-playground-mnist.hf.space",
   };
 
-  /* The app's own floor is `body { min-width: 800px }` (nansense/ui/static.py);
-     below that it pans horizontally instead of reflowing. Laying the frame out a
-     little above the floor keeps the three panes clear of each other without
-     shrinking the text more than necessary. */
-  var LOGICAL_WIDTH = 960;
-
   function init() {
     var root = document.querySelector(".pg-embed");
     if (!root) return;
-    var screen = root.querySelector(".pg-embed__screen");
     var frame = root.querySelector(".pg-embed__frame");
     var buttons = root.querySelectorAll(".pg-embed__btn[data-variant]");
     var current = "imagenette"; // matches the iframe's HTML src attribute
-
-    // Never scale up: on a wide enough column the app renders at native size.
-    function fit() {
-      var width = screen.clientWidth;
-      if (!width) return;
-      root.style.setProperty("--pg-scale", Math.min(1, width / LOGICAL_WIDTH));
-    }
-    fit();
-    if (window.ResizeObserver) new ResizeObserver(fit).observe(screen);
-    else window.addEventListener("resize", fit);
 
     buttons.forEach(function (button) {
       button.addEventListener("click", function () {

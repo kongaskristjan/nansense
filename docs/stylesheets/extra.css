@@ -77,6 +77,12 @@
 
 .pg-embed {
   margin: 1.2rem 0 1.5rem;
+  /* Zoom level of the embedded app. The frame is laid out at `1 / --pg-scale`
+     of the box and scaled back down, so the app sees a viewport that much wider
+     than the column: at 0.8 a 1100px box gives it ~1375px to lay out in, well
+     clear of its 800px floor (nansense/ui/static.py — below that it pans
+     instead of reflowing). Lower = more app on screen, smaller text. */
+  --pg-scale: 0.8;
 }
 
 .pg-embed__bar {
@@ -123,10 +129,7 @@
   color: var(--md-primary-bg-color);
 }
 
-/* The visible box. The frame inside is laid out at a fixed logical width and
-   scaled down to fit, because the app is desktop-first: below 800px it pans
-   horizontally rather than reflowing, so a narrow frame would crop the input
-   pane. `--pg-scale` is set by playground-embed.js from the live box width. */
+/* The visible box; the frame inside is scaled to `--pg-scale` around it. */
 .pg-embed__screen {
   position: relative;
   overflow: hidden;
@@ -138,14 +141,15 @@
   background: var(--md-code-bg-color);
 }
 
+/* `zoom` rather than `transform: scale()`: it shrinks the rendering *and*
+   enlarges the frame's own viewport, so `width/height: 100%` keeps filling the
+   box while the app inside lays out at `box / --pg-scale`. A transform would
+   only shrink what the app already drew at the box's width. */
 .pg-embed__frame {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: calc(100% / var(--pg-scale, 1));
-  height: calc(100% / var(--pg-scale, 1));
-  transform: scale(var(--pg-scale, 1));
-  transform-origin: top left;
+  display: block;
+  width: 100%;
+  height: 100%;
+  zoom: var(--pg-scale, 1);
   border: 0;
 }
 
@@ -162,4 +166,12 @@
   .pg-embed {
     display: none;
   }
+}
+
+/* A wider content column than Material's stock 61rem. The home page embeds the
+   playground, which is a desktop app with an 800px floor (nansense/ui/static.py)
+   — at 61rem it had to be scaled down to fit the column. Prose pages trade a
+   longer measure for it, so this is deliberately moderate rather than full-width. */
+.md-grid {
+  max-width: 76rem;
 }
