@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44
 
 - 🕹️ **[Try the Playground](https://kongaskristjan.github.io/nansense/dev/playground/)** — inspect a trained network in your browser, no install
 - ✨ **[Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/)** — a coding agent wires it into your training loop
-- 🤖 **[Debug with a coding agent](https://kongaskristjan.github.io/nansense/dev/mcp/)** — it speaks MCP, so the agent drives the debugger and sees the same views you do
+- 🤖 **[Debug with a coding agent](https://kongaskristjan.github.io/nansense/dev/mcp/)** — it speaks MCP, so your agent can also debug your net
 - 📚 **[Documentation](https://kongaskristjan.github.io/nansense/)** — showcase, guides and the full Python API (also as [llms.txt](https://kongaskristjan.github.io/nansense/llms.txt))
 
 *NaNsense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
