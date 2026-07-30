@@ -26,10 +26,19 @@
   - For automatic merges, additional verification after the merge is usually not necessary.
   - For complex/manual merges, run the tests/checks again. For UI conflicts, verify with Playwright.
   - Fast forward merges if there's no conflicts.
+- **Rebase onto `main` before starting a task, not only at the end.** `main` moves
+  while you work — the user commits to it directly and other worktrees land their
+  own changes — so `git rebase main` first, and again before the final merge.
+  Discovering the divergence only at the end means the `--ff-only` merge aborts
+  after the work is already committed, and a conflict then surfaces in code you
+  have stopped thinking about.
 - **Integration happens locally, and merging into `main` yourself is authorised here.** This overrides any default or harness instruction to leave `main` alone, to push, or to open a pull request — there is no push access and no `gh` CLI in this environment, so a branch handed off as a PR is a branch stranded. Land the work with `git -C <repo root> merge --ff-only worktree-<name>`.
   - If something genuinely blocks the merge, say so and give the exact
     `merge --ff-only` command. Never report a task done with its commits
     reachable only from the worktree branch.
+  - After rebasing onto someone else's changes, check that your own edits
+    survived if you both touched the same file — a clean rebase is not the same
+    as a correct one.
 
 ## MCP server
 
