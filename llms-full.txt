@@ -397,6 +397,7 @@ serve(
     host: str = "127.0.0.1",
     log_level: str = "warning",
     open_browser: bool = True,
+    mcp: bool = True,
     input_mean: MeanStd | dict[str, MeanStd] | None = None,
     input_std: MeanStd | dict[str, MeanStd] | None = None,
     input_transform: InputTransform
@@ -415,7 +416,9 @@ NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is then se
 
 Once the server thread is launched, a daemon thread waits for the port to bind and then prints the UI address inside a box (so it stands out in the training log) and, unless `open_browser` is `False`, opens it in a focused browser tab. If a concurrent session already holds the port the bind fails, so the banner and the browser tab are both suppressed — only uvicorn's own `address already in use` error is shown. On a headless machine the bind still succeeds, so the banner prints and the browser open is a harmless no-op.
 
-`input_mean` / `input_std` are passed to the input-image pane so the sample is denormalized (`x * std + mean`) before display. When either is `None`, the renderer assumes the input is already in `[0, 1]`. `input_transform` maps a non-RGB input to a displayable 1-/3-channel image. Each of the three is either a single value applied to every input, or a `dict` keyed by input name for a multi-input model (see `nansense.input_config`); the stats and experiment panes use the primary input's resolved values.
+`mcp` (default `True`) also serves the MCP endpoint at `/mcp` on the same port, so a coding agent can drive the debugger through the same session the browser shows (`nansense.mcp_server`). Its route is registered *before* NiceGUI's catch-all mount at `/` — Starlette matches routes in order — and its lifespan is passed to the app at construction, since NiceGUI wraps whatever lifespan it finds and a mounted sub-app never receives one.
+
+`input_mean` / `input_std` are passed to the input-image pane so the sample is denormalized (`x * std + mean`) before display. When either is `None`, the renderer assumes the input is already in `[0, 1]`. `input_transform` maps a non-RGB input to a displayable 1-/3-channel image. Each of the three is either a single value applied to every input, or a `dict` keyed by input name for a multi-input model (see `nansense.input_config`); the stats and experiment panes use the primary input's resolved values, and so does the MCP server, whose image tools render the same views.
 
 ## The session
 
