@@ -1146,6 +1146,7 @@ def build_server(
         log_x: bool = False,
         log_y: bool = False,
         seq: int | None = None,
+        overlay: bool = False,
     ) -> dict[str, Any]:
         """Save one still of a view as a PNG file and return its path.
 
@@ -1156,10 +1157,10 @@ def build_server(
         the picture to *you* instead, and are what to use when you are the
         one looking.
 
-        Views take the same arguments as `start_recording`, except
-        "experiment", which saves an already-published result: `seq` picks
-        it (default: the newest), rather than registering a rerunning
-        request the way a recording must.
+        Views take the same arguments as `start_recording` — including
+        `overlay` for an attribution — except "experiment", which saves an
+        already-published result: `seq` picks it (default: the newest),
+        rather than registering a rerunning request the way a recording must.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -1176,6 +1177,7 @@ def build_server(
             log_x=log_x,
             log_y=log_y,
             seq=seq,
+            overlay=overlay,
             display=display,
             input_name=primary_input,
         )
@@ -1671,6 +1673,7 @@ def _snapshot_view(
     log_x: bool,
     log_y: bool,
     seq: int | None,
+    overlay: bool,
     display: InputDisplay,
     input_name: str | None,
 ) -> Any:
@@ -1699,6 +1702,7 @@ def _snapshot_view(
             log_y=log_y,
             kind=None,
             params=None,
+            overlay=overlay,
             display=display,
             input_name=input_name,
         )
@@ -1724,6 +1728,7 @@ def _snapshot_view(
             "seq": result.seq,
             "input_mean": mean,
             "input_std": std,
+            "overlay": overlay,
         },
     )
 
@@ -1740,6 +1745,7 @@ def _save_snapshot(
     log_x: bool,
     log_y: bool,
     seq: int | None,
+    overlay: bool,
     display: InputDisplay,
     input_name: str | None,
 ) -> dict[str, Any]:
@@ -1754,6 +1760,7 @@ def _save_snapshot(
         log_x=log_x,
         log_y=log_y,
         seq=seq,
+        overlay=overlay,
         display=display,
         input_name=input_name,
     )

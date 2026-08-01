@@ -680,6 +680,32 @@ def test_an_experiment_snapshot_without_a_result_says_what_to_run(
         assert "run_experiment" in view["hint"]
 
 
+def test_an_experiment_snapshot_can_overlay_its_attribution(tmp_path: Path) -> None:
+    """`save_snapshot` freezes what the page's Snapshot button does, and the
+    page's view now carries the overlay switch — so the still must too."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        _call(
+            session,
+            "run_experiment",
+            {
+                "kind": "gradcam",
+                "layer": "conv",
+                "params": {"target": -1},
+                "timeout_seconds": 60.0,
+            },
+        )
+        plain = _call(session, "save_snapshot", {"view": "experiment"})
+        blended = _call(
+            session, "save_snapshot", {"view": "experiment", "overlay": True}
+        )
+        first, second = Path(plain["files"][0]), Path(blended["files"][0])
+        assert first.exists() and second.exists()
+        assert first.read_bytes() != second.read_bytes()
+
+
 def test_discarding_a_recording_writes_no_file(tmp_path: Path) -> None:
     """The dialog's Delete beside its Save & Finish: a take that went wrong
     should leave nothing behind to clean up or mistake for a result."""
