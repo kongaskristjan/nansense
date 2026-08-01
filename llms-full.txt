@@ -241,7 +241,9 @@ Time travel needs an epoch cache: drive the epoch loop with [`for epoch in sessi
 
 ### The schedule
 
-The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate `session.batches`, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass `phases={"train": a, "val": b}` to `start()` if you want that precision from the very first epoch — an optional up-front declaration (it's what the PyTorch Lightning integration uses).
+The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate `session.batches`, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass `phases={"train": a, "val": b}` to `start()` if you want that precision from the very first epoch — an optional up-front declaration, usually just `len(loader)` per phase. Every bundled example declares it this way, and the PyTorch Lightning integration does it for you from the trainer's dataloaders.
+
+A declared schedule is also validated: an unseen phase name, or more batches than declared, raises instead of passing silently. That is what you want when the counts are known up front, but it means a phase that does not run every epoch (validating every N epochs, say) should be re-declared with [`session.set_schedule(phases=...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session.set_schedule) rather than pinned once.
 
 ## Wire it into your loop: PyTorch Lightning
 
@@ -290,7 +292,7 @@ You drive the run from the top bar: **Step Batch** advances one batch, **Run** r
 
 **Time Travel** jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a [restorer](https://kongaskristjan.github.io/nansense/dev/wiring/#time-travel), which checkpoints each epoch start to disk.
 
-**Refresh** pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic *Update frequency* — how often views refresh during Run — plus the [recording](#recording-videos) and [numerical debugging](#numerical-debugging) options.
+**Refresh** pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic *Update frequency* — how often views refresh during Run — plus the [recording and snapshot](#recording-videos-and-snapshots) and [numerical debugging](#numerical-debugging) options.
 
 ## The main page
 
@@ -344,9 +346,11 @@ An experiment can also be kept **live**: it re-runs on every visualization updat
 
 Every few batches (configurable in the settings dialog), NaNsense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.
 
-## Recording videos
+## Recording videos and snapshots
 
 The settings dialog records any view to an MP4, one frame per visualization update, written under `nansense_recordings/`. Start a recording with a layer watched or an experiment open, then save or discard it from the same dialog.
+
+**Snapshot**, next to Record, writes that same frame just once — a PNG of the view exactly as it stands, saved to the same directory and named after the view and the training position (`main_ep3_train_b12.png`). No recording has to be running, training does not have to advance, and taking one leaves a recording of the same view alone.
 # API
 
 # API reference
@@ -523,6 +527,22 @@ for epoch in session.epochs(50, cache_dir="models/latest"):
 `start_epoch` resumes the run from `cache_dir`'s checkpoint of that epoch instead of training from scratch: the cache directory is adopted as-is (it may come from an earlier process — e.g. one baked into a deployment image), the checkpoint is validated against the live model / optimizer / scheduler up-front (`TimeTravelError` on a mismatch), and the loop yields `start_epoch … n - 1` with the state restored on the training thread before the first batch. Time travel then covers every epoch the directory holds a checkpoint for.
 
 Not iterating this leaves the run a straight pass with the UI's Time Travel button disabled; on a disabled session it is inert and nothing touches the disk (`start_epoch` is then ignored). Under DDP call it on every rank — a leader jump is broadcast so all ranks re-yield the same epoch in lockstep.
+
+### set_schedule
+
+```
+set_schedule(
+    *,
+    epochs: int | None = None,
+    phases: dict[str, int] | None = None,
+) -> None
+```
+
+Re-declare the schedule mid-run; batch counters are kept.
+
+`phases` switches the schedule to declared mode and replaces the phase set and their batch counts, so it is the way to express a shape that varies per epoch — validating every N epochs declares a train-only schedule on the epochs that skip it (what the Lightning integration does on each `on_train_epoch_start`). A schedule fixed for the whole run is better passed to `start(phases=...)` once.
+
+Either argument may be omitted to leave that part unchanged.
 
 ### restore_point
 
