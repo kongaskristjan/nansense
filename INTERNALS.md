@@ -1577,7 +1577,13 @@ channel" switch so the clamping and the no-rows fallback cannot drift between
 the two front-ends — and the picture's subplot title says `all channels` when a
 row could not be narrowed, since the fallback is otherwise invisible. Both `live_position` and the snapshot's position
 are always reported: they diverge under `run`/`detach`, and conflating them
-reads stale numbers as current.
+reads stale numbers as current. `status_view` also carries `batch_size`, which
+bounds the `sample` argument the per-sample tools take — the page has a spinner
+whose max tracks it, and a caller without it can only find the end of the batch
+by rendering past it. An out-of-range index is called out by name
+(`_sample_note`) rather than left as the blank picture it would otherwise
+share with "this layer captured nothing"; the size moves during a run, since
+the last batch of an epoch is usually short.
 
 **Tools that act, not just read.** Probes, experiments and time travel all
 execute on the *training* thread — probes and experiments inside

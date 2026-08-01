@@ -158,6 +158,12 @@ def status_view(session: Session) -> dict[str, Any]:
         ),
         "total_epochs": schedule.epochs,
         "phases": schedule.phase_order,
+        # Bounds the `sample` argument every per-sample tool takes. Without it
+        # an agent has no way to know how far it can page through a batch, and
+        # an out-of-range index renders as "nothing here" rather than as a
+        # mistake. `None` before the first capture, and it genuinely varies —
+        # the last batch of an epoch is usually short.
+        "batch_size": session.input_batch_size,
         "locked": session.locked,
         "layer_count": len(session.layer_names),
         "watched_layers": sorted(session.watched_layers),

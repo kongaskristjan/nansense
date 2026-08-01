@@ -119,6 +119,23 @@ def _unknown_layers(session: Session, layers: Sequence[str]) -> list[str]:
     return [name for name in layers if name not in known]
 
 
+def _sample_note(session: Session, sample: int) -> str:
+    """The out-of-range warning for a `sample` index, or an empty string.
+
+    An index past the end of the batch renders as an empty picture, which is
+    the same answer as "this layer captured nothing" and a very different
+    problem. The batch size is not fixed either — the last batch of an epoch is
+    usually short — so a `sample` that worked a moment ago can start failing.
+    """
+    size = session.input_batch_size
+    if size is None or 0 <= sample < size:
+        return ""
+    return (
+        f" Sample {sample} is out of range: this batch holds {size} "
+        f"(valid indices 0..{size - 1}), so nothing was drawn for it."
+    )
+
+
 def layer_image(
     session: Session,
     *,
@@ -172,7 +189,8 @@ def layer_image(
             None,
             note
             + " Nothing renderable: the layers captured no activation on this "
-            "batch, or their per-sample shape has no 2-D view (4-D and beyond).",
+            "batch, or their per-sample shape has no 2-D view (4-D and beyond)."
+            + _sample_note(session, sample),
         )
     return RenderedImage(png, note + caveat)
 
@@ -211,9 +229,12 @@ def input_image(
         return RenderedImage(
             None,
             f"Input {input_name!r} has no displayable image for sample {sample}: "
-            "either the sample index is out of range, or the input is neither "
-            "1-/3-channel image-like nor covered by an `input_transform` "
-            "(see nansense.serve).",
+            "the input is neither 1-/3-channel image-like nor covered by an "
+            "`input_transform` (see nansense.serve)."
+            # Which of the two it is matters: one is a serve() configuration
+            # problem and the other is a wrong argument, and the picture is
+            # equally blank either way.
+            + _sample_note(session, sample),
         )
     note = f"Input {input_name!r}, sample {sample}, at {_position_note(session)}."
     if mean is None or std is None:

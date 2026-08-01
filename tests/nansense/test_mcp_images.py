@@ -244,6 +244,26 @@ def test_render_layer_reports_unknown_layers_rather_than_dropping_them() -> None
         assert "nope" in rendered.note
 
 
+@pytest.mark.parametrize("render", ["layer", "input"])
+def test_an_out_of_range_sample_says_so_instead_of_drawing_nothing(
+    render: str,
+) -> None:
+    """An index past the end of the batch renders blank — the same answer as
+    "this layer captured nothing", and a completely different mistake."""
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        if render == "layer":
+            rendered = layer_image(
+                session, layers=["conv"], sample=9, display=_DISPLAY, input_name="x"
+            )
+        else:
+            rendered = input_image(
+                session, sample=9, display=_DISPLAY, input_name="x"
+            )
+        assert rendered.png is None
+        assert "out of range" in rendered.note
+        assert "this batch holds 2" in rendered.note
+
+
 def test_rendering_before_the_first_capture_explains_itself() -> None:
     """An agent that asks too early gets told how to get a batch, not a blank."""
     session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})

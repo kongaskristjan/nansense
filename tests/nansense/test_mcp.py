@@ -110,6 +110,16 @@ def test_status_reports_paused_position_and_totals() -> None:
         assert view["layer_count"] == len(session.layer_names)
 
 
+def test_status_reports_the_batch_size_that_bounds_sample_arguments() -> None:
+    """Every per-sample tool takes a `sample` index; without the batch size
+    there is nothing to bound it by."""
+    with paused_session(TinyNet()) as session:
+        assert status_view(session)["batch_size"] == 2
+    # Before the first capture there is no batch to size.
+    unstarted = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    assert status_view(unstarted)["batch_size"] is None
+
+
 def test_status_distinguishes_a_loop_that_never_started() -> None:
     """`is_running` is True before the first batch; an agent must not read that
     as "training is advancing" and wait for a pause nothing is driving toward."""
