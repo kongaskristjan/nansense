@@ -87,9 +87,11 @@ def _mermaid_node_selector(slug: str) -> str:
 
 
 def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
-    """The main view's steps: a framing step naming the three panes, then
-    the mechanics, with the first two steps pointing at `layer_slug`'s
-    diagram node.
+    """The main view's steps: click a layer, read its card, go deeper.
+
+    The opening step invites the diagram click the whole page turns on, with
+    its arrow on `layer_slug`'s node; the rest walk the card that click
+    opens, then the input pane.
 
     Falls back to the first diagram node when no layer is known (a model
     with no captured layers) — the arrow still lands on something sensible.
@@ -104,7 +106,7 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
             (node,),
         ),
         TourStep(
-            "A card opens with the it's activations and gradients.",
+            "A card opens with its activations and gradients.",
             ('[data-tour="strips"]',),
             ensure_card=True,
         ),
@@ -164,13 +166,14 @@ def stats_tour_steps() -> list[TourStep]:
             ensure_view="HISTOGRAM",
         ),
         TourStep(
-            "In MIN/MAX view, each column is one channel: the inputs that activates "
-            "it most.",
+            "In MIN/MAX view, each column is one channel: the inputs that "
+            "activate it most.",
             ('[data-tour="patch-column"]',),
             ensure_view="MIN/MAX",
         ),
         TourStep(
-            "In GRAPHS view, layer's activation statistics are plot against time. ",
+            "In GRAPHS view, a layer's activation statistics are plotted "
+            "against time.",
             ('[data-tour="epoch-graph"]',),
             ensure_view="GRAPHS",
         ),
@@ -178,13 +181,11 @@ def stats_tour_steps() -> list[TourStep]:
 
 
 def weights_tour_steps() -> list[TourStep]:
-    """The Weights page's steps: what the strips are, then axis remapping.
+    """The Weights page's one step: what the strips are.
 
-    The strips come first — the arrow lands on the weight strip, and the
-    message covers the gradient and optimizer-state strips below it (they
-    only appear once training has stepped, so they shouldn't be mistaken
-    for more weights). The dimension-role controls follow as the page's
-    one mechanic that isn't self-evident.
+    The arrow lands on the weight strip, and the message covers the
+    gradient and optimizer-state strips below it (they only appear once
+    training has stepped, so they shouldn't be mistaken for more weights).
     """
     return [
         TourStep(

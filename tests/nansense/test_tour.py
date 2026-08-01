@@ -77,7 +77,7 @@ def test_subpage_tours_stay_short(steps: list[TourStep]) -> None:
 
 @pytest.mark.parametrize(
     ("locked", "main_count", "experiment_count", "has_step_controls"),
-    [(True, 5, 2, False), (False, 6, 2, True)],
+    [(True, 4, 2, False), (False, 5, 2, True)],
 )
 def test_step_controls_step_only_on_live_runs(
     locked: bool,
@@ -164,36 +164,24 @@ def test_stats_steps_force_the_views_they_describe() -> None:
 
 
 def test_weights_tour_leads_with_the_weight_strip() -> None:
-    """The strips step comes first and its arrow lands on the weight row
-    (the message covers the gradient/optimizer strips below it)."""
-    first, second = weights_tour_steps()
-    assert first.selectors == ('[data-tour="weight-strips"]',)
-    assert "gradient" in first.text and "optimizer" in first.text
-    assert second.selectors == ('[data-tour="axes"]',)
+    """The one step's arrow lands on the weight row, and its message covers
+    the gradient/optimizer strips below it."""
+    (only,) = weights_tour_steps()
+    assert only.selectors == ('[data-tour="weight-strips"]',)
+    assert "gradient" in only.text and "optimizer" in only.text
 
 
 @pytest.mark.parametrize("locked", [True, False])
-def test_strips_step_explains_the_color_scale(locked: bool) -> None:
-    """The strips step is the only place the diverging color encoding is
-    spelled out (red positive, blue negative, white zero — see
-    `render._diverging_colormap`), so it must keep naming the colors."""
-    steps = {s.selectors[0]: s for s in main_tour_steps("conv1", locked=locked)}
-    text = steps['[data-tour="strips"]'].text
-    assert "red" in text and "blue" in text and "white" in text
-
-
-@pytest.mark.parametrize("locked", [True, False])
-def test_framing_step_opens_the_main_tour(locked: bool) -> None:
-    """The main tour leads with a framing step that names the three panes
-    and draws one arrow per pane (diagram node, strips, sample)."""
-    first = main_tour_steps("conv1", locked=locked)[0]
-    for pane in ("left", "middle", "right"):
-        assert pane in first.text
-    assert first.selectors == (
-        'g.node[id*="-flowchart-conv1-"]',
-        '[data-tour="strips"]',
-        '[data-tour="sample"]',
-    )
+def test_main_tour_opens_by_inviting_a_diagram_click(locked: bool) -> None:
+    """The main tour leads with the diagram click the page turns on: one
+    arrow, on a layer node, before any step talks about a card."""
+    first, second, *_ = main_tour_steps("conv1", locked=locked)
+    assert first.selectors == ('g.node[id*="-flowchart-conv1-"]',)
+    # The invitation stands on its own — nothing is auto-shown before the
+    # visitor has been told what a click does.
+    assert not first.ensure_card
+    # What the click produces is the next step's subject.
+    assert "card" in second.text
 
 
 def test_seen_keys_are_distinct_per_page() -> None:
@@ -216,11 +204,9 @@ def test_config_carries_driver_contract() -> None:
     payload = config["steps"]
     assert isinstance(payload, list)
     assert len(payload) == len(steps)
-    # Exactly three steps may auto-show a card: the main tour's framing
-    # step (its strips arrow needs a card in the middle pane), its strips
-    # step, and its buttons step (whose Weights anchor only exists on a
-    # card whose layer owns weights).
-    assert json.dumps(config).count('"ensureCard": true') == 3
+    # Exactly two steps may auto-show a card — the ones that talk about it:
+    # the strips step and the buttons step.
+    assert json.dumps(config).count('"ensureCard": true') == 2
     # Exactly one step re-opens the input pane (the sample step).
     assert json.dumps(config).count('"ensureInput": true') == 1
     subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
@@ -270,21 +256,12 @@ def test_ensure_card_step_defaults_off() -> None:
 
 @pytest.mark.parametrize("locked", [True, False])
 def test_main_steps_ensure_their_targets_are_visible(locked: bool) -> None:
-    """The framing, strips and buttons steps auto-show the weights-owning
-    card (the framing step's strips arrow and the buttons step's Weights
-    anchor only exist on a card), and the sample step re-opens the input
-    pane the top bar's image button can hide."""
-    all_steps = main_tour_steps("conv1", locked=locked)
-    framing = all_steps[0]
-    assert framing.ensure_card
-    assert not framing.ensure_input
-    # The framing and click steps share a first selector (the diagram
-    # node); keying the mechanics steps by first selector stays unique.
-    steps = {s.selectors[0]: s for s in all_steps[1:]}
-    assert steps['[data-tour="strips"]'].ensure_card
-    assert steps['[data-tour="weights"]'].ensure_card
-    assert steps['[data-tour="sample"]'].ensure_input
+    """The card-bound steps (strips, buttons) auto-show the card their
+    arrows need, and the sample step re-opens the input pane the top bar's
+    image button can hide."""
+    click, strips, buttons, sample, *_ = main_tour_steps("conv1", locked=locked)
+    assert not click.ensure_card and not click.ensure_input
+    assert strips.ensure_card and not strips.ensure_input
+    assert buttons.ensure_card and not buttons.ensure_input
     # The pane and card mechanics stay separate per step.
-    assert not steps['[data-tour="sample"]'].ensure_card
-    assert not steps['[data-tour="weights"]'].ensure_input
-    assert not steps['[data-tour="strips"]'].ensure_input
+    assert sample.ensure_input and not sample.ensure_card
