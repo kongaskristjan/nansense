@@ -141,12 +141,10 @@ def _minmax_stats_href(layer: str) -> str:
 def _run_tooltip(locked: bool) -> str:
     """Run-button tooltip. Locked sessions expose no training controls, so
     the "training must be paused" advice only appears when the user can
-    actually pause; the disabled-state note applies either way."""
+    actually pause. Why the button is greyed out (auto-run, or a run in
+    flight) is left to the results pane's own hint (`_status_text`)."""
     pause = "" if locked else " (training must be paused)"
-    return (
-        f"Run the experiment{pause}. "
-        "Disabled while auto-run is on or a run is in flight."
-    )
+    return f"Run the experiment{pause}"
 
 
 def _status_text(auto_run: bool, locked: bool) -> str:
@@ -394,7 +392,7 @@ def _build_experiment_page(
                         ui.button("Cancel", on_click=cancel, color="slate-500")
                         .props("dense size=md")
                         .classes("grow")
-                        .tooltip("Abort this page's experiment and its automatic reruns")
+                        .tooltip("Abort experiment")
                     )
                 ui.separator()
                 ui.label("Parameters").classes("font-mono text-sm")
@@ -425,8 +423,7 @@ def _build_experiment_page(
                     ui.switch("Overlay on input", value=state.overlay, on_change=on_overlay_change)
                     .props("dense")
                     .tooltip(
-                        "Blend each attribution map over its input image "
-                        "instead of showing them side by side"
+                        "Blend each map over its input instead of side by side"
                     )
                 )
                 overlay_switch.set_visibility(state.kind != "deep_dream")
@@ -444,10 +441,7 @@ def _build_experiment_page(
                         f'dense no-caps size=sm href="{_minmax_stats_href(state.layer)}"'
                     )
                     .classes("w-full")
-                    .tooltip(
-                        "Open this layer's MIN/MAX stats — the real inputs that "
-                        "most excite the same channels"
-                    )
+                    .tooltip("Open this layer's MIN/MAX stats")
                 )
                 compare_button.set_visibility(state.kind == "deep_dream")
                 description_label = ui.label("").classes(

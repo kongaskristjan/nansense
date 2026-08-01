@@ -116,7 +116,7 @@ _CHANNEL_PARAM = ExperimentParam(
     "int",
     0,
     minimum=-1,
-    tooltip="Which channel / feature of the selected layer to target",
+    tooltip="Which channel of the layer to target",
 )
 _CHANNELS_PARAM = ExperimentParam(
     "channels",
@@ -125,8 +125,7 @@ _CHANNELS_PARAM = ExperimentParam(
     _DEFAULT_DREAM_BATCH,
     minimum=1,
     tooltip=(
-        "Dream on this many of the layer's first channels — one synthesized "
-        "sample per channel (capped at the layer's channel count)"
+        "How many of the layer's channels to dream on — one sample each"
     ),
 )
 _MINIMIZE_PARAM = ExperimentParam(
@@ -134,10 +133,7 @@ _MINIMIZE_PARAM = ExperimentParam(
     "Minimize activations",
     "bool",
     False,
-    tooltip=(
-        "Descend the objective instead of ascending it — synthesize an input "
-        "that suppresses each channel rather than excites it"
-    ),
+    tooltip="Synthesize inputs that suppress each channel instead",
 )
 _SAMPLE_PARAM = ExperimentParam(
     "sample",
@@ -145,7 +141,7 @@ _SAMPLE_PARAM = ExperimentParam(
     "int",
     0,
     minimum=0,
-    tooltip="Which input-batch sample every channel's dream starts from",
+    tooltip="Which batch sample every dream starts from",
 )
 _TARGET_PARAM = ExperimentParam(
     "target",
@@ -153,7 +149,7 @@ _TARGET_PARAM = ExperimentParam(
     "int",
     -1,
     minimum=-1,
-    tooltip="Class index Grad-CAM explains; -1 uses each sample's prediction",
+    tooltip="Which class to explain",
 )
 _BATCH_PARAM = ExperimentParam(
     "batch",
@@ -161,10 +157,7 @@ _BATCH_PARAM = ExperimentParam(
     "int",
     _DEFAULT_DREAM_BATCH,
     minimum=1,
-    tooltip=(
-        "How many inputs to run on (defaults to the current batch size, "
-        f"capped at {_DEFAULT_DREAM_BATCH})"
-    ),
+    tooltip="How many inputs to run on",
 )
 _START_PARAM = ExperimentParam(
     "start",
@@ -172,18 +165,14 @@ _START_PARAM = ExperimentParam(
     "select",
     "noise",
     options={"noise": "Noise", "sample": "Current batch"},
-    tooltip=(
-        "Noise draws fresh inputs shaped and scaled like the network's real "
-        "input — different on every run; Current batch starts from the real "
-        "input batch itself"
-    ),
+    tooltip="What the synthesized inputs start from",
 )
 _CLAMP_PARAM = ExperimentParam(
     "clamp",
     "Clamp to displayable range",
     "bool",
     True,
-    tooltip="Keep pixels inside the [0, 1] display range mapped through the input mean/std",
+    tooltip="Keep pixels inside the displayable range",
 )
 _DIFFUSION_PARAM = ExperimentParam(
     "diffusion",
@@ -192,7 +181,7 @@ _DIFFUSION_PARAM = ExperimentParam(
     0.05,
     minimum=0,
     step=0.01,
-    tooltip="Per-step blend with a 3×3 blur; damps high-frequency noise",
+    tooltip="Blur a little each step; damps high-frequency noise",
 )
 _JITTER_PARAM = ExperimentParam(
     "jitter",
@@ -200,7 +189,7 @@ _JITTER_PARAM = ExperimentParam(
     "int",
     2,
     minimum=0,
-    tooltip="Random shift each step, undone after the update; reduces pixel-grid artifacts",
+    tooltip="Random shift each step; reduces pixel-grid artifacts",
 )
 _ZOOM_PARAM = ExperimentParam(
     "zoom",
@@ -209,10 +198,7 @@ _ZOOM_PARAM = ExperimentParam(
     1.0,
     minimum=1,
     step=0.01,
-    tooltip=(
-        "Per-step center zoom-in factor (1 = no zoom; on small inputs it "
-        "only takes effect above ~1 + 1/size)"
-    ),
+    tooltip="Zoom into the centre a little each step (1 = no zoom)",
 )
 
 # Ordered per kind: the targeting knob first (deep dream's Channels, Captum's

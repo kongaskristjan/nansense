@@ -35,12 +35,15 @@ _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
 _STAR_TOOLTIP: str = (
     "Like NaNsense? A GitHub ★ star ★ means a lot and keeps me hacking."
 )
+# The dialog's own explanation of what tripped. The banner links to the
+# dialog rather than repeating this on hover — see `_DEBUG_BANNER_TOOLTIP`.
 _DEBUG_DESCRIPTION: str = (
     "A numerical issue was detected: NaN/±Inf values, or gradients whose "
     "magnitude collapsed into a precision-losing under/overflow range. "
     "Training paused at the first issue; resuming keeps running and folds any "
-    "further issues into this warning. Click for the affected layers."
+    "further issues into this warning."
 )
+_DEBUG_BANNER_TOOLTIP: str = "Click for the affected layers"
 _DEBUG_UNDER_OVER_INTRO: str = (
     "Subnormal / overflow is dtype-aware and measured on gradients. A value "
     "counts as subnormal when its magnitude is nonzero but below the dtype's "
@@ -366,7 +369,7 @@ def _add_share_button() -> None:
     button = ui.button(icon="share", on_click=dialog.open, color="slate-500").props(
         "dense size=md flat"
     )
-    button.tooltip("Share NaNsense — the playground or the library")
+    button.tooltip("Share NaNsense")
 
 
 def _add_tour_button() -> None:
@@ -382,7 +385,7 @@ def _add_tour_button() -> None:
         "dense size=md flat"
     )
     button.on("click", js_handler="() => window.nansenseStartTour()")
-    button.tooltip("Show a quick tour of this view")
+    button.tooltip("Quick tour")
 
 
 def _back_href(layer: str | None) -> str:
@@ -432,9 +435,7 @@ def _refresh_button(session: Session) -> None:
         icon="refresh",
         on_click=session.request_snapshot,
         color="slate-500",
-    ).props("dense size=md").tooltip(
-        "Update the views from the next training batch (use while training)"
-    )
+    ).props("dense size=md").tooltip("Update from the next training batch")
 
 
 def _add_step_controls(
@@ -463,10 +464,8 @@ def _add_step_controls(
             "flex items-center gap-1 px-2 py-1 rounded bg-amber-100 "
             "text-amber-800 text-sm font-medium"
         ).tooltip(
-            "This is a shared, hosted playground: training sits paused at a "
-            "trained checkpoint and stepping, time travel, and input "
-            "pinning/perturbation are disabled. Show layers, browse stats, "
-            "and run experiments freely."
+            "Paused at a trained checkpoint. Layers, stats, and experiments "
+            "all work."
         ):
             ui.icon("lock").classes("text-base")
             ui.label("playground — training controls disabled")
@@ -496,7 +495,7 @@ def _add_step_controls(
         run_button = (
             ui.button("Run", on_click=run, color="green")
             .props("dense size=md")
-            .tooltip("Run to the last batch of training, then pause")
+            .tooltip("Run to the end of training")
         )
         with ui.dropdown_button(
             "Step Batch",
@@ -518,7 +517,7 @@ def _add_step_controls(
         stop_button = (
             ui.button("Stop", on_click=session.stop, color="red")
             .props("dense size=md")
-            .tooltip("Pause at next batch")
+            .tooltip("Pause at the next batch")
         )
         _add_time_travel_button(session)
     _add_position_label(session)
@@ -703,10 +702,7 @@ def _add_time_travel_button(session: Session) -> None:
                 if missing:
                     ui.button(
                         "Cache full training run", on_click=cache_run
-                    ).tooltip(
-                        "Run training to the end, checkpointing every epoch "
-                        "start along the way"
-                    )
+                    ).tooltip("Run to the end, checkpointing every epoch")
                 if epoch_slider is not None:
                     slider = epoch_slider
                     ui.button(
@@ -813,7 +809,7 @@ def _add_settings_button(
         button = ui.button(
             icon="settings", on_click=locked_dialog.open, color="slate-500"
         ).props("dense size=md")
-        button.tooltip("Settings (locked in this shared demo)")
+        button.tooltip("Settings (locked in this demo)")
         return button
 
     # Phases seen so far; refreshed each time the dialog opens (lazy schedules
@@ -829,9 +825,8 @@ def _add_settings_button(
             )
             .props("dense")
             .tooltip(
-                "Run experiments on the experiment page automatically — on "
-                "open and on every parameter change — instead of clicking Run "
-                "(Run is grayed out while on). Shared across all tabs."
+                "Re-run the experiment on every parameter change, without "
+                "pressing Run"
             )
         )
         ui.separator()
@@ -848,9 +843,8 @@ def _add_settings_button(
             value=str(StatsScope.WATCHED),
             on_change=lambda: apply_stats_scope(),
         ).props("dense outlined").classes("w-64").tooltip(
-            "\"No layers\" pauses collection but keeps everything collected "
-            "so far; \"All layers\" collects for every layer on every batch "
-            "— bound the memory with the channel limit below"
+            "Which layers collect statistics — \"No layers\" keeps what is "
+            "already collected"
         )
         ui.separator()
         ui.label("Performance").classes("text-lg font-bold")
@@ -869,8 +863,8 @@ def _add_settings_button(
             "Limit recorded channels",
             on_change=lambda: apply_watch_performance(),
         ).props("dense").tooltip(
-            "Keep per-channel data for only the first N channels of each "
-            "watched layer. Turn off to record every channel (highest VRAM)."
+            "Limit per-channel data to the first N channels; off keeps every "
+            "channel (highest VRAM)"
         )
         with ui.row().classes("w-full gap-2 no-wrap items-start"):
             channel_limit_input = ui.number(
@@ -881,8 +875,7 @@ def _add_settings_button(
                 format="%d",
                 on_change=lambda: apply_watch_performance(),
             ).props("dense outlined").classes("flex-1").tooltip(
-                "Per-channel histograms and patch galleries are kept for "
-                "this many channels"
+                "How many channels keep per-channel data"
             )
             samples_input = ui.number(
                 label="Samples per channel",
@@ -892,15 +885,13 @@ def _add_settings_button(
                 format="%d",
                 on_change=lambda: apply_watch_performance(),
             ).props("dense outlined").classes("flex-1").tooltip(
-                "Extreme input samples kept per channel, per ranking"
+                "How many extreme inputs to keep per channel"
             )
         average_patches_switch = ui.switch(
             "Average-extreme patch galleries",
             on_change=lambda: apply_watch_performance(),
         ).props("dense").tooltip(
-            "Also collect the max/min-average galleries, which keep a whole "
-            "input image per slot (extra VRAM). The pixel-extreme galleries "
-            "are always collected."
+            "Also collect the max/min-average galleries (extra VRAM)"
         )
         ui.label(
             "Changing the channel limit, samples per channel, or the average "
@@ -971,8 +962,8 @@ def _add_settings_button(
                 format="%g",
                 on_change=lambda: apply_debug(),
             ).props("dense outlined").classes("flex-1").tooltip(
-                "Trip when at least this share of a layer's summed |gradient| "
-                "falls in the under/overflow band"
+                "Trip when this share of a layer's |gradient| falls in the "
+                "under/overflow band"
             )
         with ui.row().classes("w-full gap-6 no-wrap"):
             debug_nan_inf = ui.switch(
@@ -1193,8 +1184,7 @@ def _add_settings_button(
                         on_click=take_snapshot,
                         color="grey-8",
                     ).props("dense size=sm no-caps").tooltip(
-                        "Save this view as it is right now — one PNG, no "
-                        "recording needed"
+                        "Save this view as a PNG"
                     )
                     if not current_recording:
                         ui.button(
@@ -1203,8 +1193,7 @@ def _add_settings_button(
                             on_click=add_view,
                             color="red",
                         ).props("dense size=sm no-caps").tooltip(
-                            "Add this view to recording — one frame per "
-                            "visualization update"
+                            "Record this view — one frame per update"
                         )
             if statuses:
                 ui.label("Currently recording").classes(
@@ -1240,7 +1229,7 @@ def _add_settings_button(
                             on_click=lambda s=status: end_view(s.view.key, s.view),
                             color="grey-8",
                         ).props("dense size=sm no-caps").tooltip(
-                            "Finalize this view's MP4 file(s)"
+                            "Finish this view's MP4 file(s)"
                         )
                         ui.button(
                             "Delete",
@@ -1296,7 +1285,7 @@ def _add_settings_button(
     button = ui.button(icon="settings", on_click=open_dialog, color="slate-500").props(
         "dense size=md"
     )
-    button.tooltip("Settings — auto-run, performance, error checks, recording")
+    button.tooltip("Settings")
     with button:
         badge = ui.badge("").props("color=red floating")
 
@@ -1342,7 +1331,7 @@ def _add_error_banner(session: Session) -> None:
                 message = ui.label(_debug_banner_summary(error)).classes(
                     "text-sm font-medium grow min-w-0 truncate cursor-pointer"
                 )
-                message.tooltip(_DEBUG_DESCRIPTION)
+                message.tooltip(_DEBUG_BANNER_TOOLTIP)
                 message.on("click", lambda e=error: _open_debug_dialog(session, e))
                 ui.button(
                     "Details", on_click=lambda e=error: _open_debug_dialog(session, e)
@@ -1353,8 +1342,7 @@ def _add_error_banner(session: Session) -> None:
                 ).props(
                     "dense size=sm outline color=grey-10 no-caps"
                 ).tooltip(
-                    "Turn off the active numerical checks and dismiss this "
-                    "warning (re-enable them under the settings gear)"
+                    "Turn off the numerical checks and dismiss this warning"
                 )
 
     def refresh() -> None:
@@ -1471,7 +1459,7 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
             ui.button(
                 "Silence warning", on_click=silence, color="amber-7"
             ).props("flat no-caps").tooltip(
-                "Turn off the active numerical checks and dismiss this warning"
+                "Turn off the numerical checks and dismiss this warning"
             )
             ui.button("Close", on_click=dialog.close).props("flat")
     dialog.open()
@@ -1515,15 +1503,15 @@ def _debug_action_button(
 
             ui.button("Watch", on_click=watch_layer).props(
                 "dense size=sm flat no-caps color=primary"
-            ).tooltip("Collect this layer's gradient stats (stay here)")
+            ).tooltip("Start collecting this layer's stats and stay here")
 
             ui.button("Stats").props(
                 f'href="{href}&watch=1" dense size=sm flat no-caps color=primary'
-            ).tooltip("Watch this layer and open its stats view")
+            ).tooltip("Start collecting and open this layer's stats")
         else:
             ui.button("Stats").props(
                 f'href="{href}" dense size=sm flat no-caps color=primary'
-            ).tooltip("Open this layer's stats view (gradient histograms)")
+            ).tooltip("Open this layer's stats")
 
 
 def _best_effort_ui_update(update: Callable[[], None]) -> None:

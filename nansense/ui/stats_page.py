@@ -524,7 +524,7 @@ def _build_stats_page(
                 on_click=lambda: _refresh_now(session, refresh),
                 color="slate-500",
             ).props("dense size=md flat").tooltip(
-                "Refresh now — and from the next training batch while running"
+                "Refresh now, and from the next training batch"
             )
             _add_tour_button()
             _add_share_button()
@@ -565,10 +565,7 @@ def _build_stats_page(
                     on_change=lambda e: set_phase(e.value),
                 ).props('dense outlined options-dense data-tour="phase"').classes(
                     "w-full text-sm"
-                ).tooltip(
-                    "Which phase the cards show — or the last captured batch's "
-                    "stats for any layer (watched or not)"
-                )
+                ).tooltip("Which phase the cards show")
                 # The divider keys off the label, not the value: NiceGUI sets
                 # each option's `value` to its integer index, so only the label
                 # carries our sentinel text.
@@ -588,9 +585,7 @@ def _build_stats_page(
                 ).props('dense outlined options-dense data-tour="layer"').classes(
                     "w-full text-sm"
                 ).tooltip(
-                    "Which layer's cards to show — one keeps the page fast. In "
-                    "a phase, the watched layers; in Current batch, any layer. "
-                    f'"all" is offered with fewer than {_ALL_LAYERS_MAX} options'
+                    "Which layer's cards to show — one keeps the page fast"
                 )
                 hist_boxes: list[ui.checkbox] = []
                 minmax_boxes: list[DisableableElement] = []
@@ -601,7 +596,7 @@ def _build_stats_page(
                             value=state.axis_log_x,
                             on_change=lambda e: set_axis_log_x(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
-                            "Log-based (signed-log) scale on the value axis"
+                            "Log scale on the value axis"
                         )
                     )
                     hist_boxes.append(
@@ -619,9 +614,8 @@ def _build_stats_page(
                             value=state.retain_axes,
                             on_change=lambda e: set_retain_axes(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
-                            "Keep the current axis ranges when toggling Log x / "
-                            "Log y or switching phase, instead of auto-fitting "
-                            "to the data"
+                            "Keep the current axis ranges instead of "
+                            "auto-fitting to the data"
                         )
                     )
                     hist_boxes.append(
@@ -630,9 +624,7 @@ def _build_stats_page(
                             value=state.show_bands,
                             on_change=lambda e: set_show_bands(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
-                            "Mark the dtype's subnormal and overflow "
-                            "(near-saturation) magnitude bands with dotted lines "
-                            "— in-range edges only (fp32's sit off the axis)"
+                            "Mark the subnormal and overflow magnitude bands"
                         )
                     )
                 with ui.column().classes("w-full gap-1") as minmax_controls:
@@ -654,9 +646,8 @@ def _build_stats_page(
                             value=state.heat_on,
                             on_change=lambda e: set_heat(bool(e.value)),
                         ).props("dense").classes("text-sm").tooltip(
-                            "Blend each channel's activation strength over the "
-                            "patches (red positive, blue negative), with a scale "
-                            "next to each grid"
+                            "Blend each channel's activation strength over "
+                            "the patches"
                         )
                     )
                 hist_controls.set_visibility(state.view == _VIEW_HISTOGRAM)
@@ -674,10 +665,7 @@ def _build_stats_page(
                     )
                     .props("dense no-caps size=sm")
                     .classes("w-full")
-                    .tooltip(
-                        "Open this layer's Deep Dream experiment — the inputs "
-                        "synthesized to excite the same channels"
-                    )
+                    .tooltip("Open this layer's Deep Dream experiment")
                 )
                 compare_deep_dream.set_visibility(state.view == _VIEW_MINMAX)
                 sync_compare_href()
@@ -1202,8 +1190,8 @@ class _HistPlot:
                 .classes("text-sm")
             )
             self._channel_switch.tooltip(
-                "Show one channel's histogram instead of all values pooled; "
-                "hover a bar to sample inputs from that value range"
+                "One channel's histogram — hover a bar to sample inputs "
+                "from that range"
             )
             self._channel_spinner = (
                 ui.number(

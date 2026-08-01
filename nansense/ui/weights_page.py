@@ -162,9 +162,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
                 ).props(
                     f'dense no-caps size=sm href="{_weight_graphs_href(layer)}"'
                 ).classes("ml-2").tooltip(
-                    "Open this layer's GRAPHS view on the Stats page, "
-                    "scrolled to its per-epoch weight statistics (starts "
-                    "watching the layer)"
+                    "This layer's weight statistics per epoch"
                 )
             _add_settings_button(session, record_view).classes("ml-auto")
             _add_tour_button()
@@ -324,8 +322,7 @@ class _WeightPanel:
                                     d, getattr(e, "value", None)
                                 ),
                             ).props("dense outlined").classes("w-24").tooltip(
-                                "How this dimension is laid out: X/Y image axes, "
-                                "Tile (side-by-side), or pin one Index"
+                                "How to lay out this dimension"
                             )
                             self._role_selects.append(select)
                             number = ui.number(
@@ -368,10 +365,7 @@ class _WeightPanel:
                         _strip_marker(
                             GRADIENTS.css,
                             "GRADIENT",
-                            tooltip=(
-                                "The parameter's gradient from the last "
-                                "training step"
-                            ),
+                            tooltip="The parameter's gradient",
                         )
                         self._grad_img = ui.html("")
                     # One marker-barred strip per tensor-valued optimizer
@@ -635,10 +629,7 @@ class _WeightPanel:
                     _strip_marker(
                         OPTIMIZER.css,
                         label,
-                        tooltip=(
-                            f"Optimizer state '{label.lower()}' for this "
-                            "parameter"
-                        ),
+                        tooltip="Optimizer state for this parameter",
                     )
                     ui.html(strip_html)
         self._custom_container.clear()
@@ -652,10 +643,7 @@ class _WeightPanel:
                     _strip_marker(
                         CUSTOM.css,
                         label,
-                        tooltip=(
-                            f"Your custom instrument '{label.lower()}' "
-                            "computed for this parameter"
-                        ),
+                        tooltip="Your custom instrument for this parameter",
                     )
                     ui.html(strip_html)
         self._opt_scalars.text = render.opt_scalar_text

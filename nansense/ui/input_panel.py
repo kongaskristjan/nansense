@@ -153,7 +153,7 @@ class InputPanel:
                     label="Input",
                     on_change=self._on_input_select,
                 ).props("dense outlined").classes("w-full").tooltip(
-                    "Which model input to show and perturb"
+                    "Which model input to show"
                 )
             # The image grows to the pane width; a flat (1D) input renders as a
             # colormapped strip with the scale bar beside it (hidden for image
@@ -217,8 +217,8 @@ class InputPanel:
                     value=self._session.is_pinned,
                     on_change=self._on_pin_change,
                 ).props("dense").classes("self-start").tooltip(
-                    "Re-run the model on this fixed batch at every pause (a probe "
-                    "run), instead of showing the changing training batch"
+                    "Keep showing this batch instead of the changing "
+                    "training batch"
                 )
                 self._pinned_caption = ui.label("").classes(
                     "text-xs text-slate-500 font-mono self-start"
@@ -234,12 +234,7 @@ class InputPanel:
                     value=self._session.probe_mode,
                     on_change=self._on_mode_change,
                 ).props("dense no-caps spread").classes("w-full").tooltip(
-                    "Train/eval handling for probe forwards. Unchanged (default) "
-                    "runs with whatever modes training left; Eval uses BatchNorm "
-                    "running stats and disables dropout; Train uses batch stats "
-                    "and dropout. Selecting Eval or Train re-runs the current "
-                    "batch under that mode even without a pin; all modes restore "
-                    "the model's state afterwards."
+                    "Which mode to run the model in"
                 )
 
                 ui.separator()
@@ -253,9 +248,8 @@ class InputPanel:
                         value=bool(self._session.perturbations),
                         on_change=self._on_perturb_change,
                     ).props("dense").tooltip(
-                        "Click to modify a single pixel of the input image. "
-                        "A diff compared to original is shown in the activations. "
-                        "Useful for measuring receptive fields."
+                        "Click a pixel to change it — the strips then show "
+                        "the difference"
                     )
                     # The value control (color swatch or per-channel fields) is
                     # built lazily for the selected input by `_sync_perturb_control`.
@@ -400,7 +394,7 @@ class InputPanel:
         # background *is* the current color.
         self._color_button = ui.button().props("dense unelevated").style(
             self._swatch_style()
-        ).tooltip("Perturb color — click to change")
+        ).tooltip("Perturb color")
         with self._color_button:
             picker = ui.color_picker(on_pick=self._on_pick_color)
             # Hex only: normalized_color expects #rrggbb, so don't let the
@@ -416,7 +410,7 @@ class InputPanel:
         if preview:
             self._value_preview = ui.element("div").style(
                 self._preview_style("#888888")
-            ).tooltip("Preview: the color these channel values map to")
+            ).tooltip("The color these values map to")
         with ui.row().classes("items-center gap-1 flex-wrap justify-end"):
             for i in range(n):
                 tip = "Value to write" if n == 1 else f"Channel {i} value"

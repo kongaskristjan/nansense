@@ -370,10 +370,9 @@ def _build_page(
                 # The menu opens bottom-right of the chip, so a default
                 # (below-anchored) tooltip would cover its first item — anchor
                 # the tooltip to the chip's left instead.
-                ui.tooltip(
-                    "Shown layers — click a layer to open its stats view; "
-                    "use the menu to pause stats collection"
-                ).props('anchor="center left" self="center right"')
+                ui.tooltip("Shown layers").props(
+                    'anchor="center left" self="center right"'
+                )
                 # Icon and count are built as button children (rather than the
                 # button's `icon=` / text) so the eye icon carries its own colour
                 # independently of the amber count. `sync_stats_icon` swaps it
@@ -394,17 +393,13 @@ def _build_page(
                             "Show all layers",
                             on_click=watch_all_dialog.open,
                         ).classes("text-sm").tooltip(
-                            "Show every layer's card (while stats are "
-                            "collected for watched layers, this also watches "
-                            "them all)"
+                            "Show every layer's card"
                         )
                         ui.menu_item(
                             "Hide all layers",
                             on_click=lambda: clear_all(),
                         ).classes("text-sm").tooltip(
-                            "Hide every card (while stats are collected for "
-                            "watched layers, this also unwatches them and "
-                            "drops their collected stats)"
+                            "Hide every card and drop the collected stats"
                         )
                         # A locked session pins the stats scope, so the
                         # pause toggle would be a silent no-op — hide it.
@@ -414,11 +409,8 @@ def _build_page(
                                 on_click=lambda: toggle_stats(),
                                 auto_close=False,
                             ).classes("text-sm").tooltip(
-                                "Pause/resume the running stats — pausing "
-                                "keeps everything collected so far, resuming "
-                                "restores the previous collection scope (see "
-                                "the settings gear). Cards stay visible "
-                                "either way."
+                                "Pause or resume stats collection; what is "
+                                "already collected is kept"
                             )
                         ui.separator()
                         # "Current-batch stats" submenu: every layer (watched
@@ -433,11 +425,9 @@ def _build_page(
                             # Anchored left like the chip's own tooltip: the
                             # layer list opens to the right, and a default
                             # (below-anchored) tooltip would overlap it.
-                            ui.tooltip(
-                                "Open a layer's stats page — the Current "
-                                "batch phase works for any layer, watched "
-                                "or not"
-                            ).props("anchor='center left' self='center right'")
+                            ui.tooltip("Open a layer's stats page").props(
+                                "anchor='center left' self='center right'"
+                            )
                             with ui.item_section().props("side"):
                                 ui.icon("chevron_right")
                             with ui.menu().props(
@@ -1142,7 +1132,7 @@ class _LayerView:
                         ).style(
                             "min-height: 0; padding: 1px 6px; font-size: 11px"
                         ).tooltip(
-                            f"Inspect this layer's weights ({len(weights)})"
+                            f"This layer's weights ({len(weights)})"
                         )
                 with ui.element("div").props(
                     'data-card-action data-tour="experiment"'
@@ -1156,7 +1146,7 @@ class _LayerView:
                     ).style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip(
-                        "Run deep dream / Captum experiments on this layer"
+                        "Deep dream and attribution experiments on this layer"
                     )
                 with ui.element("div").props(
                     'data-card-action data-tour="stats"'
@@ -1169,9 +1159,7 @@ class _LayerView:
                         f'dense no-caps href="/stats?layer={quote(name)}"'
                     ).style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
-                    ).tooltip(
-                        "Open this layer's stats view (histograms & min/max)"
-                    )
+                    ).tooltip("Open this layer's stats")
                 # The card only shows while the layer is shown, so the button
                 # is always the "off" direction; its label reflects what
                 # hiding does (see the class docstring) via `set_decoupled`.
@@ -1227,14 +1215,11 @@ class _LayerView:
         """
         if decoupled:
             self._hide_button.set_text("Hide")
-            self._hide_tooltip.set_text(
-                "Hide this layer's card in this tab (stats are unaffected)"
-            )
+            self._hide_tooltip.set_text("Hide this layer's card")
         else:
             self._hide_button.set_text("Unwatch")
             self._hide_tooltip.set_text(
-                "Unwatch this layer and hide its card (drops its collected "
-                "stats)"
+                "Hide this card and drop the layer's collected stats"
             )
 
     def apply(

@@ -55,8 +55,10 @@ def test_run_tooltip_mentions_pausing_only_when_unlocked(locked: bool) -> None:
     from nansense.ui.experiment_page import _run_tooltip
 
     text = _run_tooltip(locked)
-    # The disabled-state advice applies on locked pages too.
-    assert "auto-run" in text and "in flight" in text
+    # Why the button greys out is the results pane's job (`_status_text`);
+    # the tooltip stays a single clause about what pressing Run does.
+    assert "auto-run" not in text and "in flight" not in text
+    assert text.startswith("Run the experiment")
     if locked:
         # Locked sessions have no training controls to point at.
         assert "paused" not in text and "training" not in text
