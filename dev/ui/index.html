@@ -566,10 +566,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recording-videos" class="md-nav__link">
+  <a href="#recording-videos-and-snapshots" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recording videos
+        Recording videos and snapshots
       
     </span>
   </a>
@@ -769,10 +769,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recording-videos" class="md-nav__link">
+  <a href="#recording-videos-and-snapshots" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recording videos
+        Recording videos and snapshots
       
     </span>
   </a>
@@ -806,7 +806,7 @@
 <h2 id="the-top-bar">The top bar<a class="headerlink" href="#the-top-bar" title="Permanent link">&para;</a></h2>
 <p>You drive the run from the top bar: <strong>Step Batch</strong> advances one batch, <strong>Run</strong> runs to the end and then pauses, and <strong>Stop</strong> pauses a free-running session. The dropdown next to Step Batch steps a whole phase, a whole epoch, or up to a custom position.</p>
 <p><strong>Time Travel</strong> jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a <a href="../wiring/#time-travel">restorer</a>, which checkpoints each epoch start to disk.</p>
-<p><strong>Refresh</strong> pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic <em>Update frequency</em> — how often views refresh during Run — plus the <a href="#recording-videos">recording</a> and <a href="#numerical-debugging">numerical debugging</a> options.</p>
+<p><strong>Refresh</strong> pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic <em>Update frequency</em> — how often views refresh during Run — plus the <a href="#recording-videos-and-snapshots">recording and snapshot</a> and <a href="#numerical-debugging">numerical debugging</a> options.</p>
 <h2 id="the-main-page">The main page<a class="headerlink" href="#the-main-page" title="Permanent link">&para;</a></h2>
 <p>The left pane shows the model as a clickable architecture graph. Click a node to <strong>watch</strong> that layer: its activations and gradients appear as a card, and from that point on every batch feeds them into running statistics. Watched views refresh on every pause and, while training runs, on the <em>Update frequency</em> cadence.</p>
 <p>Watching slows down training and consumes memory, so it's generally better to watch only a few layers at a time.</p>
@@ -835,8 +835,9 @@
 <p>An experiment can also be kept <strong>live</strong>: it re-runs on every visualization update, so you can watch a deep dream or attribution evolve as training proceeds.</p>
 <h2 id="numerical-debugging">Numerical debugging<a class="headerlink" href="#numerical-debugging" title="Permanent link">&para;</a></h2>
 <p>Every few batches (configurable in the settings dialog), NaNsense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.</p>
-<h2 id="recording-videos">Recording videos<a class="headerlink" href="#recording-videos" title="Permanent link">&para;</a></h2>
+<h2 id="recording-videos-and-snapshots">Recording videos and snapshots<a class="headerlink" href="#recording-videos-and-snapshots" title="Permanent link">&para;</a></h2>
 <p>The settings dialog records any view to an MP4, one frame per visualization update, written under <code>nansense_recordings/</code>. Start a recording with a layer watched or an experiment open, then save or discard it from the same dialog.</p>
+<p><strong>Snapshot</strong>, next to Record, writes that same frame just once — a PNG of the view exactly as it stands, saved to the same directory and named after the view and the training position (<code>main_ep3_train_b12.png</code>). No recording has to be running, training does not have to advance, and taking one leaves a recording of the same view alone.</p>
 
 
 

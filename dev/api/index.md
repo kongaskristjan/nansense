@@ -173,6 +173,22 @@ for epoch in session.epochs(50, cache_dir="models/latest"):
 
 Not iterating this leaves the run a straight pass with the UI's Time Travel button disabled; on a disabled session it is inert and nothing touches the disk (`start_epoch` is then ignored). Under DDP call it on every rank — a leader jump is broadcast so all ranks re-yield the same epoch in lockstep.
 
+### set_schedule
+
+```
+set_schedule(
+    *,
+    epochs: int | None = None,
+    phases: dict[str, int] | None = None,
+) -> None
+```
+
+Re-declare the schedule mid-run; batch counters are kept.
+
+`phases` switches the schedule to declared mode and replaces the phase set and their batch counts, so it is the way to express a shape that varies per epoch — validating every N epochs declares a train-only schedule on the epochs that skip it (what the Lightning integration does on each `on_train_epoch_start`). A schedule fixed for the whole run is better passed to `start(phases=...)` once.
+
+Either argument may be omitted to leave that part unchanged.
+
 ### restore_point
 
 ```

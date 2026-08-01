@@ -10,7 +10,7 @@ You drive the run from the top bar: **Step Batch** advances one batch, **Run** r
 
 **Time Travel** jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a [restorer](https://kongaskristjan.github.io/nansense/dev/wiring/#time-travel), which checkpoints each epoch start to disk.
 
-**Refresh** pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic *Update frequency* — how often views refresh during Run — plus the [recording](#recording-videos) and [numerical debugging](#numerical-debugging) options.
+**Refresh** pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic *Update frequency* — how often views refresh during Run — plus the [recording and snapshot](#recording-videos-and-snapshots) and [numerical debugging](#numerical-debugging) options.
 
 ## The main page
 
@@ -64,6 +64,8 @@ An experiment can also be kept **live**: it re-runs on every visualization updat
 
 Every few batches (configurable in the settings dialog), NaNsense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.
 
-## Recording videos
+## Recording videos and snapshots
 
 The settings dialog records any view to an MP4, one frame per visualization update, written under `nansense_recordings/`. Start a recording with a layer watched or an experiment open, then save or discard it from the same dialog.
+
+**Snapshot**, next to Record, writes that same frame just once — a PNG of the view exactly as it stands, saved to the same directory and named after the view and the training position (`main_ep3_train_b12.png`). No recording has to be running, training does not have to advance, and taking one leaves a recording of the same view alone.

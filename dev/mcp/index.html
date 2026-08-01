@@ -898,15 +898,19 @@
 <td>Stop open experiment pages re-running on the thread you need</td>
 </tr>
 <tr>
-<td><code>start_recording</code>, <code>stop_recording</code>, <code>list_recordings</code></td>
+<td><code>start_recording</code>, <code>stop_recording</code>, <code>discard_recording</code>, <code>list_recordings</code></td>
 <td>Record a view to MP4, one frame per visualization update</td>
+</tr>
+<tr>
+<td><code>save_snapshot</code></td>
+<td>Save one still of a view as a PNG file to hand a human</td>
 </tr>
 </tbody>
 </table>
 <p><strong>Time travel is the one that changes how debugging goes.</strong> An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with <code>configure_debug_checks(interval_batches=1)</code> and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by <code>session.epochs()</code> with <code>session.restore_point()</code>; <code>get_time_travel_status</code> says whether yours is.</p>
 <p><strong>Probes hold the input still.</strong> Stepping normally changes the weights <em>and</em> the batch at once, which makes it hard to say which caused a change. Pinning a batch re-runs the model on that one input at every capture, so what you see between steps is the weights alone. <code>set_probe_mode("eval")</code> runs the probe with BatchNorm on its running statistics — a model that looks fine in train mode and broken in eval usually has statistics that have drifted.</p>
 <p><strong>Experiments run on the paused training thread</strong>, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and <code>run_experiment</code> returns statistics while <code>render_experiment</code> draws the result.</p>
-<p><strong>Recordings capture change over time.</strong> One frame per visualization update — so <code>set_update_frequency</code> is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human.</p>
+<p><strong>Recordings capture change over time.</strong> One frame per visualization update — so <code>set_update_frequency</code> is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. <code>save_snapshot</code> is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the <code>render_*</code> tools return the picture to <em>you</em>.</p>
 <h2 id="a-worked-example">A worked example<a class="headerlink" href="#a-worked-example" title="Permanent link">&para;</a></h2>
 <p>A typical exchange, once the run is paused:</p>
 <blockquote>
