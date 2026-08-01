@@ -1616,6 +1616,12 @@ cost a bug:
 - Registering an auto experiment replaces the entry under its key with a *new*
   seq, while a running recording holds the old one in its frozen params. So a
   duplicate `start_recording` is rejected before that mutation, not after.
+- Ending and discarding a recording differ only in whether the frames become a
+  file, so `stop_recording` and `discard_recording` share
+  `_release_recordings`: reading `statuses()` before the manager forgets them
+  and releasing the `auto_key`s those views pinned are identical either way,
+  and a discard that skipped the release would leave the experiment rerunning
+  for the rest of the training run.
 
 **The attribution overlay** (`experiment_frame(overlay=…)`) is the page's
 "Overlay on input" switch, reached by `render_experiment` and by an

@@ -32,6 +32,7 @@ from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from importlib import metadata
+from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server import MCPServer
@@ -1179,6 +1180,18 @@ def build_server(
             input_name=primary_input,
         )
 
+    @server.tool()
+    async def discard_recording(key: str | None = None) -> dict[str, Any]:
+        """Throw a recording away without writing a file (all if `key` is
+        omitted) — the recording dialog's Delete beside its Save & Finish.
+
+        The counterpart to `stop_recording` for a take that went wrong: a
+        recording started too early, or one whose run diverged. Stopping such a
+        take finalizes an MP4 you then have to clean up out of band, and the
+        partial file is otherwise indistinguishable from a real result.
+        """
+        return await asyncio.to_thread(_discard_recording, session, key=key)
+
     return server
 
 
@@ -1779,7 +1792,19 @@ def _auto_keys(views: Iterable[Any]) -> list[str]:
     return keys
 
 
-def _stop_recording(session: Session, *, key: str | None) -> dict[str, Any]:
+def _release_recordings(
+    session: Session, *, key: str | None, keep: bool
+) -> tuple[list[Any], tuple[Path, ...]] | dict[str, Any]:
+    """End (`keep`) or discard the named recordings, releasing what they held.
+
+    Shared by `stop_recording` and `discard_recording`, which differ only in
+    whether the frames become a file: everything around that — reading the
+    statuses *before* the manager forgets them, and releasing the auto
+    experiments those views pinned — is identical, and getting it wrong leaves
+    an experiment re-running for the rest of the training run.
+
+    Returns `(views, paths)`, or an error dict when `key` names nothing.
+    """
     manager = session.recording
     # Ask *before* ending: a recording that captured no frames finalizes to no
     # files at all, which is indistinguishable afterwards from a key that was
@@ -1787,7 +1812,6 @@ def _stop_recording(session: Session, *, key: str | None) -> dict[str, Any]:
     active = manager.statuses()
     if key is None:
         views = [status.view for status in active]
-        paths = manager.end_all()
     else:
         views = [status.view for status in active if status.view.key == key]
         if not views:
@@ -1795,10 +1819,41 @@ def _stop_recording(session: Session, *, key: str | None) -> dict[str, Any]:
                 "error": f"Nothing was recording under {key!r}.",
                 "hint": "list_recordings has the active keys.",
             }
-        paths = manager.end(key)
+    # Discarding writes nothing, so there are no paths to report either way.
+    paths: tuple[Path, ...] = ()
+    if keep:
+        paths = manager.end_all() if key is None else manager.end(key)
+    elif key is None:
+        manager.delete_all()
+    else:
+        manager.delete(key)
     for auto_key in _auto_keys(views):
         session.unpin_auto_experiment(auto_key)
         session.unregister_auto_experiment(auto_key)
+    return views, paths
+
+
+def _discard_recording(session: Session, *, key: str | None) -> dict[str, Any]:
+    released = _release_recordings(session, key=key, keep=False)
+    if isinstance(released, dict):
+        return released
+    views, _ = released
+    discarded = [view.key for view in views]
+    result: dict[str, Any] = {"discarded": discarded}
+    if not discarded:
+        result["note"] = "Nothing was recording."
+    else:
+        result["note"] = (
+            "Frames dropped and any partial file removed; nothing was written."
+        )
+    return result
+
+
+def _stop_recording(session: Session, *, key: str | None) -> dict[str, Any]:
+    released = _release_recordings(session, key=key, keep=True)
+    if isinstance(released, dict):
+        return released
+    views, paths = released
     stopped = [view.key for view in views]
     result: dict[str, Any] = {
         "stopped": stopped,

@@ -680,6 +680,54 @@ def test_an_experiment_snapshot_without_a_result_says_what_to_run(
         assert "run_experiment" in view["hint"]
 
 
+def test_discarding_a_recording_writes_no_file(tmp_path: Path) -> None:
+    """The dialog's Delete beside its Save & Finish: a take that went wrong
+    should leave nothing behind to clean up or mistake for a result."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        _call(session, "start_recording", {"view": "layers", "layers": ["conv"]})
+        session.recording.capture_frames(session)
+        discarded = _call(session, "discard_recording", {"key": "main"})
+        assert discarded["discarded"] == ["main"]
+        assert recordings_view(session)["recordings"] == []
+        assert list(tmp_path.iterdir()) == []
+
+
+def test_discarding_a_recording_that_never_started_says_so(tmp_path: Path) -> None:
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyNet()) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        view = _call(session, "discard_recording", {"key": "main"})
+        assert "Nothing was recording" in view["error"]
+
+
+def test_discarding_an_experiment_recording_releases_its_request(
+    tmp_path: Path,
+) -> None:
+    """Discarding has to release the pinned auto experiment exactly as stopping
+    does — otherwise a thrown-away take keeps rerunning for the whole run."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        _call(
+            session,
+            "start_recording",
+            {
+                "view": "experiment",
+                "layer": "conv",
+                "kind": "deep_dream",
+                "params": {"channels": 1, "steps": 2},
+            },
+        )
+        assert session._auto_experiments["experiment:conv"].expires_at is None
+        _call(session, "discard_recording", {"key": "experiment:conv"})
+        assert "experiment:conv" not in session._auto_experiments
+
+
 def test_recordings_view_of_an_idle_session_explains_the_frame_source() -> None:
     with paused_session(TinyNet()) as session:
         view = recordings_view(session)
