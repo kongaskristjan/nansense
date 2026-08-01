@@ -20,6 +20,7 @@ from nansense.watch import (
     bin_index,
     bin_midpoint,
     histogram_edges,
+    narrow_to_channel,
 )
 from tests.nansense.helpers import live_hist
 
@@ -591,6 +592,33 @@ def test_dead_channel_count_live_from_channel_hists() -> None:
     assert snap.channel_hists is not None
     assert snap.collapsed_dead_count is None
     assert snap.dead_channel_count == 1
+
+
+@pytest.mark.parametrize("channel, expected", [(0, 0), (1, 2), (-3, 0), (7, 2)])
+def test_narrow_to_channel_selects_a_row_and_clamps(
+    channel: int, expected: int
+) -> None:
+    """Out-of-range indices clamp rather than raise: `channel_limit` and the
+    layer's channel count both move under a caller holding a stale index."""
+    acc = TensorAccumulator()
+    acc.update(_dead_and_alive())
+    snap = acc.snapshot()
+    assert snap.channel_hists is not None
+    narrowed = narrow_to_channel(snap, channel)
+    # Channel 0 is all-zero (dead), channel 1 holds both non-zero values.
+    assert narrowed.hist is not None
+    assert sum(narrowed.hist) - narrowed.hist[ZERO_BIN] == expected
+    # Only the histogram is re-scoped; the scalars stay tensor-wide.
+    assert narrowed.n == snap.n
+    assert narrowed.channel_hists == snap.channel_hists
+
+
+def test_narrow_to_channel_passes_through_without_channel_rows() -> None:
+    acc = TensorAccumulator()
+    acc.update(torch.tensor([1.0, 2.0]))
+    snap = acc.snapshot()
+    assert snap.channel_hists is None
+    assert narrow_to_channel(snap, 3) is snap
 
 
 def test_collapse_keeps_dead_count_only_on_eviction() -> None:

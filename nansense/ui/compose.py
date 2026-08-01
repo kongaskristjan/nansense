@@ -286,6 +286,7 @@ def histogram_image(
     *,
     log_x: bool = False,
     log_y: bool = False,
+    channel: int | None = None,
 ) -> Image.Image | None:
     """Matplotlib re-render of `(layer, kind, phase, stats)` histogram rows.
 
@@ -293,6 +294,10 @@ def histogram_image(
     produce a server-side picture; this redraws the same bars, ranges and
     overflow markers with the Agg backend so a video frame or an agent's image
     reply shows what the page shows. `kind` is `"activation"` or `"gradient"`.
+
+    `channel` only labels the subplot titles — the caller narrows the rows
+    themselves, since a row without per-channel data keeps the universal
+    histogram and the title has to say so rather than claim a channel.
     """
     if not rows:
         return None
@@ -307,7 +312,14 @@ def histogram_image(
     axes = fig.subplots(len(rows), 1, squeeze=False)
     for ax_row, (layer, kind, phase, stats) in zip(axes, rows, strict=True):
         _draw_histogram_axes(
-            ax_row[0], layer, kind, phase, stats, log_x=log_x, log_y=log_y
+            ax_row[0],
+            layer,
+            kind,
+            phase,
+            stats,
+            log_x=log_x,
+            log_y=log_y,
+            channel=channel,
         )
     fig.tight_layout()
     canvas = FigureCanvasAgg(fig)
@@ -324,6 +336,7 @@ def _draw_histogram_axes(
     *,
     log_x: bool,
     log_y: bool,
+    channel: int | None = None,
 ) -> None:
     """One subplot: the same bars/ranges the watch page draws with Plotly."""
     from matplotlib.axes import Axes
@@ -380,8 +393,16 @@ def _draw_histogram_axes(
                 zorder=3,
                 clip_on=False,
             )
+    # A row the caller could not narrow (no per-channel data) keeps the
+    # universal histogram, so the title must not claim a channel it isn't
+    # showing — the picture is the only place a reader can check that.
+    scope = (
+        f" · ch {min(channel, len(tensor_stats.channel_hists) - 1)}"
+        if channel is not None and tensor_stats.channel_hists is not None
+        else (" · all channels" if channel is not None else "")
+    )
     title = (
-        f"{layer} — {kind}s · {phase} (ep {stats.epoch}) · "
+        f"{layer} — {kind}s · {phase} (ep {stats.epoch}){scope} · "
         f"n={tensor_stats.n:,} mean={tensor_stats.mean:.3g} "
         f"std={tensor_stats.std:.3g}"
     )

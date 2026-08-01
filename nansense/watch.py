@@ -48,7 +48,7 @@ from __future__ import annotations
 import math
 import threading
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import torch
@@ -323,6 +323,26 @@ def dead_channel_indices(
         for c, row in enumerate(channel_hists)
         if sum(row) > 0 and row[ZERO_BIN] == sum(row)
     ]
+
+
+def narrow_to_channel(
+    stats: TensorStatsSnapshot, channel: int
+) -> TensorStatsSnapshot:
+    """`stats` with its universal histogram replaced by one channel's row.
+
+    `channel` is clamped into the tracked range, which is what makes a stale
+    selection safe: `channel_limit` and the layer's own channel count both
+    move as settings change and epochs collapse. Only `hist` is narrowed —
+    the scalars stay tensor-wide, since the accumulator never kept per-channel
+    sums to derive a per-channel mean from.
+
+    Returns `stats` unchanged when per-channel rows aren't tracked (a 1D
+    tensor, or an older epoch whose rows were released).
+    """
+    if stats.channel_hists is None:
+        return stats
+    index = min(max(channel, 0), len(stats.channel_hists) - 1)
+    return replace(stats, hist=stats.channel_hists[index])
 
 
 def bin_midpoint(idx: int) -> float:

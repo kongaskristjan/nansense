@@ -36,7 +36,7 @@ from nansense.mcp_views import (
     tensor_stats_view,
 )
 from nansense.session import Session
-from nansense.watch import N_BINS, ZERO_BIN, TensorStatsSnapshot
+from nansense.watch import N_BINS, ZERO_BIN, TensorStatsSnapshot, bin_midpoint
 
 from .helpers import TinyNet, make_position, paused_session
 
@@ -202,6 +202,93 @@ def test_partly_diverged_stats_say_which_population_the_mean_describes() -> None
     assert view["non_finite_count"] == 1
     assert view["mean"] == 2.0
     assert "only the finite values" in view["note"]
+
+
+def _channelled(rows: tuple[tuple[int, ...], ...]) -> TensorStatsSnapshot:
+    """A stats snapshot whose universal histogram is the sum of `rows`."""
+    total = tuple(sum(row[b] for row in rows) for b in range(N_BINS))
+    return TensorStatsSnapshot(
+        n=sum(total),
+        sum=0.0,
+        sum_sq=0.0,
+        min=0.0,
+        max=0.0,
+        hist=total,
+        channel_hists=rows,
+    )
+
+
+def test_dead_channels_report_which_ones_not_just_how_many() -> None:
+    """A count cannot be drilled into: `render_bin_samples` needs an index."""
+    live = _hist(**{f"b{ZERO_BIN + 1}": 4})
+    dead = _hist(**{f"b{ZERO_BIN}": 4})
+    view = tensor_stats_view(_channelled((live, dead, dead)))
+    assert view["dead_channels"] == 2
+    assert view["dead_channel_indices"] == [1, 2]
+    assert view["channel_count"] == 3
+
+
+def test_channel_histogram_separates_one_channel_from_the_layer() -> None:
+    quiet = _hist(**{f"b{ZERO_BIN + 1}": 4})
+    loud = _hist(**{f"b{N_BINS - 2}": 6})
+    view = tensor_stats_view(_channelled((quiet, loud)), channel=1)
+    assert view["channel"] == 1
+    # Only channel 1's bar survives; the quiet channel's bin is gone.
+    ((value, count),) = view["channel_histogram"]
+    assert count == 6
+    assert value == pytest.approx(bin_midpoint(N_BINS - 2), rel=1e-5)
+    # The scalars stay tensor-wide — the accumulator keeps no per-channel sums,
+    # so re-scoping them here would invent numbers.
+    assert view["count"] == 10
+
+
+def test_channel_index_is_clamped_and_says_so() -> None:
+    rows = (_hist(**{f"b{ZERO_BIN + 1}": 2}),) * 2
+    view = tensor_stats_view(_channelled(rows), channel=9)
+    assert view["channel"] == 1
+    assert "out of range" in view["channel_note"]
+
+
+def test_channel_keys_are_absent_without_per_channel_tracking() -> None:
+    """A 1D tensor tracks no channel rows; the keys must not appear empty."""
+    flat = TensorStatsSnapshot(
+        n=2, sum=2.0, sum_sq=2.0, min=1.0, max=1.0, hist=_hist(**{f"b{ZERO_BIN + 1}": 2})
+    )
+    view = tensor_stats_view(flat, channel=0)
+    assert "channel_count" not in view
+    assert "channel_histogram" not in view
+
+
+def test_diverged_stats_still_report_their_channels() -> None:
+    """The early "nothing finite" return must not drop the channel keys —
+    an all-NaN layer is exactly when the per-channel breakdown matters."""
+    diverged = TensorStatsSnapshot(
+        n=0,
+        sum=0.0,
+        sum_sq=0.0,
+        min=0.0,
+        max=0.0,
+        hist=_hist(**{f"b{N_BINS - 1}": 4}),
+        channel_hists=(_hist(**{f"b{N_BINS - 1}": 4}),),
+    )
+    view = tensor_stats_view(diverged, channel=0)
+    assert "mean" not in view
+    assert view["channel_count"] == 1
+    ((value, count),) = view["channel_histogram"]
+    assert count == 4
+    assert value == pytest.approx(bin_midpoint(N_BINS - 1), rel=1e-5)
+
+
+def test_layer_stats_carry_the_channel_through_to_both_streams() -> None:
+    with paused_session(TinyNet()) as session:
+        view = layer_stats_view(session, layers=["fc1"], channel=0)
+        entry = view["layers"][0]
+        assert entry["activations"]["channel"] == 0
+        assert entry["activations"]["channel_histogram"] is not None
+        assert entry["gradients"]["channel"] == 0
+        # Asking for a channel is asking for a distribution, so the format
+        # legend ships without also setting `include_histogram`.
+        assert "histogram_format" in view
 
 
 def test_stats_history_points_at_watching_when_nothing_is_collected() -> None:

@@ -313,6 +313,7 @@ def histogram_image(
     phase: str | None = None,
     log_x: bool = False,
     log_y: bool = False,
+    channel: int | None = None,
 ) -> RenderedImage:
     """The stats page's histograms: value distributions per layer and phase.
 
@@ -338,13 +339,25 @@ def histogram_image(
     chosen = phase if phase is not None else (default_phase(session, collected) or "")
     png, caveat = _encode(
         histogram_frame(
-            session, layers=collected, phase=chosen, log_x=log_x, log_y=log_y
+            session,
+            layers=collected,
+            phase=chosen,
+            log_x=log_x,
+            log_y=log_y,
+            channel=channel,
         )
     )
     note = (
         f"Activation and gradient histograms for {collected}, phase {chosen!r}"
+        f"{'' if channel is None else f', channel {channel}'}"
         f"{' (log x)' if log_x else ''}{' (log y)' if log_y else ''}."
     )
+    if channel is not None:
+        note += (
+            " A row titled 'all channels' has no per-channel data (a 1D tensor "
+            "or a collapsed older epoch) and shows the universal histogram; "
+            "get_layer_stats reports each stream's channel_count."
+        )
     if without_stats:
         note += f" Not collecting statistics, skipped: {without_stats}."
     if unknown:

@@ -260,6 +260,24 @@ def test_histograms_of_an_uncollected_layer_say_how_to_collect() -> None:
         assert "watch_layers" in rendered.note
 
 
+def test_histogram_channel_narrows_the_picture_and_names_itself() -> None:
+    """The per-channel switch, on the wire: the note has to say which channel,
+    since one channel's bars and the layer's are the same picture otherwise."""
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        session.watch("conv")
+        before = session.pause_count
+        session.step_batch()
+        assert session.wait_until_paused(after_pauses=before, timeout=5.0)
+        rendered = histogram_image(session, layers=["conv"], channel=1)
+        assert rendered.png is not None
+        assert "channel 1" in rendered.note
+        # A channel's distribution is a subset of the layer's, so narrowing has
+        # to change the bars — an ignored argument would draw the same picture.
+        whole = histogram_image(session, layers=["conv"])
+        assert whole.png is not None
+        assert rendered.png != whole.png
+
+
 def test_patch_grids_of_an_unknown_layer_point_at_the_architecture() -> None:
     with paused_session(TinyNet()) as session:
         rendered = patches_image(session, layer="nope", display=_DISPLAY)

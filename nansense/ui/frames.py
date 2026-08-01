@@ -20,7 +20,7 @@ through `nansense.ui.__init__`.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from PIL import Image
@@ -45,7 +45,7 @@ from nansense.ui.render import (
     render_weight,
     tensor_hw,
 )
-from nansense.watch import LayerStatsSnapshot
+from nansense.watch import LayerStatsSnapshot, narrow_to_channel
 
 if TYPE_CHECKING:
     from nansense.session import Session
@@ -274,8 +274,14 @@ def histogram_frame(
     phase: str,
     log_x: bool = False,
     log_y: bool = False,
+    channel: int | None = None,
 ) -> Image.Image | None:
-    """The stats page's HISTOGRAMS view for one phase, redrawn server-side."""
+    """The stats page's HISTOGRAMS view for one phase, redrawn server-side.
+
+    `channel` is the page's "Per channel" switch: each row is narrowed to that
+    channel's histogram, falling back to the universal one where per-channel
+    rows are absent (a 1D tensor, a collapsed older epoch).
+    """
     if not layers:
         return None
     snap = session.watch_snapshot(layers=list(layers), include_patches=False)
@@ -285,8 +291,19 @@ def histogram_frame(
         if stats is None:
             continue
         for kind in ("activation", "gradient"):
-            rows.append((layer, kind, phase, stats))
-    return histogram_image(rows, log_x=log_x, log_y=log_y)
+            rows.append((layer, kind, phase, _narrowed(stats, kind, channel)))
+    return histogram_image(rows, log_x=log_x, log_y=log_y, channel=channel)
+
+
+def _narrowed(
+    stats: LayerStatsSnapshot, kind: str, channel: int | None
+) -> LayerStatsSnapshot:
+    """`stats` with `kind`'s histogram narrowed to one channel, or unchanged."""
+    if channel is None:
+        return stats
+    field = "activations" if kind == "activation" else "gradients"
+    tensor_stats = getattr(stats, field)
+    return replace(stats, **{field: narrow_to_channel(tensor_stats, channel)})
 
 
 def patch_frames(

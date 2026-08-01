@@ -1563,7 +1563,19 @@ separates the two by reading the histogram's total, since the histogram counts
 every value: it reports `finite_count` / `non_finite_count` and suppresses the
 derived scalars when nothing finite was seen. Histograms ship as
 `[value, count]` pairs over the populated bins only (211 fixed bins are nearly
-all empty on a real layer). Both `live_position` and the snapshot's position
+all empty on a real layer).
+
+**Per-channel data.** `_channel_view` carries the accumulator's `channel_hists`
+onto the wire in the two shapes a reader can act on: the *indices* of the dead
+channels (a count cannot be drilled into — `render_bin_samples(channel=…)`
+needs the number) and, with `channel=`, one channel's own histogram, which can
+be saturated or collapsed while the layer-wide one it sums into looks
+unremarkable. The scalars stay tensor-wide in both cases; the accumulator keeps
+no per-channel sums, so re-scoping them would invent numbers. The narrowing
+itself is `watch.narrow_to_channel`, shared with the `/stats` page's "Per
+channel" switch so the clamping and the no-rows fallback cannot drift between
+the two front-ends — and the picture's subplot title says `all channels` when a
+row could not be narrowed, since the fallback is otherwise invisible. Both `live_position` and the snapshot's position
 are always reported: they diverge under `run`/`detach`, and conflating them
 reads stale numbers as current.
 

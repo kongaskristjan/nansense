@@ -279,14 +279,24 @@ def build_server(
 
     @server.tool()
     async def get_layer_stats(
-        layers: list[str], include_histogram: bool = False
+        layers: list[str],
+        include_histogram: bool = False,
+        channel: int | None = None,
     ) -> dict[str, Any]:
         """Activation and gradient statistics for the last captured batch.
 
         Works for any layer, watched or not. Reports count, shape, mean, std,
-        min, max, median, and the dead-channel count (channels whose every
-        value landed in the zero band — dead ReLUs). `include_histogram` adds
-        the value distribution as `[value, count]` pairs over signed-log bins.
+        min, max, median, and the dead channels (those whose every value landed
+        in the zero band — dead ReLUs) as both a count and the indices
+        themselves, which is what lets you drill into one with `channel` here
+        or with `render_bin_samples`. `include_histogram` adds the value
+        distribution as `[value, count]` pairs over signed-log bins.
+
+        `channel` adds that one channel's histogram beside the layer-wide one:
+        a single channel can be saturated or collapsed while the layer it sums
+        into looks unremarkable. The scalars stay tensor-wide — the accumulator
+        keeps no per-channel sums — and the index is clamped into the tracked
+        range (`channel_count`, capped by the `channel_limit` setting).
 
         Non-finite values are reported as the strings "nan", "inf" and "-inf".
         """
@@ -295,6 +305,7 @@ def build_server(
             session,
             layers=layers,
             include_histogram=include_histogram,
+            channel=channel,
         )
 
     @server.tool()
@@ -413,6 +424,7 @@ def build_server(
         phase: str | None = None,
         log_x: bool = False,
         log_y: bool = False,
+        channel: int | None = None,
     ) -> list[Any]:
         """Picture of the value distributions of watched layers.
 
@@ -422,6 +434,10 @@ def build_server(
         only — call `watch_layers` first. `log_x` spreads the bins evenly by
         magnitude, `log_y` reveals sparse tails. Defaults to the newest phase
         with data.
+
+        `channel` narrows every subplot to one channel (the page's "Per
+        channel" switch) — the way to tell one collapsed channel from a layer
+        that collapsed as a whole.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -431,6 +447,7 @@ def build_server(
                 phase=phase,
                 log_x=log_x,
                 log_y=log_y,
+                channel=channel,
             )
         )
 

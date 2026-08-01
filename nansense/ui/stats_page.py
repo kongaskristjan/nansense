@@ -83,7 +83,12 @@ from nansense.ui.top_bar import (
     _top_bar_row,
 )
 from nansense.ui.tour import add_tour, stats_tour_steps
-from nansense.watch import N_BINS, LayerStatsSnapshot, WatchSnapshot
+from nansense.watch import (
+    N_BINS,
+    LayerStatsSnapshot,
+    WatchSnapshot,
+    narrow_to_channel,
+)
 
 
 # The View dropdown's three entries; also the values `_WatchPageState.view`
@@ -1287,17 +1292,17 @@ class _HistPlot:
         """
         if not self._per_channel:
             return per_phase
-        out: dict[str, LayerStatsSnapshot] = {}
-        for phase, snap in per_phase.items():
-            stats = kind_stats(snap, self._kind)
-            if stats.channel_hists is None:
-                out[phase] = snap
-                continue
-            channel = min(self._channel, len(stats.channel_hists) - 1)
-            narrowed = replace(stats, hist=stats.channel_hists[channel])
-            field = "activations" if self._kind == "activation" else "gradients"
-            out[phase] = replace(snap, **{field: narrowed})
-        return out
+        field = "activations" if self._kind == "activation" else "gradients"
+        return {
+            # `narrow_to_channel` clamps the index and passes a stream without
+            # per-channel rows through untouched — shared with the MCP server's
+            # own per-channel view so the two cannot disagree on either rule.
+            phase: replace(
+                snap,
+                **{field: narrow_to_channel(kind_stats(snap, self._kind), self._channel)},
+            )
+            for phase, snap in per_phase.items()
+        }
 
     def _trace_names(self, view: dict[str, LayerStatsSnapshot]) -> list[str]:
         suffix = (

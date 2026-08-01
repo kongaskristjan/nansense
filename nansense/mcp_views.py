@@ -33,7 +33,12 @@ import torch
 from nansense import debugger, experiments, instruments
 from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.session import Session
-from nansense.watch import TensorStatsSnapshot, bin_midpoint
+from nansense.watch import (
+    TensorStatsSnapshot,
+    bin_midpoint,
+    dead_channel_indices,
+    narrow_to_channel,
+)
 
 # Derived statistics are rounded to this many significant digits. The tail of
 # a float64 repr is noise for a reader deciding whether a gradient collapsed,
@@ -216,11 +221,48 @@ def histogram_view(hist: tuple[int, ...] | None) -> list[tuple[float, int]] | No
     ]
 
 
+def _channel_view(
+    stats: TensorStatsSnapshot, channel: int | None
+) -> dict[str, Any]:
+    """The per-channel keys: how many channels, which are dead, one's histogram.
+
+    The accumulator keeps a histogram row per channel (capped at
+    `channel_limit`), which is what the page's "Per channel" switch draws. Two
+    things here are not derivable from the layer-wide view. `dead_channels`
+    alone names a count, and a count cannot be drilled into — the *indices* are
+    what `render_bin_samples(channel=...)` and `render_layer` need to go from
+    "twelve channels are dead" to seeing one of them. And a channel's own
+    distribution can be bimodal, saturated or collapsed while the layer-wide
+    histogram it sums into looks unremarkable.
+    """
+    rows = stats.channel_hists
+    if rows is None:
+        return {}
+    view: dict[str, Any] = {"channel_count": len(rows)}
+    dead = dead_channel_indices(rows)
+    if dead:
+        # Bounded by `channel_limit` (16 by default), so the whole list ships
+        # rather than a truncated sample the caller cannot act on.
+        view["dead_channel_indices"] = dead
+    if channel is not None:
+        narrowed = narrow_to_channel(stats, channel)
+        index = min(max(channel, 0), len(rows) - 1)
+        view["channel"] = index
+        view["channel_histogram"] = histogram_view(narrowed.hist)
+        if index != channel:
+            view["channel_note"] = (
+                f"Channel {channel} is out of range; clamped to {index} "
+                f"(this tensor tracks {len(rows)} channels)."
+            )
+    return view
+
+
 def tensor_stats_view(
     stats: TensorStatsSnapshot,
     *,
     include_histogram: bool = False,
     shape: torch.Size | None = None,
+    channel: int | None = None,
 ) -> dict[str, Any]:
     """One tensor stream's scalars (and optionally its histogram).
 
@@ -231,6 +273,11 @@ def tensor_stats_view(
     layer has `n == 0`, which reads as "nothing here" when the truth is
     "everything here is NaN or Inf". So the counts are reported separately, and
     a partly-diverged layer says outright which population its mean describes.
+
+    `channel` narrows the *histogram* to one channel's row, the page's "Per
+    channel" switch. The scalars stay tensor-wide either way — see
+    `watch.narrow_to_channel` for why — so they are not silently re-scoped
+    under the caller.
     """
     finite = stats.n
     # `hist` counts every value, including the non-finite ones (NaN in the zero
@@ -254,6 +301,7 @@ def tensor_stats_view(
         )
         if include_histogram:
             view["histogram"] = histogram_view(stats.hist)
+        view.update(_channel_view(stats, channel))
         return view
 
     view["mean"] = _num(stats.mean)
@@ -274,6 +322,7 @@ def tensor_stats_view(
         view["dtype"] = dtype
     if include_histogram:
         view["histogram"] = histogram_view(stats.hist)
+    view.update(_channel_view(stats, channel))
     return view
 
 
@@ -282,12 +331,16 @@ def layer_stats_view(
     *,
     layers: Iterable[str],
     include_histogram: bool = False,
+    channel: int | None = None,
 ) -> dict[str, Any]:
     """Activation and gradient statistics for the last captured batch.
 
     Reads the published `BatchSnapshot`, so any layer works whether or not it
     is watched — watching only matters for the epoch-over-epoch series that
     `stats_history_view` reads.
+
+    `channel` adds that channel's own histogram to every stream, alongside the
+    dead-channel indices each one always reports.
     """
     snapshot = session.snapshot
     if snapshot is None:
@@ -321,11 +374,13 @@ def layer_stats_view(
                     layer_stats.activations,
                     include_histogram=include_histogram,
                     shape=None if activation is None else activation.shape,
+                    channel=channel,
                 ),
                 "gradients": tensor_stats_view(
                     layer_stats.gradients,
                     include_histogram=include_histogram,
                     shape=None if gradient is None else gradient.shape,
+                    channel=channel,
                 ),
             }
         )
@@ -334,7 +389,7 @@ def layer_stats_view(
         "position": position_view(position, schedule=session.schedule),
         "layers": entries,
     }
-    if include_histogram:
+    if include_histogram or channel is not None:
         view["histogram_format"] = (
             "[value, count] pairs over signed-log bins; value is the bin midpoint"
         )
