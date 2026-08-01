@@ -551,6 +551,7 @@ def experiment_image(
     seq: int,
     display: InputDisplay,
     input_name: str | None = None,
+    overlay: bool = False,
 ) -> RenderedImage:
     """The experiment page: the freshest result published for request `seq`."""
     from nansense.ui.frames import experiment_frame
@@ -566,13 +567,23 @@ def experiment_image(
     mean, std = display.stats(input_name)
     png, caveat = _encode(
         experiment_frame(
-            session, seq=seq, mean=mean, std=std, require_image=True
+            session,
+            seq=seq,
+            mean=mean,
+            std=std,
+            require_image=True,
+            overlay=overlay,
         )
     )
     note = (
         f"{result.kind} on {result.layer}, step {result.step}/{result.total_steps}"
         f"{'' if result.done else ' (still running)'}."
     )
+    if overlay and result.attribution is None:
+        note += (
+            " No attribution to overlay: this kind synthesizes an input rather "
+            "than attributing one, so the picture is unchanged."
+        )
     if result.error is not None:
         note += f" Error: {result.error}"
     if png is None:

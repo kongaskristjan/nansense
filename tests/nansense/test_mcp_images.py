@@ -30,6 +30,7 @@ from nansense.mcp_images import (
     MAX_SIDE,
     RenderedImage,
     _encode,
+    experiment_image,
     histogram_image,
     image_reply,
     input_image,
@@ -276,6 +277,84 @@ def test_histogram_channel_narrows_the_picture_and_names_itself() -> None:
         whole = histogram_image(session, layers=["conv"])
         assert whole.png is not None
         assert rendered.png != whole.png
+
+
+def _gradcam_seq(session: Any) -> int:
+    """Run Grad-CAM on `conv` and return its request seq."""
+    seq = session.request_experiment(
+        kind="gradcam", layer="conv", params={"target": -1}
+    )
+    assert session.wait_for_experiment(timeout=15)
+    result = session.experiment_result_for(seq)
+    assert result is not None and result.error is None
+    assert result.attribution is not None and result.reference is not None
+    return seq
+
+
+def test_experiment_overlay_blends_the_attribution_onto_the_input() -> None:
+    """The page's "Overlay on input" switch, on the wire: for a spatial method
+    the blend is the readable view, and a heat strip beside the image is not."""
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        seq = _gradcam_seq(session)
+        beside = experiment_image(session, seq=seq, display=_DISPLAY, input_name="x")
+        blended = experiment_image(
+            session, seq=seq, display=_DISPLAY, input_name="x", overlay=True
+        )
+        assert beside.png is not None and blended.png is not None
+        assert beside.png != blended.png
+
+
+def test_experiment_overlay_says_when_there_is_nothing_to_blend() -> None:
+    """Deep dream synthesizes an input rather than attributing one, so the
+    flag is inert — and silence would read as a blend that happened."""
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        seq = session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params={"channels": 2, "steps": 2, "lr": 0.1, "start": "sample"},
+        )
+        assert session.wait_for_experiment(timeout=15)
+        rendered = experiment_image(
+            session, seq=seq, display=_DISPLAY, input_name="x", overlay=True
+        )
+        assert rendered.png is not None
+        assert "No attribution to overlay" in rendered.note
+
+
+class _TwoChannelNet(nn.Module):
+    """A 2-channel input: image-shaped enough for Captum, but not a picture —
+    denormalizing needs `C in (1, 3)`, so no overlay can be built."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(2, 3, 3, padding=1)
+        self.fc = nn.Linear(3 * 6 * 6, 4)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.fc(torch.relu(self.conv(x)).flatten(1))
+
+
+def test_unblendable_overlay_falls_back_to_the_attribution_itself() -> None:
+    """An input that will not denormalize to an image has no overlay. Dropping
+    the attribution along with it would cost the reader the very thing the
+    overlay was meant to make legible."""
+    with paused_session(
+        _TwoChannelNet(), lambda m: m(torch.rand(2, 2, 6, 6)).square().mean().backward()
+    ) as session:
+        seq = session.request_experiment(
+            kind="neuron_gradient", layer="conv", params={"channel": 0}
+        )
+        assert session.wait_for_experiment(timeout=15)
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.attribution is not None
+        beside = experiment_image(session, seq=seq, display=_DISPLAY, input_name="x")
+        blended = experiment_image(
+            session, seq=seq, display=_DISPLAY, input_name="x", overlay=True
+        )
+        # Identical: the overlay could not be built, so the plain attribution
+        # picture is what comes back — not a picture missing a section.
+        assert blended.png is not None
+        assert blended.png == beside.png
 
 
 def test_patch_grids_of_an_unknown_layer_point_at_the_architecture() -> None:

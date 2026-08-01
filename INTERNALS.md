@@ -1617,6 +1617,18 @@ cost a bug:
   seq, while a running recording holds the old one in its frozen params. So a
   duplicate `start_recording` is rejected before that mutation, not after.
 
+**The attribution overlay** (`experiment_frame(overlay=…)`) is the page's
+"Overlay on input" switch, reached by `render_experiment` and by an
+`"experiment"` recording alike — for a spatial method like Grad-CAM the blend
+*is* the readable view, and a heat strip beside the image is one the reader has
+to align by eye. Two fallbacks keep it honest: deep dream has no attribution to
+blend and says so in the note rather than returning a silently identical
+picture, and an input that will not denormalize to an image (`C` outside
+`(1, 3)`) falls back to the plain attribution strip — losing the overlay must
+not also lose the attribution it was meant to make legible. The ±scale comes
+from `render.attribution_vmax` over the *whole* attribution tensor, shared with
+the page so one frame of a recording means the same thing as the next.
+
 Two shapes of "empty" also need care. `stack_sections` composes label-only
 sections into a perfectly valid picture of nothing but captions — right for a
 video frame, wrong for a caller choosing between a picture and an explanation,

@@ -679,6 +679,18 @@ def _encode_input_sample(
     return _pil_to_bytes(pil)
 
 
+def attribution_vmax(attribution: Tensor) -> float:
+    """Largest `|x|` over finite attribution values — the overlay's ±scale.
+
+    Shared by every consumer of `render_attribution_overlay` (the experiment
+    page, a recorded frame, an agent's image reply) so one sample's overlay
+    means the same thing as the next one's: the scale has to come from the
+    whole attribution tensor, not from the sample being drawn.
+    """
+    finite = attribution[torch.isfinite(attribution)]
+    return float(finite.abs().max()) if finite.numel() else 0.0
+
+
 def render_attribution_overlay(
     input_sample: Tensor,
     attribution_sample: Tensor,

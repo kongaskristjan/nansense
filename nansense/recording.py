@@ -66,7 +66,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from nansense.input_config import InputTransform
-from nansense.params import float_tuple, int_param, str_tuple
+from nansense.params import bool_param, float_tuple, int_param, str_tuple
 from nansense.schedule import BatchPosition, format_position
 
 if TYPE_CHECKING:
@@ -599,4 +599,5 @@ def _experiment_frame(view: RecordedView, session: Session) -> Image.Image | Non
         seq=int_param(view.params, "seq"),
         mean=float_tuple(view.params.get("input_mean")),
         std=float_tuple(view.params.get("input_std")),
+        overlay=bool_param(view.params, "overlay", False),
     )

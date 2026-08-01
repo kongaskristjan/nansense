@@ -1050,9 +1050,16 @@ def build_server(
         return {"cancelled": "all" if seq is None else seq}
 
     @server.tool(structured_output=False)
-    async def render_experiment(seq: int) -> list[Any]:
+    async def render_experiment(seq: int, overlay: bool = False) -> list[Any]:
         """Picture of an experiment's result: the synthesized inputs or the
-        attribution maps, beside the inputs they came from."""
+        attribution maps, beside the inputs they came from.
+
+        `overlay` blends an attribution over the input it explains instead of
+        drawing it alongside — for a spatial method like Grad-CAM that is the
+        difference between seeing *where* the model looked and having to align
+        a heat strip with an image by eye. Inert for deep dream, which
+        synthesizes an input rather than attributing one.
+        """
         return image_reply(
             await asyncio.to_thread(
                 experiment_image,
@@ -1060,6 +1067,7 @@ def build_server(
                 seq=seq,
                 display=display,
                 input_name=primary_input,
+                overlay=overlay,
             )
         )
 
@@ -1082,6 +1090,7 @@ def build_server(
         log_y: bool = False,
         kind: str | None = None,
         params: dict[str, Any] | None = None,
+        overlay: bool = False,
     ) -> dict[str, Any]:
         """Record a view to MP4, one frame per visualization update.
 
@@ -1095,7 +1104,8 @@ def build_server(
         own arguments: `layers` for "layers"/"histograms"/"patches", `layer`
         for "weights"/"experiment", `phase` for "histograms"/"patches", and
         `kind` + `params` for "experiment" (which registers its own
-        continuously re-running experiment, as the page does).
+        continuously re-running experiment, as the page does, plus `overlay`
+        to blend its attribution over the input in every frame).
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -1113,6 +1123,7 @@ def build_server(
             log_y=log_y,
             kind=kind,
             params=params,
+            overlay=overlay,
             display=display,
             input_name=primary_input,
         )
@@ -1429,6 +1440,7 @@ def _recorded_view(
     log_y: bool,
     kind: str | None,
     params: dict[str, Any] | None,
+    overlay: bool,
     display: InputDisplay,
     input_name: str | None,
 ) -> Any:
@@ -1568,6 +1580,7 @@ def _recorded_view(
             "auto_key": key,
             "input_mean": mean,
             "input_std": std,
+            "overlay": overlay,
         },
     )
 
@@ -1601,6 +1614,7 @@ def _start_recording(
     log_y: bool,
     kind: str | None,
     params: dict[str, Any] | None,
+    overlay: bool,
     display: InputDisplay,
     input_name: str | None,
 ) -> dict[str, Any]:
@@ -1616,6 +1630,7 @@ def _start_recording(
         log_y=log_y,
         kind=kind,
         params=params,
+        overlay=overlay,
         display=display,
         input_name=input_name,
     )

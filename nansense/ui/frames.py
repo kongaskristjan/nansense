@@ -37,8 +37,10 @@ from nansense.ui.compose import (
     upscaled_image,
 )
 from nansense.ui.render import (
+    attribution_vmax,
     default_weight_dims,
     probe_act_tensor,
+    render_attribution_overlay,
     render_image,
     render_patch_grid,
     render_strip,
@@ -48,6 +50,7 @@ from nansense.ui.render import (
 from nansense.watch import LayerStatsSnapshot, narrow_to_channel
 
 if TYPE_CHECKING:
+    from nansense.experiments import ExperimentResult
     from nansense.session import Session
 
 #: Which video file / group each patch grid belongs to. Crops ("pixel" grids)
@@ -350,9 +353,17 @@ def experiment_frame(
     mean: tuple[float, ...] | None = None,
     std: tuple[float, ...] | None = None,
     require_image: bool = False,
+    overlay: bool = False,
 ) -> Image.Image | None:
     """The experiment page: request `seq`'s freshest result, headed by a status
-    line (kind, layer, step, objective, error)."""
+    line (kind, layer, step, objective, error).
+
+    `overlay` is the page's "Overlay on input" switch: the attribution is
+    blended over the input rather than drawn beside it, which for a spatial
+    method (Grad-CAM) is the difference between a readable picture and a heat
+    strip a reader has to align by eye. Deep dream has no attribution to blend,
+    so the flag is inert there — as on the page, where the switch is hidden.
+    """
     result = session.experiment_result_for(seq)
     if result is None:
         return None
@@ -364,7 +375,12 @@ def experiment_frame(
     sections: list[_Section] = [(status, None)]
     if result.image is not None:
         sections.append(("result", batch_image_row(result.image, mean=mean, std=std)))
-    if result.attribution is not None:
+    blended = (
+        _overlay_section(result, mean=mean, std=std) if overlay else None
+    )
+    if blended is not None:
+        sections.append(blended)
+    elif result.attribution is not None:
         sections.append(
             (
                 "attribution",
@@ -378,3 +394,36 @@ def experiment_frame(
     if result.reference is not None:
         sections.append(("input", batch_image_row(result.reference, mean=mean, std=std)))
     return stack_sections(sections, require_image=require_image)
+
+
+def _overlay_section(
+    result: ExperimentResult,
+    *,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+) -> _Section | None:
+    """The attribution blended over the input, or `None` when it can't be.
+
+    `None` covers the cases the page hides the switch for or falls back from:
+    no attribution (deep dream), no reference input to blend onto, and an input
+    that won't denormalize to an image. The caller then draws the plain
+    attribution strip rather than nothing — a missing overlay must not cost the
+    reader the attribution it was meant to make legible.
+
+    The ±scale comes from the whole attribution tensor, not the drawn sample,
+    so a frame in a recording means the same thing as the one before it.
+    """
+    attribution = result.attribution
+    reference = result.reference
+    if attribution is None or reference is None:
+        return None
+    rendered = render_attribution_overlay(
+        reference[0],
+        attribution[0],
+        mean=mean,
+        std=std,
+        vmax=attribution_vmax(attribution),
+    )
+    if rendered is None:
+        return None
+    return ("overlay", strip_image(rendered))

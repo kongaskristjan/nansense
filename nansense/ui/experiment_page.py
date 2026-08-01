@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 from uuid import uuid4
 
-import torch
 from nicegui import ui
 from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.elements.mixins.value_element import ValueElement
@@ -41,6 +40,7 @@ from nansense.ui.common import (
 from nansense.ui.render import (
     INPUT_IMAGE_SIZE,
     StripRender,
+    attribution_vmax,
     render_attribution_overlay,
     render_image,
     render_strip,
@@ -121,12 +121,6 @@ def _layer_channel_count(snap: BatchSnapshot | None, layer: str) -> int | None:
     if act is None or act.ndim < 2:
         return None
     return int(act.shape[1])
-
-
-def _attribution_vmax(attribution: Tensor) -> float:
-    """Largest `|x|` over finite attribution values — the overlay's ±scale."""
-    finite = attribution[torch.isfinite(attribution)]
-    return float(finite.abs().max()) if finite.numel() else 0.0
 
 
 @dataclass
@@ -292,6 +286,9 @@ def _build_experiment_page(
                 "auto_key": page_key,
                 "input_mean": input_mean,
                 "input_std": input_std,
+                # Frozen with the rest of the view: the switch is disabled for
+                # the duration of the recording, so the frames stay one view.
+                "overlay": state.overlay,
             },
         )
 
@@ -711,7 +708,7 @@ def _build_experiment_page(
         n = int(attr.shape[0])
         if state.overlay and reference is not None:
             ref = reference  # narrowed for the closures below
-            vmax = _attribution_vmax(attr)
+            vmax = attribution_vmax(attr)
             for i in range(n):
                 _sample_card(
                     i,
