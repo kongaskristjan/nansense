@@ -15,6 +15,7 @@ The public surface of the `nansense` package. Everything here is importable as `
       members:
         - batches
         - epochs
+        - set_schedule
         - restore_point
         - training_restorer
         - close

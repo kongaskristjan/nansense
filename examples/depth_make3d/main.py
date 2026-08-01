@@ -133,6 +133,9 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
         # Optional: lets time-travel checkpoints restore the LR schedule.
         scheduler=scheduler,
         port=args.nansense_port,
+        # Optional: declares the phase shape up front, so per-phase progress and
+        # boundary stops are exact from the first batch instead of the second epoch.
+        phases={"train": len(train_loader), "val": len(test_loader)},
         input_mean=config.mean,
         input_std=config.std,
     )

@@ -231,6 +231,11 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
         # Optional: lets time-travel checkpoints restore the LR schedule.
         scheduler=scheduler,
         port=args.nansense_port,
+        # Optional: declaring the schedule up front makes the UI exact from the
+        # very first batch — per-phase progress totals and the "run to end of
+        # phase/epoch" stops. Left out, NaNsense learns the same shape by
+        # watching `session.batches(...)`, but only from the second epoch on.
+        phases={"train": len(train_loader), "val": len(test_loader)},
         input_mean=config.mean,
         input_std=config.std,
     )
@@ -238,8 +243,8 @@ def run_single(args: argparse.Namespace, config: DatasetConfig, device: torch.de
     # Opting into time travel: each epoch start is checkpointed to
     # `--cache-dir`, and a UI-requested jump unwinds to `with session.restore_point():`
     # and re-enters at the chosen epoch with the cached model / optimizer /
-    # scheduler / RNG state restored. The epoch count is declared here; phase
-    # names and batch counts are discovered as `session.batches(...)` runs.
+    # scheduler / RNG state restored. The epoch count is declared here, and the
+    # phase shape was declared above.
     best_acc = 0.0
     for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():
@@ -357,6 +362,9 @@ def run_distributed(args: argparse.Namespace, config: DatasetConfig) -> None:
         optimizer=optimizer,
         scheduler=scheduler,
         port=args.nansense_port,
+        # Per-rank counts: each rank's sampler shard is what its own
+        # `session.batches(...)` iterates, and `len()` already reflects that.
+        phases={"train": len(train_loader), "val": len(test_loader)},
         input_mean=config.mean,
         input_std=config.std,
     )

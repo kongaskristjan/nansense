@@ -52,7 +52,9 @@ Time travel needs an epoch cache: drive the epoch loop with [`for epoch in sessi
 
 ### The schedule
 
-The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate `session.batches`, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass `phases={"train": a, "val": b}` to `start()` if you want that precision from the very first epoch — an optional up-front declaration (it's what the PyTorch Lightning integration uses).
+The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate `session.batches`, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass `phases={"train": a, "val": b}` to `start()` if you want that precision from the very first epoch — an optional up-front declaration, usually just `len(loader)` per phase. Every bundled example declares it this way, and the PyTorch Lightning integration does it for you from the trainer's dataloaders.
+
+A declared schedule is also validated: an unseen phase name, or more batches than declared, raises instead of passing silently. That is what you want when the counts are known up front, but it means a phase that does not run every epoch (validating every N epochs, say) should be re-declared with [`session.set_schedule(phases=...)`](api.md#nansense.Session.set_schedule) rather than pinned once.
 
 ## Wire it into your loop: PyTorch Lightning
 

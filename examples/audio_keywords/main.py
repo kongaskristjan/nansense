@@ -115,6 +115,7 @@ def run_single(args: argparse.Namespace, config: AudioConfig, device: torch.devi
         optimizer=optimizer,
         scheduler=scheduler,
         port=args.nansense_port,
+        phases={"train": len(train_loader), "val": len(val_loader)},
         input_mean=config.mean,
         input_std=config.std,
     )

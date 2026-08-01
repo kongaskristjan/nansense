@@ -1590,6 +1590,17 @@ class Session:
         epochs: int | None = None,
         phases: dict[str, int] | None = None,
     ) -> None:
+        """Re-declare the schedule mid-run; batch counters are kept.
+
+        `phases` switches the schedule to declared mode and replaces the phase
+        set and their batch counts, so it is the way to express a shape that
+        varies per epoch — validating every N epochs declares a train-only
+        schedule on the epochs that skip it (what the Lightning integration
+        does on each `on_train_epoch_start`). A schedule fixed for the whole
+        run is better passed to `start(phases=...)` once.
+
+        Either argument may be omitted to leave that part unchanged.
+        """
         with self._cv:
             self._schedule.update(epochs=epochs, phases=phases)
 

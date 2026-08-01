@@ -181,6 +181,7 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
         enabled=not args.disable_nansense,
         optimizer=optimizer,
         port=args.nansense_port,
+        phases={"train": len(train_loader), "val": len(val_loader)},
         input_mean=(0.0,),
         input_std=(1.0,),
     )

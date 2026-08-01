@@ -149,6 +149,7 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
         optimizer=optimizer,
         scheduler=scheduler,
         port=args.nansense_port,
+        phases={"train": len(train_loader), "val": len(val_loader)},
         input_transform={"image": display_rgb},
     )
 
