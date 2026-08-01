@@ -9,6 +9,7 @@ from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import quote
 
 import torch
@@ -782,14 +783,16 @@ def _add_settings_button(
     frequency, so changing it mid-recording would change the videos' time
     base.
 
-    "Recording" offers a "Record" button for the page's own view (built by
-    `record_view` with the page's *current* parameters, frozen for the
-    recording's lifetime; None when the page's current state can't be
-    recorded yet) plus the list of all active recordings, each one
-    save-&-finishable (finalize the MP4) or deletable (discard it). The
-    current page's view, while it records, appears only in that list (marked
-    "this view") rather than twice. A red badge on the gear carries the
-    active-recording count.
+    "Recording" offers "Snapshot" and "Record" buttons for the page's own
+    view (built by `record_view` with the page's *current* parameters —
+    frozen for the recording's lifetime, or for the one instant a snapshot
+    takes; None when the page's current state can't be captured yet) plus
+    the list of all active recordings, each one save-&-finishable (finalize
+    the MP4) or deletable (discard it). Snapshot writes one PNG of the view
+    as it stands and is always available; Record is replaced by the view's
+    entry in that list (marked "this view") while it records, rather than
+    offered twice. A red badge on the gear carries the active-recording
+    count.
 
     On a locked session every setting in here is shared, mutable state, so
     the gear opens a short notice instead of the dialog.
@@ -984,7 +987,8 @@ def _add_settings_button(
         ui.label("Recording").classes("text-lg font-bold")
         ui.label(
             "Each recorded view becomes an MP4 file — one frame per "
-            "visualization update."
+            "visualization update. Snapshot writes that same frame once, as "
+            "a PNG of the view right now."
         ).classes("text-sm text-slate-600")
         recording_section = ui.column().classes("w-full gap-3")
         ui.separator()
@@ -1104,6 +1108,30 @@ def _add_settings_button(
         refresh_recording_lock()
         rebuild()
 
+    # Rendering a frame can take seconds for a large view, so the snapshot
+    # runs off the event loop like end/delete below — and its notify goes
+    # through `_best_effort_ui_update`, since the dialog may be gone by then.
+    async def take_snapshot() -> None:
+        view = record_view() if record_view is not None else None
+        if view is None:
+            ui.notify("Nothing to capture on this page yet", type="warning")
+            return
+        message: str
+        kind: Literal["positive", "negative", "warning"]
+        try:
+            paths = await asyncio.to_thread(
+                session.recording.snapshot, view, session
+            )
+        except Exception as e:  # noqa: BLE001 — reported, like a frame error
+            message, kind = f"Snapshot failed: {type(e).__name__}: {e}", "negative"
+        else:
+            message, kind = (
+                ("Saved " + ", ".join(str(p) for p in paths), "positive")
+                if paths
+                else ("Nothing to capture in this view yet", "warning")
+            )
+        _best_effort_ui_update(lambda: ui.notify(message, type=kind))
+
     # End/delete run via `asyncio.to_thread`: finalizing the MP4 writers
     # (ffmpeg) takes a moment and may briefly wait for an in-flight frame
     # append — blocking the event loop here would starve the websocket
@@ -1141,32 +1169,43 @@ def _add_settings_button(
         recording_section.clear()
         statuses = session.recording.statuses()
         current = record_view() if record_view is not None else None
-        # The current page's view shows up either as the "Record" button (not
-        # yet recording) or — once recording — as a "this view" entry in the
-        # list below, never both.
+        # Snapshot stays offered whatever the view is doing — a still costs
+        # nothing and is just as useful mid-recording. "Record" is the one
+        # that disappears once the view records, since it then carries a
+        # "this view" entry in the list below; never both.
         current_recording = (
             current is not None and session.recording.is_recording(current.key)
         )
         with recording_section:
             if current is None:
                 ui.label(
-                    "Nothing recordable on this page yet — watch a layer or "
+                    "Nothing capturable on this page yet — watch a layer or "
                     "run an experiment first."
                 ).classes("text-sm text-slate-500 italic")
-            elif not current_recording:
+            else:
                 with ui.row().classes("w-full items-center gap-2 no-wrap"):
                     ui.label(current.label).classes(
                         "text-sm font-medium truncate grow min-w-0"
                     )
                     ui.button(
-                        "Record",
-                        icon="fiber_manual_record",
-                        on_click=add_view,
-                        color="red",
+                        "Snapshot",
+                        icon="photo_camera",
+                        on_click=take_snapshot,
+                        color="grey-8",
                     ).props("dense size=sm no-caps").tooltip(
-                        "Add this view to recording — one frame per "
-                        "visualization update"
+                        "Save this view as it is right now — one PNG, no "
+                        "recording needed"
                     )
+                    if not current_recording:
+                        ui.button(
+                            "Record",
+                            icon="fiber_manual_record",
+                            on_click=add_view,
+                            color="red",
+                        ).props("dense size=sm no-caps").tooltip(
+                            "Add this view to recording — one frame per "
+                            "visualization update"
+                        )
             if statuses:
                 ui.label("Currently recording").classes(
                     "text-xs uppercase tracking-wider text-slate-400"

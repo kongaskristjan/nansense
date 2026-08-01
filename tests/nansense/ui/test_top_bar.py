@@ -11,14 +11,16 @@ from nicegui.element import Element
 
 from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
+from nansense.recording import RecordedView
 from nansense.schedule import Schedule
-from nansense.session import BatchSnapshot
+from nansense.session import BatchSnapshot, Session
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
     _PLATFORM_ICONS,
     _REPO_URL,
     _SHARE_TARGETS,
     _STAR_TOOLTIP,
+    _add_settings_button,
     _add_share_button,
     _add_step_controls,
     _at_last_batch,
@@ -476,3 +478,71 @@ def test_unlocked_step_controls_keep_the_live_position_label() -> None:
     children = _step_controls_children(locked=False)
     labels = [c for c in children if isinstance(c, ui.label)]
     assert [label.text for label in labels] == ["(waiting for first batch)"]
+
+
+# --- settings dialog: snapshot & record -------------------------------
+
+
+def _capture_view() -> RecordedView:
+    return RecordedView(key="main", page="main", label="Main view", params={})
+
+
+def _capture_buttons(session: Session) -> dict[str, Element]:
+    """The recording section's buttons, keyed by label, for a main-page view.
+
+    The dialog fills that section only when it opens (`rebuild`), so the test
+    has to go through the gear's click handler — the button on its own leaves
+    the section empty.
+    """
+    before = set(ui.context.client.elements)
+    with ui.card():
+        gear = _add_settings_button(session, _capture_view)
+    click = next(
+        listener.handler
+        for listener in gear._event_listeners.values()
+        if listener.type == "click" and listener.handler is not None
+    )
+    click(None)  # opens the dialog, which is what fills the section
+    dialog = next(
+        element
+        for id_, element in ui.context.client.elements.items()
+        if id_ not in before and isinstance(element, ui.dialog)
+    )
+    return {
+        element.text: element
+        for element in _descendants(dialog)
+        if isinstance(element, ui.button) and element.text
+    }
+
+
+def _descendants(element: Element) -> list[Element]:
+    found: list[Element] = []
+    for slot in element.slots.values():
+        for child in slot.children:
+            found.append(child)
+            found += _descendants(child)
+    return found
+
+
+def test_snapshot_sits_next_to_record_for_the_pages_own_view() -> None:
+    """One still and one video of the same view, offered together — a snapshot
+    is a recording of length one, so the same page state feeds both."""
+    session, _model = make_session(epochs=1, phases={"train": 1})
+    buttons = _capture_buttons(session)
+    assert "Snapshot" in buttons and "Record" in buttons
+    assert buttons["Snapshot"]._props.get("icon") == "photo_camera"
+
+
+def test_snapshot_stays_offered_while_the_view_is_recording() -> None:
+    """Record is replaced by the view's "this view" entry in the list once it
+    records; Snapshot is not — a still mid-recording costs nothing and the
+    recording's own frames only arrive on the update cadence."""
+    session, _model = make_session(epochs=1, phases={"train": 1})
+    assert session.recording.start(_capture_view())
+    try:
+        buttons = _capture_buttons(session)
+        assert "Snapshot" in buttons
+        assert "Record" not in buttons
+        assert "Save & Finish" in buttons
+    finally:
+        session.recording.delete_all()

@@ -1055,6 +1055,28 @@ reproduces the previous visual quality; the cost is weaker compression
 refresh runs through `_best_effort_ui_update` (in `top_bar`) so a page
 closed during the await can't surface a teardown error.
 
+**Snapshots** (`RecordingManager.snapshot`) are the same frame, taken once.
+The dialog's Snapshot button — and the MCP `save_snapshot` tool — hand it
+the very `RecordedView` a recording would freeze and get back PNG file(s)
+in the same run directory, named `<key>_ep<E>_<phase>_b<B>[_<group>].png`
+(`_unique_path` suffixes `-2`, `-3` rather than overwrite, since two
+stills of one position — before and after a perturbation — are a normal
+thing to want). It goes through `_render_view_frames` and
+`_stamp_position` exactly like `ViewRecorder.capture`, so a still and a
+video frame of one view are the same picture; only the sink differs, and
+the MIN/MAX split into pixel/average files for the same reason. The
+recorder dict is never consulted: nothing needs to be recording, and a
+running recording neither gains a frame nor loses one. It runs on the
+caller's thread (the UI's `asyncio.to_thread` worker, or an MCP tool
+call) rather than the training thread, so a renderer failure *raises* to
+that caller instead of being stored on a recorder — there is someone to
+tell. Naming and writing take a separate `_snapshot_lock`, so a PNG write
+never delays the `count` / `statuses` polls the event loop makes.
+`save_snapshot` shares `_recorded_view` for every page but the
+experiment: a recording registers a rerunning request so each frame is
+fresh, which a one-shot still has no use for, so `_snapshot_view` draws
+an already-published `seq` and registers nothing to leak.
+
 ## Time travel (`nansense.restore`)
 
 Time travel jumps training back to the start of any epoch whose state was

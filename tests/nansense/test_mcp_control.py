@@ -620,6 +620,66 @@ def test_an_experiment_recording_keeps_its_request_rerunning(tmp_path: Path) -> 
         assert "experiment:conv" not in session._auto_experiments
 
 
+def test_saving_a_snapshot_writes_one_png_and_records_nothing(tmp_path: Path) -> None:
+    """The UI's Snapshot button, agent-side: one still of a view, no recording
+    started and none needed."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        view = _call(session, "save_snapshot", {"view": "layers", "layers": ["conv"]})
+        assert view["view"] == "main"
+        (file,) = view["files"]
+        assert Path(file).exists() and file.endswith(".png")
+        assert recordings_view(session)["recordings"] == []
+
+
+def test_a_snapshot_of_a_view_with_no_data_says_so(tmp_path: Path) -> None:
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyNet()) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        view = _call(session, "save_snapshot", {"view": "histograms"})
+        assert "watch some layers first" in view["error"]
+
+
+def test_an_experiment_snapshot_saves_a_result_without_pinning_a_rerun(
+    tmp_path: Path,
+) -> None:
+    """A recording registers a re-running request so each frame is fresh; a
+    still draws a published result, and must leave nothing rerunning behind."""
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        _call(
+            session,
+            "run_experiment",
+            {
+                "kind": "deep_dream",
+                "layer": "conv",
+                "params": {"channels": 1, "steps": 2},
+                "timeout_seconds": 60.0,
+            },
+        )
+        view = _call(session, "save_snapshot", {"view": "experiment"})
+        assert view["view"] == "experiment:conv"
+        assert Path(view["files"][0]).exists()
+        assert session._auto_experiments == {}
+
+
+def test_an_experiment_snapshot_without_a_result_says_what_to_run(
+    tmp_path: Path,
+) -> None:
+    from nansense.recording import RecordingManager
+
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path)
+        view = _call(session, "save_snapshot", {"view": "experiment", "seq": 7})
+        assert "No experiment result to save for seq 7" in view["error"]
+        assert "run_experiment" in view["hint"]
+
+
 def test_recordings_view_of_an_idle_session_explains_the_frame_source() -> None:
     with paused_session(TinyNet()) as session:
         view = recordings_view(session)

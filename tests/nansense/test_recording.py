@@ -1,4 +1,4 @@
-"""Tests for per-view MP4 recording (`nansense.recording`)."""
+"""Tests for per-view MP4 recording and PNG snapshots (`nansense.recording`)."""
 
 from __future__ import annotations
 
@@ -19,8 +19,10 @@ from nansense.recording import (
     _POSITION_BANNER_HEIGHT,
     _fit_frame,
     _main_frame,
+    _position_slug,
     _sanitize,
     _stamp_position,
+    _unique_path,
     _VideoStream,
 )
 from nansense.session import Session
@@ -289,6 +291,137 @@ def test_delete_removes_files(tmp_path: Path) -> None:
     assert all(not p.exists() for p in status.paths)
     assert not list((tmp_path / "rec").glob("*.mp4"))
     assert manager.count() == 0
+
+
+# --- snapshots (single-frame PNG stills) ------------------------------
+
+
+def test_position_slug_sorts_by_training_order() -> None:
+    from nansense.schedule import BatchPosition
+
+    position = BatchPosition(
+        phase="train",
+        epoch=3,
+        batch_idx=12,
+        is_last_in_phase=False,
+        is_last_in_epoch=False,
+        is_last_overall=False,
+    )
+    assert _position_slug(position) == "ep3_train_b12"
+
+
+def test_unique_path_never_overwrites(tmp_path: Path) -> None:
+    first = _unique_path(tmp_path, "main")
+    assert first.name == "main.png"
+    first.touch()
+    second = _unique_path(tmp_path, "main")
+    assert second.name == "main-2.png"
+    second.touch()
+    assert _unique_path(tmp_path, "main").name == "main-3.png"
+
+
+def test_snapshot_writes_the_recorded_frame_as_a_stamped_png(tmp_path: Path) -> None:
+    """A still is one recording frame: same renderer, same position banner."""
+    from PIL import Image
+
+    phases = {"train": 2}
+    session, model, manager = _make_session(tmp_path, epochs=1, phases=phases)
+    session.watch("conv")
+    session.detach()
+    _run_epochs(session, model, epochs=1, phases=phases)
+
+    view = _main_view()
+    (path,) = manager.snapshot(view, session)
+    assert path.name == "main_ep0_train_b1.png"
+    saved = Image.open(path)
+    frame = _main_frame(view, session)
+    assert frame is not None
+    # The frame the recorder would have encoded, plus the banner drawn on top.
+    assert saved.size == (frame.width, frame.height + _POSITION_BANNER_HEIGHT)
+
+
+def test_snapshot_of_minmax_writes_one_png_per_grid_group(tmp_path: Path) -> None:
+    phases = {"train": 2}
+    session, model, manager = _make_session(tmp_path, epochs=1, phases=phases)
+    session.set_watch_performance(average_patches=True)
+    session.watch("conv")
+    session.detach()
+    _run_epochs(session, model, epochs=1, phases=phases)
+    paths = manager.snapshot(
+        RecordedView(
+            key="watch_minmax",
+            page="watch_minmax",
+            label="MIN/MAX",
+            params={
+                "layers": ("conv",),
+                "phase": "train",
+                "grids": ("max_pixel", "max_average"),
+                "heatmap": False,
+                "input_mean": None,
+                "input_std": None,
+            },
+        ),
+        session,
+    )
+    # Same split as the videos: pixel crops and whole inputs never share one.
+    assert sorted(p.name for p in paths) == [
+        "watch_minmax_ep0_train_b1_average.png",
+        "watch_minmax_ep0_train_b1_pixel.png",
+    ]
+    assert all(p.exists() for p in paths)
+
+
+def test_repeated_snapshots_of_one_position_keep_both(tmp_path: Path) -> None:
+    phases = {"train": 1}
+    session, model, manager = _make_session(tmp_path, epochs=1, phases=phases)
+    session.watch("conv")
+    session.detach()
+    _run_epochs(session, model, epochs=1, phases=phases)
+    (first,) = manager.snapshot(_main_view(), session)
+    (second,) = manager.snapshot(_main_view(), session)
+    assert first != second
+    assert first.exists() and second.exists()
+
+
+def test_snapshot_needs_no_recording_and_leaves_one_running(tmp_path: Path) -> None:
+    """Snapshot never touches the recorder dict: a running recording keeps
+    its frame count, and one is not needed to take a still."""
+    phases = {"train": 1}
+    session, model, manager = _make_session(tmp_path, epochs=1, phases=phases)
+    session.watch("conv")
+    session.detach()
+    _run_epochs(session, model, epochs=1, phases=phases)
+
+    assert manager.snapshot(_main_view(), session)  # nothing recording
+    assert manager.count() == 0
+
+    assert manager.start(_main_view())
+    manager.capture_frames(session)
+    manager.snapshot(_main_view(), session)
+    (status,) = manager.statuses()
+    assert status.frames == 1  # the still added no frame
+    assert manager.is_recording("main")
+    manager.delete_all()
+
+
+def test_snapshot_of_a_view_with_nothing_to_draw_writes_no_file(
+    tmp_path: Path,
+) -> None:
+    """Before the first batch there is no snapshot to render from."""
+    session, _, manager = _make_session(tmp_path, epochs=1, phases={"train": 1})
+    assert manager.snapshot(_main_view(), session) == ()
+    assert not list((tmp_path / "rec").glob("*.png"))
+
+
+def test_snapshot_renderer_error_reaches_the_caller(tmp_path: Path) -> None:
+    """Unlike a recording frame (stored, never raised into the training loop),
+    a still is a foreground action with a caller to tell."""
+    session, _, manager = _make_session(tmp_path, epochs=1, phases={"train": 1})
+    with pytest.raises(ValueError, match="unknown recorded view page"):
+        manager.snapshot(
+            RecordedView(key="broken", page="nonsense", label="broken", params={}),
+            session,
+        )
 
 
 def test_close_finalizes_recordings(tmp_path: Path) -> None:

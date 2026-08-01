@@ -1,4 +1,4 @@
-"""Per-view MP4 recording of visualizations.
+"""Per-view MP4 recording — and single-frame PNG snapshots — of visualizations.
 
 Each recorded view renders one frame per *visualization update* (the
 frequency configured via `Session.set_update_frequency`, see
@@ -7,6 +7,12 @@ frequency configured via `Session.set_update_frequency`, see
 capture (`Session._record_frames` → `RecordingManager.capture_frames`)
 right after a frequency update published its snapshot, probe result, and
 auto-experiment reruns — so every frame is consistent with one update.
+
+`RecordingManager.snapshot` is the still counterpart: the same
+`RecordedView`, the same renderers and the same position banner, written
+once as PNG the moment it is asked for (from the caller's thread — the
+UI's worker or an MCP tool), into the same run directory. It needs no
+recording to be active, and leaves one that is running untouched.
 
 A `RecordedView` freezes the view's parameters at record start (watched
 layers, sample index, phase, axis scales, weight-axis layouts, the
@@ -309,6 +315,31 @@ def _sanitize(key: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", key).strip("_") or "view"
 
 
+def _position_slug(position: BatchPosition) -> str:
+    """A snapshot filename's position stamp — `ep3_train_b12`.
+
+    The banner drawn *into* the image says the same thing in prose; this is
+    the sortable, filename-safe form of it, so a directory listing of
+    snapshots reads in training order.
+    """
+    return f"ep{position.epoch}_{position.phase}_b{position.batch_idx}"
+
+
+def _unique_path(directory: Path, stem: str) -> Path:
+    """`directory/stem.png`, suffixed `-2`, `-3`, … if it is already taken.
+
+    Two snapshots of one view at one position are a normal thing to want
+    (before and after a perturbation, say), and neither should overwrite
+    the other.
+    """
+    path = directory / f"{stem}.png"
+    n = 2
+    while path.exists():
+        path = directory / f"{stem}-{n}.png"
+        n += 1
+    return path
+
+
 class RecordingManager:
     """All active recordings of one session, shared across UI connections.
 
@@ -325,6 +356,12 @@ class RecordingManager:
 
     def __init__(self, *, directory: Path | None = None, fps: int = VIDEO_FPS) -> None:
         self._lock = threading.Lock()
+        # Snapshots take their own lock, held across "pick a free name, write
+        # it" so two concurrent stills can't choose the same file. Keeping it
+        # apart from `_lock` is what stops a PNG write from delaying the
+        # `count` / `statuses` polls the event loop makes (see the class
+        # docstring) — they contend for nothing here.
+        self._snapshot_lock = threading.Lock()
         self._recorders: dict[str, ViewRecorder] = {}
         self.directory = (
             directory
@@ -393,6 +430,41 @@ class RecordingManager:
             self._recorders.clear()
         for recorder in recorders:
             recorder.delete()
+
+    def snapshot(self, view: RecordedView, session: Session) -> tuple[Path, ...]:
+        """Render `view` once, right now, and write it as PNG file(s).
+
+        A recording's single frame, taken on demand: same frozen
+        `RecordedView`, same renderers, same position banner — but written
+        immediately from the calling thread (the UI's worker thread or an
+        MCP tool call) instead of once per update from the training thread.
+        Nothing needs to be recording, and a recording of the same view is
+        untouched — the recorder dict is never consulted.
+
+        Returns the files written, newest name last: several when the view
+        splits into groups (the MIN/MAX pixel/average grids), and `()` when
+        the view has nothing to draw yet. Renderer failures propagate — a
+        snapshot is a foreground action with a caller to tell, unlike a
+        recording's frame, which must never reach the training loop.
+        """
+        frames = _render_view_frames(view, session)
+        position = _capture_position(session)
+        stamp = "" if position is None else _position_slug(position)
+        paths: list[Path] = []
+        for suffix, frame in frames.items():
+            if frame is None:
+                continue
+            if position is not None:
+                frame = _stamp_position(frame, format_position(position))
+            stem = _sanitize(
+                "_".join(part for part in (view.key, stamp, suffix) if part)
+            )
+            with self._snapshot_lock:
+                self.directory.mkdir(parents=True, exist_ok=True)
+                path = _unique_path(self.directory, stem)
+                Image.fromarray(frame).save(path)
+            paths.append(path)
+        return tuple(paths)
 
     def capture_frames(self, session: Session) -> None:
         """Append one frame to every active recording (training thread).

@@ -1106,6 +1106,51 @@ def build_server(
         `key` is omitted). `list_recordings` has the keys."""
         return await asyncio.to_thread(_stop_recording, session, key=key)
 
+    @server.tool()
+    async def save_snapshot(
+        view: Literal["layers", "weights", "histograms", "patches", "experiment"],
+        layers: list[str] | None = None,
+        layer: str | None = None,
+        phase: str | None = None,
+        sample: int = 0,
+        heatmap: bool = False,
+        log_x: bool = False,
+        log_y: bool = False,
+        seq: int | None = None,
+    ) -> dict[str, Any]:
+        """Save one still of a view as a PNG file and return its path.
+
+        A recording of length one — the same view, the same frame, written
+        immediately instead of once per update — so it needs no training to
+        advance and no stop call. This is the file to hand a human ("the
+        dead channels are in this picture"); the `render_*` tools return
+        the picture to *you* instead, and are what to use when you are the
+        one looking.
+
+        Views take the same arguments as `start_recording`, except
+        "experiment", which saves an already-published result: `seq` picks
+        it (default: the newest), rather than registering a rerunning
+        request the way a recording must.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        return await asyncio.to_thread(
+            _save_snapshot,
+            session,
+            view=view,
+            layers=layers,
+            layer=layer,
+            phase=phase,
+            sample=sample,
+            heatmap=heatmap,
+            log_x=log_x,
+            log_y=log_y,
+            seq=seq,
+            display=display,
+            input_name=primary_input,
+        )
+
     return server
 
 
@@ -1567,6 +1612,122 @@ def _start_recording(
     result = recordings_view(session)
     result["started"] = recorded.key
     return result
+
+
+def _snapshot_view(
+    session: Session,
+    *,
+    view: str,
+    layers: Sequence[str] | None,
+    layer: str | None,
+    phase: str | None,
+    sample: int,
+    heatmap: bool,
+    log_x: bool,
+    log_y: bool,
+    seq: int | None,
+    display: InputDisplay,
+    input_name: str | None,
+) -> Any:
+    """The `RecordedView` a snapshot freezes, or an error dict.
+
+    Every view but "experiment" freezes exactly what `start_recording`
+    would, so a still and a recording of the same view are the same
+    picture. The experiment is the exception: a recording *registers* a
+    continuously re-running request so each frame is a fresh rerun of one
+    seq, which a single still has no use for — it draws a result that has
+    already been published, and registering one here would leave a request
+    rerunning with no recording to ever release it.
+    """
+    from nansense.recording import RecordedView
+
+    if view != "experiment":
+        return _recorded_view(
+            session,
+            view=view,
+            layers=layers,
+            layer=layer,
+            phase=phase,
+            sample=sample,
+            heatmap=heatmap,
+            log_x=log_x,
+            log_y=log_y,
+            kind=None,
+            params=None,
+            display=display,
+            input_name=input_name,
+        )
+    result = (
+        session.experiment_result if seq is None else session.experiment_result_for(seq)
+    )
+    if result is None:
+        return {
+            "error": (
+                "No experiment result to save"
+                + ("." if seq is None else f" for seq {seq}.")
+            ),
+            "hint": "run_experiment publishes one; its seq names it here.",
+        }
+    mean, std = display.stats(input_name)
+    kind_label = experiments.EXPERIMENT_KINDS.get(result.kind, result.kind)
+    return RecordedView(
+        key=f"experiment:{result.layer}",
+        page="experiment",
+        label=f"Experiment · {kind_label} · {result.layer}",
+        params={
+            "layer": result.layer,
+            "seq": result.seq,
+            "input_mean": mean,
+            "input_std": std,
+        },
+    )
+
+
+def _save_snapshot(
+    session: Session,
+    *,
+    view: str,
+    layers: Sequence[str] | None,
+    layer: str | None,
+    phase: str | None,
+    sample: int,
+    heatmap: bool,
+    log_x: bool,
+    log_y: bool,
+    seq: int | None,
+    display: InputDisplay,
+    input_name: str | None,
+) -> dict[str, Any]:
+    frozen = _snapshot_view(
+        session,
+        view=view,
+        layers=layers,
+        layer=layer,
+        phase=phase,
+        sample=sample,
+        heatmap=heatmap,
+        log_x=log_x,
+        log_y=log_y,
+        seq=seq,
+        display=display,
+        input_name=input_name,
+    )
+    if isinstance(frozen, dict):
+        return frozen
+    paths = session.recording.snapshot(frozen, session)
+    if not paths:
+        return {
+            "error": f"{frozen.key!r} had nothing to draw, so no file was written.",
+            "hint": (
+                "The view renders from the last published snapshot and the "
+                "watch accumulators — let training advance one batch first."
+            ),
+        }
+    return {
+        "view": frozen.key,
+        "label": frozen.label,
+        "files": [str(path) for path in paths],
+    }
 
 
 def _auto_keys(views: Iterable[Any]) -> list[str]:
