@@ -100,37 +100,18 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
     node = _mermaid_node_selector(layer_slug) if layer_slug else "g.node"
     steps = [
         TourStep(
-            "A live look inside the network: the architecture on the "
-            "left, each shown layer's activations in the middle, and "
-            "the input batch on the right.",
-            # The diagram node must stay the first selector — the tour
-            # contract (and its test) reads the first step's first
-            # selector as the `findMermaidNode`-scheme node.
-            (
-                node,
-                '[data-tour="strips"]',
-                '[data-tour="sample"]',
-            ),
-            # With no card shown the middle pane is empty; a card gives
-            # the strips arrow a target. No ensure_input: its trigger
-            # (all selectors missing) can't fire while the diagram is
-            # visible, and the sample step re-opens the pane itself.
-            ensure_card=True,
-        ),
-        TourStep(
-            "Click a layer in the diagram to show or hide its activations.",
+            "Click any layer in the neural network.",
             (node,),
         ),
         TourStep(
-            "The card shows the layer's activations and gradients for "
-            "each sample — red is positive, blue negative, white zero.",
+            "A card opens with the it's activations and gradients.",
             ('[data-tour="strips"]',),
             ensure_card=True,
         ),
         TourStep(
-            "Weights, Experiment, and Stats go deeper: the layer's "
-            "parameters and optimizer state, deep-dream and attribution "
-            "probes, and its training statistics.",
+            "Weights, Experiments, and Stats go deeper: its "
+            "parameters and optimizer state, deep-dream, and "
+            "training statistics.",
             (
                 '[data-tour="weights"]',
                 '[data-tour="experiment"]',
@@ -142,7 +123,7 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
             ensure_card=True,
         ),
         TourStep(
-            "Pick which sample of the batch to inspect.",
+            "Select the input to inspect.",
             ('[data-tour="sample"]',),
             ensure_input=True,
         ),
@@ -168,8 +149,8 @@ def stats_tour_steps() -> list[TourStep]:
     """
     return [
         TourStep(
-            "These pick what every card shows: the view, the phase, "
-            "and which layer.",
+            "Select the investigation view, train or validation phase, "
+            "and the layer.",
             (
                 '[data-tour="view"]',
                 '[data-tour="phase"]',
@@ -178,22 +159,18 @@ def stats_tour_steps() -> list[TourStep]:
         ),
         TourStep(
             "In HISTOGRAM view, you can see the distributions of each layer's "
-            "activations and gradients. Turn on \"Per channel\" and hover a "
-            "bar to see inputs from that bin.",
+            "activations and gradients.",
             ('[data-tour="hist-activation"]', '[data-tour="hist-gradient"]'),
             ensure_view="HISTOGRAM",
         ),
         TourStep(
-            "In MIN/MAX, each column is one channel: the real inputs that "
-            "drove it most extreme, strongest sample on top.",
+            "In MIN/MAX view, each column is one channel: the inputs that activates "
+            "it most.",
             ('[data-tour="patch-column"]',),
             ensure_view="MIN/MAX",
         ),
         TourStep(
-            "GRAPHS charts this layer's statistics across the epochs — how "
-            "its activations, gradients, and weights evolved over training "
-            "(not the loss curve). Toggle stats beyond the mean via the "
-            "plot legend.",
+            "In GRAPHS view, layer's activation statistics are plot against time. ",
             ('[data-tour="epoch-graph"]',),
             ensure_view="GRAPHS",
         ),
@@ -216,11 +193,6 @@ def weights_tour_steps() -> list[TourStep]:
             "below.",
             ('[data-tour="weight-strips"]',),
         ),
-        TourStep(
-            "Map each weight dimension to the X or Y image axis, tile it "
-            "side by side, or pin it to one index.",
-            ('[data-tour="axes"]',),
-        ),
     ]
 
 
@@ -240,16 +212,14 @@ def experiment_tour_steps(*, locked: bool) -> list[TourStep]:
     """
     steps = [
         TourStep(
-            "Pick the experiment kind and target layer — the method's "
-            "description appears at the bottom of this pane.",
+            "Pick the experiment and the target layer.",
             ('[data-tour="kind"]', '[data-tour="layer"]'),
         ),
     ]
     if locked:
         steps.append(
             TourStep(
-                "Parameter changes don't re-run the experiment here — "
-                "press Run to apply them, and Cancel to abort a run.",
+                "Don't forget to rerun when changing parameters.",
                 ('[data-tour="run"]',),
             )
         )
