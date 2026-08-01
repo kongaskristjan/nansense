@@ -1287,7 +1287,10 @@ page and the composed still both draw), `static.py` (the CSS/JS blobs), and
 `tour.py` (the per-page guided tours: Python step data for every page — a
 long tour for the main view, one-to-three-step tours for the subpages —
 plus an overlay-JS driver that draws arrows to `data-tour`-tagged
-elements; on locked sessions each page's tour auto-starts once per browser
+elements; the main view's tour rides on the layer whose card the page
+already shows (`main_page._pick_tour_layer`), scoping its card anchors by
+`data-layer` so the node it points at and the card it talks about are the
+same layer; on locked sessions each page's tour auto-starts once per browser
 — a per-page localStorage flag set on dismissal — and every page's top-bar
 `?` button replays its tour anywhere; the driver brackets each run with
 start/end events, which the stats page — whose view-bound steps cycle the

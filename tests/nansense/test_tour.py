@@ -120,9 +120,12 @@ def test_data_tour_anchors_exist_in_ui_sources(
     source = _ui_source()
     for step in steps:
         for sel in step.selectors:
-            m = re.fullmatch(r'\[data-tour="([a-z-]+)"\]', sel)
+            # `search`, not `fullmatch`: the main tour's card anchors carry a
+            # `[data-layer="…"] ` scope prefix (the mermaid-node selector has
+            # no `data-tour` at all and is checked below).
+            m = re.search(r'\[data-tour="([a-z-]+)"\]', sel)
             if m is None:
-                continue  # the mermaid-node selector, checked below
+                continue
             assert f'data-tour="{m.group(1)}"' in source, sel
 
 
@@ -135,6 +138,58 @@ def test_diagram_selector_matches_findmermaidnode_scheme() -> None:
         s.selectors for s in main_tour_steps(None, locked=True)
     )
     assert fallback == "g.node"
+
+
+@pytest.mark.parametrize("locked", [True, False])
+def test_main_tour_stays_on_one_layer(locked: bool) -> None:
+    """Every main-tour arrow belongs to the same layer.
+
+    The first step points at a diagram node; each card-bound step after it
+    is scoped to that layer's card (`data-layer="<slug>"`), so the tour can
+    never point at a card the visitor didn't open — the auto-shown card and
+    the diagram node the tour opened with are one and the same layer.
+    """
+    click, *rest = main_tour_steps("stage1_0_conv1", locked=locked)
+    assert click.selectors == ('g.node[id*="-flowchart-stage1_0_conv1-"]',)
+    for step in rest:
+        for sel in step.selectors:
+            if "data-tour" not in sel:
+                continue
+            if step.ensure_card:
+                assert sel.startswith('[data-layer="stage1_0_conv1"] '), sel
+            else:
+                # The input pane and the step controls live outside the
+                # cards, so they are page-wide anchors.
+                assert "data-layer" not in sel, sel
+
+
+def test_card_anchors_are_unscoped_without_a_layer() -> None:
+    """A model with no captured layers has no card to scope to, so the
+    anchors stay page-wide (matching the `g.node` diagram fallback)."""
+    _, strips, *_ = main_tour_steps(None, locked=True)
+    assert strips.selectors == ('[data-tour="strips"]',)
+
+
+@pytest.mark.parametrize(
+    ("has_weights", "anchors"),
+    [
+        (True, ("weights", "experiment", "stats")),
+        # A ReLU/add card has no Weights button, so the step drops that
+        # arrow instead of pointing it at some other layer's card.
+        (False, ("experiment", "stats")),
+    ],
+)
+def test_buttons_step_matches_the_buttons_the_card_has(
+    has_weights: bool, anchors: tuple[str, ...]
+) -> None:
+    steps = main_tour_steps("relu1", locked=True, has_weights=has_weights)
+    (buttons,) = [s for s in steps if s.ensure_card and "deeper" in s.text]
+    assert buttons.selectors == tuple(
+        f'[data-layer="relu1"] [data-tour="{a}"]' for a in anchors
+    )
+    # The message names exactly the buttons it points at.
+    assert ("Weights" in buttons.text) == has_weights
+    assert "Experiments" in buttons.text and "Stats" in buttons.text
 
 
 def test_stats_steps_force_the_views_they_describe() -> None:

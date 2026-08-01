@@ -181,6 +181,28 @@ def _seed_shown(
     return set(watched)
 
 
+def _pick_tour_layer(
+    layer_names: list[str],
+    shown: frozenset[str],
+    layer_weights: dict[str, list[str]],
+) -> str | None:
+    """The layer the main tour points at (and auto-shows for its card steps).
+
+    It must be a layer whose card the page already opened — the tour's first
+    arrow lands on a diagram node, and pointing it at a layer other than the
+    one card on screen reads as two unrelated subjects (the playground's
+    seed is a single deliberate card, so the arrow has to name *that* one).
+    Among several shown layers a weights-owning one wins: it makes all three
+    of the card's buttons real targets for the buttons step. With nothing
+    shown — an unwatched local run, where the tour's card steps open the
+    card themselves — the same preference picks from the whole model.
+    """
+    candidates = [n for n in layer_names if n in shown] or layer_names
+    if not candidates:
+        return None
+    return next((n for n in candidates if layer_weights.get(n)), candidates[0])
+
+
 def _build_page(
     session: Session,
     mermaid_src: str,
@@ -268,19 +290,22 @@ def _build_page(
     ui.add_body_html(_layer_info_script(session.layer_info, slugs))
 
     # The tour points at (and auto-shows, for its strips and buttons steps)
-    # one layer; preferring one that owns weights makes all three card
-    # buttons real targets for the tour's three-arrow step. Auto-starts
-    # only on locked (playground) sessions — local runs reach it via the
-    # `?` button.
+    # one layer: the one this tab is already showing, so its first arrow
+    # lands on the card the visitor is looking at rather than opening a
+    # second, unrelated one. A layer without weights has no Weights button,
+    # so the buttons step drops that arrow instead of pointing it elsewhere.
+    # Auto-starts only on locked (playground) sessions — local runs reach it
+    # via the `?` button.
     layer_weights = session.layer_weights
-    tour_layer = next(
-        (n for n in layer_names if layer_weights.get(n)),
-        layer_names[0] if layer_names else None,
-    )
+    tour_layer = _pick_tour_layer(layer_names, shown_layers(), layer_weights)
     tour_slug = slugs[tour_layer] if tour_layer is not None else None
     add_tour(
         "main",
-        main_tour_steps(tour_slug, locked=session.locked),
+        main_tour_steps(
+            tour_slug,
+            locked=session.locked,
+            has_weights=bool(layer_weights.get(tour_layer or "")),
+        ),
         locked=session.locked,
         auto_watch_slug=tour_slug,
     )

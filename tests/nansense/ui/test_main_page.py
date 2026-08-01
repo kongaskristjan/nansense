@@ -17,6 +17,7 @@ from nansense.ui.main_page import (
     _display_batch_size,
     _input_img_src,
     _layer_info_script,
+    _pick_tour_layer,
     _seed_shown,
 )
 from nansense.ui.graph import slug_map
@@ -62,6 +63,46 @@ def test_seed_shown_replaces_the_seed_with_a_valid_focus_layer(
 ) -> None:
     shown = _seed_shown(frozenset({"conv1"}), focus_layer, ["conv1", "conv2"])
     assert shown == expected
+
+
+# A LeNet-ish model: two of the five layers own parameters, and neither of
+# them is first in graph order.
+_LAYERS = ["input", "conv1", "relu1", "conv2", "relu2"]
+_WEIGHTS: dict[str, list[str]] = {
+    "input": [],
+    "conv1": ["conv1.weight"],
+    "relu1": [],
+    "conv2": ["conv2.weight"],
+    "relu2": [],
+}
+
+
+@pytest.mark.parametrize(
+    ("shown", "expected"),
+    [
+        # The one open card wins, weights or not — the tour's first arrow
+        # must land on the layer the visitor is already looking at (the
+        # playground's MNIST seed is exactly this case).
+        ({"relu1"}, "relu1"),
+        ({"conv2"}, "conv2"),
+        # Among several open cards, a weights-owning one wins: it gives the
+        # buttons step all three of its arrows.
+        ({"relu1", "conv2"}, "conv2"),
+        ({"relu1", "relu2"}, "relu1"),
+        # Nothing open (an unwatched local run): the same preference picks
+        # from the whole model, and the card steps open it themselves.
+        (set(), "conv1"),
+    ],
+)
+def test_pick_tour_layer_prefers_a_shown_card(
+    shown: set[str], expected: str
+) -> None:
+    assert _pick_tour_layer(_LAYERS, frozenset(shown), _WEIGHTS) == expected
+
+
+def test_pick_tour_layer_without_layers() -> None:
+    """A model with nothing captured has no layer to point at."""
+    assert _pick_tour_layer([], frozenset(), {}) is None
 
 
 def test_layer_info_script_publishes_nonempty_entries_by_slug() -> None:

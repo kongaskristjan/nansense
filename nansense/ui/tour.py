@@ -7,17 +7,16 @@ Every page has its own short tour (`*_tour_steps` below); the main view's
 is the long one, the subpages get one to three steps covering only what a
 first look wouldn't reveal.
 
-The main tour's framing, strips and buttons steps need the right layer
-card on screen, so showing any of them auto-shows the weights-owning layer
-(via the
-show-only `nansense_tour_show_layer` event, which never hides a card the
-visitor already opened) whenever one of the step's own anchors has no
-visible target — with no card the strips anchor is missing, and a card
-without weights (e.g. a ReLU) has no Weights button for the buttons step's
-arrow. On a locked session that only touches the tab's own `shown` set, so
-playground visitors never affect each other. The sample step similarly
-re-opens the input pane (`nansense_tour_show_input`) if the top bar's
-image button had hidden it.
+The main tour is about a single layer — the one the page already shows
+(`main_page._pick_tour_layer`): the opening arrow points at its diagram
+node, and its strips and buttons steps need its card on screen, so showing
+either auto-shows that same layer (via the show-only
+`nansense_tour_show_layer` event, which never hides a card the visitor
+already opened) whenever the step's own anchor has no visible target. On a
+locked session that only touches the tab's own `shown` set, so playground
+visitors never affect each other. The sample step similarly re-opens the
+input pane (`nansense_tour_show_input`) if the top bar's image button had
+hidden it.
 
 The driver is a self-contained JS blob in the `static.py` style: targets
 are plain CSS selectors resolved to their first *visible* match on a 200 ms
@@ -86,18 +85,64 @@ def _mermaid_node_selector(slug: str) -> str:
     return f'g.node[id*="-flowchart-{slug}-"]'
 
 
-def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
+def _card_selector(slug: str | None, anchor: str) -> str:
+    """A card anchor, scoped to one layer's card when the layer is known.
+
+    Cards carry `data-layer="<slug>"` (`main_page._LayerView`), so scoping
+    keeps every card-bound arrow on the tour's own layer even when the
+    visitor has opened several cards — an unscoped anchor would resolve to
+    whichever card comes first in the pane.
+    """
+    inner = f'[data-tour="{anchor}"]'
+    return f'[data-layer="{slug}"] {inner}' if slug else inner
+
+
+def _buttons_step(slug: str | None, *, has_weights: bool) -> TourStep:
+    """The step covering the card's deep-dive buttons.
+
+    Weights only appears on a card whose layer owns parameters; on any
+    other layer the button — and so its arrow and its half of the sentence
+    — is dropped rather than pointing the visitor at another card.
+    """
+    if has_weights:
+        return TourStep(
+            "Weights, Experiments, and Stats go deeper: its "
+            "parameters and optimizer state, deep-dream, and "
+            "training statistics.",
+            (
+                _card_selector(slug, "weights"),
+                _card_selector(slug, "experiment"),
+                _card_selector(slug, "stats"),
+            ),
+            ensure_card=True,
+        )
+    return TourStep(
+        "Experiments and Stats go deeper: deep-dream and "
+        "training statistics.",
+        (_card_selector(slug, "experiment"), _card_selector(slug, "stats")),
+        ensure_card=True,
+    )
+
+
+def main_tour_steps(
+    layer_slug: str | None, *, locked: bool, has_weights: bool = True
+) -> list[TourStep]:
     """The main view's steps: click a layer, read its card, go deeper.
 
-    The opening step invites the diagram click the whole page turns on, with
-    its arrow on `layer_slug`'s node; the rest walk the card that click
-    opens, then the input pane.
+    Every step is about one layer — `layer_slug`'s, the one whose card the
+    page already shows (`main_page._pick_tour_layer`): the opening arrow
+    points at its diagram node and the card steps auto-show it, so the tour
+    never talks about a second layer the visitor didn't open. Falls back to
+    the first diagram node when no layer is known (a model with no captured
+    layers) — the arrow still lands on something sensible.
 
-    Falls back to the first diagram node when no layer is known (a model
-    with no captured layers) — the arrow still lands on something sensible.
-    A locked session (the playground) parks training, so the closing step
-    about the Run / Step Batch / Stop cluster only exists on live runs —
-    the cluster itself is replaced by the demo notice there anyway.
+    `has_weights` says whether that layer owns parameters. A layer that
+    doesn't (a ReLU, an add) has no Weights button on its card, so the
+    buttons step names — and points at — only the two buttons that are
+    really there. A locked session (the playground) parks training, so the
+    closing step about the Run / Step Batch / Stop cluster only exists on
+    live runs — the cluster itself is replaced by the demo notice there
+    anyway.
     """
     node = _mermaid_node_selector(layer_slug) if layer_slug else "g.node"
     steps = [
@@ -107,23 +152,10 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
         ),
         TourStep(
             "A card opens with its activations and gradients.",
-            ('[data-tour="strips"]',),
+            (_card_selector(layer_slug, "strips"),),
             ensure_card=True,
         ),
-        TourStep(
-            "Weights, Experiments, and Stats go deeper: its "
-            "parameters and optimizer state, deep-dream, and "
-            "training statistics.",
-            (
-                '[data-tour="weights"]',
-                '[data-tour="experiment"]',
-                '[data-tour="stats"]',
-            ),
-            # The Weights anchor only exists on a card whose layer owns
-            # weights — a shown ReLU card leaves it missing, so this step
-            # must be able to bring the weights-owning card on screen too.
-            ensure_card=True,
-        ),
+        _buttons_step(layer_slug, has_weights=has_weights),
         TourStep(
             "Select the input to inspect.",
             ('[data-tour="sample"]',),
@@ -520,9 +552,9 @@ _TOUR_JS: str = """
   function showStep(i) {
     stepIdx = i;
     const step = cfg.steps[i];
-    // Card-needing steps: any of this step's own anchors missing — no card
-    // at all, or a shown card whose layer has no Weights button — means the
-    // weights-owning card must come on screen. The event is show-only (a
+    // Card-needing steps: their anchors are scoped to the tour's own layer,
+    // so a missing target means that card is closed (the visitor hid it, or
+    // never had it) and must come back on screen. The event is show-only (a
     // toggle would hide a card the visitor already opened); on a locked
     // session the show is per-tab, like a diagram click.
     if (step.ensureCard && cfg.autoWatchSlug &&
