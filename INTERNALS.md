@@ -1044,7 +1044,9 @@ subprocess writer (the previous `imageio_ffmpeg` approach) communicated
 over pipes and `close()` *waited on a separate process to exit*, which
 could stall indefinitely (hanging "Save & Finish") or be OOM-killed — all
 outside our control. In-process, encode/flush are bounded calls that raise
-on error instead. The stream uses `_X264_PRESET = "ultrafast"` with a
+on error instead. `imageio` / `imageio-ffmpeg` left the dependency list with
+that switch — nothing imports them, and `imageio-ffmpeg` alone vendored an
+80 MB ffmpeg binary into every install. The stream uses `_X264_PRESET = "ultrafast"` with a
 `_X264_THREADS` cap: libx264's default `medium` lookahead buffers ~40
 frames and defers most encoding to the flush, where its working set
 roughly triples (a multi-GB spike *at save time* for large frames that can
