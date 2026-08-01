@@ -19,8 +19,9 @@ import time.
 from __future__ import annotations
 
 import io
+import math
 from collections.abc import Sequence
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -51,6 +52,12 @@ from nansense.ui.theme import (
 )
 from nansense.watch import N_BINS, LayerStatsSnapshot
 
+if TYPE_CHECKING:
+    # Annotations only — matplotlib stays a lazy import (see
+    # `histogram_image`), and these cost nothing at runtime.
+    from matplotlib.axis import Axis
+    from matplotlib.ticker import Formatter
+
 # Hard cap on a composed image's width and height. A layer with thousands of
 # channels would otherwise compose into a picture measured in gigapixels; the
 # row is truncated instead. (`nansense.recording` caps its *video* dimensions
@@ -74,9 +81,10 @@ _CHECKER_BOX: int = 4
 _CHECKER_LIGHT: tuple[int, int, int] = (249, 250, 251)  # slate-50  (#f9fafb)
 _CHECKER_DARK: tuple[int, int, int] = (229, 231, 235)  # slate-200 (#e5e7eb)
 
-# Matplotlib histogram geometry: inches per subplot row at `_HIST_DPI`.
+# Matplotlib histogram geometry. A row's height is the page's own
+# `histograms._PLOT_HEIGHT` at this DPI, so a composed row has the same aspect
+# as the plot the page draws rather than a squatter one of its own.
 _HIST_DPI: int = 100
-_HIST_ROW_INCHES: float = 2.4
 _HIST_WIDTH_INCHES: float = 9.0
 
 
@@ -560,6 +568,19 @@ def histogram_image(
     overflow markers with the Agg backend so a video frame or an agent's image
     reply shows what the page shows. `kind` is `"activation"` or `"gradient"`.
 
+    Every styling value comes from `nansense.ui.histograms` — the same
+    constants that build the Plotly figure — so the two agree on background,
+    gridlines, bar color and opacity, fonts, and the power-of-ten tick format.
+    Two things are deliberately *not* the page:
+
+    - the page draws one figure per (layer, kind) with a row per phase, while a
+      frame stacks rows from several layers and kinds, so each row's title
+      carries its own layer and kind rather than relying on a figure title; and
+    - the page puts the scalar stats in a table beside the plot
+      (`_stats_table_html`), which a single stacked image has no room for, so
+      they ride along in each row's right-hand corner instead. Dropping them
+      would cost the frame information the page does show.
+
     `channel` only labels the subplot titles — the caller narrows the rows
     themselves, since a row without per-channel data keeps the universal
     histogram and the title has to say so rather than claim a channel.
@@ -571,8 +592,13 @@ def histogram_image(
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.figure import Figure
 
+    from nansense.ui.histograms import _PLOT_HEIGHT, PAPER_BG
+
+    row_inches = _PLOT_HEIGHT / _HIST_DPI
     fig = Figure(
-        figsize=(_HIST_WIDTH_INCHES, _HIST_ROW_INCHES * len(rows)), dpi=_HIST_DPI
+        figsize=(_HIST_WIDTH_INCHES, row_inches * len(rows)),
+        dpi=_HIST_DPI,
+        facecolor=PAPER_BG,
     )
     axes = fig.subplots(len(rows), 1, squeeze=False)
     for ax_row, (layer, kind, phase, stats) in zip(axes, rows, strict=True):
@@ -603,13 +629,20 @@ def _draw_histogram_axes(
     log_y: bool,
     channel: int | None = None,
 ) -> None:
-    """One subplot: the same bars/ranges the watch page draws with Plotly."""
+    """One subplot: the same bars/ranges/chrome the watch page draws with Plotly."""
     from matplotlib.axes import Axes
 
     from nansense.ui.histograms import (
+        AXIS_TITLE_FONT_SIZE,
+        BAR_OPACITY,
         BIN_CENTERS,
         BIN_WIDTHS,
         OVERFLOW_MARKER_COLOR,
+        SUBPLOT_TITLE_FONT_SIZE,
+        TICK_COLOR,
+        TICK_FONT_SIZE,
+        TITLE_FONT_SIZE,
+        Y_AXIS_TITLE,
         axis_ranges,
         kind_stats,
         overflow_marks,
@@ -627,12 +660,22 @@ def _draw_histogram_axes(
     heights = trace_heights(hist, density)
     color = phase_color(phase, 0)
     x_values = list(range(N_BINS)) if log_x else list(BIN_CENTERS)
+    # `bargap=0` on the page: bars tile their bins with no edge line between.
     if log_x:
-        ax.bar(x_values, heights, width=1.0, color=color)
+        ax.bar(
+            x_values, heights, width=1.0, color=color, alpha=BAR_OPACITY, linewidth=0
+        )
         tick_vals, tick_text = x_tick_layout()
-        ax.set_xticks(tick_vals, tick_text, fontsize=6)
+        ax.set_xticks(tick_vals, tick_text)
     else:
-        ax.bar(x_values, heights, width=BIN_WIDTHS, color=color)
+        ax.bar(
+            x_values,
+            heights,
+            width=BIN_WIDTHS,
+            color=color,
+            alpha=BAR_OPACITY,
+            linewidth=0,
+        )
     per_phase = {phase: stats}
     x_range, y_range = axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
     if x_range is not None:
@@ -658,6 +701,7 @@ def _draw_histogram_axes(
                 zorder=3,
                 clip_on=False,
             )
+    _style_histogram_axes(ax, log_x=log_x, density=density)
     # A row the caller could not narrow (no per-channel data) keeps the
     # universal histogram, so the title must not claim a channel it isn't
     # showing — the picture is the only place a reader can check that.
@@ -666,10 +710,99 @@ def _draw_histogram_axes(
         if channel is not None and tensor_stats.channel_hists is not None
         else (" · all channels" if channel is not None else "")
     )
-    title = (
-        f"{layer} — {kind}s · {phase} (ep {stats.epoch}){scope} · "
-        f"n={tensor_stats.n:,} mean={tensor_stats.mean:.3g} "
-        f"std={tensor_stats.std:.3g}"
+    # The page's three pieces of heading, in matplotlib's three title slots:
+    # its figure title on the left, its phase-tinted subplot title centered,
+    # and the stats table's scalars — which have nowhere else to go here — kept
+    # small and gray on the right so they read as an annotation, not a label.
+    ax.set_title(
+        f"{layer} — {kind}s", loc="left", fontsize=_pt(TITLE_FONT_SIZE), color="#1e293b"
     )
-    ax.set_title(title, fontsize=8)
-    ax.tick_params(labelsize=6)
+    ax.set_title(
+        f"{phase} (ep {stats.epoch}){scope}",
+        loc="center",
+        fontsize=_pt(SUBPLOT_TITLE_FONT_SIZE),
+        color=color,
+    )
+    ax.set_title(
+        f"n={tensor_stats.n:,}  mean={tensor_stats.mean:.3g}  "
+        f"std={tensor_stats.std:.3g}",
+        loc="right",
+        fontsize=_pt(TICK_FONT_SIZE),
+        color="#64748b",
+    )
+    ax.set_ylabel(
+        Y_AXIS_TITLE[density], fontsize=_pt(AXIS_TITLE_FONT_SIZE), color=TICK_COLOR
+    )
+
+
+def _style_histogram_axes(ax: object, *, log_x: bool, density: bool) -> None:
+    """The Plotly plot's chrome, on a matplotlib axes.
+
+    Plotly draws no axis lines or tick marks — just a filled plotting area,
+    horizontal gridlines, and (on the linear x-axis) a zero line. Matplotlib
+    defaults to the opposite of all three: a black box, outward ticks, no fill.
+    """
+    from matplotlib.axes import Axes
+
+    from nansense.ui.histograms import (
+        GRID_COLOR,
+        PLOT_BG,
+        TICK_COLOR,
+        TICK_FONT_SIZE,
+        ZEROLINE_COLOR,
+    )
+
+    assert isinstance(ax, Axes)
+    ax.set_facecolor(PLOT_BG)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(labelsize=_pt(TICK_FONT_SIZE), colors=TICK_COLOR, length=0)
+    # y gridlines only, behind the bars.
+    ax.grid(visible=True, axis="y", color=GRID_COLOR, linewidth=0.8)
+    ax.grid(visible=False, axis="x")
+    ax.set_axisbelow(True)
+    ax.yaxis.set_major_formatter(_power_ticks(ax.yaxis))
+    if not log_x:
+        # The signed-log axis labels its own ticks (`x_tick_layout`); only the
+        # linear one formats values, and only it carries a zero line.
+        ax.xaxis.set_major_formatter(_power_ticks(ax.xaxis))
+        ax.axvline(0.0, color=ZEROLINE_COLOR, linewidth=1, zorder=0)
+
+
+def _pt(px: float) -> float:
+    """CSS px as matplotlib points at `_HIST_DPI`.
+
+    Plotly sizes its fonts in px, matplotlib in points — at 100 dpi a "size 12"
+    asked of each differs by 1.39x, which is the whole heading hierarchy drawn
+    a size too large. Every font size crossing over from `histograms` goes
+    through here.
+    """
+    return px * 72.0 / _HIST_DPI
+
+
+def _power_ticks(axis: Axis) -> Formatter:
+    """A tick formatter in Plotly's `exponentformat="power"` style.
+
+    Plotly writes 2e-8 as `2x10^-8`, and factors *one* exponent out across the
+    whole axis — ticks up to 1.2e8 read `0.2x10^8`, `0.4x10^8`, not each with
+    its own power. Matplotlib instead hoists a shared power into a corner
+    offset box and labels the ticks `-2.0 ... 2.0`, which on a histogram of
+    gradient magnitudes reads as if the axis ran to +/-2.
+
+    The exponent is taken from the axis' view limits at draw time, so it tracks
+    a zoomed or capped range the way Plotly's does. Ordinary magnitudes stay
+    plain, as they do on the page.
+    """
+    from matplotlib.ticker import FuncFormatter
+
+    def format_tick(value: float, _pos: object) -> str:
+        if value == 0:
+            return "0"
+        lo, hi = axis.get_view_interval()
+        largest = max(abs(lo), abs(hi)) or abs(value)
+        exponent = math.floor(math.log10(largest))
+        if -3 <= exponent < 4:
+            return f"{value:g}"
+        return f"${value / 10.0**exponent:g}{{\\times}}10^{{{exponent}}}$"
+
+    return FuncFormatter(format_tick)

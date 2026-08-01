@@ -10,6 +10,8 @@ from PIL import Image
 from nansense.ui.compose import (
     _CHECKER_DARK,
     _CHECKER_LIGHT,
+    _power_ticks,
+    histogram_image,
     MAX_IMAGE_SIZE,
     Section,
     captioned_columns,
@@ -21,7 +23,9 @@ from nansense.ui.compose import (
     strip_image,
     upscaled_image,
 )
+from nansense.ui.histograms import _PLOT_HEIGHT, PAPER_BG as PAPER_BG_HEX, PLOT_BG
 from nansense.ui.render import INPUT_IMAGE_SIZE, LABEL_HEIGHT, render_image, render_strip
+from nansense.watch import N_BINS, LayerStatsSnapshot, TensorStatsSnapshot
 from nansense.ui.theme import (
     ACTIVATIONS,
     BAR_RADIUS,
@@ -229,3 +233,70 @@ def test_upscaled_image_blows_a_small_input_up_to_display_size() -> None:
 
 def test_upscaled_image_of_nothing_is_none() -> None:
     assert upscaled_image(None) is None
+
+
+def _hist_rows(n: int = 1) -> list[tuple[str, str, str, LayerStatsSnapshot]]:
+    """`n` identical histogram rows with a plausible bell over the bins."""
+    centre = N_BINS // 2
+    counts = np.exp(-((np.arange(N_BINS) - centre) ** 2) / 60.0) * 5000
+    hist = tuple(int(c) for c in counts.astype(int))
+    stats = TensorStatsSnapshot(
+        n=131072, sum=1.0, sum_sq=9.0, min=-3.1, max=4.2, hist=hist
+    )
+    snap = LayerStatsSnapshot(
+        layer="features.3",
+        phase="train",
+        epoch=2,
+        activations=stats,
+        gradients=stats,
+    )
+    return [("features.3", "activation", "train", snap) for _ in range(n)]
+
+
+def test_histogram_image_paints_the_pages_plot_background() -> None:
+    """The still is a redraw of the page's Plotly figure, so it has to carry
+    the page's chrome — the slate plotting area, not matplotlib's bare white."""
+    img = histogram_image(_hist_rows())
+    assert img is not None
+    colors = {tuple(c) for row in np.asarray(img) for c in row}
+    assert rgb(PLOT_BG) in colors
+    assert rgb(PAPER_BG_HEX) in colors  # the paper around it
+
+
+def test_histogram_row_is_as_tall_as_the_pages_plot() -> None:
+    """A composed row matches `_PLOT_HEIGHT` so it has the page's aspect, and
+    stacking rows scales linearly."""
+    one, two = histogram_image(_hist_rows(1)), histogram_image(_hist_rows(2))
+    assert one is not None and two is not None
+    assert one.height == _PLOT_HEIGHT
+    assert two.height == 2 * _PLOT_HEIGHT
+
+
+@pytest.mark.parametrize(
+    ("view", "value", "expected"),
+    [
+        # Ordinary magnitudes stay plain, as on the page.
+        ((0.0, 12.0), 4.0, "4"),
+        ((0.0, 12.0), 0.0, "0"),
+        # Beyond that Plotly factors ONE exponent across the axis: a tick of
+        # 2e7 on an axis topping out at 1.2e8 reads 0.2x10^8, not 2x10^7.
+        ((0.0, 1.2e8), 2e7, r"$0.2{\times}10^{8}$"),
+        ((0.0, 1.2e8), 1.2e8, r"$1.2{\times}10^{8}$"),
+        ((-2e-8, 2e-8), -1.5e-8, r"$-1.5{\times}10^{-8}$"),
+    ],
+)
+def test_power_ticks_factor_one_exponent_across_the_axis(
+    view: tuple[float, float], value: float, expected: str
+) -> None:
+    """Matplotlib's default parks a shared power in a corner offset box and
+    labels the ticks 2.0 ... 12.0, which on a gradient histogram reads as if
+    the axis ran to 12. Mirror Plotly's `exponentformat="power"` instead."""
+    from matplotlib.figure import Figure
+
+    ax = Figure().subplots()
+    ax.set_ylim(view)
+    assert _power_ticks(ax.yaxis)(value, 0) == expected
+
+
+def test_histogram_image_of_nothing_is_none() -> None:
+    assert histogram_image([]) is None

@@ -204,6 +204,26 @@ _PLOT_HEIGHT: int = 440
 # unit, not a scale. Hover values inherit the same exponent style.
 AXIS_EXPONENT_FORMAT: str = "power"
 
+# The plot's chrome. These are Plotly layout values, but `nansense.ui.compose`
+# redraws the same figure with matplotlib for a recording frame or an agent's
+# image — it has no browser to run Plotly in — so both read them from here.
+# Changing one of these changes the page *and* the still; hardcoding a color in
+# either renderer is how the two drift apart.
+PLOT_BG: str = "#f8fafc"  # slate-50, the plotting area
+PAPER_BG: str = "#ffffff"  # around it
+GRID_COLOR: str = "#e2e8f0"  # slate-200, y gridlines only
+ZEROLINE_COLOR: str = "#cbd5e1"  # slate-300, the linear x-axis' zero
+TICK_COLOR: str = "#444"  # Plotly's default tick-label gray
+BAR_OPACITY: float = 0.85
+TITLE_FONT_SIZE: int = 12
+SUBPLOT_TITLE_FONT_SIZE: int = 11
+AXIS_TITLE_FONT_SIZE: int = 10
+TICK_FONT_SIZE: int = 9
+#: What the y-axis counts, keyed by `use_density(log_x)`. Bars are probabilities
+#: on the signed-log axis and densities on the linear one, so the label is not
+#: cosmetic — it says which of the two the reader is looking at.
+Y_AXIS_TITLE: dict[bool, str] = {True: "probability density", False: "probability"}
+
 # Linear-space geometry of the signed-log bins, used when the x-axis is
 # switched to a linear scale: each bar is drawn at the centre of its bin and
 # given the bin's true (linear) width so the bars tile the value axis.
@@ -908,7 +928,7 @@ def _make_histogram_figure(
                 width=None if log_x else BIN_WIDTHS,
                 name=names[i],
                 marker_color=phase_color(phase, i),
-                opacity=0.85,
+                opacity=BAR_OPACITY,
                 hovertemplate=hover,
             ),
             row=i + 1,
@@ -943,7 +963,10 @@ def _make_histogram_figure(
     # color, sitting right above the row they describe.
     for i, annotation in enumerate(fig.layout.annotations):
         annotation.update(
-            font=dict(size=11, color=phase_color(phase_hists[i][0], i))
+            font=dict(
+                size=SUBPLOT_TITLE_FONT_SIZE,
+                color=phase_color(phase_hists[i][0], i),
+            )
         )
     # `shared_xaxes` only hides the upper rows' tick labels; matching the
     # x-axes proper keeps every row in lock-step when zooming/panning and
@@ -951,12 +974,12 @@ def _make_histogram_figure(
     for row in range(2, len(phase_hists) + 1):
         fig.update_xaxes(matches="x", row=row, col=1)
     fig.update_layout(
-        title=dict(text=title, x=0.0, font=dict(size=12)),
+        title=dict(text=title, x=0.0, font=dict(size=TITLE_FONT_SIZE)),
         bargap=0,
         margin=dict(l=50, r=20, t=40, b=40),
         height=_PLOT_HEIGHT * max(1, len(phase_hists)),
-        plot_bgcolor="#f8fafc",
-        paper_bgcolor="white",
+        plot_bgcolor=PLOT_BG,
+        paper_bgcolor=PAPER_BG,
         showlegend=False,
         # Hover by x-position instead of proximity: a short bar is hoverable
         # from anywhere in its column, which the per-channel sample strip
@@ -969,18 +992,18 @@ def _make_histogram_figure(
             range=x_range,
             tickvals=tick_vals,
             ticktext=tick_text,
-            tickfont=dict(size=9),
+            tickfont=dict(size=TICK_FONT_SIZE),
             showgrid=False,
             zeroline=False,
         )
     else:
         fig.update_xaxes(
             range=x_range,
-            tickfont=dict(size=9),
+            tickfont=dict(size=TICK_FONT_SIZE),
             exponentformat=AXIS_EXPONENT_FORMAT,
             showgrid=False,
             zeroline=True,
-            zerolinecolor="#cbd5e1",
+            zerolinecolor=ZEROLINE_COLOR,
         )
     fig.update_yaxes(
         type="log" if log_y else "linear",
@@ -989,12 +1012,12 @@ def _make_histogram_figure(
         # anyway) since Plotly would misread the range as log10 units.
         range=y_range,
         showgrid=True,
-        gridcolor="#e2e8f0",
-        tickfont=dict(size=9),
+        gridcolor=GRID_COLOR,
+        tickfont=dict(size=TICK_FONT_SIZE),
         exponentformat=AXIS_EXPONENT_FORMAT,
         title=dict(
-            text="probability density" if density else "probability",
-            font=dict(size=10),
+            text=Y_AXIS_TITLE[density],
+            font=dict(size=AXIS_TITLE_FONT_SIZE),
         ),
     )
     if under_over_band is not None:

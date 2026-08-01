@@ -1013,7 +1013,18 @@ machinery (`render_strip`, `render_weight`, `render_patch_grid`,
 `render_image`), nearest-upscaling the native-resolution data images to
 their CSS display size like the browser does; histograms — Plotly on the
 live page, hence client-side — are re-rendered with matplotlib (Agg)
-using the same bar heights and axis-range helpers the page uses. The
+using the same bar heights and axis-range helpers the page uses, and the
+same *chrome*: `histograms.py` exports the plot's background, gridline,
+zero-line and tick colors, its bar opacity, its font sizes and its y-axis
+label, and both renderers read them from there. Three things matplotlib
+has to be told explicitly, because its defaults are the opposite of
+Plotly's: no spines or tick marks (Plotly draws a filled plotting area and
+gridlines, no axis lines), font sizes converted px→pt (`_pt`; at 100 dpi a
+"size 12" differs by 1.39× between the two), and `_power_ticks`, which
+factors one exponent across an axis the way `exponentformat="power"` does
+— matplotlib would otherwise park a shared power in a corner offset box
+and label a ±2e-8 axis `-2.0 … 2.0`, which reads as if it ran to ±2. A row
+is `_PLOT_HEIGHT` tall, so it has the page's aspect. The
 MIN/MAX view writes pixel-grid (crops) and average-grid (whole inputs)
 frames to *separate* `*_pixel.mp4` / `*_average.mp4` streams because
 their frame sizes differ. Every stream is locked to its first frame's
