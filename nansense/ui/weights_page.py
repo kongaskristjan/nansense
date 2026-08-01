@@ -34,6 +34,7 @@ from nansense.ui.top_bar import (
     _refresh_button,
     _top_bar_row,
 )
+from nansense.ui.theme import CUSTOM, GRADIENTS, OPTIMIZER, WEIGHT
 from nansense.ui.tour import add_tour, weights_tour_steps
 
 
@@ -356,7 +357,7 @@ class _WeightPanel:
                         "flex no-wrap items-stretch"
                     ).props('data-tour="weight-strips"'):
                         _strip_marker(
-                            "bg-sky-500",
+                            WEIGHT.css,
                             "WEIGHT",
                             header_gap=True,
                             tooltip="The parameter's current values",
@@ -365,7 +366,7 @@ class _WeightPanel:
                     ui.element("div").classes("h-1")
                     with ui.element("div").classes("flex no-wrap items-stretch"):
                         _strip_marker(
-                            "bg-violet-500",
+                            GRADIENTS.css,
                             "GRADIENT",
                             tooltip=(
                                 "The parameter's gradient from the last "
@@ -632,7 +633,7 @@ class _WeightPanel:
                     # (`_compute_optimizer_values`); lower() restores the
                     # conventionally-lowercase key (exp_avg, momentum_buffer).
                     _strip_marker(
-                        "bg-amber-600",
+                        OPTIMIZER.css,
                         label,
                         tooltip=(
                             f"Optimizer state '{label.lower()}' for this "
@@ -649,7 +650,7 @@ class _WeightPanel:
                     # (`_compute_custom_strips`); lower() restores the
                     # conventionally-lowercase registration name.
                     _strip_marker(
-                        "bg-teal-600",
+                        CUSTOM.css,
                         label,
                         tooltip=(
                             f"Your custom instrument '{label.lower()}' "

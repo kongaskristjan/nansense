@@ -1269,7 +1269,8 @@ One module per page plus shared support: `app.py` (`serve` + page routes),
 settings/recording, and step-until dialogs), `input_panel.py` (the main
 page's right sidebar), `render.py` + `histograms.py` (pure render/plot
 math), `graph.py` (the Mermaid architecture graph), `bin_samples.py`,
-`common.py` (small cross-page helpers), `static.py` (the CSS/JS blobs), and
+`common.py` (small cross-page helpers), `theme.py` (the sizes and colors the
+page and the composed still both draw), `static.py` (the CSS/JS blobs), and
 `tour.py` (the per-page guided tours: Python step data for every page — a
 long tour for the main view, one-to-three-step tours for the subpages —
 plus an overlay-JS driver that draws arrows to `data-tour`-tagged
@@ -1291,6 +1292,27 @@ recording imports only the public names of `render.py` (`render_strip`,
 `render_image`, `render_weight`, `render_patch_grid`, `probe_act_tensor`, …)
 and `histograms.py`, never page modules. Those signatures are the contract
 between the UI and recording — keep them stable.
+
+`render.py` returns the *pieces*; the layout around them is drawn twice, by the
+browser (`common.py`, CSS) and by PIL (`compose.py`), so the sizes and colors
+that layout needs live once in **`nansense/ui/theme.py`**: the gutter between a
+caption and its image, the label-bar radius, a marker's width and the height
+below which its label is unreadable, and a `Marker` per strip kind carrying both
+a Tailwind class for the page and a hex color for PIL. A page module that
+hardcodes `bg-emerald-500`, or a composer that hardcodes `#10b981`, is how the
+two front-ends drift apart — take both from `theme.py` instead. `LABEL_HEIGHT`
+stays in `render.py`, since a caption bar's height is also a render-math input
+(the legend reserves it).
+
+Composed stills therefore carry the same furniture the page draws: filled
+`CHANNEL n` header bars (once per card — `strip_image(..., show_labels=False)`
+on the rows below the first, mirroring `_strip_html`), `SAMPLE n` row labels
+down a patch grid's left edge, and the colored kind marker beside every strip.
+That marker is not decoration: every strip uses the same diverging colormap, so
+a frame without it cannot say which row is the gradient. Text is drawn in
+DejaVu Sans Mono, resolved out of matplotlib's package data — PIL's built-in
+bitmap font is not monospace and has no em dash, which it drew as a tofu box in
+every recorded frame.
 
 Render conventions worth knowing before editing `render.py`:
 

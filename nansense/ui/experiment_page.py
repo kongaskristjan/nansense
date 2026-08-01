@@ -59,24 +59,8 @@ from nansense.ui.top_bar import (
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
+from nansense.ui.theme import caption_color
 from nansense.ui.tour import add_tour, experiment_tour_steps
-
-
-# Experiment cell caption colors, echoing the main view's activation (green) /
-# gradient (purple) markers: the input is green, the attribution / overlay
-# purple, and everything else (deep-dream channel images) the neutral slate the
-# `CHANNEL n` column headers use.
-_CAPTION_COLORS: dict[str, str] = {
-    "input": "#10b981",
-    "attribution": "#8b5cf6",
-    "overlay": "#8b5cf6",
-}
-
-
-def _caption_bar_color(caption: str) -> str:
-    """Bar color for an experiment cell caption (first word keys the map)."""
-    head = caption.split(" ", 1)[0].lower()
-    return _CAPTION_COLORS.get(head, "#64748b")
 
 
 def _coerce_number(spec: ExperimentParam, *candidates: object) -> int | float:
@@ -655,13 +639,13 @@ def _build_experiment_page(
         """A horizontal, scrollable row of captioned cells (caption over body),
         consistent with the watch / weights cards. Captions are filled color
         bars matching the main view's markers: input green, attribution/overlay
-        purple, deep-dream channels slate (`_caption_bar_color`)."""
+        purple, deep-dream channels slate (`theme.caption_color`)."""
         with ui.row().classes("items-start gap-4 no-wrap w-full overflow-x-auto"):
             for caption, build in cells:
                 with ui.column().classes("items-center gap-1 shrink-0"):
                     ui.html(
                         _label_bar_html(
-                            caption.upper(), color=_caption_bar_color(caption)
+                            caption.upper(), color=caption_color(caption)
                         )
                     ).classes("w-full")
                     build()

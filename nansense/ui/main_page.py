@@ -57,6 +57,7 @@ from nansense.ui.top_bar import (
     _refresh_button,
     _top_bar_row,
 )
+from nansense.ui.theme import ACTIVATIONS, CUSTOM_TENSOR, GRADIENTS
 from nansense.ui.tour import add_tour, main_tour_steps
 
 
@@ -1169,12 +1170,12 @@ class _LayerView:
                 with ui.element("div").classes("w-max min-w-full"):
                     with ui.element("div").classes("flex no-wrap items-stretch"):
                         _strip_marker(
-                            "bg-emerald-500", "ACTIVATIONS", header_gap=True
+                            ACTIVATIONS.css, "ACTIVATIONS", header_gap=True
                         )
                         self.act_html = ui.html("")
                     ui.element("div").classes("h-1")
                     with ui.element("div").classes("flex no-wrap items-stretch"):
-                        _strip_marker("bg-violet-500", "GRADIENTS")
+                        _strip_marker(GRADIENTS.css, "GRADIENTS")
                         self.grad_html = ui.html("")
                     # Custom layer-tensor strips (`Session.watch_layer_tensor`)
                     # follow, one labelled row per instrument. The rows are
@@ -1230,7 +1231,7 @@ class _LayerView:
                     with ui.element("div").classes(
                         "flex no-wrap items-stretch"
                     ):
-                        _strip_marker("bg-sky-500", label.upper())
+                        _strip_marker(CUSTOM_TENSOR.css, label.upper())
                         self._custom_rows[label] = ui.html("")
         for label, content in custom:
             self._custom_rows[label].set_content(content)

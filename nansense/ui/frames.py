@@ -29,6 +29,7 @@ from nansense.input_config import InputTransform
 from nansense.patches import PATCH_TYPES, PatchType
 from nansense.schedule import format_position
 from nansense.ui.compose import (
+    Section,
     batch_image_row,
     histogram_image,
     patch_grid_image,
@@ -47,6 +48,7 @@ from nansense.ui.render import (
     render_weight,
     tensor_hw,
 )
+from nansense.ui.theme import ACTIVATIONS, GRADIENTS, NEUTRAL, OPTIMIZER, WEIGHT
 from nansense.watch import LayerStatsSnapshot, narrow_to_channel
 
 if TYPE_CHECKING:
@@ -63,7 +65,7 @@ PATCH_GROUPS: dict[PatchType, str] = {
     "min_average": "average",
 }
 
-_Section = tuple[str, Image.Image | None]
+_Section = Section
 
 
 @dataclass(frozen=True)
@@ -169,38 +171,49 @@ def main_frame(
             )
         )
         if input_img is not None:
-            sections.append(("input", input_img))
+            sections.append(Section("input", input_img))
+    # One card per layer, as the page draws it: the layer's name heads the card
+    # and each strip below carries its kind's colored marker. Only the first
+    # strip captions its channels — the rows under it share those headers.
     for name in layers:
         if probe is not None:
             act = probe_act_tensor(probe, name, compare=compare)
+            sections.append(Section(f"{name} (probe)", None))
             sections.append(
-                (
-                    f"{name} — activations (probe)",
+                Section(
+                    "ACTIVATIONS",
                     strip_image(render_strip(act, sample_idx, input_hw=input_hw)),
+                    ACTIVATIONS,
+                    header_gap=True,
                 )
             )
         else:
             assert snap is not None
+            sections.append(Section(name, None))
             sections.append(
-                (
-                    f"{name} — activations",
+                Section(
+                    "ACTIVATIONS",
                     strip_image(
                         render_strip(
                             snap.activations.get(name), sample_idx, input_hw=input_hw
                         )
                     ),
+                    ACTIVATIONS,
+                    header_gap=True,
                 )
             )
             sections.append(
-                (
-                    f"{name} — gradients",
+                Section(
+                    "GRADIENTS",
                     strip_image(
                         render_strip(
                             snap.activation_gradients.get(name),
                             sample_idx,
                             input_hw=input_hw,
-                        )
+                        ),
+                        show_labels=False,
                     ),
+                    GRADIENTS,
                 )
             )
     return stack_sections(sections, require_image=require_image)
@@ -226,8 +239,9 @@ def weights_frame(
     for panel in panels:
         tensor = snap.weights.get(panel.name)
         if tensor is None:
-            sections.append((f"{panel.name} — no weights captured", None))
+            sections.append(Section(f"{panel.name} — no weights captured", None))
             continue
+        sections.append(Section(panel.name, None))
         x_dim, y_dim, tile_dim = panel.layout(tensor.ndim)
         layout = {
             "x_dim": x_dim,
@@ -236,12 +250,21 @@ def weights_frame(
             "fixed": panel.fixed,
         }
         sections.append(
-            (f"{panel.name} — weight", strip_image(render_weight(tensor, **layout)))
+            Section(
+                "WEIGHT",
+                strip_image(render_weight(tensor, **layout)),
+                WEIGHT,
+                header_gap=True,
+            )
         )
         grad = snap.weight_gradients.get(panel.name)
         if grad is not None:
             sections.append(
-                (f"{panel.name} — gradient", strip_image(render_weight(grad, **layout)))
+                Section(
+                    "GRADIENT",
+                    strip_image(render_weight(grad, **layout), show_labels=False),
+                    GRADIENTS,
+                )
             )
         scalar_parts: list[str] = []
         for key, state in sorted(snap.optimizer_state.get(panel.name, {}).items()):
@@ -259,14 +282,18 @@ def weights_frame(
                     tile_dim=dims.tile_dim,
                     fixed={},
                 )
-            sections.append((f"{panel.name} — {key}", strip_image(strip)))
+            sections.append(
+                Section(
+                    key.upper(), strip_image(strip, show_labels=False), OPTIMIZER
+                )
+            )
         scalar_parts += [
             f"{key} = {value:.4g}"
             for key, value in sorted(snap.optimizer_hyperparams.get(panel.name, {}).items())
         ]
         if scalar_parts:
-            sections.append(("  ·  ".join(scalar_parts), None))
-    sections.insert(0, (format_position(snap.position), None))
+            sections.append(Section("  ·  ".join(scalar_parts), None))
+    sections.insert(0, Section(format_position(snap.position), None))
     return stack_sections(sections, require_image=require_image)
 
 
@@ -341,7 +368,7 @@ def patch_frames(
             if img is None:
                 continue
             sections.setdefault(PATCH_GROUPS[ptype], []).append(
-                (f"{layer} — {ptype} · {phase} (ep {stats.epoch})", img)
+                Section(f"{layer} — {ptype} · {phase} (ep {stats.epoch})", img)
             )
     return {group: stack_sections(rows) for group, rows in sections.items()}
 
@@ -372,9 +399,17 @@ def experiment_frame(
         status += f" · objective {result.objective:.4g}"
     if result.error is not None:
         status += f" · error: {result.error}"
-    sections: list[_Section] = [(status, None)]
+    # The page captions these cells with colored bars rather than side markers,
+    # but in the same color language: the input green, the attribution and its
+    # overlay purple, a deep-dream channel image neutral
+    # (`theme.CAPTION_COLORS`).
+    sections: list[_Section] = [Section(status, None)]
     if result.image is not None:
-        sections.append(("result", batch_image_row(result.image, mean=mean, std=std)))
+        sections.append(
+            Section(
+                "RESULT", batch_image_row(result.image, mean=mean, std=std), NEUTRAL
+            )
+        )
     blended = (
         _overlay_section(result, mean=mean, std=std) if overlay else None
     )
@@ -382,17 +417,25 @@ def experiment_frame(
         sections.append(blended)
     elif result.attribution is not None:
         sections.append(
-            (
-                "attribution",
+            Section(
+                "ATTRIBUTION",
                 strip_image(
                     render_strip(
                         result.attribution, 0, input_hw=tensor_hw(result.reference)
                     )
                 ),
+                GRADIENTS,
+                header_gap=True,
             )
         )
     if result.reference is not None:
-        sections.append(("input", batch_image_row(result.reference, mean=mean, std=std)))
+        sections.append(
+            Section(
+                "INPUT",
+                batch_image_row(result.reference, mean=mean, std=std),
+                ACTIVATIONS,
+            )
+        )
     return stack_sections(sections, require_image=require_image)
 
 
@@ -426,4 +469,4 @@ def _overlay_section(
     )
     if rendered is None:
         return None
-    return ("overlay", strip_image(rendered))
+    return Section("OVERLAY", strip_image(rendered), GRADIENTS, header_gap=True)

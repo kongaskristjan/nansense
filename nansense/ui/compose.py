@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import Sequence
+from typing import NamedTuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -33,6 +34,21 @@ from nansense.ui.render import (
     StripRender,
     render_image,
 )
+from nansense.ui.theme import (
+    BAR_RADIUS,
+    LABEL_FONT_SIZE,
+    LABEL_GAP,
+    LABEL_TRACKING,
+    MARKER_FONT_SIZE,
+    MARKER_GAP,
+    MARKER_LABEL_MIN_HEIGHT,
+    MARKER_TRACKING,
+    MARKER_WIDTH,
+    NEUTRAL_COLOR,
+    Marker,
+    mono_font,
+    rgb,
+)
 from nansense.watch import N_BINS, LayerStatsSnapshot
 
 # Hard cap on a composed image's width and height. A layer with thousands of
@@ -44,6 +60,8 @@ MAX_IMAGE_SIZE: int = 4096
 _SECTION_GAP: int = 10
 _FRAME_PAD: int = 10
 _COLUMN_GAP: int = 2
+#: Horizontal space a strip's marker takes from the strip beside it.
+_MARKER_COLUMN: int = MARKER_WIDTH + MARKER_GAP
 _LABEL_COLOR: tuple[int, int, int] = (30, 41, 59)  # slate-800
 _BACKGROUND: tuple[int, int, int] = (255, 255, 255)
 _MIN_SECTION_WIDTH: int = 320
@@ -81,19 +99,187 @@ def checkerboard(width: int, height: int) -> Image.Image:
     return Image.fromarray(rgba, mode="RGBA")
 
 
+_AnyFont = ImageFont.FreeTypeFont | ImageFont.ImageFont
+
+
+def _tracked_width(text: str, font: _AnyFont, tracking: float) -> float:
+    """Width of `text` including CSS-style `letter-spacing` after every glyph."""
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    return sum(probe.textlength(ch, font=font) + tracking for ch in text)
+
+
+def _draw_tracked(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    font: _AnyFont,
+    fill: tuple[int, int, int],
+    tracking: float,
+) -> None:
+    """Draw `text` glyph by glyph so `letter-spacing` survives into the image.
+
+    PIL has no tracking of its own, and the page's label bars set it (0.04em on
+    a caption, 0.12em on a marker's vertical label). At marker size that is
+    ~1px a character — over a word like ACTIVATIONS it is the difference
+    between matching the page and running a dozen pixels short.
+    """
+    x, y = xy
+    for ch in text:
+        draw.text((x, y), ch, fill=fill, font=font)
+        x += draw.textlength(ch, font=font) + tracking
+
+
+def _ellipsized(text: str, font: _AnyFont, limit: float, tracking: float) -> str:
+    """`text` trimmed to `limit` px with an ellipsis, matching CSS overflow.
+
+    The bars set `text-overflow: ellipsis`, so an over-long caption ends in "…"
+    rather than being cut mid-glyph or overflowing its bar.
+    """
+    if _tracked_width(text, font, tracking) <= limit:
+        return text
+    for end in range(len(text) - 1, 0, -1):
+        candidate = f"{text[:end]}…"
+        if _tracked_width(candidate, font, tracking) <= limit:
+            return candidate
+    return ""
+
+
+def label_bar(
+    text: str, width: int, *, color: str = NEUTRAL_COLOR
+) -> Image.Image:
+    """A rounded filled caption bar — the PIL twin of `common._label_bar_html`.
+
+    White bold monospace centered on a colored, `BAR_RADIUS`-rounded bar
+    `LABEL_HEIGHT` tall: the shared look of the `CHANNEL n` column headers, the
+    `SAMPLE n` row labels and the experiment cell captions. An empty `text`
+    still returns the bar's worth of background, so a caption-less column keeps
+    the same geometry as its neighbours.
+    """
+    bar = Image.new("RGB", (max(width, 1), LABEL_HEIGHT), _BACKGROUND)
+    if not text:
+        return bar
+    draw = ImageDraw.Draw(bar)
+    draw.rounded_rectangle(
+        (0, 0, max(width, 1) - 1, LABEL_HEIGHT - 1), radius=BAR_RADIUS, fill=rgb(color)
+    )
+    font = mono_font(LABEL_FONT_SIZE)
+    shown = _ellipsized(text, font, width - 4, LABEL_TRACKING)
+    text_w = _tracked_width(shown, font, LABEL_TRACKING)
+    _draw_tracked(
+        draw,
+        ((width - text_w) / 2, (LABEL_HEIGHT - LABEL_FONT_SIZE) / 2 - 1),
+        shown,
+        font,
+        (255, 255, 255),
+        LABEL_TRACKING,
+    )
+    return bar
+
+
+def _vertical_bar(
+    text: str,
+    *,
+    width: int,
+    height: int,
+    color: str,
+    font_size: int,
+    tracking: float,
+) -> Image.Image:
+    """A rounded colored bar with its label rotated to read bottom-up.
+
+    The shared body of `row_label_bar` and `marker_bar`. The label is drawn
+    horizontally into a scratch image and rotated a quarter turn
+    counter-clockwise, which is what puts the first character at the bottom —
+    the page reaches the same reading direction with `writing-mode: vertical-rl`
+    plus a 180° turn.
+    """
+    bar = Image.new("RGB", (width, max(height, 1)), _BACKGROUND)
+    if height <= 0:
+        return bar
+    draw = ImageDraw.Draw(bar)
+    draw.rounded_rectangle(
+        (0, 0, width - 1, height - 1), radius=BAR_RADIUS, fill=rgb(color)
+    )
+    if not text:
+        return bar
+    font = mono_font(font_size)
+    shown = _ellipsized(text, font, height - 4, tracking)
+    text_w = _tracked_width(shown, font, tracking)
+    scratch = Image.new("RGB", (max(int(text_w) + 2, 1), font_size + 4), rgb(color))
+    _draw_tracked(
+        ImageDraw.Draw(scratch), (0, 0), shown, font, (255, 255, 255), tracking
+    )
+    rotated = scratch.rotate(90, expand=True)
+    bar.paste(
+        rotated, ((width - rotated.width) // 2, (height - rotated.height) // 2)
+    )
+    return bar
+
+
+def row_label_bar(
+    text: str, height: int, *, color: str = NEUTRAL_COLOR
+) -> Image.Image:
+    """A `SAMPLE n` row label — the PIL twin of `common._row_label_bar_html`.
+
+    `LABEL_HEIGHT` wide (the bars are square-ish by design: a row label is a
+    column header turned on its side) and as tall as the row it names.
+    """
+    return _vertical_bar(
+        text,
+        width=LABEL_HEIGHT,
+        height=height,
+        color=color,
+        font_size=LABEL_FONT_SIZE,
+        tracking=LABEL_TRACKING,
+    )
+
+
+def marker_bar(marker: Marker, label: str, height: int) -> Image.Image:
+    """A strip's kind marker — the PIL twin of `common._strip_marker`.
+
+    A `MARKER_WIDTH` colored bar as tall as the strip beside it, carrying the
+    kind's name bottom-up. On a strip too short to read the label down
+    (`MARKER_LABEL_MIN_HEIGHT`) the bar is drawn bare, exactly as the page's
+    container query hides it — the color still says which kind this is.
+    """
+    return _vertical_bar(
+        label if height >= MARKER_LABEL_MIN_HEIGHT else "",
+        width=MARKER_WIDTH,
+        height=height,
+        color=marker.color,
+        font_size=MARKER_FONT_SIZE,
+        tracking=MARKER_TRACKING,
+    )
+
+
 def captioned_columns(
-    legend: Image.Image | None, columns: Sequence[tuple[Image.Image, str]]
+    legend: Image.Image | None,
+    columns: Sequence[tuple[Image.Image, str]],
+    *,
+    show_labels: bool = True,
+    label_gap: int = LABEL_GAP,
 ) -> Image.Image | None:
     """Lay out a legend plus captioned column images into one image.
 
     Shared by the activation strips (`strip_image`) and the MIN/MAX patch grids
     (`patch_grid_image`): the optional `legend` leads the row under a blank
-    caption-height band, then each column image is placed left to right with its
-    caption (already collapsed to fit) centered above it. Columns are
-    accumulated until the row would exceed `MAX_IMAGE_SIZE`.
+    caption-height band, then each column image is placed left to right under
+    its `label_bar` caption. Columns are accumulated until the row would exceed
+    `MAX_IMAGE_SIZE`.
+
+    `show_labels` mirrors `common._strip_html`'s flag of the same name: a card
+    captions its *first* strip and stacks the rest below it uncaptioned, so the
+    shared `CHANNEL n` headers sit once atop the table rather than repeating on
+    every row. Without them the caption band and its gap collapse, and the row
+    is only as tall as the images.
+
+    `label_gap` is the gutter between a caption and what it captions: strips set
+    `LABEL_GAP`, the patch grids `PATCH_CELL_GAP`, each matching the CSS `gap`
+    its own page layout uses.
     """
     if not columns:
         return None
+    band = LABEL_HEIGHT + label_gap if show_labels else 0
     x = legend.width + _COLUMN_GAP if legend is not None else 0
     body_height = legend.height if legend is not None else 0
     placements: list[tuple[Image.Image, str, int]] = []
@@ -104,31 +290,29 @@ def captioned_columns(
         body_height = max(body_height, img.height)
         x += img.width + _COLUMN_GAP
     total_width = min(x, MAX_IMAGE_SIZE)
-    canvas = Image.new("RGB", (total_width, LABEL_HEIGHT + body_height), _BACKGROUND)
+    canvas = Image.new("RGB", (total_width, band + body_height), _BACKGROUND)
     if legend is not None:
-        canvas.paste(legend, (0, LABEL_HEIGHT))
-    draw = ImageDraw.Draw(canvas)
-    font = ImageFont.load_default()
+        canvas.paste(legend, (0, band))
     for img, label, col_x in placements:
-        if label:
-            text_w = draw.textlength(label, font=font)
-            draw.text(
-                (col_x + max(0, (img.width - text_w) / 2), 1),
-                label,
-                fill=_LABEL_COLOR,
-                font=font,
-            )
-        canvas.paste(img, (col_x, LABEL_HEIGHT))
+        if show_labels and label:
+            canvas.paste(label_bar(label, img.width), (col_x, 0))
+        canvas.paste(img, (col_x, band))
     return canvas
 
 
-def strip_image(strip: StripRender | None) -> Image.Image | None:
+def strip_image(
+    strip: StripRender | None, *, show_labels: bool = True
+) -> Image.Image | None:
     """Decode a `StripRender` to one display-resolution image.
 
     Each tile is nearest-upscaled to its CSS display size (matching the
     browser's `image-rendering: pixelated`) and laid out left to right after the
-    crisp legend by `captioned_columns`, with its column caption drawn above it
-    — reproducing the captioned columns the page shows.
+    crisp legend by `captioned_columns`, with its `CHANNEL n` caption bar drawn
+    above it — reproducing the captioned columns the page shows.
+
+    `show_labels` follows the page's card rule (see `captioned_columns`): the
+    first strip of a card carries the headers, the rows stacked below it reuse
+    them.
 
     An RGBA tile carries transparent NaN/±Inf cells: it is composited over a
     baked gray `checkerboard` the same size as the upscaled tile, so the
@@ -151,7 +335,7 @@ def strip_image(strip: StripRender | None) -> Image.Image | None:
                 (tile.width, tile.height), Image.Resampling.NEAREST
             )
         columns.append((up, tile.label))
-    return captioned_columns(legend, columns)
+    return captioned_columns(legend, columns, show_labels=show_labels)
 
 
 def patch_grid_image(grid: PatchGridRender | None) -> Image.Image | None:
@@ -159,8 +343,14 @@ def patch_grid_image(grid: PatchGridRender | None) -> Image.Image | None:
 
     Each channel's cells are nearest-upscaled to their CSS square and stacked
     with a `PATCH_CELL_GAP` gutter into a column image, then laid out after the
-    optional heat legend by `captioned_columns` under a "CHANNEL N" caption —
-    the still-image mirror of the MIN/MAX view's captioned cell grid.
+    optional heat legend by `captioned_columns` under a `CHANNEL n` caption. A
+    `SAMPLE n` row-label column leads the row, so the composed grid reads as the
+    same table the page draws: channel headers across, sample labels down.
+
+    The caption gutter here is `PATCH_CELL_GAP`, not `LABEL_GAP` — the page's
+    grid columns run on one vertical rhythm from the header through the cells
+    (`stats_page._patch_column_html`), where a strip separates its header with
+    the wider `LABEL_GAP`.
     """
     if grid is None or not grid.columns:
         return None
@@ -187,7 +377,42 @@ def patch_grid_image(grid: PatchGridRender | None) -> Image.Image | None:
             stack.paste(cell_img, (0, y))
             y += size + PATCH_CELL_GAP
         columns.append((stack, column.label))
-    return captioned_columns(legend, columns)
+    body = captioned_columns(legend, columns, label_gap=PATCH_CELL_GAP)
+    if body is None:
+        return None
+    return _hstack([_sample_column(grid), body])
+
+
+def _sample_column(grid: PatchGridRender) -> Image.Image:
+    """The `SAMPLE n` row labels running down the left of a patch grid.
+
+    Leads with the same header-height spacer the channel columns do, so the
+    labels line up with the cell rows rather than the headers above them.
+    """
+    cell = grid.columns[0].cell_size
+    rows = len(grid.columns[0].cells)
+    height = LABEL_HEIGHT + PATCH_CELL_GAP + rows * cell + max(rows - 1, 0) * PATCH_CELL_GAP
+    column = Image.new("RGB", (LABEL_HEIGHT, max(height, 1)), _BACKGROUND)
+    y = LABEL_HEIGHT + PATCH_CELL_GAP
+    for i in range(rows):
+        column.paste(row_label_bar(f"SAMPLE {i}", cell), (0, y))
+        y += cell + PATCH_CELL_GAP
+    return column
+
+
+def _hstack(images: Sequence[Image.Image], gap: int = _COLUMN_GAP) -> Image.Image:
+    """Place `images` left to right, top-aligned, `gap` px apart."""
+    width = sum(img.width for img in images) + gap * max(len(images) - 1, 0)
+    canvas = Image.new(
+        "RGB",
+        (min(width, MAX_IMAGE_SIZE), max(img.height for img in images)),
+        _BACKGROUND,
+    )
+    x = 0
+    for img in images:
+        canvas.paste(img, (x, 0))
+        x += img.width + gap
+    return canvas
 
 
 def upscaled_image(data: bytes | None) -> Image.Image | None:
@@ -231,8 +456,30 @@ def batch_image_row(
     return canvas
 
 
+class Section(NamedTuple):
+    """One row of a composed frame: a heading, a strip, or a marked strip.
+
+    With no `marker` the row is a text line — a card's layer name, an
+    experiment's status, a line of optimizer scalars — drawn the way the page
+    draws its headings. With one, the row is a strip: the marker becomes the
+    colored bar down its left carrying `label`, exactly as `common._strip_marker`
+    puts it there, and `label` is not drawn as text at all.
+
+    `header_gap` offsets that marker past the strip's `CHANNEL n` header band so
+    it lines up with the tiles rather than standing taller than the markers on
+    the header-less rows below it. Set it on the same row the caller renders
+    with `strip_image(..., show_labels=True)` — they describe the one card rule
+    from two sides.
+    """
+
+    label: str
+    image: Image.Image | None
+    marker: Marker | None = None
+    header_gap: bool = False
+
+
 def stack_sections(
-    sections: Sequence[tuple[str, Image.Image | None]],
+    sections: Sequence[Section],
     *,
     require_image: bool = False,
 ) -> Image.Image | None:
@@ -250,34 +497,52 @@ def stack_sections(
     """
     if not sections:
         return None
-    if require_image and all(image is None for _, image in sections):
+    if require_image and all(section.image is None for section in sections):
         return None
-    font = ImageFont.load_default()
-    width = _FRAME_PAD * 2 + min(
-        MAX_IMAGE_SIZE,
-        max([img.width for _, img in sections if img is not None] + [_MIN_SECTION_WIDTH]),
-    )
+    font = mono_font(LABEL_FONT_SIZE)
+    widths = [
+        section.image.width + (_MARKER_COLUMN if section.marker is not None else 0)
+        for section in sections
+        if section.image is not None
+    ]
+    width = _FRAME_PAD * 2 + min(MAX_IMAGE_SIZE, max(widths + [_MIN_SECTION_WIDTH]))
     height = _FRAME_PAD
-    for label, img in sections:
-        if label:
+    for section in sections:
+        if section.label and section.marker is None:
             height += LABEL_HEIGHT + 2
-        if img is not None:
-            height += min(img.height, MAX_IMAGE_SIZE) + _SECTION_GAP
+        if section.image is not None:
+            height += min(section.image.height, MAX_IMAGE_SIZE) + _SECTION_GAP
         else:
             height += _SECTION_GAP
     height = min(height + _FRAME_PAD, MAX_IMAGE_SIZE)
     canvas = Image.new("RGB", (width, height), _BACKGROUND)
     draw = ImageDraw.Draw(canvas)
     y = _FRAME_PAD
-    for label, img in sections:
-        if label:
-            draw.text((_FRAME_PAD, y), label, fill=_LABEL_COLOR, font=font)
+    for section in sections:
+        if section.label and section.marker is None:
+            _draw_tracked(
+                draw,
+                (_FRAME_PAD, y),
+                section.label,
+                font,
+                _LABEL_COLOR,
+                LABEL_TRACKING,
+            )
             y += LABEL_HEIGHT + 2
-        if img is not None:
-            canvas.paste(img, (_FRAME_PAD, y))
-            y += min(img.height, MAX_IMAGE_SIZE) + _SECTION_GAP
-        else:
+        if section.image is None:
             y += _SECTION_GAP
+            continue
+        drawn_height = min(section.image.height, MAX_IMAGE_SIZE)
+        x = _FRAME_PAD
+        if section.marker is not None:
+            band = LABEL_HEIGHT + LABEL_GAP if section.header_gap else 0
+            canvas.paste(
+                marker_bar(section.marker, section.label, drawn_height - band),
+                (x, y + band),
+            )
+            x += _MARKER_COLUMN
+        canvas.paste(section.image, (x, y))
+        y += drawn_height + _SECTION_GAP
     return canvas
 
 

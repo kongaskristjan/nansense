@@ -12,6 +12,7 @@ from nicegui.elements.mixins.disableable_element import DisableableElement
 
 from nansense.session import Session
 from nansense.ui.render import LABEL_HEIGHT, StripRender, StripTile, image_mime
+from nansense.ui.theme import LABEL_GAP, NEUTRAL_COLOR
 from nansense.ui.static import (
     _MIN_APP_WIDTH_CSS,
     _PANEL_RESIZE_CSS,
@@ -197,11 +198,8 @@ def _b64_img_src(image: bytes, *, mime: str | None = None) -> str:
     return f"data:{mime or image_mime()};base64,{encoded}"
 
 
-# Vertical gap between a column header bar and the image beneath it; the legend
-# spacer matches it so images still line up under the headers.
-LABEL_GAP: int = 4
 # Default header / marker bar color (slate-500); INPUT/ATTRIBUTION etc. override.
-_LABEL_BAR_COLOR: str = "#64748b"
+_LABEL_BAR_COLOR: str = NEUTRAL_COLOR
 
 
 def _label_bar_html(text: str, *, color: str = _LABEL_BAR_COLOR, width: int | None = None) -> str:

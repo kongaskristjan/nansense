@@ -495,7 +495,7 @@ def bin_samples_image(
     import torch
 
     from nansense.ui.bin_samples import sample_bin
-    from nansense.ui.compose import stack_sections, upscaled_image
+    from nansense.ui.compose import Section, stack_sections, upscaled_image
     from nansense.ui.render import render_image
     from nansense.watch import _bin_indices
 
@@ -542,7 +542,7 @@ def bin_samples_image(
     ]
     mean, std = display.stats(input_name)
     sections = [
-        (
+        Section(
             f"sample {sample.sample_idx} · value {sample.value:.4g}",
             upscaled_image(
                 render_image(sample.image.unsqueeze(0), 0, mean=mean, std=std)
