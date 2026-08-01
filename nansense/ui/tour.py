@@ -100,15 +100,15 @@ def _card_selector(slug: str | None, anchor: str) -> str:
 def _buttons_step(slug: str | None, *, has_weights: bool) -> TourStep:
     """The step covering the card's deep-dive buttons.
 
-    Weights only appears on a card whose layer owns parameters; on any
-    other layer the button — and so its arrow and its half of the sentence
-    — is dropped rather than pointing the visitor at another card.
+    The message names the buttons its arrows ring, and nothing more — what
+    each page holds is the page's own business. Weights only appears on a
+    card whose layer owns parameters; on any other layer the button — and
+    so its arrow and its name — is dropped rather than pointing the visitor
+    at another card.
     """
     if has_weights:
         return TourStep(
-            "Weights, Experiments, and Stats go deeper: its "
-            "parameters and optimizer state, deep-dream, and "
-            "training statistics.",
+            "Weights, Experiment, and Stats go deeper.",
             (
                 _card_selector(slug, "weights"),
                 _card_selector(slug, "experiment"),
@@ -117,8 +117,7 @@ def _buttons_step(slug: str | None, *, has_weights: bool) -> TourStep:
             ensure_card=True,
         )
     return TourStep(
-        "Experiments and Stats go deeper: deep-dream and "
-        "training statistics.",
+        "Experiment and Stats go deeper.",
         (_card_selector(slug, "experiment"), _card_selector(slug, "stats")),
         ensure_card=True,
     )
@@ -165,7 +164,7 @@ def main_tour_steps(
     if not locked:
         steps.append(
             TourStep(
-                "Step or run the paused training from here.",
+                "Run or step training from here.",
                 ('[data-tour="step-controls"]',),
             )
         )
@@ -177,14 +176,14 @@ def stats_tour_steps() -> list[TourStep]:
 
     Step 1 covers the three dropdowns in one message; each following step
     describes one view and forces it (`ensure_view`), so its arrows point
-    at a live example: the activation/gradient histograms (with the
-    hover-a-bar sampler, the page's least discoverable feature), a MIN/MAX
-    grid's per-channel column, and a GRAPHS epoch series.
+    at a live example: the activation/gradient histograms, a MIN/MAX grid's
+    per-channel column, and a GRAPHS epoch series. Those three lead with
+    the view's own name because the step switched the page to it under the
+    visitor — the name ties the message to the View dropdown they just saw.
     """
     return [
         TourStep(
-            "Select the investigation view, train or validation phase, "
-            "and the layer.",
+            "Pick the view, phase, and layer.",
             (
                 '[data-tour="view"]',
                 '[data-tour="phase"]',
@@ -192,20 +191,18 @@ def stats_tour_steps() -> list[TourStep]:
             ),
         ),
         TourStep(
-            "In HISTOGRAM view, you can see the distributions of each layer's "
-            "activations and gradients.",
+            "HISTOGRAM: activation and gradient distributions.",
             ('[data-tour="hist-activation"]', '[data-tour="hist-gradient"]'),
             ensure_view="HISTOGRAM",
         ),
         TourStep(
-            "In MIN/MAX view, each column is one channel: the inputs that "
+            "MIN/MAX: each column is one channel — the inputs that "
             "activate it most.",
             ('[data-tour="patch-column"]',),
             ensure_view="MIN/MAX",
         ),
         TourStep(
-            "In GRAPHS view, a layer's activation statistics are plotted "
-            "against time.",
+            "GRAPHS: activation and gradient statistics per epoch.",
             ('[data-tour="epoch-graph"]',),
             ensure_view="GRAPHS",
         ),
@@ -221,9 +218,8 @@ def weights_tour_steps() -> list[TourStep]:
     """
     return [
         TourStep(
-            "Each parameter's values, with its gradient and the "
-            "optimizer's state (momentum, Adam moments) in the strips "
-            "below.",
+            "The parameter's values, with its gradient and optimizer "
+            "state below.",
             ('[data-tour="weight-strips"]',),
         ),
     ]
@@ -232,35 +228,34 @@ def weights_tour_steps() -> list[TourStep]:
 def experiment_tour_steps(*, locked: bool) -> list[TourStep]:
     """The Experiment page's steps.
 
-    Step 1 points at the kind and layer selectors — mainly for the
-    description that appears at the bottom of the pane, which is easy to
-    miss. Step 2 is per-flavor: the playground (locked) turns auto-run off
-    — the page's first experiment still self-starts, but re-runs take a
-    manual Run — so its visitors get the Run / Cancel pair pointed out;
-    live runs auto-run by default and instead get the page's one real
-    gotcha —
-    experiments execute on the training thread, so nothing runs until
-    training pauses (the playground's training is always parked, and its
-    step cluster is replaced by the demo notice anyway).
+    Step 1 points at the kind and layer selectors. Step 2 is per-flavor:
+    the playground (locked) turns auto-run off — the page's first
+    experiment still self-starts, but re-runs take a manual Run — so its
+    visitors get the Run / Cancel pair pointed out; live runs auto-run by
+    default and instead get the page's one real gotcha — experiments
+    execute on the training thread, so nothing runs until training pauses.
+    That step's arrow rings the step controls, which is where the visitor
+    pauses, so the message doesn't have to name the buttons (the
+    playground's training is always parked, and its step cluster is
+    replaced by the demo notice anyway).
     """
     steps = [
         TourStep(
-            "Pick the experiment and the target layer.",
+            "Pick the experiment and the layer.",
             ('[data-tour="kind"]', '[data-tour="layer"]'),
         ),
     ]
     if locked:
         steps.append(
             TourStep(
-                "Don't forget to rerun when changing parameters.",
+                "Press Run after changing a parameter.",
                 ('[data-tour="run"]',),
             )
         )
     else:
         steps.append(
             TourStep(
-                "Experiments run while training is paused — if results "
-                "stay queued, pause with Stop or Step Batch.",
+                "Experiments only run while training is paused.",
                 ('[data-tour="step-controls"]',),
             )
         )

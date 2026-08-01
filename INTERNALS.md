@@ -1287,7 +1287,9 @@ page and the composed still both draw), `static.py` (the CSS/JS blobs), and
 `tour.py` (the per-page guided tours: Python step data for every page — a
 long tour for the main view, one-to-three-step tours for the subpages —
 plus an overlay-JS driver that draws arrows to `data-tour`-tagged
-elements; the main view's tour rides on the layer whose card the page
+elements; every step is one sentence under 100 characters, naming only
+what its arrows ring and using the labels the UI actually prints, since
+the reader landed seconds ago (`test_tour.py` enforces both); the main view's tour rides on the layer whose card the page
 already shows (`main_page._pick_tour_layer`), scoping its card anchors by
 `data-layer` so the node it points at and the card it talks about are the
 same layer; on locked sessions each page's tour auto-starts once per browser

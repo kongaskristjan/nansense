@@ -55,9 +55,10 @@ def test_steps_are_short_and_skimmable(
     assert steps
     for step in steps:
         assert step.text.endswith(".")
-        # Skimmable: at most two sentences and ~200 chars per bubble.
-        assert step.text.count(". ") <= 1
-        assert len(step.text) <= 200
+        # A visitor reads these seconds after landing: one sentence, one
+        # line. Anything longer belongs on the page, not in the bubble.
+        assert step.text.count(". ") == 0
+        assert len(step.text) <= 100
         assert step.selectors
 
 
@@ -187,9 +188,31 @@ def test_buttons_step_matches_the_buttons_the_card_has(
     assert buttons.selectors == tuple(
         f'[data-layer="relu1"] [data-tour="{a}"]' for a in anchors
     )
-    # The message names exactly the buttons it points at.
+    # The message names exactly the buttons it points at, with the labels
+    # the card actually prints on them ("Experiment", not "Experiments").
     assert ("Weights" in buttons.text) == has_weights
-    assert "Experiments" in buttons.text and "Stats" in buttons.text
+    assert "Experiment and" in buttons.text or "Experiment, and" in buttons.text
+    assert "Stats" in buttons.text
+    assert "Experiments" not in buttons.text
+
+
+def test_buttons_step_uses_the_cards_own_button_labels() -> None:
+    """The names in the buttons step are the card's real button labels.
+
+    The message is only useful if the visitor can match each word to a
+    button under an arrow, so a renamed card button must fail here.
+    """
+    source = _ui_source()
+    (buttons,) = [
+        s
+        for s in main_tour_steps("conv1", locked=True, has_weights=True)
+        if s.ensure_card and "deeper" in s.text
+    ]
+    named = buttons.text.removesuffix(" go deeper.").replace(" and", "")
+    labels = [word.strip() for word in named.split(",")]
+    assert labels == ["Weights", "Experiment", "Stats"]
+    for label in labels:
+        assert re.search(rf'ui\.button\(\s*"{label}"', source), label
 
 
 def test_stats_steps_force_the_views_they_describe() -> None:
