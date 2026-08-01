@@ -82,7 +82,7 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
 | `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions |
 | `set_auto_run_experiments` | Stop open experiment pages re-running on the thread you need |
-| `start_recording`, `stop_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update |
+| `start_recording`, `stop_recording`, `discard_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update |
 | `save_snapshot` | Save one still of a view as a PNG file to hand a human |
 
 **Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks(interval_batches=1)` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.
@@ -91,7 +91,7 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 
 **Experiments run on the paused training thread**, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and `run_experiment` returns statistics while `render_experiment` draws the result.
 
-**Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human. `save_snapshot` is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the `render_*` tools return the picture to *you*.
+**Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. `save_snapshot` is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the `render_*` tools return the picture to *you*.
 
 ## A worked example
 
