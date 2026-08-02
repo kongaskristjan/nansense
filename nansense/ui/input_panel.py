@@ -158,7 +158,12 @@ class InputPanel:
             # The image grows to the pane width; a flat (1D) input renders as a
             # colormapped strip with the scale bar beside it (hidden for image
             # inputs). Clicks stay in native pixel space regardless of CSS size.
-            with ui.row().classes("w-full items-start no-wrap gap-1"):
+            # `data-tour` on the row (not the image) so the ring takes in the
+            # scale bar too — the tour's sample step points here and at the
+            # spinner below, which together are "the input" it talks about.
+            with ui.row().classes("w-full items-start no-wrap gap-1").props(
+                'data-tour="input-image"'
+            ):
                 self._image = ui.interactive_image(
                     on_mouse=self._on_image_click, events=["mousedown"]
                 ).classes("grow min-w-0").style("image-rendering:pixelated")

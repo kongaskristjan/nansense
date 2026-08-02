@@ -333,6 +333,17 @@ def test_ensure_card_step_defaults_off() -> None:
 
 
 @pytest.mark.parametrize("locked", [True, False])
+def test_sample_step_rings_the_image_and_its_selector(locked: bool) -> None:
+    """"The input" is the picture plus the spinner that picks it, so the
+    step draws an arrow to each rather than to the spinner alone."""
+    _, _, _, sample, *_ = main_tour_steps("conv1", locked=locked)
+    assert sample.selectors == (
+        '[data-tour="input-image"]',
+        '[data-tour="sample"]',
+    )
+
+
+@pytest.mark.parametrize("locked", [True, False])
 def test_main_steps_ensure_their_targets_are_visible(locked: bool) -> None:
     """The card-bound steps (strips, buttons) auto-show the card their
     arrows need, and the sample step re-opens the input pane the top bar's

@@ -16,7 +16,7 @@ already opened) whenever the step's own anchor has no visible target. On a
 locked session that only touches the tab's own `shown` set, so playground
 visitors never affect each other. The sample step similarly re-opens the
 input pane (`nansense_tour_show_input`) if the top bar's image button had
-hidden it.
+hidden it — both of that step's arrows live in there.
 
 The driver is a self-contained JS blob in the `static.py` style: targets
 are plain CSS selectors resolved to their first *visible* match on a 200 ms
@@ -65,8 +65,8 @@ class TourStep:
     Each selector contributes one arrow, drawn to its first visible match
     (hidden cards' elements have zero-size rects and are skipped).
     `ensure_card` marks steps that need the auto-watch layer's card on
-    screen (main view only); `ensure_input` marks the step whose target
-    lives in the input pane, which the top bar's image button can hide;
+    screen (main view only); `ensure_input` marks the step whose targets
+    live in the input pane, which the top bar's image button can hide;
     `ensure_view` names the Stats view the step talks about — showing the
     step switches the page to it (via the `nansense_tour_set_view` event
     the stats page listens for), so the arrows land on a live example of
@@ -157,7 +157,7 @@ def main_tour_steps(
         _buttons_step(layer_slug, has_weights=has_weights),
         TourStep(
             "Select the input to inspect.",
-            ('[data-tour="sample"]',),
+            ('[data-tour="input-image"]', '[data-tour="sample"]'),
             ensure_input=True,
         ),
     ]
