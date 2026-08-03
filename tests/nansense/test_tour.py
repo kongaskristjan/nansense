@@ -26,7 +26,10 @@ from nansense.ui.tour import (
     weights_tour_steps,
 )
 
-_UI_DIR = Path(__file__).resolve().parents[2] / "nansense" / "ui"
+_REPO = Path(__file__).resolve().parents[2]
+_UI_DIR = _REPO / "nansense" / "ui"
+# The docs pages' half of the seen-flag protocol (see `test_tour_flags_*`).
+_EMBED_JS = _REPO / "docs" / "javascripts" / "playground-embed.js"
 
 # Every page's steps, for both session flavors — the shape the pages
 # actually install (see each page's `add_tour` call).
@@ -269,6 +272,53 @@ def test_seen_keys_are_distinct_per_page() -> None:
     # visitors who already dismissed its tour aren't replayed.
     assert seen_key("main") == SEEN_KEY_PREFIX
     assert seen_key("stats") == f"{SEEN_KEY_PREFIX}-stats"
+
+
+def test_tour_flags_ask_the_embedding_page_first() -> None:
+    """The driver asks its embedder for the seen flag, and tells it on exit.
+
+    The hosted playground swaps two Hugging Face Spaces — two origins —
+    into one docs-page frame, so a flag kept only in the frame's own
+    localStorage replays every tour when the visitor switches demos.
+    """
+    assert "window.parent.postMessage" in _TOUR_JS
+    # Both directions: read the flag on load, record it on dismissal.
+    assert "tellHost('get')" in _TOUR_JS
+    assert "tellHost('set')" in _TOUR_JS
+    # Replies are only taken from the embedder, and only for our own key.
+    assert "e.source !== window.parent" in _TOUR_JS
+    assert "data.key !== cfg.seenKey" in _TOUR_JS
+    # Unembedded runs (local, a direct Space visit, huggingface.co's own
+    # Space wrapper) must keep working off this origin's own flag.
+    assert "localStorage.getItem(cfg.seenKey)" in _TOUR_JS
+    assert "localStorage.setItem(cfg.seenKey" in _TOUR_JS
+
+
+def test_tour_flags_match_the_docs_pages_store() -> None:
+    """The docs half of the protocol agrees with the driver's half.
+
+    `docs/javascripts/playground-embed.js` holds the flags for both demos
+    (and for both embeds — the home page and `/playground/`). It answers
+    only the playground origins and only keys the tour owns, so a renamed
+    message or a new page key must fail here rather than in production.
+    """
+    host = _EMBED_JS.read_text(encoding="utf-8")
+    for message in ("get", "set", "is"):
+        assert f'"{message}"' in host, message
+        assert f"'{message}'" in _TOUR_JS, message
+    assert "nansenseTour" in host and "nansenseTour" in _TOUR_JS
+    # Every page's key must pass the host's allowlist, which is what keeps
+    # a frame from writing arbitrary keys into the docs origin.
+    (allowed,) = re.findall(r"TOUR_KEY = /(\S+)/;", host)
+    for page in ("main", "stats", "weights", "experiment"):
+        assert re.fullmatch(allowed, seen_key(page)), page
+    assert not re.fullmatch(allowed, "some-other-key")
+    # Only the two demo Spaces are answered, and each reply goes back to
+    # the asking origin rather than to `*`.
+    assert host.count("hf.space") == 2
+    assert "TOUR_ORIGINS.indexOf(event.origin) < 0" in host
+    assert re.search(r"postMessage\(.*?event\.origin", host, re.S)
+    assert '"*"' not in host
 
 
 def test_config_carries_driver_contract() -> None:

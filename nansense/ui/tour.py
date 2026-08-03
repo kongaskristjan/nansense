@@ -31,11 +31,21 @@ unless they picked a view themselves while it ran.
 Auto-start policy (see `add_tour`): only a locked session — the hosted
 playground, whose visitors are exactly the people who have never seen the
 UI — starts a tour on load, and each page's tour only once per browser
-(a per-page localStorage flag, set the moment the tour is dismissed —
-skipped, stepped through, or escaped; the playground's public origin is
-stable, so the flag survives visits). Local runs never auto-start: the top
-bar's `?` button (`top_bar._add_tour_button`) is the explicit way in on
-every page, and it replays that page's tour anywhere, seen or not.
+(a per-page seen flag, set the moment the tour is dismissed — skipped,
+stepped through, or escaped). Local runs never auto-start: the top bar's
+`?` button (`top_bar._add_tour_button`) is the explicit way in on every
+page, and it replays that page's tour anywhere, seen or not.
+
+Those flags live in whoever embeds the app, when they offer to hold them
+(`docs/javascripts/playground-embed.js`), and in the app's own
+localStorage otherwise. The hosted playground is the reason: its two
+demos are two Hugging Face Spaces — two origins — swapped into one frame
+on the docs pages, so an origin-scoped flag set under Imagenette is
+invisible to MNIST and switching demos replayed every tour from step 1.
+The docs origin is a single first-party one behind both demos and both
+embeds (the home page and `/playground/`), so a tour dismissed anywhere
+stays dismissed everywhere; `resolveSeen` in the driver below falls back
+to this origin whenever nobody answers.
 """
 
 from __future__ import annotations
@@ -45,11 +55,13 @@ from dataclasses import dataclass
 
 from nicegui import ui
 
-# The localStorage flags marking a page's tour as seen. Origin-scoped, which
-# is fine for the fixed-origin playground (the only auto-start case); local
-# runs change ports (origins) freely because they never auto-start. The main
-# page keeps the original unsuffixed key so playground visitors who already
-# dismissed its tour aren't replayed by the rename.
+# The flags marking a page's tour as seen — held by the embedding page when
+# there is one, in this origin's localStorage otherwise (see the driver's
+# `resolveSeen`). `docs/javascripts/playground-embed.js` only accepts keys
+# under this prefix, so the two halves must keep agreeing on it
+# (`test_tour.py`). The main page keeps the original unsuffixed key so
+# playground visitors who already dismissed its tour aren't replayed by the
+# rename.
 SEEN_KEY_PREFIX = "nansense-tour-seen"
 
 
@@ -403,12 +415,61 @@ _TOUR_JS: str = """
   let textEl = null, countEl = null, nextBtn = null;
   let timer = null;
 
-  function seen() {
+  // Whoever embeds us keeps the seen flags when they offer to (the docs
+  // pages do, via `docs/javascripts/playground-embed.js`): the hosted
+  // playground is two Spaces — two origins — swapped into one frame, so an
+  // origin-scoped flag set under one demo is invisible to the other and
+  // switching demos replayed every tour from step 1. This origin's own
+  // localStorage stays the fallback, which is what every unembedded case
+  // uses: a local run, a direct Space visit, huggingface.co's own Space
+  // wrapper (an embedder that doesn't answer), a browser that blocks
+  // third-party storage.
+  const HOST_RETRY_MS = 200;
+  const HOST_WAIT_MS = 700;
+
+  function localSeen() {
     try { return !!localStorage.getItem(cfg.seenKey); }
     catch (e) { return false; }
   }
+  function tellHost(action) {
+    if (window.parent === window) return;
+    try {
+      window.parent.postMessage(
+        { nansenseTour: action, key: cfg.seenKey }, '*');
+    } catch (e) {}
+  }
   function markSeen() {
     try { localStorage.setItem(cfg.seenKey, '1'); } catch (e) {}
+    tellHost('set');
+  }
+
+  // The host's flag if one answers, this origin's own otherwise. The ask
+  // repeats while we wait: the frame can be ready before the page holding
+  // it, and a dropped first ask costs the visitor a replayed tour.
+  function resolveSeen(cb) {
+    if (window.parent === window) { cb(localSeen()); return; }
+    let done = false, retry = null;
+    function finish(value) {
+      if (done) return;
+      done = true;
+      if (retry) clearInterval(retry);
+      window.removeEventListener('message', onHostReply);
+      cb(value);
+    }
+    function onHostReply(e) {
+      const data = e.data;
+      if (e.source !== window.parent || !data) return;
+      if (data.nansenseTour !== 'is' || data.key !== cfg.seenKey) return;
+      // A flag from this origin still counts — it's what visitors who
+      // dismissed a tour before the host kept the flags have — and is
+      // handed over so the host can answer for it from now on.
+      if (!data.seen && localSeen()) { tellHost('set'); finish(true); return; }
+      finish(!!data.seen);
+    }
+    window.addEventListener('message', onHostReply);
+    tellHost('get');
+    retry = setInterval(function() { tellHost('get'); }, HOST_RETRY_MS);
+    setTimeout(function() { finish(localSeen()); }, HOST_WAIT_MS);
   }
 
   // First *visible* match: hidden layer cards keep their DOM (display:none),
@@ -610,11 +671,20 @@ _TOUR_JS: str = """
     document.addEventListener('keydown', onKey);
   };
 
-  if (cfg.autoStart && !seen()) {
+  // The flag lookup and the settle beat run together, so asking the host
+  // costs nothing when it answers promptly.
+  function autoStart() {
+    let waited = false, flag = null;
+    function ready() {
+      if (waited && flag === false) window.nansenseStartTour();
+    }
+    resolveSeen(function(value) { flag = value; ready(); });
     // A beat after load so the first arrow lands on a rendered diagram in
     // the common case (the 200 ms tick catches it regardless).
-    setTimeout(function() { window.nansenseStartTour(); }, 800);
+    setTimeout(function() { waited = true; ready(); }, 800);
   }
+
+  if (cfg.autoStart) autoStart();
 })();
 </script>
 """

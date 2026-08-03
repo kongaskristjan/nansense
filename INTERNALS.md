@@ -1293,7 +1293,11 @@ the reader landed seconds ago (`test_tour.py` enforces both); the main view's to
 already shows (`main_page._pick_tour_layer`), scoping its card anchors by
 `data-layer` so the node it points at and the card it talks about are the
 same layer; on locked sessions each page's tour auto-starts once per browser
-— a per-page localStorage flag set on dismissal — and every page's top-bar
+— a per-page seen flag set on dismissal, held by the embedding page when it
+offers to (`docs/javascripts/playground-embed.js` does, so the hosted
+playground's two Spaces — two origins in one docs frame — stop replaying
+every tour when the visitor switches demos) and in the app's own
+localStorage otherwise — and every page's top-bar
 `?` button replays its tour anywhere; the driver brackets each run with
 start/end events, which the stats page — whose view-bound steps cycle the
 View dropdown — uses to restore the pre-tour view on dismissal unless the
