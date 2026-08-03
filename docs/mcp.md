@@ -9,7 +9,7 @@ The agent connects to the same session the browser shows. Both are front-ends on
 The endpoint is served alongside the UI, on the same port. Start your run as usual:
 
 ```bash
-uv run --group cuda examples/standard/main.py --nansense-port 8080
+uv run --group cpu examples/standard/main.py --nansense-port 8080
 ```
 
 The startup banner prints the command to register it:

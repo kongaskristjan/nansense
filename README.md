@@ -24,11 +24,17 @@ Unlike wandb or TensorBoard, which log external metrics (loss, accuracy) to scro
 
 ## Try it
 
-Clone the repository and run a bundled example with [uv](https://docs.astral.sh/uv/getting-started/installation) — datasets and pretrained networks download automatically, and a browser tab opens with the UI:
+Clone the repository and run a bundled example with [uv](https://docs.astral.sh/uv/getting-started/installation) — Python, dependencies, datasets and pretrained networks download automatically, and a browser tab opens with the UI:
 
 ```bash
+# Install uv (Windows: https://docs.astral.sh/uv/getting-started/installation):
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+git clone https://github.com/kongaskristjan/nansense
+cd nansense
+
 # --group: cpu | cuda (NVIDIA) | cuda-legacy (pre-Turing NVIDIA) | rocm (AMD)
-uv run --group cuda examples/standard/main.py --nansense-port 8080
+uv run --group cpu examples/standard/main.py --nansense-port 8080
 ```
 
 [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/) lists all the examples and explains the hardware groups.
