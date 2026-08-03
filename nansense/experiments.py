@@ -360,6 +360,23 @@ class ExperimentResult:
     objective: float | None = None
 
 
+@dataclass(frozen=True)
+class ExperimentQueueState:
+    """Where one request sits before its first result (`experiment_queue_state`).
+
+    A request publishes nothing until it produces progress — Captum methods
+    only publish once, at the end — so "no result yet" alone can't tell a
+    request that is executing from one still waiting its turn. `stage` makes
+    that difference visible: `"running"` (the training thread is on it now),
+    `"queued"` (waiting behind `ahead` other requests, the running one
+    included), or `"absent"` (never queued, cancelled, superseded, or long
+    since finished).
+    """
+
+    stage: str
+    ahead: int = 0
+
+
 def run(
     session: Session,
     request: ExperimentRequest,
@@ -485,6 +502,21 @@ def cancel_experiment(session: Session, seq: int | None = None) -> None:
         session._cv.notify_all()
 
 
+def experiment_queue_state(session: Session, seq: int) -> ExperimentQueueState:
+    """Implementation of `Session.experiment_queue_state`."""
+    with session._cv:
+        running = session._experiment_running
+        if running == seq:
+            return ExperimentQueueState("running")
+        for position, request in enumerate(session._experiment_queue):
+            if request.seq == seq:
+                # A run already in flight is one more wait in front of it.
+                return ExperimentQueueState(
+                    "queued", position + (1 if running is not None else 0)
+                )
+        return ExperimentQueueState("absent")
+
+
 def register_auto_experiment(
     session: Session, key: str, *, kind: str, layer: str, params: dict[str, object]
 ) -> int:
@@ -565,7 +597,14 @@ def run_auto_experiments(session: Session) -> None:
     evolving weights. Expired registrations (no page heartbeat, not
     pinned by a recording) are dropped first. A registration whose
     initial request is still queued is taken over here: the queued
-    duplicate is removed so the request runs exactly once per update.
+    duplicate is dropped so the request runs exactly once per update.
+
+    The batch's requests then go back on the queue in the order they run,
+    ahead of anything the pause loop still holds (this publish path owns
+    the training thread until the last of them finishes), and each is
+    popped as it starts. So a request waiting its turn keeps reading as
+    queued to `experiment_queue_state` instead of vanishing for the
+    duration, and `cancel_experiment` on it still bites.
     """
     now = time.monotonic()
     with session._cv:
@@ -579,9 +618,23 @@ def run_auto_experiments(session: Session) -> None:
         seqs = {r.seq for r in requests}
         if seqs:
             session._experiment_queue = deque(
-                r for r in session._experiment_queue if r.seq not in seqs
+                requests + [r for r in session._experiment_queue if r.seq not in seqs]
             )
     for request in requests:
+        with session._cv:
+            # Pop and mark running under one lock, exactly as the pause loop
+            # hands a request over: a cancel landing in between would
+            # otherwise find the seq neither queued nor running and be a
+            # silent no-op, letting a cancelled experiment run. A request
+            # already gone from the queue *was* cancelled while it waited
+            # its turn, so it is skipped rather than run.
+            queued = deque(
+                r for r in session._experiment_queue if r.seq != request.seq
+            )
+            if len(queued) == len(session._experiment_queue):
+                continue
+            session._experiment_queue = queued
+            session._experiment_running = request.seq
         run_experiment_guarded(session, request)
 
 

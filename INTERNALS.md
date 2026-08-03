@@ -877,9 +877,23 @@ run), and on anything that ends the pause — resume commands, a pending
 time-travel jump, `close()` — so the pause loop regains control within
 one step. Another client's new
 request does *not* abort a running experiment; it waits its turn in the
-queue. Requests queued while training is running stay queued until the
-next pause (`experiment_pending` lets the UI say so). A raising experiment
-publishes an error result instead of killing the training thread.
+queue. Requests queued while training is running wait for the next
+snapshot publish or pause, whichever comes first (`experiment_pending`
+lets the UI say so). A raising experiment publishes an error result
+instead of killing the training thread.
+
+**Where a request sits.** Nothing is published until a run has progress to
+show — and the Captum methods publish once, at the end — so "no result
+yet" alone can't tell a run in flight from one still waiting.
+`Session.experiment_queue_state(seq)` resolves it into an
+`ExperimentQueueState`: `"running"`, `"queued"` (with how many requests
+are `ahead`), or `"absent"` (never queued, cancelled, superseded, or long
+finished). Both front-ends use it — the experiment page picks its status
+pill from it (spinner vs. static glyph), `get_experiment_result` returns
+`stage` / `queued_ahead` for the same distinction. Both hand-offs from
+queue to runner therefore pop the request and mark it running under one
+lock, so no poll ever catches a live request as `"absent"` and a cancel
+in that window still bites.
 
 **Isolation.** Experiments share the probe contract via
 `probe.isolated_model` (the refactored common core): eval-mode forwards
@@ -957,6 +971,18 @@ the page opens onto a result — and toggles Run/Cancel enablement (Run off whil
 a run is in flight; Cancel off while idle). Run replaces and Cancel aborts
 only this page's request, so tabs don't clobber each other.
 
+The results pane leads with a **status pill** (`_StatusPill`, shared with
+the stats cards) rather than a line of text: a tone plus either a spinner
+or a glyph. Idle before the page has a request of its own, then — while
+nothing is published — whatever `experiment_queue_state` says: running,
+queued behind *n*, starting, or (cancelled/superseded) stopped before it
+ran; and finally the streamed result, green on done, slate on stopped
+early, red on failed. Every wait that resolves on its own spins, which is
+all of them but the last: an auto experiment runs at the next
+visualization update as well as at a pause, so advancing training only
+*offers* Stop / Step Batch as a shortcut — and offers it solely when
+unlocked, a locked demo having no such controls to name.
+
 Results render through `render_result`. Deep dream uses a **single** card
 (`_render_image_row`) holding one horizontal row of captioned cells: the
 shared starting input first (only for the current-batch start), then one
@@ -986,7 +1012,11 @@ the page's last `touch_auto_experiment` heartbeat (its 200 ms tick), so
 closing the page stops the reruns; an active experiment recording pins the
 entry (`pin_auto_experiment`) for its own lifetime. At each update,
 `run_auto_experiments` first removes any still-queued duplicate of a
-registered request so it runs exactly once per update.
+registered request so it runs exactly once per update, then puts the
+batch's requests back on the queue in the order it will run them and pops
+each as it starts — so a registration waiting its turn still reads as
+`"queued"` (not `"absent"`) to `experiment_queue_state`, and cancelling one
+mid-batch skips it instead of being a silent no-op.
 
 ## Recording (`nansense.recording`)
 

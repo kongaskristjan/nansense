@@ -18,6 +18,7 @@ from nansense.experiments import (
     EXPERIMENT_KINDS,
     EXPERIMENT_PARAMS,
     ExperimentParam,
+    ExperimentQueueState,
     ExperimentResult,
     available_experiment_kinds,
     default_param_values,
@@ -34,6 +35,8 @@ from nansense.ui.common import (
     _resizable_pane_props,
     _resize_handle,
     _set_controls_enabled,
+    _StatusChip,
+    _StatusPill,
     _strip_html,
     _weights_placeholder,
 )
@@ -157,6 +160,64 @@ def _status_text(auto_run: bool, locked: bool) -> str:
         "The first experiment starts on its own — after changing "
         f"parameters, press Run{pause}."
     )
+
+
+def _idle_chip(auto_run: bool, locked: bool) -> _StatusChip:
+    """The pill before this page has an experiment of its own."""
+    return _StatusChip("idle", "science", _status_text(auto_run, locked))
+
+
+def _pending_chip(
+    kind: str,
+    queue: ExperimentQueueState,
+    *,
+    training_running: bool,
+    locked: bool,
+) -> _StatusChip:
+    """The pill for a request that hasn't published a result yet.
+
+    Captum methods publish once, at the end, so this covers whole runs —
+    it has to say which kind of wait the user is in. Every wait here
+    resolves on its own (an experiment page registers an auto experiment,
+    which the training thread runs at its next visualization update as
+    well as at a pause), so all of them spin (`icon=None`); only the
+    request that will never run drops the spinner. Advancing training is
+    the slow wait, so it names the controls that cut it short — unlocked
+    only, a locked session has none (`_run_tooltip`).
+    """
+    title = EXPERIMENT_KINDS.get(kind, kind)
+    if queue.stage == "running":
+        return _StatusChip("running", None, f"{title} — running…")
+    if queue.stage == "absent":
+        # Cancelled, superseded, or dropped before the thread picked it up.
+        return _StatusChip("idle", "block", f"{title} — stopped before it ran")
+    if training_running:
+        controls = "" if locked else "; Stop or Step Batch runs it now"
+        return _StatusChip(
+            "waiting",
+            None,
+            f"{title} — runs at the next visualization update{controls}",
+        )
+    if queue.ahead:
+        plural = "" if queue.ahead == 1 else "s"
+        return _StatusChip(
+            "waiting",
+            None,
+            f"{title} — queued behind {queue.ahead} experiment{plural}",
+        )
+    return _StatusChip("running", None, f"{title} — starting…")
+
+
+def _result_chip(result: ExperimentResult) -> _StatusChip:
+    """The pill for a published result: still streaming, or its outcome."""
+    text = _experiment_status(result)
+    if result.error is not None:
+        return _StatusChip("failed", "error", text)
+    if not result.done:
+        return _StatusChip("running", None, text)
+    if result.step < result.total_steps:
+        return _StatusChip("stopped", "stop_circle", text)
+    return _StatusChip("done", "check_circle", text)
 
 
 def _build_experiment_page(
@@ -452,9 +513,9 @@ def _build_experiment_page(
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
             ):
-                status_label = ui.label(
-                    _status_text(session.auto_run_experiments, session.locked)
-                ).classes("text-sm text-slate-600")
+                status_pill = _StatusPill(
+                    _idle_chip(session.auto_run_experiments, session.locked)
+                )
                 error_label = ui.label("").classes("text-sm text-red-600")
                 results_col = ui.column().classes("gap-2 w-full")
 
@@ -765,13 +826,20 @@ def _build_experiment_page(
         if state.my_seq is None:
             return
         if result is None:
+            # Nothing published yet: the queue says whether that means
+            # running now, waiting in line, or waiting for the training
+            # thread to come round.
             if state.last_result is None:
-                status_label.text = (
-                    "queued — waiting for training to pause, or for earlier "
-                    "experiments to finish (use Stop / Step Batch above)"
+                status_pill.show(
+                    _pending_chip(
+                        state.kind,
+                        session.experiment_queue_state(state.my_seq),
+                        training_running=session.is_running,
+                        locked=session.locked,
+                    )
                 )
             return
-        status_label.text = _experiment_status(result)
+        status_pill.show(_result_chip(result))
         error_label.text = result.error or ""
         if result is not state.last_result:
             state.last_result = result

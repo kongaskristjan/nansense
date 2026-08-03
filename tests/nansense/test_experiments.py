@@ -5,14 +5,17 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from unittest import mock
 
 import pytest
 import torch
 from torch import Tensor, nn
 
 import nansense
+from nansense import experiments
 from nansense.experiments import (
     EXPERIMENT_KINDS,
+    ExperimentQueueState,
     _value_bounds,
     _zoom_in,
     available_experiment_kinds,
@@ -419,6 +422,66 @@ def test_register_auto_experiment_supersedes_queued_request() -> None:
     )
     queued = [r.seq for r in session._experiment_queue]
     assert queued == [second] and first not in queued
+
+
+def test_experiment_queue_state_places_each_request() -> None:
+    # A request publishes nothing until it has progress, so the UI asks the
+    # queue whether "no result" means running, waiting, or gone. No training
+    # loop runs here, so both requests stay queued behind nothing.
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    first = session.request_experiment(kind="deep_dream", layer="conv", params={})
+    second = session.request_experiment(kind="deep_dream", layer="conv", params={})
+    assert session.experiment_queue_state(first) == ExperimentQueueState("queued", 0)
+    assert session.experiment_queue_state(second) == ExperimentQueueState("queued", 1)
+    # Never-requested and cancelled seqs are equally absent.
+    assert session.experiment_queue_state(9999).stage == "absent"
+    session.cancel_experiment(first)
+    assert session.experiment_queue_state(first).stage == "absent"
+    # The survivor moves up the line.
+    assert session.experiment_queue_state(second) == ExperimentQueueState("queued", 0)
+
+
+def test_experiment_queue_state_counts_the_running_request() -> None:
+    # The running request is a wait of its own: a queued one behind it is
+    # one deeper than its queue position suggests.
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    running = session.request_experiment(kind="deep_dream", layer="conv", params={})
+    queued = session.request_experiment(kind="deep_dream", layer="conv", params={})
+    # Mimic the pause loop picking the first request up.
+    session._experiment_queue.popleft()
+    session._experiment_running = running
+    assert session.experiment_queue_state(running) == ExperimentQueueState("running", 0)
+    assert session.experiment_queue_state(queued) == ExperimentQueueState("queued", 1)
+
+
+def test_auto_experiments_awaiting_their_turn_stay_queued_and_cancellable() -> None:
+    """One publish runs every registration in turn, and the page of each one
+    still waiting polls its state meanwhile — "gone" would read as a request
+    that died, and a Cancel on it must not be a silent no-op."""
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    seqs = [
+        session.register_auto_experiment(
+            f"page-{i}", kind="deep_dream", layer="conv", params=_dream_params(steps=1)
+        )
+        for i in range(3)
+    ]
+    seen: list[tuple[str, ...]] = []
+
+    def observe(_session: Session, request: object) -> None:
+        # Stands in for the run itself: records how every request reads at
+        # the moment this one starts.
+        seen.append(tuple(session.experiment_queue_state(s).stage for s in seqs))
+        if len(seen) == 1:
+            session.cancel_experiment(seqs[2])  # while it waits its turn
+
+    with mock.patch.object(experiments, "run_experiment_guarded", observe):
+        experiments.run_auto_experiments(session)
+
+    # The two that hadn't started yet read as queued, not as gone.
+    assert seen[0] == ("running", "queued", "queued")
+    assert seen[1][1] == "running"  # the second one's turn
+    # The cancel bit: the third was skipped, so only two ever started.
+    assert len(seen) == 2
 
 
 def test_auto_run_experiments_setting_defaults_on() -> None:

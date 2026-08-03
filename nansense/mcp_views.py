@@ -834,14 +834,29 @@ def experiment_result_view(
     """One experiment request's latest published progress or outcome."""
     result = session.experiment_result_for(seq)
     if result is None:
-        return {
-            "seq": seq,
-            "error": (
-                "No result published for this request — it may still be queued "
-                "(experiments run on the paused training thread), or old enough "
-                "to have been evicted."
-            ),
-        }
+        # Nothing published yet is ambiguous on its own — the queue says
+        # whether the request is under way, waiting, or gone (the UI draws
+        # the same distinction as a spinner or a static pill).
+        queue = session.experiment_queue_state(seq)
+        pending: dict[str, Any] = {"seq": seq, "stage": queue.stage}
+        if queue.stage == "running":
+            pending["note"] = (
+                "Running on the training thread now; it has published no "
+                "progress yet (the Captum methods publish once, at the end)."
+            )
+        elif queue.stage == "queued":
+            pending["queued_ahead"] = queue.ahead
+            pending["note"] = (
+                "Queued — experiments run on the paused training thread, so "
+                "this waits for the pause and for the "
+                f"{queue.ahead} request(s) in front of it."
+            )
+        else:
+            pending["error"] = (
+                "No result published for this request, and it is not queued — "
+                "cancelled, superseded, or old enough to have been evicted."
+            )
+        return pending
     view: dict[str, Any] = {
         "seq": result.seq,
         "kind": result.kind,

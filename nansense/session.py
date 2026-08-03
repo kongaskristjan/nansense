@@ -65,6 +65,7 @@ from nansense import capture, debugger, distributed, experiments, probe
 from nansense.debugger import DebugError, DebugSettings
 from nansense.input_config import InputTransform, MeanStd
 from nansense.experiments import (
+    ExperimentQueueState,
     ExperimentRequest,
     ExperimentResult,
     _AutoExperiment,
@@ -1167,6 +1168,17 @@ class Session:
         """Whether any request is queued but not yet picked up."""
         with self._cv:
             return bool(self._experiment_queue)
+
+    def experiment_queue_state(self, seq: int) -> ExperimentQueueState:
+        """Where request `seq` sits while `experiment_result_for` is empty.
+
+        A request publishes nothing until it has progress to show, so the
+        absence of a result is ambiguous on its own: the run may be under
+        way, or still waiting for the training thread. This resolves it —
+        `"running"`, `"queued"` (with how many requests are `ahead`), or
+        `"absent"`. Front-ends use it to say which, instead of guessing.
+        """
+        return experiments.experiment_queue_state(self, seq)
 
     def request_experiment(
         self, *, kind: str, layer: str, params: dict[str, object]

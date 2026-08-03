@@ -385,7 +385,22 @@ def test_an_unknown_experiment_kind_never_reaches_the_session() -> None:
 def test_an_experiment_result_that_was_never_published_says_so() -> None:
     with paused_session(TinyNet()) as session:
         view = _call(session, "get_experiment_result", {"seq": 999})
+        assert view["stage"] == "absent"
         assert "No result published" in view["error"]
+
+
+def test_a_result_free_request_reports_its_place_in_the_queue() -> None:
+    """An agent polling a result gets the same distinction the UI draws with
+    its spinner: waiting in line is not the same as gone."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    seq = session.request_experiment(kind="deep_dream", layer="fc1", params={})
+    behind = session.request_experiment(kind="deep_dream", layer="fc1", params={})
+    view = _call(session, "get_experiment_result", {"seq": behind})
+    # No training loop runs, so both requests sit in the queue.
+    assert view["stage"] == "queued" and view["queued_ahead"] == 1
+    assert "error" not in view
+    session.cancel_experiment(seq)
+    assert _call(session, "get_experiment_result", {"seq": behind})["queued_ahead"] == 0
 
 
 # --- time travel ------------------------------------------------------

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import html
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Literal
 
 from nicegui import ui
@@ -89,6 +90,74 @@ def _defer_value_write(write: Callable[[], object]) -> None:
     reach the client.
     """
     ui.timer(0.0, write, once=True)
+
+
+@dataclass(frozen=True)
+class _StatusChip:
+    """One rendering of a status pill: a tone, a leading glyph and text.
+
+    `icon=None` draws the spinner instead of an icon — the in-progress cue
+    for work the user is waiting on (a queued or running experiment, stats
+    still being collected). Pure data, so pages can build and test their
+    status wording without touching NiceGUI.
+    """
+
+    tone: str
+    icon: str | None
+    text: str
+
+
+# Chip tones, ordered as a job moves through them. Each pairs a tinted
+# background with text dark enough to read on it; the spinner inherits that
+# text color (`currentColor`), so a pill is one color statement.
+_CHIP_TONES: dict[str, str] = {
+    "idle": "bg-slate-100 text-slate-600 border-slate-300",
+    "waiting": "bg-amber-100 text-amber-800 border-amber-300",
+    "running": "bg-sky-100 text-sky-800 border-sky-300",
+    "stopped": "bg-slate-200 text-slate-700 border-slate-400",
+    "done": "bg-emerald-100 text-emerald-800 border-emerald-300",
+    "failed": "bg-red-100 text-red-700 border-red-300",
+}
+_CHIP_BASE = (
+    "items-center gap-2 no-wrap w-fit max-w-full px-2.5 py-1 "
+    "rounded border text-sm font-medium"
+)
+
+
+class _StatusPill:
+    """A live status pill: one chip's worth of state, updated in place.
+
+    Built once and re-shown on every change (`show`) rather than rebuilt, so
+    a spinning pill keeps spinning across updates instead of restarting its
+    animation. Repeat shows of the same chip are dropped, which keeps the
+    per-tick UI writes at zero while a status holds steady.
+    """
+
+    def __init__(self, chip: _StatusChip) -> None:
+        self._chip: _StatusChip | None = None
+        self._row = ui.row()
+        with self._row:
+            # `color=None` leaves the spinner inheriting the pill's text
+            # color; a size in `em` keeps it on the label's baseline.
+            self._spinner = ui.spinner(size="1.1em", color=None)
+            self._icon = ui.icon("info").classes("text-base shrink-0")
+            self._label = ui.label("").classes("min-w-0")
+        self.show(chip)
+
+    def show(self, chip: _StatusChip) -> None:
+        """Re-render the pill for `chip` (a no-op when it is unchanged)."""
+        if chip == self._chip:
+            return
+        self._chip = chip
+        self._row.classes(replace=f"{_CHIP_BASE} {_CHIP_TONES[chip.tone]}")
+        self._spinner.set_visibility(chip.icon is None)
+        self._icon.set_visibility(chip.icon is not None)
+        if chip.icon is not None:
+            self._icon.set_name(chip.icon)
+        self._label.text = chip.text
+
+    def set_visibility(self, visible: bool) -> None:
+        self._row.set_visibility(visible)
 
 
 def _notice_banner(message: str, *, icon: str = "info") -> ui.element:

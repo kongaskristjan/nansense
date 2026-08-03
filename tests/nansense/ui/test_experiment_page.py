@@ -83,6 +83,140 @@ def test_status_text_locked_and_auto_run_variants(
         assert "training must be paused" in text
 
 
+@pytest.mark.parametrize("locked", [False, True])
+def test_pending_chip_names_the_run_controls_only_when_there_are_some(
+    locked: bool,
+) -> None:
+    """Advancing training is the slow wait — it still resolves itself at the
+    next visualization update, so the pill spins and only *offers* the
+    controls that cut it short. A locked session has none to offer."""
+    from nansense.experiments import ExperimentQueueState
+    from nansense.ui.experiment_page import _pending_chip
+
+    chip = _pending_chip(
+        "deep_dream",
+        ExperimentQueueState("queued", 0),
+        training_running=True,
+        locked=locked,
+    )
+    assert chip.icon is None
+    assert "Deep Dream" in chip.text and "next visualization update" in chip.text
+    assert ("Step Batch" in chip.text) == (not locked)
+
+
+@pytest.mark.parametrize(
+    ("stage", "ahead", "expected"),
+    [
+        ("running", 0, "Deep Dream — running…"),
+        ("queued", 0, "Deep Dream — starting…"),
+        ("queued", 1, "Deep Dream — queued behind 1 experiment"),
+        ("queued", 3, "Deep Dream — queued behind 3 experiments"),
+    ],
+)
+def test_pending_chip_spins_through_the_waits_that_resolve_themselves(
+    stage: str, ahead: int, expected: str
+) -> None:
+    from nansense.experiments import ExperimentQueueState
+    from nansense.ui.experiment_page import _pending_chip
+
+    chip = _pending_chip(
+        "deep_dream",
+        ExperimentQueueState(stage, ahead),
+        training_running=False,
+        locked=True,
+    )
+    assert chip.icon is None  # the spinner is the in-progress cue
+    assert chip.text == expected
+
+
+def test_pending_chip_reports_a_request_that_never_ran() -> None:
+    # Cancel before the first publish: no result is ever coming, so a
+    # spinner would lie.
+    from nansense.experiments import ExperimentQueueState
+    from nansense.ui.experiment_page import _pending_chip
+
+    chip = _pending_chip(
+        "occlusion",
+        ExperimentQueueState("absent"),
+        training_running=False,
+        locked=False,
+    )
+    assert chip.icon is not None and "stopped before it ran" in chip.text
+
+
+@pytest.mark.parametrize(
+    ("step", "done", "error", "tone", "spins"),
+    [
+        (7, False, None, "running", True),
+        (300, True, None, "done", False),
+        (12, True, None, "stopped", False),  # cancelled or past the time limit
+        (0, True, "boom", "failed", False),
+    ],
+)
+def test_result_chip_tone_follows_the_outcome(
+    step: int, done: bool, error: str | None, tone: str, spins: bool
+) -> None:
+    from nansense.experiments import ExperimentResult
+    from nansense.ui.experiment_page import _result_chip
+
+    chip = _result_chip(
+        ExperimentResult(
+            seq=1,
+            kind="deep_dream",
+            layer="conv",
+            step=step,
+            total_steps=300,
+            done=done,
+            error=error,
+        )
+    )
+    assert chip.tone == tone
+    assert (chip.icon is None) == spins
+
+
+def test_every_chip_the_page_builds_has_a_defined_tone() -> None:
+    # A tone with no entry in `_CHIP_TONES` raises only when the pill is
+    # first shown — in the browser, mid-experiment.
+    from nansense.experiments import ExperimentQueueState, ExperimentResult
+    from nansense.ui.common import _CHIP_TONES
+    from nansense.ui.experiment_page import _idle_chip, _pending_chip, _result_chip
+
+    flags = (False, True)
+    stages = (("running", 0), ("queued", 0), ("queued", 2), ("absent", 0))
+    chips = [_idle_chip(auto_run, locked) for auto_run in flags for locked in flags]
+    chips += [
+        _pending_chip(
+            "deep_dream",
+            ExperimentQueueState(stage, ahead),
+            training_running=running,
+            locked=locked,
+        )
+        for stage, ahead in stages
+        for running in flags
+        for locked in flags
+    ]
+    chips += [
+        _result_chip(
+            ExperimentResult(
+                seq=1,
+                kind="deep_dream",
+                layer="conv",
+                step=step,
+                total_steps=3,
+                done=done,
+                error=error,
+            )
+        )
+        for step, done, error in (
+            (1, False, None),  # streaming
+            (3, True, None),  # done
+            (1, True, None),  # stopped early
+            (0, True, "x"),  # failed
+        )
+    ]
+    assert {chip.tone for chip in chips} <= set(_CHIP_TONES)
+
+
 def test_minmax_stats_href_encodes_layer_and_targets_minmax_view() -> None:
     # A real `href` (not an `on_click` navigate) keeps the compare button
     # middle-clickable; the link must land on the MIN/MAX grids directly.
