@@ -1498,9 +1498,16 @@ view; a fast timer feeds `session.watch_snapshot()` to the visible view,
 gated by `_RefreshGate` to the visualization update cadence — a tick
 re-renders only after a new snapshot publish (the settings' "Update
 frequency", a pause/step, a one-shot Refresh), a watched-set/phase-list
-change, or an average-patches Performance flip (it flushes the aggregates
-and re-gates the MIN/MAX radio's entries), so the page updates in step
-with the main view. The HISTOGRAM card leads with a **Statistics** section — one
+change, an average-patches Performance flip (it flushes the aggregates
+and re-gates the MIN/MAX radio's entries), or training starting/stopping,
+so the page updates in step with the main view. A card with nothing to
+draw hides every view behind one of two things, never empty plots: the
+`_StatusPill` spinner while the numbers are on their way — before the
+first refresh lands (it computes off the event loop), or while batches
+advance and keep feeding them — and, once waiting can't help, the red
+`_no_stats_message` notice, whose unlocked variant is the only one that
+advises stepping. That is why the run/stop flip is a gate input: the two
+read differently and the next publish can be an epoch away. The HISTOGRAM card leads with a **Statistics** section — one
 framed table per phase with activations and gradients as the two value
 columns (dead channels activation-only) — above the two histogram plots.
 GRAPHS plots each stat (mean/std/median/min/max, plus dead

@@ -90,16 +90,32 @@ def test_reveal_samples_js_scrolls_strip_when_below_fold() -> None:
 
 @pytest.mark.parametrize("locked", [True, False])
 def test_no_stats_message_matches_session_kind(locked: bool) -> None:
-    """A locked session (the shared demo) can't step, so its variant must
-    not hand out stepping advice — it says the stats are still loading and
-    points at "Current batch", the one phase that works for any layer."""
+    """The notice only shows once waiting can't help (a running session
+    spins instead), so neither variant may claim stats are on their way. A
+    locked session (the shared demo) can't step, so its variant hands out no
+    stepping advice — it points at "Current batch", the one phase that works
+    for any layer."""
     text = _no_stats_message(locked)
     if locked:
         assert "step" not in text.lower()
         assert _PHASE_CURRENT_BATCH_LABEL in text
+        assert "nothing further will arrive" in text
     else:
         assert "step at least one batch" in text
         assert "running statistics" in text
+
+
+def test_the_layer_card_waits_with_a_spinner_never_with_advice() -> None:
+    """Both card pills cover a wait that resolves on its own — the first
+    refresh landing, or the next batch's numbers — so they spin and ask for
+    nothing (`icon=None` is the pill's spinner)."""
+    from nansense.ui.common import _CHIP_TONES
+    from nansense.ui.stats_page import _COLLECTING_CHIP, _LOADING_CHIP
+
+    for chip in (_LOADING_CHIP, _COLLECTING_CHIP):
+        assert chip.icon is None
+        assert chip.tone in _CHIP_TONES
+        assert "step" not in chip.text.lower()
 
 
 def test_figure_payload_carries_plotly_config() -> None:
@@ -649,6 +665,22 @@ def test_refresh_gate_passes_on_average_patches_flip() -> None:
     assert gate.should_refresh(session)
     assert not gate.should_refresh(session)
     assert session.set_watch_performance(average_patches=True)
+    assert gate.should_refresh(session)
+    assert not gate.should_refresh(session)
+
+
+def test_refresh_gate_passes_when_training_starts_or_stops() -> None:
+    # A card with nothing to show reads differently while batches advance
+    # ("collecting") than while they don't ("step at least one batch"), and
+    # the next publish can be a whole epoch away — so the flip itself has to
+    # re-render the page rather than waiting for one.
+    session, _ = make_session(epochs=1, phases={"train": 3})
+    gate = _RefreshGate()
+    assert gate.should_refresh(session)  # consume the page-open state
+    assert not gate.should_refresh(session)
+    with session._cv:  # what the training thread does on reaching a batch
+        session._paused = True
+    assert not session.is_running
     assert gate.should_refresh(session)
     assert not gate.should_refresh(session)
 

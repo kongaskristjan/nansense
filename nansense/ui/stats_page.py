@@ -32,6 +32,8 @@ from nansense.ui.common import (
     _resizable_pane_props,
     _resize_handle,
     _set_controls_enabled,
+    _StatusChip,
+    _StatusPill,
 )
 from nansense.ui.epoch_stats import (
     epoch_axis_dtick,
@@ -170,15 +172,19 @@ class _RefreshGate:
     cards stay in sync while training runs between updates or sits paused.
     So does a flip of the average-patches Performance setting: it flushes
     every aggregate bucket and decides which grid types the MIN/MAX radio
-    offers, both of which the page must re-render. The sidebar controls and
-    the "Refresh now" button (`_refresh_now`) call `refresh` directly,
-    bypassing the gate.
+    offers, both of which the page must re-render. Starting or stopping
+    training passes too: a card with nothing to show says something
+    different while batches advance (`_COLLECTING_CHIP`) than while they
+    don't (`_no_stats_message`), and the next publish can be an epoch away.
+    The sidebar controls and the "Refresh now" button (`_refresh_now`) call
+    `refresh` directly, bypassing the gate.
     """
 
     last_snapshot: BatchSnapshot | None = None
     last_stats_layers: frozenset[str] = frozenset()
     last_phases: tuple[str, ...] = ()
     last_average_patches: bool | None = None
+    last_running: bool | None = None
 
     def should_refresh(self, session: Session) -> bool:
         """Consume the session's current state; True if it changed."""
@@ -186,16 +192,19 @@ class _RefreshGate:
         stats_layers = session.stats_layers
         phases = tuple(session.schedule.phase_order)
         average_patches = session.watch_performance.average_patches
+        running = session.is_running
         changed = (
             snapshot is not self.last_snapshot
             or stats_layers != self.last_stats_layers
             or phases != self.last_phases
             or average_patches != self.last_average_patches
+            or running != self.last_running
         )
         self.last_snapshot = snapshot
         self.last_stats_layers = stats_layers
         self.last_phases = phases
         self.last_average_patches = average_patches
+        self.last_running = running
         return changed
 
 
@@ -1675,9 +1684,12 @@ class _WatchLayerPanel:
                     ).props("dense size=sm flat round").tooltip(
                         "Stop watching"
                     )
-            # Shown (with both view sections hidden) until the layer has any
-            # collected stats, so an unstepped layer is a single clear notice
-            # rather than empty plots and "no data yet" tables.
+            # A card with nothing to draw shows one of two things, never
+            # empty plots and "no data yet" tables: a spinning pill while
+            # the numbers are on their way (the first refresh computes them
+            # off the event loop, and a running session keeps adding to
+            # them), or the notice below once waiting can't help.
+            self._status = _StatusPill(_LOADING_CHIP)
             self._no_data = _notice_banner(
                 _no_stats_message(session.locked), icon="bar_chart"
             )
@@ -1760,9 +1772,11 @@ class _WatchLayerPanel:
                     "text-xs text-red-600"
                 )
                 self._metrics_error.set_visibility(False)
-            self._hist_section.set_visibility(state.view == _VIEW_HISTOGRAM)
-            self._patch_section.set_visibility(state.view == _VIEW_MINMAX)
-            self._epochs_section.set_visibility(state.view == _VIEW_GRAPHS)
+            # Every view starts hidden behind the loading pill; the first
+            # `update` reveals the one the dropdown selects.
+            self._hist_section.set_visibility(False)
+            self._patch_section.set_visibility(False)
+            self._epochs_section.set_visibility(False)
 
     def update(
         self,
@@ -1786,10 +1800,15 @@ class _WatchLayerPanel:
             else []
         )
         per_phase = {} if view == _VIEW_GRAPHS else self._phase_view(snap)
-        # No stats accumulated for this layer/phase yet — show the notice and
-        # hide every view (their empty plots/grids are pure clutter here).
+        # No stats accumulated for this layer/phase yet — show the pill or
+        # the notice and hide every view (their empty plots/grids are pure
+        # clutter here). While training advances, the numbers are on their
+        # way, so that wait spins rather than advising anything.
         has_data = bool(history) if view == _VIEW_GRAPHS else bool(per_phase)
-        self._no_data.set_visibility(not has_data)
+        collecting = not has_data and self._session.is_running
+        self._status.show(_COLLECTING_CHIP)
+        self._status.set_visibility(collecting)
+        self._no_data.set_visibility(not has_data and not collecting)
         self._hist_section.set_visibility(
             has_data and view == _VIEW_HISTOGRAM
         )
@@ -2196,22 +2215,33 @@ _TYPE_NOT_COLLECTED_HTML: str = (
     "Performance settings</div>"
 )
 
-def _no_stats_message(locked: bool) -> str:
-    """The layer-card notice shown until any stats exist for the phase.
+# The layer-card pills, both of them waits that resolve on their own: the
+# first refresh computes a card's numbers off the event loop, and a running
+# session keeps feeding them. Spinner (`icon=None`) rather than advice —
+# there is nothing for the user to do but watch.
+_LOADING_CHIP = _StatusChip("waiting", None, "Loading this layer's statistics…")
+_COLLECTING_CHIP = _StatusChip(
+    "waiting", None, "Collecting — statistics arrive as training advances."
+)
 
-    Unlocked, it stresses that only batches stepped after the layer is
-    watched feed the running aggregate (it grows rather than overwriting
-    with the last batch). A locked session (the shared hosted demo) can't
-    step at all, and its per-epoch stats usually do exist and are merely
-    still in flight — so that variant must not claim nothing was collected
-    or advise stepping, and points at "Current batch" (the one phase that
-    works for any layer) as the fallback.
+
+def _no_stats_message(locked: bool) -> str:
+    """The layer-card notice shown when waiting can no longer help.
+
+    Only reached with training stopped — while it advances the card spins
+    (`_COLLECTING_CHIP`) instead. Unlocked, the notice stresses that only
+    batches stepped after the layer is watched feed the running aggregate
+    (it grows rather than overwriting with the last batch). A locked session
+    (the shared hosted demo) can't step at all and never will collect more,
+    so that variant must not advise stepping: what's missing is missing for
+    this phase, and it points at "Current batch" (the one phase that works
+    for any layer) as the fallback.
     """
     if locked:
         return (
-            "Stats for this layer haven't loaded yet — they can take a "
-            "moment to arrive on the shared demo. If nothing appears, the "
-            "Current batch phase works for any layer."
+            "No stats for this layer in this phase — nothing further will "
+            "arrive on the parked demo. The Current batch phase works for "
+            "any layer."
         )
     return (
         "No stats collected for this layer yet — step at least one batch to "
