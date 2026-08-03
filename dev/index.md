@@ -2,7 +2,7 @@
 
 *Don't guess why your neural network fails to learn. Instead, have a look inside.*
 
-Live playground Imagenette · ResNet MNIST · LeNet-5
+Live playground Easy: MNIST · LeNet-5 Advanced: Imagenette · ResNet
 
 The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.
 
