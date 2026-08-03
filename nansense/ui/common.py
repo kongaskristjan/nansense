@@ -282,6 +282,8 @@ def _strip_tile_html(tile: StripTile, *, show_label: bool) -> str:
 def _strip_html(strip: StripRender | None, *, show_labels: bool = False) -> str:
     """HTML for one strip: a crisp legend `<img>` plus a row of tile columns.
 
+    The legend column carries `data-tour="legend"` — the tour's anchor for
+    the step that says what the diverging colors mean (`tour.py`).
     Each channel/tile is its own column (`_strip_tile_html`). With `show_labels`
     the strip carries a row of `CHANNEL n` header bars above its tiles (and a
     blank spacer above the legend so it lines up below the bars). A card renders
@@ -299,7 +301,8 @@ def _strip_html(strip: StripRender | None, *, show_labels: bool = False) -> str:
     )
     legend_gap = f" gap:{LABEL_GAP}px;" if show_labels else ""
     legend_col = (
-        f'<div style="display:flex; flex-direction:column; flex:none;{legend_gap}">'
+        f'<div data-tour="legend" '
+        f'style="display:flex; flex-direction:column; flex:none;{legend_gap}">'
         f"{legend_spacer}"
         f'<img src="{_b64_img_src(strip.legend_image)}" '
         'style="display:block; flex:none; max-width:none;" /></div>'

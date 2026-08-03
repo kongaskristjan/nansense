@@ -9,8 +9,8 @@ first look wouldn't reveal.
 
 The main tour is about a single layer — the one the page already shows
 (`main_page._pick_tour_layer`): the opening arrow points at its diagram
-node, and its strips and buttons steps need its card on screen, so showing
-either auto-shows that same layer (via the show-only
+node, and its strips, colors and buttons steps need its card on screen, so
+showing any of them auto-shows that same layer (via the show-only
 `nansense_tour_show_layer` event, which never hides a card the visitor
 already opened) whenever the step's own anchor has no visible target. On a
 locked session that only touches the tab's own `shown` set, so playground
@@ -140,6 +140,13 @@ def main_tour_steps(
 ) -> list[TourStep]:
     """The main view's steps: click a layer, read its card, go deeper.
 
+    Two of those steps are the card's only written key: the strips step
+    names its two rows in the order they sit in, and the step after rings
+    the colorbar to say what its diverging colors mean. Nothing else in the
+    UI spells either out — the row markers just read ACTIVATIONS /
+    GRADIENTS and the colorbar just prints `+x` / `0` / `-x` — and the
+    playground's embedded visitors never see the docs that do.
+
     Every step is about one layer — `layer_slug`'s, the one whose card the
     page already shows (`main_page._pick_tour_layer`): the opening arrow
     points at its diagram node and the card steps auto-show it, so the tour
@@ -162,8 +169,13 @@ def main_tour_steps(
             (node,),
         ),
         TourStep(
-            "A card opens with its activations and gradients.",
+            "A card opens: activations above, gradients below.",
             (_card_selector(layer_slug, "strips"),),
+            ensure_card=True,
+        ),
+        TourStep(
+            "Red is positive, blue negative, white zero.",
+            (_card_selector(layer_slug, "legend"),),
             ensure_card=True,
         ),
         _buttons_step(layer_slug, has_weights=has_weights),
@@ -309,7 +321,7 @@ def add_tour(
     """Install `page`'s tour (config + CSS + driver) into the current page.
 
     `auto_watch_slug` (main page only) is the layer auto-shown for the
-    card-needing steps (strips and buttons). Only a locked session (the
+    card-needing steps (strips, colors, buttons). Only a locked session (the
     shared playground) auto-starts, and only when the browser hasn't
     dismissed this page's tour before
     (per-page `seen_key`); everywhere else the tour waits for the top bar's

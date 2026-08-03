@@ -81,7 +81,7 @@ def test_subpage_tours_stay_short(steps: list[TourStep]) -> None:
 
 @pytest.mark.parametrize(
     ("locked", "main_count", "experiment_count", "has_step_controls"),
-    [(True, 4, 2, False), (False, 5, 2, True)],
+    [(True, 5, 2, False), (False, 6, 2, True)],
 )
 def test_step_controls_step_only_on_live_runs(
     locked: bool,
@@ -218,6 +218,43 @@ def test_buttons_step_uses_the_cards_own_button_labels() -> None:
         assert re.search(rf'ui\.button\(\s*"{label}"', source), label
 
 
+@pytest.mark.parametrize("locked", [True, False])
+def test_card_steps_name_the_rows_and_the_color_scale(locked: bool) -> None:
+    """The card's only written key: which row is which, and what the colors
+    mean.
+
+    The UI itself never says either — the markers read ACTIVATIONS /
+    GRADIENTS with no top/bottom cue and the colorbar prints only `+x` /
+    `0` / `-x` — so the two steps carry it, in that order, and the colors
+    step rings the colorbar it describes.
+    """
+    _, strips, colors, *_ = main_tour_steps("conv1", locked=locked)
+    assert strips.text.index("activations") < strips.text.index("gradients")
+    assert "above" in strips.text and "below" in strips.text
+    assert colors.selectors == ('[data-layer="conv1"] [data-tour="legend"]',)
+    for word in ("Red", "positive", "blue", "negative", "white", "zero"):
+        assert word in colors.text, word
+
+
+def test_color_step_matches_the_renderers_colormap() -> None:
+    """Red is the positive end and blue the negative one — asserted against
+    the colormap itself, so flipping it must flip the tour's wording."""
+    import numpy as np
+
+    from nansense.ui.render import _diverging_colormap
+
+    (positive, zero, negative) = _diverging_colormap(
+        np.array([1.0, 0.0, -1.0], dtype=np.float32)
+    )
+    (colors,) = [
+        s for s in main_tour_steps("conv1", locked=True) if "Red" in s.text
+    ]
+    # Channel order is R, G, B: the ends max out the channel the step names.
+    assert positive.argmax() == 0 and colors.text.startswith("Red is positive")
+    assert negative.argmax() == 2 and "blue negative" in colors.text
+    assert tuple(zero) == (255, 255, 255) and "white zero" in colors.text
+
+
 def test_stats_steps_force_the_views_they_describe() -> None:
     """Each view-bound stats step names a real View-dropdown entry.
 
@@ -332,9 +369,9 @@ def test_config_carries_driver_contract() -> None:
     payload = config["steps"]
     assert isinstance(payload, list)
     assert len(payload) == len(steps)
-    # Exactly two steps may auto-show a card — the ones that talk about it:
-    # the strips step and the buttons step.
-    assert json.dumps(config).count('"ensureCard": true') == 2
+    # Exactly three steps may auto-show a card — the ones that talk about
+    # it: the strips, colors, and buttons steps.
+    assert json.dumps(config).count('"ensureCard": true') == 3
     # Exactly one step re-opens the input pane (the sample step).
     assert json.dumps(config).count('"ensureInput": true') == 1
     subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
@@ -386,7 +423,7 @@ def test_ensure_card_step_defaults_off() -> None:
 def test_sample_step_rings_the_image_and_its_selector(locked: bool) -> None:
     """"The input" is the picture plus the spinner that picks it, so the
     step draws an arrow to each rather than to the spinner alone."""
-    _, _, _, sample, *_ = main_tour_steps("conv1", locked=locked)
+    _, _, _, _, sample, *_ = main_tour_steps("conv1", locked=locked)
     assert sample.selectors == (
         '[data-tour="input-image"]',
         '[data-tour="sample"]',
@@ -395,12 +432,15 @@ def test_sample_step_rings_the_image_and_its_selector(locked: bool) -> None:
 
 @pytest.mark.parametrize("locked", [True, False])
 def test_main_steps_ensure_their_targets_are_visible(locked: bool) -> None:
-    """The card-bound steps (strips, buttons) auto-show the card their
-    arrows need, and the sample step re-opens the input pane the top bar's
-    image button can hide."""
-    click, strips, buttons, sample, *_ = main_tour_steps("conv1", locked=locked)
+    """The card-bound steps (strips, colors, buttons) auto-show the card
+    their arrows need, and the sample step re-opens the input pane the top
+    bar's image button can hide."""
+    click, strips, colors, buttons, sample, *_ = main_tour_steps(
+        "conv1", locked=locked
+    )
     assert not click.ensure_card and not click.ensure_input
     assert strips.ensure_card and not strips.ensure_input
+    assert colors.ensure_card and not colors.ensure_input
     assert buttons.ensure_card and not buttons.ensure_input
     # The pane and card mechanics stay separate per step.
     assert sample.ensure_input and not sample.ensure_card
