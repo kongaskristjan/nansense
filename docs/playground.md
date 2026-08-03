@@ -6,14 +6,14 @@ hide:
 ---
 
 <div class="playground-switch" role="group" aria-label="Playground variant">
-  <button class="pg-btn" type="button" data-variant="imagenette" aria-pressed="true">Imagenette · ResNet</button>
-  <button class="pg-btn" type="button" data-variant="mnist" aria-pressed="false">MNIST · LeNet-5</button>
+  <button class="pg-btn" type="button" data-variant="mnist" aria-pressed="true">Easy: MNIST · LeNet-5</button>
+  <button class="pg-btn" type="button" data-variant="imagenette" aria-pressed="false">Advanced: Imagenette · ResNet</button>
 </div>
 
 <!-- `clipboard-write` delegates the Clipboard API into the cross-origin app
      frame: the app's own Share dialog (top bar) copies links, and without the
      delegation the browser rejects the write inside the iframe. -->
-<iframe id="playground-frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
+<iframe id="playground-frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground-mnist.hf.space" allow="fullscreen; clipboard-write"></iframe>
 
 <style>
   /* Fullscreen app page: the header collapses to a slim toolbar (logo +
@@ -109,13 +109,13 @@ hide:
 <script>
   (function () {
     var spaces = {
-      imagenette: "https://kongaskristjan-nansense-playground.hf.space",
       mnist: "https://kongaskristjan-nansense-playground-mnist.hf.space",
+      imagenette: "https://kongaskristjan-nansense-playground.hf.space",
     };
     var frame = document.getElementById("playground-frame");
     var switchEl = document.querySelector(".playground-switch");
     var buttons = switchEl.querySelectorAll(".pg-btn[data-variant]");
-    var current = "imagenette"; // matches the iframe's HTML src attribute
+    var current = "mnist"; // matches the iframe's HTML src attribute
 
     // Lift the variant switch into the header, just past the (hidden) title,
     // so the repo link keeps the far right.
@@ -139,7 +139,7 @@ hide:
       buttons.forEach(function (button) {
         button.setAttribute("aria-pressed", String(button.dataset.variant === variant));
       });
-      history.replaceState(null, "", variant === "imagenette" ? location.pathname : "#" + variant);
+      history.replaceState(null, "", variant === "mnist" ? location.pathname : "#" + variant);
     }
     buttons.forEach(function (button) {
       button.addEventListener("click", function () {
@@ -147,9 +147,9 @@ hide:
       });
     });
     function selectFromHash() {
-      select(location.hash === "#mnist" ? "mnist" : "imagenette");
+      select(location.hash === "#imagenette" ? "imagenette" : "mnist");
     }
     window.addEventListener("hashchange", selectFromHash);
-    if (location.hash === "#mnist") selectFromHash();
+    if (location.hash === "#imagenette") selectFromHash();
   })();
 </script>

@@ -7,8 +7,8 @@
 
 (function () {
   var SPACES = {
-    imagenette: "https://kongaskristjan-nansense-playground.hf.space",
     mnist: "https://kongaskristjan-nansense-playground-mnist.hf.space",
+    imagenette: "https://kongaskristjan-nansense-playground.hf.space",
   };
 
   function init() {
@@ -16,7 +16,7 @@
     if (!root) return;
     var frame = root.querySelector(".pg-embed__frame");
     var buttons = root.querySelectorAll(".pg-embed__btn[data-variant]");
-    var current = "imagenette"; // matches the iframe's HTML src attribute
+    var current = "mnist"; // matches the iframe's HTML src attribute
 
     buttons.forEach(function (button) {
       button.addEventListener("click", function () {

@@ -10,7 +10,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 _DOCS = Path(__file__).parent.parent / "docs"
+
+_SPACES = {
+    "mnist": "https://kongaskristjan-nansense-playground-mnist.hf.space",
+    "imagenette": "https://kongaskristjan-nansense-playground.hf.space",
+}
 
 
 def test_playground_iframe_delegates_clipboard_write() -> None:
@@ -36,18 +43,40 @@ def test_home_embed_zooms_the_frame_instead_of_transforming_it() -> None:
     assert "transform: scale(var(--pg-scale" not in css
 
 
-def test_home_embed_switch_offers_both_hosted_spaces() -> None:
-    """Every variant button must have a Space to switch to, and the iframe's
-    initial `src` must be the variant the switch starts out pressing."""
-    index = (_DOCS / "index.md").read_text(encoding="utf-8")
-    script = (_DOCS / "javascripts" / "playground-embed.js").read_text(encoding="utf-8")
-    variants = re.findall(r'data-variant="(\w+)"', index)
-    assert set(variants) == {"imagenette", "mnist"}
-    spaces = dict(re.findall(r'(\w+): "(https://[^"]+\.hf\.space)"', script))
-    assert set(spaces) == set(variants)
+@pytest.mark.parametrize(
+    ("page", "script"),
+    [
+        ("index.md", "javascripts/playground-embed.js"),  # embed on the home page
+        ("playground.md", "playground.md"),  # full-page app, script inlined
+    ],
+)
+def test_playground_switch_starts_on_the_easy_mnist_variant(page: str, script: str) -> None:
+    """Both switches offer the same two hosted Spaces, and all four places that
+    encode the starting variant — button order, `aria-pressed`, the iframe's
+    `src` and the script's `current` — must agree on MNIST. It leads because a
+    LeNet on digits is the readable one; the ResNet is the advanced follow-up."""
+    text = (_DOCS / page).read_text(encoding="utf-8")
+    script_text = (_DOCS / script).read_text(encoding="utf-8")
 
-    pressed = re.findall(r'data-variant="(\w+)" aria-pressed="true"', index)
-    iframe = re.search(r'<iframe[^>]*class="pg-embed__frame"[^>]*>', index)
+    buttons = re.findall(r"<button[^>]*data-variant=\"(\w+)\"[^>]*>([^<]*)</button>", text)
+    assert [variant for variant, _ in buttons] == ["mnist", "imagenette"]
+    labels = dict(buttons)
+    assert labels["mnist"].startswith("Easy")
+    assert labels["imagenette"].startswith("Advanced")
+
+    assert dict(re.findall(r'(\w+): "(https://[^"]+\.hf\.space)"', script_text)) == _SPACES
+    pressed = re.findall(r'data-variant="(\w+)" aria-pressed="true"', text)
+    assert pressed == ["mnist"]
+    iframe = re.search(r"<iframe[^>]*>", text)
     assert iframe is not None
-    assert len(pressed) == 1
-    assert spaces[pressed[0]] in iframe.group(0)
+    assert _SPACES["mnist"] in iframe.group(0)
+    assert 'var current = "mnist"' in script_text
+
+
+def test_playground_deep_link_names_the_non_default_variant() -> None:
+    """`/playground/` keeps the advanced variant addressable as `#imagenette`;
+    the default one needs no hash, so `#mnist` must not linger as a magic
+    string that would strand the page on a variant it no longer starts with."""
+    text = (_DOCS / "playground.md").read_text(encoding="utf-8")
+    assert '"#imagenette"' in text
+    assert '"#mnist"' not in text

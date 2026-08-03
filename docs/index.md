@@ -10,8 +10,8 @@ hide:
 <div class="pg-embed">
   <div class="pg-embed__bar" role="group" aria-label="Playground variant">
     <span class="pg-embed__label">Live playground</span>
-    <button class="pg-embed__btn" type="button" data-variant="imagenette" aria-pressed="true">Imagenette · ResNet</button>
-    <button class="pg-embed__btn" type="button" data-variant="mnist" aria-pressed="false">MNIST · LeNet-5</button>
+    <button class="pg-embed__btn" type="button" data-variant="mnist" aria-pressed="true">Easy: MNIST · LeNet-5</button>
+    <button class="pg-embed__btn" type="button" data-variant="imagenette" aria-pressed="false">Advanced: Imagenette · ResNet</button>
   </div>
   <!-- The app is desktop-first (`body { min-width: 800px }`) and pans instead of
        reflowing, so the frame is given a fixed logical viewport and scaled to fit
@@ -19,7 +19,7 @@ hide:
        `clipboard-write` delegates the Clipboard API into the cross-origin app
        frame, so the app's own Share dialog can copy links. -->
   <div class="pg-embed__screen">
-    <iframe class="pg-embed__frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground.hf.space" allow="fullscreen; clipboard-write"></iframe>
+    <iframe class="pg-embed__frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground-mnist.hf.space" allow="fullscreen; clipboard-write"></iframe>
   </div>
   <p class="pg-embed__note">The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.</p>
 </div>
