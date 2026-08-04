@@ -760,7 +760,7 @@
 <p>The agent connects to the same session the browser shows. Both are front-ends onto one paused training loop, so you can watch in the UI while the agent works.</p>
 <h2 id="connect">Connect<a class="headerlink" href="#connect" title="Permanent link">&para;</a></h2>
 <p>The endpoint is served alongside the UI, on the same port. Start your run as usual:</p>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cuda<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
 </code></pre></div>
 <p>The startup banner prints the command to register it:</p>
 <div class="highlight"><pre><span></span><code>┌──────────────────────────────────────────────────────────────┐
