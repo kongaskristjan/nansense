@@ -72,11 +72,11 @@ from nansense.ui.render import (
     render_image,
     render_patch_grid,
 )
+from nansense.ui.share import _add_share_button
 from nansense.ui.top_bar import (
     _add_error_banner,
     _add_repo_logo,
     _add_settings_button,
-    _add_share_button,
     _add_step_controls,
     _add_tour_button,
     _back_button,
@@ -536,7 +536,7 @@ def _build_stats_page(
                 "Refresh now, and from the next training batch"
             )
             _add_tour_button()
-            _add_share_button()
+            _add_share_button(session)
             _add_repo_logo()
 
         _add_error_banner(session)

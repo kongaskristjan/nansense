@@ -1309,8 +1309,19 @@ touches the model — that invariant belongs to the training thread.
 One module per page plus shared support: `app.py` (`serve` + page routes),
 `main_page.py`, `stats_page.py`, `weights_page.py`, `experiment_page.py`,
 `top_bar.py` (the shared top-bar/step controls and the time-travel,
-settings/recording, and step-until dialogs), `input_panel.py` (the main
-page's right sidebar), `render.py` + `histograms.py` (pure render/plot
+settings/recording, and step-until dialogs), `share.py` (the Share dialog:
+the playground / video / library targets, and the previews the first two
+carry — a live frame of the page the playground link opens, zoomed out so
+the desktop-first app fits, and a player for the demo video; the frame is
+replaced by a note on a locked session, which *is* what that link opens, so
+the hosted playground never loads a second copy of itself. The video's
+Download button — the point of that section, since social platforms want the
+file uploaded rather than linked — is answered by a route the module
+registers on the app: `<a download>` is honoured same-origin only and the
+asset host sends no CORS headers, so the app streams the bytes through
+itself with a `Content-Disposition`. Everything below the toggle is built
+when the dialog opens and dropped when it closes, so a page load never boots
+a hosted demo), `input_panel.py` (the main page's right sidebar), `render.py` + `histograms.py` (pure render/plot
 math), `graph.py` (the Mermaid architecture graph), `bin_samples.py`,
 `common.py` (small cross-page helpers), `theme.py` (the sizes and colors the
 page and the composed still both draw), `static.py` (the CSS/JS blobs), and

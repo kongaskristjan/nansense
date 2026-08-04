@@ -41,6 +41,7 @@ from nansense.ui.render import (
     render_strip,
     tensor_hw,
 )
+from nansense.ui.share import _add_share_button
 from nansense.ui.static import (
     _ARCHITECTURE_CLICK_CSS,
     _ARCHITECTURE_CLICK_JS,
@@ -50,7 +51,6 @@ from nansense.ui.top_bar import (
     _add_error_banner,
     _add_repo_logo,
     _add_settings_button,
-    _add_share_button,
     _add_step_controls,
     _add_tour_button,
     _build_step_until_custom_dialog,
@@ -449,7 +449,7 @@ def _build_page(
                 "Toggle input selection pane"
             )
             _add_tour_button()
-            _add_share_button()
+            _add_share_button(session)
             _add_repo_logo()
 
         _add_error_banner(session)

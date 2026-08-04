@@ -49,12 +49,12 @@ from nansense.ui.render import (
     render_strip,
     tensor_hw,
 )
+from nansense.ui.share import _add_share_button
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
     _add_error_banner,
     _add_repo_logo,
     _add_settings_button,
-    _add_share_button,
     _add_step_controls,
     _add_tour_button,
     _back_button,
@@ -414,7 +414,7 @@ def _build_experiment_page(
             _add_step_controls(session, step_until_custom)
             _add_settings_button(session, record_view).classes("ml-auto")
             _add_tour_button()
-            _add_share_button()
+            _add_share_button(session)
             _add_repo_logo()
 
         _add_error_banner(session)

@@ -52,6 +52,7 @@ from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
 from nansense.ui.graph import build_mermaid
 from nansense.ui.main_page import _RenderCache, _build_page
+from nansense.ui.share import add_video_download_route
 from nansense.ui.stats_page import _build_stats_page
 from nansense.ui.weights_page import _build_weights_page
 
@@ -301,6 +302,10 @@ def serve(
         # Ahead of NiceGUI's `/` mount, which `ui.run_with` adds below and
         # which would otherwise swallow the path.
         fastapi_app.router.routes.extend(mount.routes)
+    # Likewise ahead of that mount: the Share dialog's video download
+    # (`nansense.ui.share`), which the app serves from its own origin so the
+    # browser saves the file instead of playing it.
+    add_video_download_route(fastapi_app)
     favicon_path = logo_small_path()
     # One cache for all connections: two tabs on the same session share
     # rendered strips instead of re-rendering them per connection.

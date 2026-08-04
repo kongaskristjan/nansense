@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote
-
 import pytest
 import torch
 from nicegui import ui
@@ -16,14 +14,11 @@ from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
-    _PLATFORM_ICONS,
     _BRAND_NAME,
     _BRAND_TAGLINE,
     _REPO_URL,
-    _SHARE_TARGETS,
     _STAR_TOOLTIP,
     _add_settings_button,
-    _add_share_button,
     _add_step_controls,
     _at_last_batch,
     _back_href,
@@ -32,8 +27,6 @@ from nansense.ui.top_bar import (
     _debug_banner_summary,
     _debug_pct,
     _logo_data_uri,
-    _platform_icon_html,
-    _share_platform_links,
     _summarize_epoch_ranges,
     _time_travel_default_index,
     _under_over_band_lines,
@@ -408,59 +401,6 @@ def test_brand_wordmark_names_the_library_and_what_it_is() -> None:
     # Two words, matching the docs site's own one-liner for the library.
     assert _BRAND_TAGLINE == "PyTorch debugger"
     assert len(_BRAND_TAGLINE) <= 20
-
-
-def test_share_targets_cover_playground_and_library() -> None:
-    """The dialog offers two shareables: the playground and the library docs.
-
-    The library link is the version-less site root (redirects to the default
-    published version), not a pinned /dev/ page."""
-    assert list(_SHARE_TARGETS) == ["playground", "library"]
-    assert (
-        _SHARE_TARGETS["playground"].url
-        == "https://kongaskristjan.github.io/nansense/dev/playground/"
-    )
-    assert _SHARE_TARGETS["library"].url == "https://kongaskristjan.github.io/nansense/"
-
-
-@pytest.mark.parametrize("key", ["playground", "library"])
-def test_share_platform_links_embed_the_encoded_target(key: str) -> None:
-    """Every platform's share-intent href carries the URL-encoded target link
-    (and no raw spaces from the title), so the composer opens prefilled."""
-    target = _SHARE_TARGETS[key]
-    links = dict(_share_platform_links(target.url, target.title))
-    assert set(links) == {"X", "Facebook", "LinkedIn", "Reddit", "Hacker News", "Email"}
-    encoded = quote(target.url, safe="")
-    for href in links.values():
-        assert encoded in href
-        assert " " not in href
-
-
-def test_share_button_is_a_quiet_icon_added_unconditionally() -> None:
-    """One flat icon-only share button — no locked-session gate anymore: the
-    hosted playground shows it too (handing out links is what a demo is for)."""
-    with ui.card() as card:
-        _add_share_button()
-    buttons = [c for c in card.default_slot.children if isinstance(c, ui.button)]
-    assert len(buttons) == 1
-    assert buttons[0]._props.get("icon") == "share"
-    assert buttons[0].text == ""  # icon-only: quieter than the labelled controls
-    assert "flat" in buttons[0]._props
-
-
-def test_platform_icons_cover_every_platform_but_email() -> None:
-    """Each share platform renders a brand glyph (Email uses the bundled
-    Material `mail` icon, so it has no SVG entry); path data must be real SVG
-    path commands so a truncated paste can't ship a blank button."""
-    labels = {label for label, _ in _share_platform_links("https://e.com", "t")}
-    assert set(_PLATFORM_ICONS) == labels - {"Email"}
-    for viewbox, path in _PLATFORM_ICONS.values():
-        assert viewbox.startswith("0 0 ")
-        assert path.startswith("M") and len(path) > 50
-    assert _platform_icon_html("Email") is None
-    x_svg = _platform_icon_html("X")
-    assert x_svg is not None
-    assert 'fill="currentColor"' in x_svg
 
 
 def _step_controls_children(*, locked: bool) -> list[Element]:
