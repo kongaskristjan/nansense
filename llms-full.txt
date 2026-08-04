@@ -93,14 +93,22 @@ The fastest way to try NaNsense is to run one of the bundled examples — they d
 
 ## Run the examples
 
-The examples run with [uv](https://docs.astral.sh/uv/getting-started/installation), a fast Python package manager. `uv` does not pollute your other Python environments, and automatically installs the necessary packages when running a script.
+The examples run with [uv](https://docs.astral.sh/uv/getting-started/installation), a fast Python package manager. `uv` does not pollute your other Python environments, and automatically installs Python and the necessary packages when running a script. Datasets and any pretrained networks are downloaded automatically too, and the UI serves on `--nansense-port`.
 
 ```
-# Install uv:
+# Install uv (Windows: https://docs.astral.sh/uv/getting-started/installation):
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+git clone https://github.com/kongaskristjan/nansense
+cd nansense
+
+# --group: cpu | cuda (NVIDIA) | cuda-legacy (pre-Turing NVIDIA) | rocm (AMD)
+# `examples/standard/main.py` is a good starting point; `--dataset` and
+# `--model` switch between mnist, cifar10 and imagenette.
+uv run --group cpu examples/standard/main.py --nansense-port 8080
 ```
 
-Clone the repository, then pick the dependency group that matches your hardware and pass it as `--group`:
+`--group cpu` is the torch build that works everywhere. If you have a GPU, swap it for the group matching your hardware — nothing else about the commands changes:
 
 | Group         | Hardware                                                  |
 | ------------- | --------------------------------------------------------- |
@@ -109,22 +117,18 @@ Clone the repository, then pick the dependency group that matches your hardware 
 | `cuda`        | Current NVIDIA GPUs: Turing through Blackwell (CUDA 13.0) |
 | `rocm`        | AMD GPUs (ROCm 7.2)                                       |
 
-Then launch any example; the requirements, datasets and any pretrained networks are downloaded automatically, and the UI serves on `--nansense-port`.
+The other bundled examples run the same way:
 
 ```
-# `examples/standard/main.py` is a good starting point for mnist, cifar10 and
-# imagenette. Use `--dataset` and `--model` for different combinations.
-uv run --group [group] examples/standard/main.py --nansense-port 8080
-
 # More exotic, but harder to interpret tasks:
-uv run --group [group] examples/game_of_life/main.py --nansense-port 8080
-uv run --group [group] examples/audio_keywords/main.py --nansense-port 8080
-uv run --group [group] examples/depth_make3d/main.py --nansense-port 8080
+uv run --group cpu examples/game_of_life/main.py --nansense-port 8080
+uv run --group cpu examples/audio_keywords/main.py --nansense-port 8080
+uv run --group cpu examples/depth_make3d/main.py --nansense-port 8080
 
 # Multi-input demo: a 5-channel image + a flat stats vector. Shows the input
 # pane's input picker, the `input_transform` for non-RGB images, and the
 # flat-input strip.
-uv run --group [group] examples/multimodal/main.py --nansense-port 8080
+uv run --group cpu examples/multimodal/main.py --nansense-port 8080
 ```
 
 A focused browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar — see the [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md).
