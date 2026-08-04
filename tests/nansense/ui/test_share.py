@@ -15,9 +15,11 @@ from nicegui.element import Element
 from nansense.session import Session
 from nansense.ui import share
 from nansense.ui.share import (
+    _CARD_HEIGHT_REM,
     _CARD_WIDTH_REM,
     _IN_PLAYGROUND_NOTE,
     _PLATFORM_ICONS,
+    _PREVIEW_HEIGHT_REM,
     _PREVIEW_ZOOM,
     _SHARE_TARGETS,
     _VIDEO_FILENAME,
@@ -80,6 +82,12 @@ class _ShareDialog:
 
     def elements(self) -> list[Element]:
         return _descendants(self.dialog)
+
+    def card(self) -> ui.card:
+        return next(e for e in self.elements() if isinstance(e, ui.card))
+
+    def size_classes(self) -> set[str]:
+        return {c for c in self.card()._classes if c.startswith(("w-[", "h-["))}
 
     def tags(self) -> list[str]:
         return [element.tag for element in self.elements()]
@@ -177,6 +185,39 @@ def test_the_preview_hands_the_framed_app_a_viewport_it_can_lay_out_in() -> None
     assert _PREVIEW_ZOOM < 1  # zoomed out: more app per pixel of dialog
     assert _preview_viewport_px() >= MIN_APP_WIDTH
     assert _CARD_WIDTH_REM > 32  # the pre-preview dialog's width
+
+
+def test_the_dialog_is_one_size_whichever_section_is_picked() -> None:
+    """Picking a section rebuilds everything under the toggle, so a card sized
+    to its contents would resize under the pointer — the library, one link and
+    six icons, would collapse it to a fraction of the playground's height.
+    Both dimensions are pinned, to what the playground section needs."""
+    session, _model = make_session(epochs=1, phases={"train": 1})
+    dialog = _ShareDialog(session)
+    sizes = []
+    for key in _SHARE_TARGETS:
+        dialog.open(key)
+        sizes.append(dialog.size_classes())
+    assert sizes[0] == sizes[1] == sizes[2]
+    assert sizes[0] == {f"w-[{_CARD_WIDTH_REM}rem]", f"h-[{_CARD_HEIGHT_REM}rem]"}
+
+
+def test_both_previews_fill_the_same_box_under_the_same_caption() -> None:
+    """The two previewed sections are the ones a visitor flips between, so
+    they lay out identically: one preview box of one height, under a caption
+    row whose height doesn't depend on the Download button only the video
+    puts there. Otherwise the link and platform rows below jog on every
+    switch."""
+    session, _model = make_session(epochs=1, phases={"train": 1})
+    dialog = _ShareDialog(session)
+    for key in ("playground", "video"):
+        dialog.open(key)
+        boxes = [
+            e for e in dialog.elements() if f"h-[{_PREVIEW_HEIGHT_REM}rem]" in e._classes
+        ]
+        captions = [e for e in dialog.elements() if "h-7" in e._classes]
+        assert len(boxes) == 1, key
+        assert len(captions) == 1, key
 
 
 def test_the_playground_preview_frames_the_page_the_link_opens() -> None:

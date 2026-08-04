@@ -9,7 +9,8 @@ toggle over `_SHARE_TARGETS`), a *preview* of the pick, the *link* itself (a
 one-line pill with a copy button), and *where* to post it (one share-intent
 button per platform). Everything below the toggle is rebuilt on every switch,
 so each anchor's href — and the copy handler's URL — is baked in for the
-current pick.
+current pick; the card itself is a fixed size (the playground section's), so
+none of that rebuilding resizes the dialog under the pointer.
 """
 
 from __future__ import annotations
@@ -238,26 +239,42 @@ def _stream(upstream: IO[bytes]) -> Iterator[bytes]:
             yield chunk
 
 
-# The dialog card. Wide enough that the previews are worth having: the
-# playground preview frames the real app, which pans instead of reflowing
-# below `MIN_APP_WIDTH` (see `ui/static.py`), so the card's inner width
-# divided by `_PREVIEW_ZOOM` has to clear that floor — `test_share.py`
-# checks it does. `zoom` (as on the docs site's own embed) shrinks the
-# rendering *and* widens the frame's viewport by the same factor;
-# `transform: scale()` would only shrink what the app already drew at the
-# preview's width, leaving it just as cramped.
-_CARD_WIDTH_REM: int = 46
+# The dialog card. Both dimensions are pinned, and pinned to what the
+# *playground* section needs — the widest and the tallest of the three, since
+# it carries a framed app. Switching sections rebuilds everything under the
+# toggle, so a card sized to its contents would resize under the pointer on
+# every switch (and the library, a link and six icons, would collapse it to a
+# third of its height). The library simply leaves the slack empty.
+#
+# Width is what makes the previews worth having: the playground preview
+# frames the real app, which pans instead of reflowing below `MIN_APP_WIDTH`
+# (see `ui/static.py`), so the card's inner width divided by `_PREVIEW_ZOOM`
+# has to clear that floor — `test_share.py` checks it does. `zoom` (as on the
+# docs site's own embed) shrinks the rendering *and* widens the frame's
+# viewport by the same factor; `transform: scale()` would only shrink what
+# the app already drew at the preview's width, leaving it just as cramped.
+_CARD_WIDTH_REM: int = 50
 _CARD_PADDING_REM: float = 1.5  # `p-6`
 _REM_PX: int = 16
 #: Zoomed to 0.7 rather than nearer 1: at 0.8 the framed app's first layer
 #: card is cut off mid-gradient-row, and a preview that crops the one thing
 #: the playground is for isn't previewing much.
 _PREVIEW_ZOOM: float = 0.7
-_CARD_CLASSES: str = f"w-[{_CARD_WIDTH_REM}rem] max-w-full p-6 gap-4"
-# 20rem: the tallest preview that still leaves the whole dialog inside a
-# laptop-height app viewport (the docs home page embeds the app in a box
-# ~620px tall), and 16:9-ish at this width, which is the video's shape.
-_PREVIEW_BOX_CLASSES: str = "w-full h-80 overflow-hidden rounded border border-slate-300"
+#: 22rem of preview, plus the ~24rem the title, toggle, link, platform row
+#: and Close take around it, plus a little slack so the video section — whose
+#: caption row carries the Download button — clears it too. Fits a laptop
+#: window with room to spare; `max-h-full` with a scroll is the fallback in
+#: the short frame the docs home page embeds the app in.
+_PREVIEW_HEIGHT_REM: int = 22
+_CARD_HEIGHT_REM: float = 47
+_CARD_CLASSES: str = (
+    f"w-[{_CARD_WIDTH_REM}rem] max-w-full h-[{_CARD_HEIGHT_REM}rem] max-h-full "
+    "overflow-y-auto p-6 gap-4"
+)
+_PREVIEW_BOX_CLASSES: str = (
+    f"w-full h-[{_PREVIEW_HEIGHT_REM}rem] shrink-0 overflow-hidden rounded "
+    "border border-slate-300"
+)
 _CAPTION_CLASSES: str = "text-xs uppercase tracking-wider text-slate-400"
 _IN_PLAYGROUND_NOTE: str = "You are in the playground — this link opens this very app"
 
@@ -281,7 +298,11 @@ def _add_preview(target: _ShareTarget, *, in_playground: bool) -> None:
     if target.preview is None:
         return
     with ui.column().classes("w-full gap-1"):
-        with ui.row().classes("w-full items-center justify-between no-wrap"):
+        # Fixed-height caption row: the video's Download button is taller than
+        # the bare caption beside the playground's frame, and without this the
+        # link and platform rows below would shift by those few pixels every
+        # time the two previewed sections are toggled between.
+        with ui.row().classes("w-full h-7 items-center justify-between no-wrap"):
             ui.label("Preview").classes(_CAPTION_CLASSES)
             if target.preview == "video":
                 _add_download_button()
@@ -401,7 +422,10 @@ def _add_share_button(session: Session) -> None:
                 .classes("w-full")
                 .props('spread no-caps padding="xs lg"')
             )
-        content = ui.column().classes("w-full gap-4")
+        # `grow`: the card is a fixed height, so the sections' slack — all of
+        # it, on the previewless library — collects here, which keeps Close in
+        # the bottom corner instead of floating up under the last row.
+        content = ui.column().classes("w-full grow gap-4")
         with ui.row().classes("w-full justify-end"):
             ui.button("Close", on_click=dialog.close).props("flat")
 

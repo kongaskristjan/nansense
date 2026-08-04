@@ -1314,7 +1314,11 @@ the playground / video / library targets, and the previews the first two
 carry — a live frame of the page the playground link opens, zoomed out so
 the desktop-first app fits, and a player for the demo video; the frame is
 replaced by a note on a locked session, which *is* what that link opens, so
-the hosted playground never loads a second copy of itself. The video's
+the hosted playground never loads a second copy of itself. The card is a
+fixed size — the playground section's, the largest of the three — so picking
+a section never resizes the dialog under the pointer; the previewless library
+leaves the slack empty, and a window too short for the card scrolls it
+(`max-h-full`) rather than clipping it. The video's
 Download button — the point of that section, since social platforms want the
 file uploaded rather than linked — is answered by a route the module
 registers on the app: `<a download>` is honoured same-origin only and the
