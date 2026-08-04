@@ -73,6 +73,34 @@ def test_playground_switch_starts_on_the_easy_mnist_variant(page: str, script: s
     assert 'var current = "mnist"' in script_text
 
 
+def _declarations(css: str, selector: str) -> str:
+    """The declarations of the rule for `selector` in `css`."""
+    rule = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert rule is not None, f"no rule for {selector}"
+    return rule.group(1)
+
+
+def test_playground_collapses_the_nav_into_the_drawer_at_every_width() -> None:
+    """A full-screen app has no room for the nav column, so the page hides it —
+    but Material only offers the hamburger drawer below its 76.25em breakpoint,
+    above which hiding the column drops the nav for good. The inline CSS
+    re-creates the drawer above the breakpoint; without these pieces the wide
+    playground is a dead end with no way back into the docs."""
+    text = (_DOCS / "playground.md").read_text(encoding="utf-8")
+    assert "  - navigation\n" in text  # front matter: no nav column
+
+    desktop = re.search(r"@media screen and \(min-width: 76\.25em\) \{(.*?)\n  \}", text, re.S)
+    assert desktop is not None
+    assert "display: inline-block" in _declarations(desktop.group(1), '.md-header__button[for="__drawer"]')
+
+    panel = _declarations(desktop.group(1), ".md-sidebar--primary")
+    assert "display: block" in panel  # the front matter marks the sidebar hidden
+    assert "position: fixed" in panel
+    assert "left: -12.1rem" in panel  # parked off-canvas until opened
+    opened = _declarations(desktop.group(1), '[data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary')
+    assert "transform: translateX(12.1rem)" in opened
+
+
 def test_playground_deep_link_names_the_non_default_variant() -> None:
     """`/playground/` keeps the advanced variant addressable as `#imagenette`;
     the default one needs no hash, so `#mnist` must not linger as a magic
