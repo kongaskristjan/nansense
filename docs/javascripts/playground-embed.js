@@ -40,9 +40,41 @@
     }
   }
 
+  /* Where the frame's closing tour arrow should point: the header's "one
+     prompt" call to action, which lives out here rather than in the app.
+     Answered as its centre x in the *frame's* coordinates, so the frame can
+     aim at it without reading this document; null when this embed has no
+     such button (the home page's) or it is hidden at this width, and the
+     frame then drops that arrow. `nansense/ui/tour.py` is the other half. */
+  function anchorX(source) {
+    var cta = document.querySelector(".md-header__banner");
+    if (!cta) return null;
+    var rect = cta.getBoundingClientRect();
+    if (!rect.width) return null; /* hidden below the desktop breakpoint */
+    var frames = document.querySelectorAll("iframe");
+    for (var i = 0; i < frames.length; i++) {
+      if (frames[i].contentWindow !== source) continue;
+      var box = frames[i].getBoundingClientRect();
+      /* The home page's embed is laid out wide and CSS-scaled down
+         (`--pg-scale`), so a parent pixel is not a frame pixel. */
+      var scale = frames[i].offsetWidth ? box.width / frames[i].offsetWidth : 0;
+      if (!scale) return null;
+      return (rect.left + rect.width / 2 - box.left) / scale;
+    }
+    return null;
+  }
+
   function onTourMessage(event) {
     var data = event.data;
     if (TOUR_ORIGINS.indexOf(event.origin) < 0 || !data) return;
+    /* Carries no key — it asks about this page, not about a stored flag. */
+    if (data.nansenseTour === "anchor") {
+      event.source.postMessage(
+        { nansenseTour: "anchorAt", x: anchorX(event.source) },
+        event.origin
+      );
+      return;
+    }
     if (!TOUR_KEY.test(String(data.key))) return;
     if (data.nansenseTour === "set") {
       try {

@@ -1334,12 +1334,22 @@ localStorage otherwise — and every page's top-bar
 `?` button replays its tour anywhere; the driver brackets each run with
 start/end events, which the stats page — whose view-bound steps cycle the
 View dropdown — uses to restore the pre-tour view on dismissal unless the
-visitor picked a view themselves mid-run).
+visitor picked a view themselves mid-run; a locked main tour closes on the
+one step whose subject is the library rather than the UI, ringing the top
+bar's brand mark and — via `host_anchor`, the same postMessage channel as
+the seen flags — sending a second arrow out of the frame to the docs
+header's "one prompt" call to action, which the embedder locates in the
+frame's own coordinates, answers `null` for when it has no such button
+(the home page's embed), and leaves to a viewport-width fallback when
+nobody answers at all).
 Page modules import from the shared modules; `app.py` imports the pages —
 the graph is acyclic. The favicon and the top-bar logo come from
 `nansense/assets` (the packaged PNG plus `importlib.resources` accessors):
 an installed wheel ships only the `nansense` package, so the UI must not
-resolve paths relative to the repo checkout.
+resolve paths relative to the repo checkout. The mark is followed by the
+wordmark and a two-word descriptor, and the pair links to the repo: the app
+is usually met inside the docs iframe or on a bare Space URL, where nothing
+else on screen names it or says it is a library.
 
 **Render contract shared with recording.** `nansense.recording` renders the
 same content the pages show, so the render model lives in the pure modules:

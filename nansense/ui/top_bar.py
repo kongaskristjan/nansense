@@ -35,6 +35,10 @@ _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
 _STAR_TOOLTIP: str = (
     "Like NaNsense? A GitHub ★ star ★ means a lot and keeps me hacking."
 )
+# The wordmark beside the brand mark (`_add_repo_logo`). The tagline is the
+# docs site's own one-liner, cut to what fits a top bar.
+_BRAND_NAME: str = "NaNsense"
+_BRAND_TAGLINE: str = "PyTorch debugger"
 # The dialog's own explanation of what tripped. The banner links to the
 # dialog rather than repeating this on hover — see `_DEBUG_BANNER_TOOLTIP`.
 _DEBUG_DESCRIPTION: str = (
@@ -128,19 +132,33 @@ def _logo_data_uri() -> str:
 
 
 def _add_repo_logo() -> ui.link:
-    """The NaNsense brand mark at the far-right end of the top bar.
+    """The NaNsense brand mark and wordmark at the far-right of the top bar.
 
     Sits last in every page's top bar — after the right-aligned controls — as a
     quiet star call-to-action. Rendered as a native link opening in a new tab
     (so middle/ctrl-click works, like the nav buttons) with a hover tooltip
     nudging a repo star. Returned so a top bar with no `ml-auto` control of its
     own can right-align it directly.
+
+    The mark is followed by the name and a two-word descriptor, because the
+    app is mostly met where nothing around it says what it is: inside an
+    iframe on the docs pages, or on a bare Space URL reached from a shared
+    link. A wordless mark leaves a visitor no way to learn that the demo they
+    are driving is a library they can run themselves — this is the one place
+    the app names itself. `data-tour="brand"` anchors the closing tour step.
     """
-    link = ui.link(target=_REPO_URL, new_tab=True).classes(
-        "shrink-0 flex items-center"
+    link = (
+        ui.link(target=_REPO_URL, new_tab=True)
+        .classes("shrink-0 flex items-center gap-2 no-underline")
+        .props('data-tour="brand"')
     )
     with link:
         ui.image(_logo_data_uri()).classes("h-7 w-7").props("no-spinner")
+        # A plain flex div rather than `ui.column`, whose default gap would
+        # have to be fought off; the two lines stack to the mark's height.
+        with ui.element("div").classes("flex flex-col leading-none"):
+            ui.label(_BRAND_NAME).classes("text-sm font-bold text-slate-700")
+            ui.label(_BRAND_TAGLINE).classes("text-[10px] text-slate-500")
         # Right-anchored so the tooltip grows leftward and stays on-screen at
         # the top bar's right edge.
         ui.tooltip(_STAR_TOOLTIP).props('anchor="bottom right" self="top right"')

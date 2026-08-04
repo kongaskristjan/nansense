@@ -46,6 +46,15 @@ The docs origin is a single first-party one behind both demos and both
 embeds (the home page and `/playground/`), so a tour dismissed anywhere
 stays dismissed everywhere; `resolveSeen` in the driver below falls back
 to this origin whenever nobody answers.
+
+The same channel places the playground tour's closing arrow. That step
+points at the docs header's "one prompt" call to action, which is the
+embedder's own DOM and cross-origin to us, so the host is asked where it
+is and answers in our coordinates (`askHostAnchor` / `anchorX` in
+`playground-embed.js`). The arrow tip lands on our top edge under it;
+where nobody answers it falls back to a share of the viewport width, and
+where the embedder says it has no such button the step simply keeps its
+in-app arrow alone.
 """
 
 from __future__ import annotations
@@ -83,6 +92,12 @@ class TourStep:
     step switches the page to it (via the `nansense_tour_set_view` event
     the stats page listens for), so the arrows land on a live example of
     what the message describes.
+
+    `host_anchor` adds one more arrow that leaves the app entirely, aimed
+    at the embedding docs page's "one prompt" call to action — the only
+    tour target that isn't ours to select (see the driver's
+    `hostAnchorPoint`). It draws no ring: there is nothing inside this
+    document to ring.
     """
 
     text: str
@@ -90,6 +105,7 @@ class TourStep:
     ensure_card: bool = False
     ensure_input: bool = False
     ensure_view: str | None = None
+    host_anchor: bool = False
 
 
 def _mermaid_node_selector(slug: str) -> str:
@@ -185,7 +201,9 @@ def main_tour_steps(
             ensure_input=True,
         ),
     ]
-    if not locked:
+    if locked:
+        steps.append(_playground_closing_step())
+    else:
         steps.append(
             TourStep(
                 "Run or step training from here.",
@@ -193,6 +211,28 @@ def main_tour_steps(
             )
         )
     return steps
+
+
+def _playground_closing_step() -> TourStep:
+    """The locked playground's last step: what this is, and how to get it.
+
+    Everything before it teaches the UI; nothing before it says that the
+    thing being driven is a library. The playground is where that gap
+    hurts — its visitors arrive inside a docs iframe or on a bare Space
+    URL, having never seen the repo — and the tour's last panel is the one
+    moment their attention is already held.
+
+    Two arrows: the in-app one rings the brand mark, which is the top bar's
+    link to the repo, and `host_anchor` sends a second one out of the frame
+    to the docs header's "one prompt" call to action — the shortest path
+    from here to a wired-up training loop of their own.
+    """
+    return TourStep(
+        "This is a hosted playground — run NaNsense on your own net, "
+        "fully unlocked.",
+        ('[data-tour="brand"]',),
+        host_anchor=True,
+    )
 
 
 def stats_tour_steps() -> list[TourStep]:
@@ -302,6 +342,7 @@ def tour_config(
                 "ensureCard": step.ensure_card,
                 "ensureInput": step.ensure_input,
                 "ensureView": step.ensure_view,
+                "hostAnchor": step.host_anchor,
             }
             for step in steps
         ],
@@ -439,6 +480,23 @@ _TOUR_JS: str = """
   const HOST_RETRY_MS = 200;
   const HOST_WAIT_MS = 700;
 
+  // The closing step's second arrow points at the embedding docs page's
+  // "one prompt" call to action, which sits in the parent header — above
+  // our viewport, in a document we cannot read across origins. So we ask:
+  // the host answers with that button's centre x expressed in *our*
+  // coordinates, and the tip lands on our own top edge beneath it, which
+  // reads as pointing up and out of the frame. `null` is the host saying
+  // it has no such button (the home page's embed), and the step then keeps
+  // only its in-app arrow. An embedder that never answers falls back to
+  // the share below — where the header's flex layout puts the button, with
+  // its own auto margins and the variant switch's competing for the free
+  // space (`docs/stylesheets/extra.css`).
+  const HOST_ANCHOR_FALLBACK_X = 0.66;
+  const HOST_ANCHOR_TIP_Y = 8;
+  let anchorX;                 // undefined until the host answers
+  let anchorSilent = false;    // nobody answered in time — use the fallback
+  let anchorAskedWidth = -1;   // the width the standing answer was asked at
+
   function localSeen() {
     try { return !!localStorage.getItem(cfg.seenKey); }
     catch (e) { return false; }
@@ -484,6 +542,43 @@ _TOUR_JS: str = """
     setTimeout(function() { finish(localSeen()); }, HOST_WAIT_MS);
   }
 
+  function onHostAnchor(e) {
+    const data = e.data;
+    if (e.source !== window.parent || !data) return;
+    if (data.nansenseTour !== 'anchorAt') return;
+    anchorX = typeof data.x === 'number' ? data.x : null;
+  }
+
+  // Asked once per distinct viewport width: the button's x moves when the
+  // header reflows, and nothing else moves it. A dropped ask costs one
+  // arrow's precision, not the arrow — the wait below hands over to the
+  // fallback share, and any resize asks again.
+  function askHostAnchor() {
+    if (window.parent === window) return;
+    if (anchorAskedWidth === window.innerWidth) return;
+    if (anchorAskedWidth < 0) {
+      window.addEventListener('message', onHostAnchor);
+      setTimeout(function() {
+        anchorSilent = anchorX === undefined;
+      }, HOST_WAIT_MS);
+    }
+    anchorAskedWidth = window.innerWidth;
+    try {
+      window.parent.postMessage({ nansenseTour: 'anchor' }, '*');
+    } catch (e) {}
+  }
+
+  // Where the out-of-frame arrow lands, or null when there is nothing above
+  // us to point at: an unembedded run (a local session, a direct Space
+  // visit) or a host that answered that it has no call to action.
+  function hostAnchorPoint() {
+    if (window.parent === window || anchorX === null) return null;
+    const x = typeof anchorX === 'number'
+      ? anchorX
+      : (anchorSilent ? window.innerWidth * HOST_ANCHOR_FALLBACK_X : null);
+    return x === null ? null : { x: x, y: HOST_ANCHOR_TIP_Y };
+  }
+
   // First *visible* match: hidden layer cards keep their DOM (display:none),
   // so a zero-size rect distinguishes shown cards from hidden ones. Also
   // works for SVG nodes, which have no offsetParent. Quasar form fields
@@ -524,6 +619,17 @@ _TOUR_JS: str = """
   }
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function drawArrow(from, to) {
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('data-arrow', '1');
+    path.setAttribute('d', arrowPath(from, to));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'rgb(245 158 11)');
+    path.setAttribute('stroke-width', '2.5');
+    path.setAttribute('marker-end', 'url(#nansense-tour-head)');
+    svg.appendChild(path);
+  }
 
   function buildOverlay() {
     overlay = document.createElement('div');
@@ -596,14 +702,14 @@ _TOUR_JS: str = """
       ring.style.width = (r.width + 8) + 'px';
       ring.style.height = (r.height + 8) + 'px';
       overlay.appendChild(ring);
-      const path = document.createElementNS(SVG_NS, 'path');
-      path.setAttribute('data-arrow', '1');
-      path.setAttribute('d', arrowPath(start, edgePoint(r, start)));
-      path.setAttribute('fill', 'none');
-      path.setAttribute('stroke', 'rgb(245 158 11)');
-      path.setAttribute('stroke-width', '2.5');
-      path.setAttribute('marker-end', 'url(#nansense-tour-head)');
-      svg.appendChild(path);
+      drawArrow(start, edgePoint(r, start));
+    }
+    // The one target that isn't in this document: no ring, just an arrow
+    // to our top edge under the embedder's call to action.
+    if (step.hostAnchor) {
+      askHostAnchor();
+      const tip = hostAnchorPoint();
+      if (tip) drawArrow(start, tip);
     }
     // Once per step: bring an off-screen target into view (e.g. the shown
     // card when many cards precede it in the centre pane).

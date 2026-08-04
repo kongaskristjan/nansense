@@ -81,7 +81,9 @@ def test_subpage_tours_stay_short(steps: list[TourStep]) -> None:
 
 @pytest.mark.parametrize(
     ("locked", "main_count", "experiment_count", "has_step_controls"),
-    [(True, 5, 2, False), (False, 6, 2, True)],
+    # Both flavors close on a sixth step, but on different subjects: a live
+    # run gets the step controls, the playground gets the library pitch.
+    [(True, 6, 2, False), (False, 6, 2, True)],
 )
 def test_step_controls_step_only_on_live_runs(
     locked: bool,
@@ -302,6 +304,53 @@ def test_main_tour_opens_by_inviting_a_diagram_click(locked: bool) -> None:
     assert "card" in second.text
 
 
+@pytest.mark.parametrize("locked", [True, False])
+def test_playground_tour_closes_with_the_library_pitch(locked: bool) -> None:
+    """The playground's tour ends by saying what NaNsense is.
+
+    Every step before it teaches the UI; none of them says that the demo is
+    a library the visitor can run. Only the locked session needs the step —
+    a local run is already looking at its own training loop — so a live run
+    closes on the step controls instead.
+    """
+    *_, last = main_tour_steps("conv1", locked=locked)
+    assert last.host_anchor is locked
+    if not locked:
+        assert "NaNsense" not in last.text
+        return
+    # It names the library, and says both what this is and what to do next.
+    assert "NaNsense" in last.text
+    assert "playground" in last.text
+    assert "your own net" in last.text
+    # The in-app arrow rings the top bar's brand mark — the repo link, and
+    # the only place the app names itself.
+    assert last.selectors == ('[data-tour="brand"]',)
+
+
+def test_only_the_closing_playground_step_leaves_the_frame() -> None:
+    """`host_anchor` is the one arrow aimed outside the app, so it stays on
+    the one step whose subject is outside the app."""
+    for page, locked, steps in _ALL_PAGE_STEPS:
+        outward = [s for s in steps if s.host_anchor]
+        assert len(outward) == (1 if page == "main" and locked else 0)
+
+
+def test_closing_step_anchor_is_the_top_bars_brand_mark() -> None:
+    """The step's selector must match the anchor the top bar renders.
+
+    `test_data_tour_anchors_exist_in_ui_sources` only proves the attribute
+    exists somewhere in the UI; this pins it to the brand link, which is
+    what makes the arrow land on the repo link rather than anywhere else.
+    """
+    from nansense.ui.top_bar import _BRAND_NAME
+
+    source = (_UI_DIR / "top_bar.py").read_text(encoding="utf-8")
+    assert 'data-tour="brand"' in source
+    # Same element carries the wordmark, so the ring takes both in.
+    assert "ui.label(_BRAND_NAME)" in source
+    assert _BRAND_NAME == "NaNsense"
+
+
 def test_seen_keys_are_distinct_per_page() -> None:
     keys = [seen_key(p) for p in ("main", "stats", "weights", "experiment")]
     assert len(set(keys)) == len(keys)
@@ -350,6 +399,17 @@ def test_tour_flags_match_the_docs_pages_store() -> None:
     for page in ("main", "stats", "weights", "experiment"):
         assert re.fullmatch(allowed, seen_key(page)), page
     assert not re.fullmatch(allowed, "some-other-key")
+    # The closing step's out-of-frame arrow rides the same channel: the
+    # frame asks, the page answers with the CTA's x in frame coordinates.
+    assert '"anchor"' in host and "'anchor'" in _TOUR_JS
+    assert '"anchorAt"' in host and "'anchorAt'" in _TOUR_JS
+    # The anchor ask carries no key, so it must be handled before the
+    # allowlist check that every keyed message goes through.
+    assert host.index('=== "anchor"') < host.index("TOUR_KEY.test")
+    # It is the header CTA that gets measured, and its position is
+    # translated out of this page's coordinates into the frame's.
+    assert ".md-header__banner" in host
+    assert "contentWindow !== source" in host
     # Only the two demo Spaces are answered, and each reply goes back to
     # the asking origin rather than to `*`.
     assert host.count("hf.space") == 2
@@ -374,6 +434,8 @@ def test_config_carries_driver_contract() -> None:
     assert json.dumps(config).count('"ensureCard": true') == 3
     # Exactly one step re-opens the input pane (the sample step).
     assert json.dumps(config).count('"ensureInput": true') == 1
+    # And exactly one aims an arrow out of the frame (the closing step).
+    assert json.dumps(config).count('"hostAnchor": true') == 1
     subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
     assert subpage["autoStart"] is False
     assert subpage["autoWatchSlug"] is None
@@ -383,6 +445,7 @@ def test_config_carries_driver_contract() -> None:
     # serialize their `ensureView`.
     assert '"ensureCard": true' not in json.dumps(subpage)
     assert '"ensureInput": true' not in json.dumps(subpage)
+    assert '"hostAnchor": true' not in json.dumps(subpage)
     assert '"ensureView": "HISTOGRAM"' in json.dumps(subpage)
 
 
@@ -408,6 +471,12 @@ def test_driver_js_uses_the_config_hooks() -> None:
     # Quasar fields get their data-tour forwarded to the inner native
     # control; the driver must widen matches to the whole field.
     assert ".q-field" in _TOUR_JS
+    # The closing step's out-of-frame arrow: driven off the serialized flag,
+    # aimed at a point the embedder supplies rather than at an element.
+    assert "step.hostAnchor" in _TOUR_JS
+    assert "hostAnchorPoint" in _TOUR_JS
+    # Unembedded runs have nothing above them, so they draw no such arrow.
+    assert "window.parent === window" in _TOUR_JS
     # The blob is injected as one <script>; it must not close itself early.
     assert _TOUR_JS.count("</script>") == 1
 
@@ -417,6 +486,7 @@ def test_ensure_card_step_defaults_off() -> None:
     assert step.ensure_card is False
     assert step.ensure_input is False
     assert step.ensure_view is None
+    assert step.host_anchor is False
 
 
 @pytest.mark.parametrize("locked", [True, False])

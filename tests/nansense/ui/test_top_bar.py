@@ -17,6 +17,8 @@ from nansense.session import BatchSnapshot, Session
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
     _PLATFORM_ICONS,
+    _BRAND_NAME,
+    _BRAND_TAGLINE,
     _REPO_URL,
     _SHARE_TARGETS,
     _STAR_TOOLTIP,
@@ -392,6 +394,20 @@ def test_logo_data_uri_is_a_cached_png() -> None:
 def test_repo_logo_links_repo_and_nudges_a_star() -> None:
     assert _REPO_URL == "https://github.com/kongaskristjan/nansense"
     assert "star" in _STAR_TOOLTIP.lower()
+
+
+def test_brand_wordmark_names_the_library_and_what_it_is() -> None:
+    """The top bar is the only place the app names itself.
+
+    Most visitors meet it inside the docs iframe or on a bare Space URL,
+    where a wordless mark leaves nothing on screen saying what this is —
+    so the mark is followed by the name and a short descriptor, both kept
+    to a top bar's worth of width.
+    """
+    assert _BRAND_NAME == "NaNsense"
+    # Two words, matching the docs site's own one-liner for the library.
+    assert _BRAND_TAGLINE == "PyTorch debugger"
+    assert len(_BRAND_TAGLINE) <= 20
 
 
 def test_share_targets_cover_playground_and_library() -> None:
