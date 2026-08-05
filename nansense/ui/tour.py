@@ -7,16 +7,21 @@ Every page has its own short tour (`*_tour_steps` below); the main view's
 is the long one, the subpages get one to three steps covering only what a
 first look wouldn't reveal.
 
-The main tour is about a single layer — the one the page already shows
-(`main_page._pick_tour_layer`): the opening arrow points at its diagram
-node, and its strips, colors and buttons steps need its card on screen, so
-showing any of them auto-shows that same layer (via the show-only
-`nansense_tour_show_layer` event, which never hides a card the visitor
-already opened) whenever the step's own anchor has no visible target. On a
-locked session that only touches the tab's own `shown` set, so playground
-visitors never affect each other. The sample step similarly re-opens the
-input pane (`nansense_tour_show_input`) if the top bar's image button had
-hidden it — both of that step's arrows live in there.
+The main tour opens on one layer — the one the page already shows
+(`main_page._pick_tour_layer`), whose diagram node the first arrow points
+at — but its strips, colors and buttons steps follow the visitor instead of
+that layer: they scope their anchors to a card that is really open,
+preferring the tour's own and taking any other over none (`openCardSlug` in
+the driver). The first step invites a diagram click, so by the time those
+steps run the visitor may have opened another layer and closed the one the
+tour started on; pointing back at it would read as the tour undoing their
+click. Only with no card open at all is the page asked to open the tour's
+layer, via the show-only `nansense_tour_show_layer` event (a toggle would
+hide a card the visitor already opened). On a locked session that only
+touches the tab's own `shown` set, so playground visitors never affect each
+other. The sample step similarly re-opens the input pane
+(`nansense_tour_show_input`) if the top bar's image button had hidden it —
+both of that step's arrows live in there.
 
 The driver is a self-contained JS blob in the `static.py` style: targets
 are plain CSS selectors resolved to their first *visible* match on a 200 ms
@@ -85,13 +90,20 @@ class TourStep:
 
     Each selector contributes one arrow, drawn to its first visible match
     (hidden cards' elements have zero-size rects and are skipped).
-    `ensure_card` marks steps that need the auto-watch layer's card on
-    screen (main view only); `ensure_input` marks the step whose targets
-    live in the input pane, which the top bar's image button can hide;
-    `ensure_view` names the Stats view the step talks about — showing the
-    step switches the page to it (via the `nansense_tour_set_view` event
-    the stats page listens for), so the arrows land on a live example of
-    what the message describes.
+    `ensure_card` marks the steps that talk about a layer card (main view
+    only): their selectors ship as bare card anchors and the driver scopes
+    them to whichever card is open, opening the tour's own layer when none
+    is. `ensure_input` marks the step whose targets live in the input pane,
+    which the top bar's image button can hide; `ensure_view` names the Stats
+    view the step talks about — showing the step switches the page to it
+    (via the `nansense_tour_set_view` event the stats page listens for), so
+    the arrows land on a live example of what the message describes.
+
+    `alt_text` is the message for a card that hasn't got the step's first
+    anchor — the buttons step's Weights button, which only a layer owning
+    parameters has. Which card a step lands on is the visitor's to decide,
+    so both messages ship and the driver picks once it can see the card
+    (`stepText`); until then `text` stands.
 
     `host_anchor` adds one more arrow that leaves the app entirely, aimed
     at the embedding docs page's "one prompt" call to action — the only
@@ -106,6 +118,7 @@ class TourStep:
     ensure_input: bool = False
     ensure_view: str | None = None
     host_anchor: bool = False
+    alt_text: str | None = None
 
 
 def _mermaid_node_selector(slug: str) -> str:
@@ -113,47 +126,41 @@ def _mermaid_node_selector(slug: str) -> str:
     return f'g.node[id*="-flowchart-{slug}-"]'
 
 
-def _card_selector(slug: str | None, anchor: str) -> str:
-    """A card anchor, scoped to one layer's card when the layer is known.
+def _card_anchor(anchor: str) -> str:
+    """One anchor inside a layer card, left for the driver to scope.
 
-    Cards carry `data-layer="<slug>"` (`main_page._LayerView`), so scoping
-    keeps every card-bound arrow on the tour's own layer even when the
-    visitor has opened several cards — an unscoped anchor would resolve to
-    whichever card comes first in the pane.
+    Cards carry `data-layer="<slug>"` (`main_page._LayerView`) and the
+    driver prefixes that scope at show time (`scopedSelectors`), because
+    which card a step is about is only settled in the browser: it is
+    whichever one the visitor has open. Unscoped, the anchor would resolve
+    to whichever card comes first in the pane instead.
     """
-    inner = f'[data-tour="{anchor}"]'
-    return f'[data-layer="{slug}"] {inner}' if slug else inner
+    return f'[data-tour="{anchor}"]'
 
 
-def _buttons_step(slug: str | None, *, has_weights: bool) -> TourStep:
+def _buttons_step() -> TourStep:
     """The step covering the card's deep-dive buttons.
 
     The message names the buttons its arrows ring, and nothing more — what
     each page holds is the page's own business. Weights only appears on a
-    card whose layer owns parameters; on any other layer the button — and
-    so its arrow and its name — is dropped rather than pointing the visitor
-    at another card.
+    card whose layer owns parameters, and the card this step lands on is
+    the visitor's choice, so both messages ship: the driver drops the arrow
+    to a Weights button that isn't there, and `alt_text` drops its name
+    along with it rather than pointing the visitor at another card.
     """
-    if has_weights:
-        return TourStep(
-            "Weights, Experiment, and Stats go deeper.",
-            (
-                _card_selector(slug, "weights"),
-                _card_selector(slug, "experiment"),
-                _card_selector(slug, "stats"),
-            ),
-            ensure_card=True,
-        )
     return TourStep(
-        "Experiment and Stats go deeper.",
-        (_card_selector(slug, "experiment"), _card_selector(slug, "stats")),
+        "Weights, Experiment, and Stats go deeper.",
+        (
+            _card_anchor("weights"),
+            _card_anchor("experiment"),
+            _card_anchor("stats"),
+        ),
         ensure_card=True,
+        alt_text="Experiment and Stats go deeper.",
     )
 
 
-def main_tour_steps(
-    layer_slug: str | None, *, locked: bool, has_weights: bool = True
-) -> list[TourStep]:
+def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
     """The main view's steps: click a layer, read its card, go deeper.
 
     Two of those steps are the card's only written key: the strips step
@@ -163,20 +170,18 @@ def main_tour_steps(
     GRADIENTS and the colorbar just prints `+x` / `0` / `-x` — and the
     playground's embedded visitors never see the docs that do.
 
-    Every step is about one layer — `layer_slug`'s, the one whose card the
-    page already shows (`main_page._pick_tour_layer`): the opening arrow
-    points at its diagram node and the card steps auto-show it, so the tour
-    never talks about a second layer the visitor didn't open. Falls back to
-    the first diagram node when no layer is known (a model with no captured
-    layers) — the arrow still lands on something sensible.
+    The tour opens on `layer_slug`, the layer whose card the page already
+    shows (`main_page._pick_tour_layer`): the first arrow points at its
+    diagram node, and the card steps fall back to it when the visitor has
+    no card open. They don't insist on it — their anchors are bare, scoped
+    in the browser to whichever card is open — so a visitor who takes step
+    1's invitation on some other layer keeps the card they chose. Falls
+    back to the first diagram node when no layer is known (a model with no
+    captured layers) — the arrow still lands on something sensible.
 
-    `has_weights` says whether that layer owns parameters. A layer that
-    doesn't (a ReLU, an add) has no Weights button on its card, so the
-    buttons step names — and points at — only the two buttons that are
-    really there. A locked session (the playground) parks training, so the
-    closing step about the Run / Step Batch / Stop cluster only exists on
-    live runs — the cluster itself is replaced by the demo notice there
-    anyway.
+    A locked session (the playground) parks training, so the closing step
+    about the Run / Step Batch / Stop cluster only exists on live runs —
+    the cluster itself is replaced by the demo notice there anyway.
     """
     node = _mermaid_node_selector(layer_slug) if layer_slug else "g.node"
     steps = [
@@ -186,15 +191,15 @@ def main_tour_steps(
         ),
         TourStep(
             "A card opens: activations above, gradients below.",
-            (_card_selector(layer_slug, "strips"),),
+            (_card_anchor("strips"),),
             ensure_card=True,
         ),
         TourStep(
             "Red is positive, blue negative, white zero.",
-            (_card_selector(layer_slug, "legend"),),
+            (_card_anchor("legend"),),
             ensure_card=True,
         ),
-        _buttons_step(layer_slug, has_weights=has_weights),
+        _buttons_step(),
         TourStep(
             "Select the input to inspect.",
             ('[data-tour="input-image"]', '[data-tour="sample"]'),
@@ -343,6 +348,7 @@ def tour_config(
                 "ensureInput": step.ensure_input,
                 "ensureView": step.ensure_view,
                 "hostAnchor": step.host_anchor,
+                "altText": step.alt_text,
             }
             for step in steps
         ],
@@ -361,8 +367,9 @@ def add_tour(
 ) -> None:
     """Install `page`'s tour (config + CSS + driver) into the current page.
 
-    `auto_watch_slug` (main page only) is the layer auto-shown for the
-    card-needing steps (strips, colors, buttons). Only a locked session (the
+    `auto_watch_slug` (main page only) is the card steps' layer: the one
+    they prefer among the open cards, and the one they ask the page to open
+    when the visitor has none. Only a locked session (the
     shared playground) auto-starts, and only when the browser hasn't
     dismissed this page's tour before
     (per-page `seen_key`); everywhere else the tour waits for the top bar's
@@ -594,6 +601,46 @@ _TOUR_JS: str = """
     return null;
   }
 
+  // Which layer card the main view's card-bound steps are about. The tour
+  // opens on one layer, but its first step invites a diagram click: by the
+  // time these steps run the visitor may have opened another card and closed
+  // that one, and pointing back at it (worse, re-opening it) reads as the
+  // tour undoing their click. So the tour's own layer wins whenever its card
+  // is on screen, any other open card beats none, and only with nothing open
+  // does `showStep` ask the page for the tour's layer. Hidden cards keep
+  // their DOM, so a zero-size rect is what "closed" looks like.
+  function openCardSlug() {
+    let other = null;
+    for (const card of document.querySelectorAll('[data-layer]')) {
+      const r = card.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const slug = card.getAttribute('data-layer');
+      if (slug === cfg.autoWatchSlug) return slug;
+      if (other === null) other = slug;
+    }
+    return other;
+  }
+
+  // Card anchors ship bare (`[data-tour="strips"]`) and are scoped to that
+  // card here; unscoped they would resolve to whichever card comes first in
+  // the pane, which is rarely the one the step is about.
+  function scopedSelectors(step, slug) {
+    if (!step.ensureCard || !slug) return step.selectors;
+    const scope = '[data-layer="' + slug.replace(/"/g, '') + '"] ';
+    return step.selectors.map(function(sel) { return scope + sel; });
+  }
+
+  // The message, for a step that carries one per card flavor: the buttons
+  // step names the buttons it rings, and a layer owning no parameters has no
+  // Weights button on its card. Which card the step landed on is only known
+  // here, so `altText` takes over when that first anchor has no target —
+  // but only once there is a card to check it against, since a step still
+  // waiting for its auto-shown card would otherwise read as the short one.
+  function stepText(step, selectors, cardOpen) {
+    if (!step.altText || !cardOpen) return step.text;
+    return findTarget(selectors[0]) ? step.text : step.altText;
+  }
+
   // Where an arrow tip lands: the point on the target rect's (padded)
   // border along the line from the rect center towards the box.
   function edgePoint(rect, from) {
@@ -683,6 +730,13 @@ _TOUR_JS: str = """
   function reposition() {
     if (!overlay || stepIdx < 0) return;
     const step = cfg.steps[stepIdx];
+    // Re-resolved every tick, like the rects: the auto-shown card arrives a
+    // round-trip late, and the visitor stays free to open and close cards
+    // mid-step — the arrows and the message follow what is on screen.
+    const slug = step.ensureCard ? openCardSlug() : null;
+    const selectors = scopedSelectors(step, slug);
+    const text = stepText(step, selectors, slug !== null);
+    if (textEl.textContent !== text) textEl.textContent = text;
     for (const el of overlay.querySelectorAll('.nansense-tour-ring')) {
       el.remove();
     }
@@ -690,7 +744,7 @@ _TOUR_JS: str = """
     const boxRect = box.getBoundingClientRect();
     const start = { x: boxRect.left + boxRect.width / 2, y: boxRect.top };
     let first = null;
-    for (const sel of step.selectors) {
+    for (const sel of selectors) {
       const el = findTarget(sel);
       if (!el) continue;
       if (!first) first = el;
@@ -726,13 +780,12 @@ _TOUR_JS: str = """
   function showStep(i) {
     stepIdx = i;
     const step = cfg.steps[i];
-    // Card-needing steps: their anchors are scoped to the tour's own layer,
-    // so a missing target means that card is closed (the visitor hid it, or
-    // never had it) and must come back on screen. The event is show-only (a
-    // toggle would hide a card the visitor already opened); on a locked
-    // session the show is per-tab, like a diagram click.
-    if (step.ensureCard && cfg.autoWatchSlug &&
-        step.selectors.some(sel => !findTarget(sel))) {
+    // Card-bound steps talk about a card the visitor actually has open
+    // (`openCardSlug`); only when there is none at all does the page get
+    // asked for the tour's own layer. The event is show-only (a toggle would
+    // hide a card the visitor already opened); on a locked session the show
+    // is per-tab, like a diagram click.
+    if (step.ensureCard && cfg.autoWatchSlug && openCardSlug() === null) {
       emitEvent('nansense_tour_show_layer', cfg.autoWatchSlug);
     }
     // The sample spinner lives in the input pane, which the top bar's image
@@ -747,7 +800,8 @@ _TOUR_JS: str = """
     if (step.ensureView) {
       emitEvent('nansense_tour_set_view', step.ensureView);
     }
-    textEl.textContent = step.text;
+    // The message itself is `reposition`'s: it depends on the card the step
+    // lands on, which may still be on its way here.
     countEl.textContent = (i + 1) + ' / ' + cfg.steps.length;
     nextBtn.textContent = i === cfg.steps.length - 1 ? 'Done' : 'Next';
     reposition();

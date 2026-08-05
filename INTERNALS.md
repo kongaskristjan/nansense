@@ -1337,10 +1337,15 @@ what its arrows ring and using the labels the UI actually prints, since
 the reader landed seconds ago (`test_tour.py` enforces both); two of the
 main view's steps are the layer card's only written key — which row is
 which, and that the diverging colormap runs red-positive to blue-negative,
-neither of which the card itself spells out; the main view's tour rides on the layer whose card the page
-already shows (`main_page._pick_tour_layer`), scoping its card anchors by
-`data-layer` so the node it points at and the card it talks about are the
-same layer; on locked sessions each page's tour auto-starts once per browser
+neither of which the card itself spells out; the main view's tour opens on the layer whose card the page
+already shows (`main_page._pick_tour_layer`) but its card steps follow the
+visitor — their anchors ship bare and the driver scopes them by
+`data-layer` to a card that is really open, preferring the tour's own,
+taking any other over none, and asking the page to open the tour's layer
+only when the visitor has closed everything, so the diagram click step 1
+invites can't be undone a step later; the same lateness picks the buttons
+step's message, which names one button fewer on a card whose layer owns no
+parameters (`alt_text`); on locked sessions each page's tour auto-starts once per browser
 — a per-page seen flag set on dismissal, held by the embedding page when it
 offers to (`docs/javascripts/playground-embed.js` does, so the hosted
 playground's two Spaces — two origins in one docs frame — stop replaying

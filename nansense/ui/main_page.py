@@ -289,11 +289,11 @@ def _build_page(
     ui.add_body_html(_ARCHITECTURE_CLICK_JS)
     ui.add_body_html(_layer_info_script(session.layer_info, slugs))
 
-    # The tour points at (and auto-shows, for its strips and buttons steps)
-    # one layer: the one this tab is already showing, so its first arrow
-    # lands on the card the visitor is looking at rather than opening a
-    # second, unrelated one. A layer without weights has no Weights button,
-    # so the buttons step drops that arrow instead of pointing it elsewhere.
+    # The tour opens on one layer: the one this tab is already showing, so
+    # its first arrow lands on the card the visitor is looking at rather than
+    # opening a second, unrelated one. It stays the card steps' preference
+    # and their fallback — they auto-show it only when no card is open at all
+    # — but a visitor who opens another layer keeps it (`tour.py`).
     # Auto-starts only on locked (playground) sessions — local runs reach it
     # via the `?` button.
     layer_weights = session.layer_weights
@@ -301,11 +301,7 @@ def _build_page(
     tour_slug = slugs[tour_layer] if tour_layer is not None else None
     add_tour(
         "main",
-        main_tour_steps(
-            tour_slug,
-            locked=session.locked,
-            has_weights=bool(layer_weights.get(tour_layer or "")),
-        ),
+        main_tour_steps(tour_slug, locked=session.locked),
         locked=session.locked,
         auto_watch_slug=tour_slug,
     )

@@ -57,11 +57,13 @@ def test_steps_are_short_and_skimmable(
 ) -> None:
     assert steps
     for step in steps:
-        assert step.text.endswith(".")
-        # A visitor reads these seconds after landing: one sentence, one
-        # line. Anything longer belongs on the page, not in the bubble.
-        assert step.text.count(". ") == 0
-        assert len(step.text) <= 100
+        # Both messages a step can show, held to the same bar.
+        for text in filter(None, (step.text, step.alt_text)):
+            assert text.endswith(".")
+            # A visitor reads these seconds after landing: one sentence, one
+            # line. Anything longer belongs on the page, not in the bubble.
+            assert text.count(". ") == 0
+            assert len(text) <= 100
         assert step.selectors
 
 
@@ -126,9 +128,8 @@ def test_data_tour_anchors_exist_in_ui_sources(
     source = _ui_source()
     for step in steps:
         for sel in step.selectors:
-            # `search`, not `fullmatch`: the main tour's card anchors carry a
-            # `[data-layer="…"] ` scope prefix (the mermaid-node selector has
-            # no `data-tour` at all and is checked below).
+            # `search`, not `fullmatch`: the mermaid-node selector has no
+            # `data-tour` at all (it is checked below).
             m = re.search(r'\[data-tour="([a-z-]+)"\]', sel)
             if m is None:
                 continue
@@ -146,59 +147,57 @@ def test_diagram_selector_matches_findmermaidnode_scheme() -> None:
     assert fallback == "g.node"
 
 
+@pytest.mark.parametrize("layer_slug", ["stage1_0_conv1", None])
 @pytest.mark.parametrize("locked", [True, False])
-def test_main_tour_stays_on_one_layer(locked: bool) -> None:
-    """Every main-tour arrow belongs to the same layer.
+def test_card_steps_ship_bare_anchors_for_the_driver_to_scope(
+    locked: bool, layer_slug: str | None
+) -> None:
+    """No card-bound step names a layer; the driver picks the card.
 
-    The first step points at a diagram node; each card-bound step after it
-    is scoped to that layer's card (`data-layer="<slug>"`), so the tour can
-    never point at a card the visitor didn't open — the auto-shown card and
-    the diagram node the tour opened with are one and the same layer.
+    Which card a step is about is only settled in the browser — it is the
+    one the visitor has open (`openCardSlug`), which the first step's
+    diagram-click invitation may well have made a different layer from the
+    one the tour opened on. So the anchors ship bare and the scope prefix
+    is added there.
     """
-    click, *rest = main_tour_steps("stage1_0_conv1", locked=locked)
-    assert click.selectors == ('g.node[id*="-flowchart-stage1_0_conv1-"]',)
+    click, *rest = main_tour_steps(layer_slug, locked=locked)
+    assert click.selectors == (
+        ('g.node[id*="-flowchart-stage1_0_conv1-"]',) if layer_slug else
+        ("g.node",)
+    )
     for step in rest:
         for sel in step.selectors:
-            if "data-tour" not in sel:
-                continue
-            if step.ensure_card:
-                assert sel.startswith('[data-layer="stage1_0_conv1"] '), sel
-            else:
-                # The input pane and the step controls live outside the
-                # cards, so they are page-wide anchors.
-                assert "data-layer" not in sel, sel
+            # True of the page-wide anchors (the input pane, the step
+            # controls) as much as of the card ones.
+            assert "data-layer" not in sel, sel
+        if step.ensure_card:
+            assert all(sel.startswith("[data-tour=") for sel in step.selectors)
 
 
-def test_card_anchors_are_unscoped_without_a_layer() -> None:
-    """A model with no captured layers has no card to scope to, so the
-    anchors stay page-wide (matching the `g.node` diagram fallback)."""
-    _, strips, *_ = main_tour_steps(None, locked=True)
-    assert strips.selectors == ('[data-tour="strips"]',)
+def test_buttons_step_carries_a_message_per_card_flavor() -> None:
+    """One step, both card flavors: with and without a Weights button.
 
-
-@pytest.mark.parametrize(
-    ("has_weights", "anchors"),
-    [
-        (True, ("weights", "experiment", "stats")),
-        # A ReLU/add card has no Weights button, so the step drops that
-        # arrow instead of pointing it at some other layer's card.
-        (False, ("experiment", "stats")),
-    ],
-)
-def test_buttons_step_matches_the_buttons_the_card_has(
-    has_weights: bool, anchors: tuple[str, ...]
-) -> None:
-    steps = main_tour_steps("relu1", locked=True, has_weights=has_weights)
+    A ReLU/add card has no Weights button, so the driver drops that arrow —
+    and picks `alt_text`, which drops its name too — rather than leaving a
+    named button with nothing under it or pointing at another layer's card.
+    """
+    steps = main_tour_steps("relu1", locked=True)
     (buttons,) = [s for s in steps if s.ensure_card and "deeper" in s.text]
     assert buttons.selectors == tuple(
-        f'[data-layer="relu1"] [data-tour="{a}"]' for a in anchors
+        f'[data-tour="{a}"]' for a in ("weights", "experiment", "stats")
     )
-    # The message names exactly the buttons it points at, with the labels
+    # The alternative drops the first anchor's button, so the driver's rule
+    # ("first selector has no target") must be about the Weights one.
+    assert buttons.selectors[0] == '[data-tour="weights"]'
+    assert buttons.alt_text is not None
+    assert "Weights" in buttons.text and "Weights" not in buttons.alt_text
+    # Both messages name exactly the buttons they point at, with the labels
     # the card actually prints on them ("Experiment", not "Experiments").
-    assert ("Weights" in buttons.text) == has_weights
-    assert "Experiment and" in buttons.text or "Experiment, and" in buttons.text
-    assert "Stats" in buttons.text
-    assert "Experiments" not in buttons.text
+    for text in (buttons.text, buttons.alt_text):
+        assert "Experiment and" in text or "Experiment, and" in text
+        assert "Stats" in text
+        assert "Experiments" not in text
+        assert text.endswith(" go deeper.")
 
 
 def test_buttons_step_uses_the_cards_own_button_labels() -> None:
@@ -210,7 +209,7 @@ def test_buttons_step_uses_the_cards_own_button_labels() -> None:
     source = _ui_source()
     (buttons,) = [
         s
-        for s in main_tour_steps("conv1", locked=True, has_weights=True)
+        for s in main_tour_steps("conv1", locked=True)
         if s.ensure_card and "deeper" in s.text
     ]
     named = buttons.text.removesuffix(" go deeper.").replace(" and", "")
@@ -233,7 +232,7 @@ def test_card_steps_name_the_rows_and_the_color_scale(locked: bool) -> None:
     _, strips, colors, *_ = main_tour_steps("conv1", locked=locked)
     assert strips.text.index("activations") < strips.text.index("gradients")
     assert "above" in strips.text and "below" in strips.text
-    assert colors.selectors == ('[data-layer="conv1"] [data-tour="legend"]',)
+    assert colors.selectors == ('[data-tour="legend"]',)
     for word in ("Red", "positive", "blue", "negative", "white", "zero"):
         assert word in colors.text, word
 
@@ -436,6 +435,10 @@ def test_config_carries_driver_contract() -> None:
     assert json.dumps(config).count('"ensureInput": true') == 1
     # And exactly one aims an arrow out of the frame (the closing step).
     assert json.dumps(config).count('"hostAnchor": true') == 1
+    # The buttons step is the one that ships a second message, for a card
+    # without a Weights button; every other step has a single one.
+    assert json.dumps(config).count('"altText": null') == len(steps) - 1
+    assert '"altText": "Experiment and Stats go deeper."' in json.dumps(config)
     subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
     assert subpage["autoStart"] is False
     assert subpage["autoWatchSlug"] is None
@@ -446,6 +449,7 @@ def test_config_carries_driver_contract() -> None:
     assert '"ensureCard": true' not in json.dumps(subpage)
     assert '"ensureInput": true' not in json.dumps(subpage)
     assert '"hostAnchor": true' not in json.dumps(subpage)
+    assert '"altText": "' not in json.dumps(subpage)
     assert '"ensureView": "HISTOGRAM"' in json.dumps(subpage)
 
 
@@ -458,10 +462,20 @@ def test_driver_js_uses_the_config_hooks() -> None:
     assert "cfg.autoWatchSlug" in _TOUR_JS
     # View-bound steps reach the stats page through this event name.
     assert "nansense_tour_set_view" in _TOUR_JS
-    # Card-needing steps auto-show a layer through a show-only event — the
-    # toggle event a diagram click emits would hide an already-open card.
+    # Card-bound steps scope their bare anchors to a card that is open, and
+    # ask the page for one — through a show-only event, since the toggle a
+    # diagram click emits would hide an already-open card — only when the
+    # visitor has none.
+    assert "openCardSlug" in _TOUR_JS
+    assert "'[data-layer=\"' + slug" in _TOUR_JS
+    # Among several open cards the tour's own layer wins, so the visitor who
+    # kept it open is never sent to a different card.
+    assert "slug === cfg.autoWatchSlug" in _TOUR_JS
+    assert "openCardSlug() === null" in _TOUR_JS
     assert "nansense_tour_show_layer" in _TOUR_JS
     assert "nansense_toggle_layer" not in _TOUR_JS
+    # The buttons step's second message is chosen from the card on screen.
+    assert "step.altText" in _TOUR_JS
     # The sample step re-opens the input pane through this event name.
     assert "nansense_tour_show_input" in _TOUR_JS
     # Fresh runs are bracketed by start/end events — the stats page uses
@@ -487,6 +501,7 @@ def test_ensure_card_step_defaults_off() -> None:
     assert step.ensure_input is False
     assert step.ensure_view is None
     assert step.host_anchor is False
+    assert step.alt_text is None
 
 
 @pytest.mark.parametrize("locked", [True, False])
