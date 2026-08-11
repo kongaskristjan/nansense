@@ -1181,7 +1181,7 @@ class Session:
         return experiments.experiment_queue_state(self, seq)
 
     def request_experiment(
-        self, *, kind: str, layer: str, params: dict[str, object]
+        self, *, kind: str, layer: str, params: dict[str, object], video: bool = False
     ) -> int:
         """Queue an experiment for the paused training thread to run.
 
@@ -1190,9 +1190,15 @@ class Session:
         from concurrent clients queue up and run in order; none of them
         supersedes a running one (use `cancel_experiment(seq)` to replace
         your own). Returns the request's seq.
+
+        `video` records the run's progress to an MP4 beside the session's
+        other recordings, and puts its path on the final result — for deep
+        dream, the ascent replayed frame by frame (pair it with the
+        `all_steps` param to record every step rather than every ~15th).
+        Ignored on a locked session.
         """
         return experiments.request_experiment(
-            self, kind=kind, layer=layer, params=params
+            self, kind=kind, layer=layer, params=params, video=video
         )
 
     def cancel_experiment(self, seq: int | None = None) -> None:

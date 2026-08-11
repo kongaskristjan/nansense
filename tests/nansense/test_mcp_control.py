@@ -17,6 +17,7 @@ import json
 from collections.abc import Coroutine
 from pathlib import Path
 
+import av
 import pytest
 from typing import Any, TypeVar
 
@@ -27,6 +28,7 @@ from torch import Tensor, nn
 
 import nansense
 from nansense.mcp_server import build_server
+from nansense.recording import RecordingManager
 from nansense.mcp_views import (
     experiment_catalog_view,
     metrics_view,
@@ -335,6 +337,60 @@ def test_running_a_deep_dream_returns_its_result() -> None:
         assert view["params"]["steps"] == 2
         # The image travels as statistics here; `render_experiment` draws it.
         assert view["image"]["shape"][0] == 1
+        # No video unless one is asked for.
+        assert "video" not in view
+
+
+def test_a_recorded_deep_dream_returns_the_video_of_its_ascent(
+    tmp_path: Path,
+) -> None:
+    """`render_experiment` shows what a channel converged to; the video shows
+    how it got there — and `all_steps` puts every step in it, not the ~20 the
+    page is streamed."""
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path / "rec")
+        view = _call(
+            session,
+            "run_experiment",
+            {
+                "kind": "deep_dream",
+                "layer": "conv",
+                "params": {"channels": 1, "steps": 6, "all_steps": True},
+                "timeout_seconds": 60.0,
+                "video": True,
+            },
+        )
+        assert view["done"] is True and view.get("error") is None, view
+        assert "ignored_params" not in view  # all_steps is a real knob
+        path = Path(view["video"])
+        assert path.exists() and path.suffix == ".mp4"
+        assert "fps" in view["video_hint"]
+        with av.open(str(path)) as container:
+            assert sum(1 for _ in container.decode(video=0)) == 6
+
+
+def test_a_video_of_a_captum_method_is_refused_with_the_reason(
+    tmp_path: Path,
+) -> None:
+    """The attribution methods publish once, at the end: there is no process
+    to record, and saying so beats handing back a one-frame film."""
+    with paused_session(TinyClassifier(), _image_step) as session:
+        session._recording_manager = RecordingManager(directory=tmp_path / "rec")
+        view = _call(
+            session,
+            "run_experiment",
+            {
+                "kind": "gradcam",
+                "layer": "conv",
+                "params": {"batch": 1},
+                "timeout_seconds": 60.0,
+                "video": True,
+            },
+        )
+        assert view["done"] is True, view
+        assert "video" not in view
+        assert "single result" in view["video_note"]
+        assert not (tmp_path / "rec").exists()
 
 
 def test_unknown_experiment_params_are_reported_not_ignored() -> None:

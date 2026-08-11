@@ -886,6 +886,16 @@ def experiment_result_view(
     if result.image is not None:
         view["image"] = _tensor_summary(result.image)
     view["hint"] = "render_experiment(seq) draws this result."
+    if result.video is not None:
+        # Imported here, not at module scope: `nansense.recording` pulls in the
+        # video encoder for a constant this view only sometimes needs.
+        from nansense.recording import VIDEO_FPS
+
+        view["video"] = result.video
+        view["video_hint"] = (
+            f"The whole run as an MP4 ({VIDEO_FPS} fps, one frame per "
+            "published step), written beside the session's recordings."
+        )
     return view
 
 

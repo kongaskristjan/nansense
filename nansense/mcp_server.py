@@ -1015,6 +1015,7 @@ def build_server(
         layer: str,
         params: dict[str, Any] | None = None,
         timeout_seconds: float = 120.0,
+        video: bool = False,
     ) -> dict[str, Any]:
         """Run an interpretability experiment on the paused model.
 
@@ -1027,6 +1028,15 @@ def build_server(
         it is queued until the next pause. Returns once the run finishes,
         `timeout_seconds` elapses, or the server's own wall-clock ceiling stops
         it. `render_experiment` draws the result.
+
+        `video` (deep dream only) records the whole ascent to an MP4 and
+        returns its path: `render_experiment` shows what a channel converged
+        *to*, the video shows how it got there — whether the image formed
+        steadily or the objective went somewhere and came back. It records the
+        progress the run publishes, which is ~20 evenly spaced steps; add
+        `{"all_steps": true}` to `params` for a frame per step. Both cost the
+        run time — the frames are drawn on the training thread, inside the
+        same wall-clock ceiling as the ascent itself.
         """
         return await _run_experiment(
             session,
@@ -1036,6 +1046,7 @@ def build_server(
             display=display,
             input_name=primary_input,
             timeout=timeout_seconds,
+            video=video,
         )
 
     @server.tool()
@@ -1389,6 +1400,7 @@ async def _run_experiment(
     display: InputDisplay,
     input_name: str | None,
     timeout: float,
+    video: bool = False,
 ) -> dict[str, Any]:
     """Validate, arm and await one experiment; report whatever it published."""
     if kind not in experiments.EXPERIMENT_KINDS:
@@ -1413,8 +1425,15 @@ async def _run_experiment(
     resolved, unknown = _experiment_params(
         session, kind=kind, overrides=params, display=display, input_name=input_name
     )
+    # Only deep dream has a process to watch: the Captum methods publish once,
+    # at the end, so their "video" would be that single frame held for a tenth
+    # of a second. That and the locked-demo refusal (the session drops the flag
+    # itself) are reported below rather than silently swallowed.
+    record = video and kind == "deep_dream" and not session.locked
     running = session.is_running
-    seq = session.request_experiment(kind=kind, layer=layer, params=resolved)
+    seq = session.request_experiment(
+        kind=kind, layer=layer, params=resolved, video=record
+    )
     finished = await asyncio.to_thread(
         _await_experiment, session, seq=seq, timeout=_clamp_timeout(timeout)
     )
@@ -1427,6 +1446,19 @@ async def _run_experiment(
         view["params_note"] = (
             "This is a locked demo, which caps the heavier knobs (steps, "
             "channels, inputs); the run may have used lower values than these."
+        )
+    if video and not record:
+        view["video_note"] = (
+            f"No video: {kind} publishes a single result at the end, so there "
+            "is no process to record. Deep dream is the kind with an ascent to "
+            "replay."
+            if kind != "deep_dream"
+            else "No video: this is a locked demo, where runs are not recorded."
+        )
+    elif record and view.get("video") is None and view.get("done"):
+        view["video_note"] = (
+            "No video file: the run published nothing renderable to record "
+            "(a non-image input has no frames to draw)."
         )
     if unknown:
         view["ignored_params"] = unknown

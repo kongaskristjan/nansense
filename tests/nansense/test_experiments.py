@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from unittest import mock
 
+import av
 import pytest
 import torch
 from torch import Tensor, nn
 
 import nansense
+import nansense.recording
 from nansense import experiments
+from nansense.recording import RecordingManager
 from nansense.experiments import (
     EXPERIMENT_KINDS,
     ExperimentQueueState,
@@ -305,6 +310,18 @@ class VectorNet(nn.Module):
         return self.fc2(torch.relu(self.fc1(x)))
 
 
+class SequenceNet(nn.Module):
+    """Rank-3 input [B, 4, 5]: renderable as neither an image nor a strip."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(5, 3)
+        self.fc2 = nn.Linear(4 * 3, 3)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.fc2(torch.relu(self.fc1(x)).flatten(1))
+
+
 def test_deep_dream_works_on_vector_input() -> None:
     model = VectorNet()
     with paused_session(model, lambda m: train_step(m, input_shape=(8,))) as session:
@@ -319,6 +336,203 @@ def test_deep_dream_works_on_vector_input() -> None:
         assert result is not None and result.error is None
         assert result.image is not None and result.image.shape == (3, 8)
         assert result.reference is None  # noise start carries no input
+
+
+# --- progress cadence and recorded runs -------------------------------
+
+
+def _published_steps(session: Session, **params: object) -> list[int]:
+    """The `step` of every result one deep-dream run publishes."""
+    steps: list[int] = []
+    original = experiments._publish_experiment
+
+    def spy(target: Session, result: experiments.ExperimentResult) -> None:
+        steps.append(result.step)
+        original(target, result)
+
+    with mock.patch.object(experiments, "_publish_experiment", spy):
+        session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params(**params)
+        )
+        assert session.wait_for_experiment(timeout=20)
+    return steps
+
+
+def test_deep_dream_publishes_a_sample_of_its_steps_by_default() -> None:
+    """~`_PUBLISH_COUNT` snapshots of the ascent, not one per step: the page
+    only ever draws the freshest, so the rest are copies nobody sees."""
+    with _paused_session() as (session, _):
+        steps = _published_steps(session, steps=40)
+        assert steps == [2 * n for n in range(1, 21)]
+
+
+def test_all_steps_publishes_every_step() -> None:
+    """The knob that makes a recorded run replay the whole ascent."""
+    with _paused_session() as (session, _):
+        steps = _published_steps(session, steps=40, all_steps=True)
+        assert steps == list(range(1, 41))
+
+
+def test_all_steps_is_a_declared_deep_dream_knob() -> None:
+    specs = {s.key: s for s in experiments.EXPERIMENT_PARAMS["deep_dream"]}
+    assert specs["all_steps"].kind == "bool"
+    assert specs["all_steps"].default is False
+
+
+def _recorded(session: Session, tmp_path: Path) -> RecordingManager:
+    """Point the session's recordings at `tmp_path` (as the UI tests do)."""
+    manager = RecordingManager(directory=tmp_path / "rec")
+    session._recording_manager = manager
+    return manager
+
+
+def _frame_count(path: Path) -> int:
+    with av.open(str(path)) as container:
+        return sum(1 for _ in container.decode(video=0))
+
+
+def test_a_recorded_deep_dream_writes_one_frame_per_published_step(
+    tmp_path: Path,
+) -> None:
+    """`video=True` turns the run's progress into a playable MP4, and the path
+    arrives on the same result that reports the run done."""
+    with _paused_session() as (session, _):
+        manager = _recorded(session, tmp_path)
+        seq = session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params=_dream_params(steps=40, all_steps=True),
+            video=True,
+        )
+        assert session.wait_for_experiment(timeout=30)
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.error is None and result.done
+        assert result.video is not None
+        path = Path(result.video)
+        assert path.parent == manager.directory
+        assert path.exists() and path.stat().st_size > 0
+        assert _frame_count(path) == 40
+
+
+def test_an_unrecorded_run_leaves_no_video(tmp_path: Path) -> None:
+    with _paused_session() as (session, _):
+        manager = _recorded(session, tmp_path)
+        seq = session.request_experiment(
+            kind="deep_dream", layer="conv", params=_dream_params()
+        )
+        assert session.wait_for_experiment(timeout=20)
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.video is None
+        assert not manager.directory.exists()
+
+
+def test_a_cancelled_recording_keeps_the_frames_it_got(tmp_path: Path) -> None:
+    """Aborting mid-ascent still finalizes a playable file — the point of
+    encoding frame by frame instead of at the end."""
+    with _paused_session() as (session, _):
+        _recorded(session, tmp_path)
+        seq = session.request_experiment(
+            kind="deep_dream",
+            layer="conv",
+            params=_dream_params(steps=200, all_steps=True),
+            video=True,
+        )
+        # Cancel once a few frames are in, then wait for the run to notice.
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            progress = session.experiment_result_for(seq)
+            if progress is not None and progress.step >= 3:
+                break
+            time.sleep(0.01)
+        session.cancel_experiment(seq)
+        assert session.wait_for_experiment(timeout=20)
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.done and result.step < 200
+        assert result.video is not None
+        assert _frame_count(Path(result.video)) == result.step
+
+
+def test_a_dream_on_a_vector_input_records_its_strips(tmp_path: Path) -> None:
+    """Not an images-only feature: a flat input draws as a colormapped strip,
+    so its ascent animates like any other."""
+    model = VectorNet()
+    with paused_session(model, lambda m: train_step(m, input_shape=(8,))) as session:
+        _recorded(session, tmp_path)
+        seq = session.request_experiment(
+            kind="deep_dream",
+            layer="fc1",
+            params={
+                "channels": 3,
+                "steps": 4,
+                "lr": 0.1,
+                "start": "noise",
+                "all_steps": True,
+            },
+            video=True,
+        )
+        assert session.wait_for_experiment(timeout=20)
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.error is None
+        assert result.video is not None
+        assert _frame_count(Path(result.video)) == 4
+
+
+def test_a_dream_with_nothing_to_draw_records_no_file(tmp_path: Path) -> None:
+    """A rank the renderers have no picture for records nothing at all, rather
+    than a clip of status lines with a blank where the image goes."""
+    model = SequenceNet()
+    step = lambda m: train_step(m, input_shape=(4, 5))  # noqa: E731 — [B, 4, 5]
+    with paused_session(model, step) as session:
+        manager = _recorded(session, tmp_path)
+        seq = session.request_experiment(
+            kind="deep_dream",
+            layer="fc1",
+            params={"channels": 2, "steps": 3, "lr": 0.1, "start": "noise"},
+            video=True,
+        )
+        assert session.wait_for_experiment(timeout=20)
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.error is None
+        assert result.image is not None and result.image.ndim == 3
+        assert result.video is None
+        assert list(manager.directory.glob("*.mp4")) == []
+
+
+def test_a_failing_recorder_costs_the_video_not_the_run(tmp_path: Path) -> None:
+    """The experiment is the valuable thing: a render that blows up is
+    reported beside its result, not in place of it."""
+    with _paused_session() as (session, _):
+        _recorded(session, tmp_path)
+        with mock.patch.object(
+            nansense.recording,
+            "_experiment_result_frame",
+            side_effect=RuntimeError("no pixels for you"),
+        ):
+            seq = session.request_experiment(
+                kind="deep_dream",
+                layer="conv",
+                params=_dream_params(steps=5),
+                video=True,
+            )
+            assert session.wait_for_experiment(timeout=20)
+        result = session.experiment_result_for(seq)
+        assert result is not None and result.done
+        assert result.image is not None  # the run itself finished
+        assert result.video is None
+        assert result.error is not None and "no pixels for you" in result.error
+
+
+def test_a_locked_session_records_no_experiment_videos() -> None:
+    """Writing a file per request is unbounded work on the one thread a shared
+    demo's visitors all queue for, so the flag is dropped with the other
+    ceilings — at the request, before anything runs."""
+    session = nansense.start(TinyClassifier(), epochs=1, phases={"train": 1})
+    session.lock()
+    seq = session.request_experiment(
+        kind="deep_dream", layer="conv", params={}, video=True
+    )
+    queued = [r for r in session._experiment_queue if r.seq == seq]
+    assert queued and queued[0].video is False
 
 
 @pytest.mark.parametrize(

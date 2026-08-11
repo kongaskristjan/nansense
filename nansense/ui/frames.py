@@ -394,6 +394,26 @@ def experiment_frame(
     result = session.experiment_result_for(seq)
     if result is None:
         return None
+    return experiment_result_frame(
+        result, mean=mean, std=std, require_image=require_image, overlay=overlay
+    )
+
+
+def experiment_result_frame(
+    result: ExperimentResult,
+    *,
+    mean: tuple[float, ...] | None = None,
+    std: tuple[float, ...] | None = None,
+    require_image: bool = False,
+    overlay: bool = False,
+) -> Image.Image | None:
+    """One already-in-hand `ExperimentResult` as a frame (see `experiment_frame`).
+
+    Split from the session lookup so a caller holding a result that is not (or
+    not yet) the session's freshest can draw it: the deep-dream video recorder
+    (`nansense.recording.ExperimentClip`) draws every progress snapshot as it
+    is produced, and must not race the next publish for the same seq.
+    """
     status = f"{result.kind} · {result.layer} · step {result.step}/{result.total_steps}"
     if result.objective is not None:
         status += f" · objective {result.objective:.4g}"

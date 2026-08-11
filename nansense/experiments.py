@@ -48,7 +48,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from captum import attr as captum_attr
@@ -61,6 +61,7 @@ from nansense.params import bool_param, float_param, float_tuple, int_param
 from nansense.probe import isolated_model
 
 if TYPE_CHECKING:
+    from nansense.recording import ExperimentClip
     from nansense.session import Session
 
 EXPERIMENT_KINDS: dict[str, str] = {
@@ -200,6 +201,18 @@ _ZOOM_PARAM = ExperimentParam(
     step=0.01,
     tooltip="Zoom into the centre a little each step (1 = no zoom)",
 )
+# Deep dream publishes `_PUBLISH_COUNT` evenly spaced snapshots of a run by
+# default — enough for a page that only ever draws the freshest one, and far
+# fewer CPU copies than one per step. This knob publishes every step instead,
+# which is what a recorded run (`ExperimentRequest.video`) needs to replay the
+# ascent frame by frame rather than in ~20 jumps.
+_ALL_STEPS_PARAM = ExperimentParam(
+    "all_steps",
+    "Publish every step",
+    "bool",
+    False,
+    tooltip="Stream one result per step instead of ~20 evenly spaced ones",
+)
 
 # Ordered per kind: the targeting knob first (deep dream's Channels, Captum's
 # Channel/Target), then Inputs (Captum) or Start from + Sample (deep dream),
@@ -212,6 +225,7 @@ EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
         _START_PARAM,
         _SAMPLE_PARAM,
         ExperimentParam("steps", "Steps", "int", 300, minimum=1),
+        _ALL_STEPS_PARAM,
         ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0, step=0.01),
         _DIFFUSION_PARAM,
         _JITTER_PARAM,
@@ -333,6 +347,12 @@ class ExperimentRequest:
     layer: str
     params: dict[str, object]
     seq: int
+    # Record the run's published progress to an MP4 (`ExperimentClip`). Not a
+    # knob of the experiment — the run is identical either way — but of how
+    # its progress is delivered, which is why it is a field here rather than
+    # an `EXPERIMENT_PARAMS` entry: the page streams the steps live and needs
+    # nothing, while an MCP client only ever sees the result it polled.
+    video: bool = False
 
 
 @dataclass(frozen=True)
@@ -345,6 +365,11 @@ class ExperimentResult:
     shown denormalized) or `attribution` (signed, shown with the diverging
     colormap) is set on success; `reference` carries the input batch the
     experiment started from.
+
+    `video` is set on the final result of a run that asked for one
+    (`ExperimentRequest.video`): the MP4 of every progress snapshot above,
+    written by `run_experiment_guarded`, so the path arrives with the same
+    result that says the run is done.
     """
 
     seq: int
@@ -358,6 +383,7 @@ class ExperimentResult:
     attribution: Tensor | None = None
     reference: Tensor | None = None
     objective: float | None = None
+    video: str | None = None
 
 
 @dataclass(frozen=True)
@@ -450,7 +476,12 @@ class _AutoExperiment:
 
 
 def request_experiment(
-    session: Session, *, kind: str, layer: str, params: dict[str, object]
+    session: Session,
+    *,
+    kind: str,
+    layer: str,
+    params: dict[str, object],
+    video: bool = False,
 ) -> int:
     """Implementation of `Session.request_experiment`."""
     if kind not in EXPERIMENT_KINDS:
@@ -467,6 +498,11 @@ def request_experiment(
                 _locked_params(params) if session._locked else dict(params)
             ),
             seq=session._experiment_seq,
+            # A locked demo shares one training thread between anonymous
+            # visitors and caps every heavy knob for it; writing a video file
+            # per request is exactly the kind of unbounded work that cap is
+            # there to prevent, so recording is off there.
+            video=video and not session._locked,
         )
         if session._locked and len(session._experiment_queue) >= _LOCKED_MAX_QUEUE:
             # Shared-demo backstop: publish a queue-full error for this seq
@@ -649,6 +685,11 @@ def run_experiment_guarded(session: Session, request: ExperimentRequest) -> None
     promptly; queued requests from other clients wait their turn
     instead of aborting the run. A failing experiment publishes an
     error result instead of killing the training thread.
+
+    A `video` request additionally draws every one of those results into an
+    `ExperimentClip` as it goes, and the *final* result carries the finished
+    file's path — so whoever is polling learns about the video from the same
+    result that tells them the run is over, with nothing left to encode.
     """
     with session._cv:
         resume_seen = session._resume_token
@@ -666,15 +707,54 @@ def run_experiment_guarded(session: Session, request: ExperimentRequest) -> None
                 or session._resume_token != resume_seen
             )
 
+    clip = _experiment_clip(session, request)
     try:
         for partial in run(session, request, should_abort):
+            if clip is not None:
+                clip.append(partial)
+                if partial.done:
+                    partial = _with_video(partial, clip)
             _publish_experiment(session, partial)
     except Exception as e:  # noqa: BLE001 — surfaced via the result
-        _publish_experiment(session, _error(request, f"{type(e).__name__}: {e}"))
+        failure = _error(request, f"{type(e).__name__}: {e}")
+        _publish_experiment(
+            session, failure if clip is None else _with_video(failure, clip)
+        )
     finally:
+        if clip is not None:
+            clip.finish()  # a no-op once `_with_video` has closed it
         with session._cv:
             session._experiment_running = None
             session._experiment_cancelled.discard(request.seq)
+
+
+def _experiment_clip(
+    session: Session, request: ExperimentRequest
+) -> ExperimentClip | None:
+    """The video recorder for `request`, or `None` when it wants no video.
+
+    Imported lazily like `Session.recording` itself: `nansense.recording`
+    pulls in the UI rendering stack, which a headless run has no reason to
+    load until something actually records.
+    """
+    if not request.video:
+        return None
+    from nansense.recording import ExperimentClip
+
+    return ExperimentClip.start(session, request)
+
+
+def _with_video(result: ExperimentResult, clip: ExperimentClip) -> ExperimentResult:
+    """`result` with the finished clip's path (or its failure) attached."""
+    path = clip.finish()
+    if path is not None:
+        return replace(result, video=str(path))
+    if clip.error is None:
+        return result  # nothing was drawable, so there is no video to mention
+    note = f"video recording failed: {clip.error}"
+    return replace(
+        result, error=note if result.error is None else f"{result.error}; {note}"
+    )
 
 
 def _publish_experiment(session: Session, result: ExperimentResult) -> None:
@@ -858,6 +938,11 @@ def _run_deep_dream(
     Gradients are normalized per sample by their mean magnitude so `lr`
     behaves comparably across layers and channels. `reference` (the shown
     input) is carried only for the current-batch start; noise has none.
+
+    Progress publishes at `_PUBLISH_COUNT` evenly spaced steps, or at every
+    step under the `all_steps` knob — the difference between a recorded run
+    (`ExperimentRequest.video`) that skips through the ascent and one that
+    replays all of it.
     """
     p = request.params
     steps = max(1, int_param(p, "steps", 300))
@@ -880,7 +965,9 @@ def _run_deep_dream(
         return
     spatial = x0.ndim == 4  # the regularizers below act on image axes only
     lo, hi = _value_bounds(int(x0.shape[1]), p.get("mean"), p.get("std"))
-    publish_every = max(1, steps // _PUBLISH_COUNT)
+    publish_every = 1 if bool_param(p, "all_steps", False) else max(
+        1, steps // _PUBLISH_COUNT
+    )
     reference: Tensor | None = None
 
     def partial(

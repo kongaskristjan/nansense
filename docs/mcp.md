@@ -80,7 +80,7 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | `time_travel`, `get_time_travel_status` | Restart at an earlier epoch, with the model, optimizer and scheduler restored |
 | `pin_batch`, `unpin_batch`, `set_probe_mode`, `get_probe_status` | Re-run the model on one fixed input at every capture |
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
-| `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions |
+| `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions — `run_experiment(video=True)` records a dream's whole ascent to MP4 |
 | `set_auto_run_experiments` | Stop open experiment pages re-running on the thread you need |
 | `start_recording`, `stop_recording`, `discard_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update |
 | `save_snapshot` | Save one still of a view as a PNG file to hand a human |
@@ -90,6 +90,8 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 **Probes hold the input still.** Stepping normally changes the weights *and* the batch at once, which makes it hard to say which caused a change. Pinning a batch re-runs the model on that one input at every capture, so what you see between steps is the weights alone. `set_probe_mode("eval")` runs the probe with BatchNorm on its running statistics — a model that looks fine in train mode and broken in eval usually has statistics that have drifted.
 
 **Experiments run on the paused training thread**, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and `run_experiment` returns statistics while `render_experiment` draws the result. A result you poll before it exists is not simply missing: `get_experiment_result` reports the request's `stage` — `running`, `queued` (with `queued_ahead`), or `absent` — so waiting longer and re-requesting are told apart.
+
+**A deep dream can hand back the whole ascent.** `render_experiment` shows what a channel converged *to*; `run_experiment(..., video=True)` writes the run itself to an MP4 and returns the path, which is how you tell an image that formed steadily from one that went somewhere and came back. The page streams every step to a watching human, but a tool call only sees the snapshot it polled — so the video is the agent-side equivalent, and it records the ~20 evenly spaced snapshots a run publishes unless `params: {"all_steps": true}` asks for one frame per step. Both cost the run time: frames are drawn on the training thread, inside the same ceiling as the ascent.
 
 **Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. `save_snapshot` is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the `render_*` tools return the picture to *you*.
 

@@ -922,7 +922,29 @@ noise has none. Regularizers per step, applied only to `[B, C, H, W]` inputs:
 jitter (random roll, undone after the update — drawn from the same
 request-seeded generator), diffusion (blend with a 3×3 box blur), center
 zoom (a per-step multiplier, ≥ 1), and clamping to `_value_bounds` — the
-displayable `[0, 1]` range mapped through the input mean/std.
+displayable `[0, 1]` range mapped through the input mean/std. Progress
+publishes at `_PUBLISH_COUNT` (20) evenly spaced steps — the page only ever
+draws the freshest, so the rest would be CPU copies nobody sees — or at
+every step under the `all_steps` knob, which is what a recorded run needs to
+replay the ascent frame by frame instead of in twenty jumps.
+
+**Recorded runs.** `ExperimentRequest.video` (a field, not an
+`EXPERIMENT_PARAMS` knob: it changes how progress is *delivered*, not what
+the run computes) has `run_experiment_guarded` draw every published result
+into a `recording.ExperimentClip` as it arrives, and attach the finished
+file's path to the run's *final* `ExperimentResult` — so a poller learns
+about the video from the same result that says the run is over, with
+nothing left to encode. It exists for the MCP side: the page is streamed
+every publish, while a tool call sees only the snapshot it polled
+(`run_experiment(video=True)`). Rendering is inline on the training thread,
+which keeps memory flat (one frame at a time, never a run's worth of CPU
+tensors) at the cost of spending the run's own wall-clock ceiling on
+frames — an abort therefore just ends the clip early, and because the
+encoder is fed frame by frame the partial file is playable. A render that
+raises is caught in the clip and reported *beside* the result rather than
+replacing it: losing the video must not lose the run. Locked sessions drop
+the flag with the other ceilings, a file per request being exactly the
+unbounded work a shared demo caps.
 
 **Captum** (`_run_captum`) runs the *unpatched* model inside the isolation
 scope (experiments only execute between batches). captum is a standard
@@ -951,7 +973,8 @@ clips the channel selectors (deep dream's Channels count to the channel
 count, Captum's Channel index to one less). The rest of each kind's knobs are
 declared in `experiments.EXPERIMENT_PARAMS` (`ExperimentParam` specs rendered as
 number/switch/select widgets) ordered, for deep dream, Channels → Start from →
-Sample → method knobs (Minimize sits just above Clamp; Sample shows only for the
+Sample → method knobs (Publish every step follows Steps, the cadence belonging
+with the count; Minimize sits just above Clamp; Sample shows only for the
 current-batch start) and, for Captum, Channel/Target → Inputs → method knobs; values persist
 across kind switches via a shared `state.values`, seeded from each knob's
 default with `session.experiment_defaults` overrides applied
@@ -1063,6 +1086,16 @@ dimensions (rounded up to even, as libx264's yuv420p requires; capped at
 renderer failure is stored on the recorder and shown in the dialog rather
 than propagating into the training loop, and `Session.close()` calls
 `end_all()` so files are playable when a run simply finishes.
+
+`ExperimentClip` is the one writer here that is not on the update clock: it
+records a single experiment *run*, one frame per progress result the runner
+publishes (deduplicated by step, since an aborted run publishes its last
+step twice — as progress and again as the final result), into the same
+directory. It renders with `require_image=True`, unlike the view recorders:
+a view keeps its shape across an empty update, but a clip of a run that
+draws nothing would be a video of status lines, and the caller is better
+told there is no video. See the experiments section above for how
+`run_experiment_guarded` drives it.
 
 Locking is deliberately fine-grained: frame rendering (seconds for large
 views) runs outside every lock. The manager's lock guards only the

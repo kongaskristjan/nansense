@@ -42,6 +42,12 @@ View pages map to videos as follows:
   experiment (same seq on every rerun, so deep dream redraws the same
   seeded noise each update).
 
+`ExperimentClip` is the third writer here, and the only one not on the
+update clock: it records a *single experiment run*, one frame per progress
+result the runner publishes, so the file replays the gradient ascent itself
+instead of the view around it. `run_experiment_guarded` drives it when a
+request asks for video (`run_experiment(video=True)` over MCP).
+
 The images themselves are rendered by `nansense.ui.frames`, which the MCP
 server's image tools also call — the functions here only unpack a view's
 frozen params and hand the result to the encoder, so a recorded frame and
@@ -70,6 +76,7 @@ from nansense.params import bool_param, float_tuple, int_param, str_tuple
 from nansense.schedule import BatchPosition, format_position
 
 if TYPE_CHECKING:
+    from nansense.experiments import ExperimentRequest, ExperimentResult
     from nansense.session import Session
 
 # Where recordings land: one timestamped subdirectory per manager (i.e. per
@@ -279,6 +286,114 @@ class ViewRecorder:
             self._closed = True
             for stream in self._streams.values():
                 stream.delete()
+
+
+class ExperimentClip:
+    """An MP4 of one experiment run — one frame per published progress result.
+
+    The video counterpart of a `ViewRecorder`, on the *experiment's* clock
+    instead of the visualization-update clock: `run_experiment_guarded` feeds
+    it every `ExperimentResult` the runner yields, so the file replays the
+    ascent itself — deep dream's image forming step by step — rather than one
+    still per training update. It exists for the agents on the MCP side, who
+    (unlike a browser watching the page stream) see only whatever result was
+    published the moment they polled; the run's `all_steps` knob turns the
+    ~20 evenly spaced publishes into one per step, so the clip can show every
+    frame the ascent produced.
+
+    Frames are rendered and encoded inline on the training thread as they
+    arrive. That keeps the memory flat — one frame at a time, never a run's
+    worth of CPU tensors — but puts the render time inside the run's
+    wall-clock ceiling, so a long clip costs the experiment steps. A render
+    or encode failure is stored in `error` and ends the recording without
+    touching the experiment: losing the video must not lose the run.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        fps: int = VIDEO_FPS,
+        mean: tuple[float, ...] | None = None,
+        std: tuple[float, ...] | None = None,
+        position: BatchPosition | None = None,
+    ) -> None:
+        self.frames = 0
+        self.error: str | None = None
+        self._stream = _VideoStream(path, fps)
+        self._mean = mean
+        self._std = std
+        self._position = position
+        self._last_step: int | None = None
+
+    @classmethod
+    def start(cls, session: Session, request: ExperimentRequest) -> ExperimentClip:
+        """A clip for `request`, in the session's recording directory.
+
+        The display statistics ride on the request's own params (the MCP
+        server and the experiment page both put them there for the runners),
+        so a clip denormalizes its images exactly like the page does.
+        """
+        stem = _sanitize(f"experiment_{request.kind}_{request.layer}_seq{request.seq}")
+        return cls(
+            session.recording.directory / f"{stem}.mp4",
+            mean=float_tuple(request.params.get("mean")),
+            std=float_tuple(request.params.get("std")),
+            position=_capture_position(session),
+        )
+
+    @property
+    def path(self) -> Path:
+        return self._stream.path
+
+    def append(self, result: ExperimentResult) -> None:
+        """Draw one progress snapshot into the clip (never raises).
+
+        One frame per *step*: a run that stops early publishes its last step
+        twice — once as progress, once as the final result — and that is a
+        duplicate frame, not a moment of the ascent.
+        """
+        if self.error is not None or result.step == self._last_step:
+            return
+        self._last_step = result.step
+        try:
+            frame = _experiment_result_frame(result, mean=self._mean, std=self._std)
+            if frame is None:
+                return
+            array = np.asarray(frame)
+            if self._position is not None:
+                array = _stamp_position(array, format_position(self._position))
+            self._stream.append(array)
+            self.frames += 1
+        except Exception as e:  # noqa: BLE001 — reported beside the result
+            self.error = f"{type(e).__name__}: {e}"
+            self._stream.delete()
+
+    def finish(self) -> Path | None:
+        """Finalize the file and return it, or `None` when nothing was drawn."""
+        if self.error is not None or self.frames == 0:
+            self._stream.delete()  # an empty stream never opened a file
+            return None
+        self._stream.close()
+        return self._stream.path
+
+
+def _experiment_result_frame(
+    result: ExperimentResult,
+    *,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+) -> Image.Image | None:
+    """One clip frame, or `None` when the result has no picture in it.
+
+    `require_image` unlike the view recorders above: a view keeps its shape
+    across an empty update, but a clip of a run that draws nothing (a dream on
+    a non-image input) would be a video of status lines, and the caller is
+    better told there is no video than handed that.
+    """
+    from nansense.ui.frames import experiment_result_frame
+
+    return experiment_result_frame(result, mean=mean, std=std, require_image=True)
 
 
 _POSITION_BANNER_HEIGHT: int = 18
