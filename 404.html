@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>Page not found</title>
   <script>
-    var versions = ["dev"];
+    var versions = ["0.3", "dev"];
     var rest = window.location.pathname.slice("/nansense/".length);
     if (versions.indexOf(rest.split("/")[0]) === -1) {
       window.location.replace(
