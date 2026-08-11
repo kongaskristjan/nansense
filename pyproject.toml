@@ -1,6 +1,6 @@
 [project]
 name = "nansense"
-version = "0.2.1"
+version = "0.3.0"
 description = "Pytorch debugger: step through the training process batch by batch, visualize gradients and activations, and run interpretability experiments"
 readme = "README.md"
 license = "MIT"
