@@ -1,0 +1,5146 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="PyTorch debugger: pause training, step batch by batch, and look inside every layer — activations, gradients, weights, optimizer state.">
+      
+      
+      
+        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/0.3/api/">
+      
+      
+        <link rel="prev" href="../instruments/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../images/logo_small.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>API reference - NaNsense</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="NaNsense" class="md-header__button md-logo" aria-label="NaNsense" data-md-component="logo">
+      
+  <img src="../images/logo_small.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            NaNsense
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/kongaskristjan/nansense" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    kongaskristjan/nansense
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="NaNsense" class="md-nav__button md-logo" aria-label="NaNsense" data-md-component="logo">
+      
+  <img src="../images/logo_small.png" alt="logo">
+
+    </a>
+    NaNsense
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/kongaskristjan/nansense" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    kongaskristjan/nansense
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../playground/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Playground
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../showcase/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Showcase
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrate with one prompt
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wiring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wiring guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    UI guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debug with a coding agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../instruments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom metrics & tensors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#entry-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.serve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        serve
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.Session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Session">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        snapshot
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.live_position" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        live_position
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.instrument_errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        instrument_errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.batches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.set_schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set_schedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.restore_point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        restore_point
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.training_restorer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        training_restorer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.close" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        close
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.time_travel_status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        time_travel_status
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lock
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.freeze_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        freeze_moment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.set_patch_layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set_patch_layers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.park" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        park
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_layer_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_layer_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_weight_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_weight_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metrics_snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metrics_snapshot
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pytorch-lightning-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PyTorch Lightning integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.lightning.NansenseCallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NansenseCallback
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="NansenseCallback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.lightning.NansenseCallback.session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.lightning.fit_with_time_travel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fit_with_time_travel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#positions-and-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Positions and snapshots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.BatchPosition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchPosition
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.Mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.Schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schedule
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Schedule">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phases
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.phase_order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phase_order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.phase_count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phase_count
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.BatchSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchSnapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#watch-statistics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Watch statistics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.StatsScope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StatsScope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WatchSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="WatchSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot.latest_per_phase" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        latest_per_phase
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot.phase_history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phase_history
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot.weight_history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        weight_history
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerStatsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerStatsSnapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TensorStatsSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TensorStatsSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mean
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.std" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        std
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.median" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        median
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.dead_channel_count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dead_channel_count
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-instruments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom instruments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.WeightContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WeightContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricsSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MetricsSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot.plots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plots
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricSeries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricSeries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#time-travel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Time travel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TrainingRestorer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TrainingRestorer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.start_epoch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        start_epoch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.finished" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        finished
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.iter_epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        iter_epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.epoch_guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epoch_guard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.save_epoch_start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save_epoch_start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TimeTravelStatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TimeTravelStatus
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TimeTravelJump" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TimeTravelJump
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TimeTravelError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TimeTravelError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frozen-moments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frozen moments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.load_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_moment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MomentError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MomentError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#numerical-debugging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Numerical debugging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.DebugSettings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DebugSettings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DebugSettings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.DebugSettings.any_check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        any_check
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.DebugError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DebugError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerReport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerReport
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#entry-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry points
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.serve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        serve
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.Session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Session">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        snapshot
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.live_position" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        live_position
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.instrument_errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        instrument_errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.batches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.set_schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set_schedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.restore_point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        restore_point
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.training_restorer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        training_restorer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.close" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        close
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.time_travel_status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        time_travel_status
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lock
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.freeze_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        freeze_moment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.set_patch_layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        set_patch_layers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.park" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        park
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_layer_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_layer_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_weight_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_weight_tensor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Session.watch_metrics_snapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        watch_metrics_snapshot
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pytorch-lightning-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PyTorch Lightning integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.lightning.NansenseCallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NansenseCallback
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="NansenseCallback">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.lightning.NansenseCallback.session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.lightning.fit_with_time_travel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fit_with_time_travel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#positions-and-snapshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Positions and snapshots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.BatchPosition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchPosition
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.Mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.Schedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schedule
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Schedule">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phases
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.phase_order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phase_order
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.Schedule.phase_count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phase_count
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.BatchSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BatchSnapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#watch-statistics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Watch statistics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.StatsScope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StatsScope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WatchSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="WatchSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot.latest_per_phase" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        latest_per_phase
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot.phase_history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        phase_history
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.WatchSnapshot.weight_history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        weight_history
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerStatsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerStatsSnapshot
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TensorStatsSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TensorStatsSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mean
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.std" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        std
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.median" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        median
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TensorStatsSnapshot.dead_channel_count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dead_channel_count
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-instruments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom instruments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.WeightContext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WeightContext
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricsSnapshot
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MetricsSnapshot">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.MetricsSnapshot.plots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plots
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MetricSeries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MetricSeries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#time-travel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Time travel
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TrainingRestorer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TrainingRestorer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.start_epoch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        start_epoch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.finished" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        finished
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.pending" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pending
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.iter_epochs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        iter_epochs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.epoch_guard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        epoch_guard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nansense.TrainingRestorer.save_epoch_start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save_epoch_start
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TimeTravelStatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TimeTravelStatus
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TimeTravelJump" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TimeTravelJump
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.TimeTravelError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TimeTravelError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frozen-moments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frozen moments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.load_moment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_moment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.MomentError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MomentError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#numerical-debugging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Numerical debugging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.DebugSettings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DebugSettings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="DebugSettings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nansense.DebugSettings.any_check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        any_check
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.DebugError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DebugError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nansense.LayerReport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LayerReport
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="api-reference">API reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h1>
+<p>The public surface of the <code>nansense</code> package. Everything here is importable as <code>nansense.&lt;name&gt;</code>, except the Lightning integration, which lives in <code>nansense.lightning</code> (available when <code>lightning</code> is installed).</p>
+<h2 id="entry-points">Entry points<a class="headerlink" href="#entry-points" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="nansense.start" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">nansense.start</span>
+
+
+<a href="#nansense.start" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">start</span><span class="p">(</span>
+    <span class="n">model</span><span class="p">:</span> <span class="n"><span title="torch.nn.Module">Module</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">epochs</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">phases</span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="int">int</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">enabled</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">optimizer</span><span class="p">:</span> <span class="n"><span title="torch.optim.Optimizer">Optimizer</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">scheduler</span><span class="p">:</span> <span class="n"><span title="torch.optim.lr_scheduler.LRScheduler">LRScheduler</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">port</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">host</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span>
+    <span class="n">open_browser</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">input_mean</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_std</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_transform</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span>
+    <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span><span class="p">]</span>
+    <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.Session (nansense.session.Session)" href="#nansense.Session">Session</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Create a <code>Session</code> for <code>model</code> (and optionally serve the UI).</p>
+<p>The training schedule is discovered as you go: declare the epoch count at
+the loop (<code>for epoch in session.epochs(N)</code>), and phase names + per-phase
+batch counts are learned as <code>session.batches(loader, phase=…)</code> runs (the
+full shape is known after the first epoch). <code>epochs</code> here is an optional
+fallback for the count; <code>phases={"train": a, "val": b}</code> is an optional
+up-front declaration that restores full first-epoch fidelity (exact
+progress and boundary stops from batch 0) — the Lightning integration uses
+it, and it is the right choice when you need the UI fully precise on epoch 0.</p>
+<p>With <code>enabled=False</code> the session is a near-zero-overhead no-op: no fx
+trace at construction, <code>batch()</code> does nothing, and the UI is skipped.
+This lets a training script keep its NaNsense wiring in place and turn
+the whole UI off with a single flag.</p>
+<p><code>optimizer</code> is optional: when given, snapshots (and the weights page)
+additionally carry each parameter's optimizer state — momentum buffers,
+Adam moments, step counts — plus its param group's numeric
+hyperparameters. Without it, everything behaves exactly as before.</p>
+<p><code>scheduler</code> is optional: when given, time-travel checkpoints include the
+LR scheduler's state, so a jump restores the learning-rate schedule
+automatically along with the model and optimizer.</p>
+<p><code>port</code> is optional: when given, the UI is served immediately on that
+port (equivalent to a separate <code>nansense.serve(session, port=...)</code>
+call, which remains available for finer control). <code>host</code>,
+<code>open_browser</code>, <code>input_mean</code>, <code>input_std</code>, and <code>input_transform</code> are
+forwarded to <code>serve</code>; once the port binds, the address is printed in a box
+and (unless <code>open_browser=False</code>) opened in a focused browser tab. If a
+concurrent session already holds the port, both are suppressed.
+<code>input_mean</code> / <code>input_std</code> / <code>input_transform</code> each take a single value
+applied to every input, or a dict keyed by input name for multi-input
+models (see <code>nansense.input_config</code>); <code>input_transform</code> maps a non-RGB
+input to a displayable 1-/3-channel image.</p>
+<p>Distributed (DDP) runs need no special wiring: call <code>start()</code> on every
+rank (a <code>DistributedDataParallel</code>-wrapped model is unwrapped
+automatically). Rank 0 serves the UI and drives pausing/stepping;
+the other ranks skip the UI, follow rank 0's pace, and contribute
+their data shard to the watch page's statistics, which become global
+across ranks. Time travel is supported under DDP: drive every rank's epoch
+loop with <code>session.epochs()</code>; a jump rewinds all ranks in lockstep from
+their own per-rank checkpoints.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="nansense.serve" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">nansense.serve</span>
+
+
+<a href="#nansense.serve" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">serve</span><span class="p">(</span>
+    <span class="n">session</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.Session (nansense.session.Session)" href="#nansense.Session">Session</a></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">port</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">8080</span><span class="p">,</span>
+    <span class="n">host</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span>
+    <span class="n">log_level</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;warning&quot;</span><span class="p">,</span>
+    <span class="n">open_browser</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">mcp</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">input_mean</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_std</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_transform</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span>
+    <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span><span class="p">]</span>
+    <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="threading.Thread">Thread</span></span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Start the NiceGUI app on a background thread and return that thread.</p>
+<p><code>port</code> / <code>host</code> pick the bind address (default <code>127.0.0.1:8080</code>).
+<code>log_level</code> is uvicorn's log level — <code>"warning"</code> by default, so routine
+request logging stays out of the training console.</p>
+<p>Returns <code>None</code> without starting anything when <code>session</code> is disabled
+(<code>nansense.start(..., enabled=False)</code>), so a training script can call
+<code>serve()</code> unconditionally and pay nothing when the UI is turned off —
+and likewise on the non-zero ranks of a distributed run, where the UI
+lives on rank 0.</p>
+<p>NiceGUI is mounted onto a bare FastAPI app via <code>ui.run_with</code>; the app is
+then served by uvicorn from a non-main thread, with signal handlers
+disabled so uvicorn doesn't try to wire SIGINT/SIGTERM from a thread
+that isn't the main one.</p>
+<p>Once the server thread is launched, a daemon thread waits for the port to
+bind and then prints the UI address inside a box (so it stands out in the
+training log) and, unless <code>open_browser</code> is <code>False</code>, opens it in a focused
+browser tab. If a concurrent session already holds the port the bind
+fails, so the banner and the browser tab are both suppressed — only
+uvicorn's own <code>address already in use</code> error is shown. On a headless
+machine the bind still succeeds, so the banner prints and the browser open
+is a harmless no-op.</p>
+<p><code>mcp</code> (default <code>True</code>) also serves the MCP endpoint at <code>/mcp</code> on the same
+port, so a coding agent can drive the debugger through the same session the
+browser shows (<code>nansense.mcp_server</code>). Its route is registered <em>before</em>
+NiceGUI's catch-all mount at <code>/</code> — Starlette matches routes in order — and
+its lifespan is passed to the app at construction, since NiceGUI wraps
+whatever lifespan it finds and a mounted sub-app never receives one.</p>
+<p><code>input_mean</code> / <code>input_std</code> are passed to the input-image pane so the
+sample is denormalized (<code>x * std + mean</code>) before display. When either
+is <code>None</code>, the renderer assumes the input is already in <code>[0, 1]</code>.
+<code>input_transform</code> maps a non-RGB input to a displayable 1-/3-channel
+image. Each of the three is either a single value applied to every input,
+or a <code>dict</code> keyed by input name for a multi-input model (see
+<code>nansense.input_config</code>); the stats and experiment panes use the primary
+input's resolved values, and so does the MCP server, whose image tools
+render the same views.</p>
+
+
+    </div>
+
+</div><h2 id="the-session">The session<a class="headerlink" href="#the-session" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.Session" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.Session</span>
+
+
+<a href="#nansense.Session" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>The bridge between a live training loop and the NaNsense UI.</p>
+<p>Create one with <code>nansense.start</code> (the intended entry point) rather than
+directly. The training loop drives the session through <code>batches</code> (wrap
+each phase's dataloader), <code>epochs</code> + <code>restore_point</code> (the time-travel
+epoch loop), and <code>close</code> when training finishes; the served UI drives
+pausing, stepping, layer watching and experiments through the rest of the
+surface. With <code>enabled=False</code> every method is a near-zero-overhead no-op.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Session.enabled" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">enabled</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Session.enabled" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">enabled</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Whether this session captures anything. Set once at <code>start()</code>.</p>
+<p>A disabled session is fully inert: <code>batch()</code> is a no-op context
+manager, <code>serve()</code> does nothing, and no model hooks are ever
+installed — the intended near-zero-overhead off switch for leaving
+NaNsense wiring in place in a training script.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Session.snapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">snapshot</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Session.snapshot" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">snapshot</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.BatchSnapshot
+
+
+  
+      dataclass
+   (nansense.session.BatchSnapshot)" href="#nansense.BatchSnapshot">BatchSnapshot</a></span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Session.live_position" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">live_position</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Session.live_position" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">live_position</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.BatchPosition
+
+
+  
+      dataclass
+   (nansense.schedule.BatchPosition)" href="#nansense.BatchPosition">BatchPosition</a></span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Position of the batch the training thread is currently on.</p>
+<p>Updated on <em>every</em> batch's <code>__enter__</code> regardless of capture mode, so
+the UI can show live epoch/batch progress during <code>step_epoch</code>,
+<code>step_until_position</code>, <code>step_run</code>, and <code>detach</code> — modes that publish a
+snapshot only at boundaries (or never), leaving <code>snapshot.position</code>
+frozen in between. Written by the training thread, read point-in-time
+by the UI thread: a single atomic reference assignment under the GIL,
+no lock needed (same contract as <code>snapshot</code>).</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Session.mode" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">mode</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Session.mode" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">mode</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.Mode (nansense.session.Mode)" href="#nansense.Mode">Mode</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Session.instrument_errors" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">instrument_errors</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Session.instrument_errors" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">instrument_errors</span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="str">str</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>instrument name -&gt; error</code> for instruments disabled by a failure.</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.batches" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">batches</span>
+
+
+<a href="#nansense.Session.batches" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">batches</span><span class="p">(</span>
+    <span class="n">loader</span><span class="p">:</span> <span class="n"><span title="collections.abc.Iterable">Iterable</span></span><span class="p">[</span><span class="n"><span title="nansense.session._BatchItem">_BatchItem</span></span><span class="p">],</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">phase</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="n">epoch</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Iterator">Iterator</span></span><span class="p">[</span><span class="n"><span title="nansense.session._BatchItem">_BatchItem</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Iterate <code>loader</code> with each item wrapped in a <code>batch()</code> context.</p>
+<p>Sugar over <code>batch()</code> for the common loop shape: the user's batch
+body runs while the generator is suspended at <code>yield</code>, i.e. inside
+the batch context — hooks are installed before the forward pass and
+the capture/pause happens when the loop asks for the next item.
+A <code>TimeTravelJump</code> raised at a batch boundary therefore surfaces
+from the <code>for</code> statement itself, not from inside the user's body.</p>
+<div class="highlight"><pre><span></span><code>for inputs, targets in session.batches(loader, phase=&quot;train&quot;):
+    ...  # forward / backward / step
+</code></pre></div>
+<p><code>epoch</code> defaults to the epoch <code>session.epochs()</code> last yielded, so the
+flat loop need not repeat it; pass it explicitly when driving the
+phases outside an <code>epochs()</code> loop.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.epochs" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">epochs</span>
+
+
+<a href="#nansense.Session.epochs" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">epochs</span><span class="p">(</span>
+    <span class="n">n</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">cache_dir</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">=</span> <span class="n"><span title="nansense.restore.DEFAULT_CACHE_DIR">DEFAULT_CACHE_DIR</span></span><span class="p">,</span>
+    <span class="n">start_epoch</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Iterator">Iterator</span></span><span class="p">[</span><span class="n"><span title="int">int</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Time-travel-aware epoch loop: <code>for epoch in session.epochs(50): ...</code>.</p>
+<p><code>n</code> is the total number of epochs — the canonical place to declare it
+(it sets the schedule's epoch count); pass it here rather than to
+<code>nansense.start</code>. If omitted, the count set on <code>start(epochs=…)</code> is
+used, and it is an error if neither was given.</p>
+<p>Yields <code>0 … n - 1</code> like <code>range</code>, but opts the session into time travel:
+each epoch start is checkpointed to <code>cache_dir</code> and a UI-requested jump
+re-enters the loop at the chosen epoch with the model / optimizer /
+scheduler / RNG restored. Wrap each iteration's body — every phase of
+the epoch — in <code>with session.restore_point():</code>, the block that catches
+the jump; the generator then re-yields the target epoch::</p>
+<div class="highlight"><pre><span></span><code>for epoch in session.epochs(50, cache_dir=&quot;models/latest&quot;):
+    with session.restore_point():
+        for inputs, targets in session.batches(train_dl, phase=&quot;train&quot;):
+            ...
+        for inputs, targets in session.batches(val_dl, phase=&quot;val&quot;):
+            ...
+</code></pre></div>
+<p><code>start_epoch</code> resumes the run from <code>cache_dir</code>'s checkpoint of that
+epoch instead of training from scratch: the cache directory is
+adopted as-is (it may come from an earlier process — e.g. one baked
+into a deployment image), the checkpoint is validated against the
+live model / optimizer / scheduler up-front (<code>TimeTravelError</code> on a
+mismatch), and the loop yields <code>start_epoch … n - 1</code> with the state
+restored on the training thread before the first batch. Time travel
+then covers every epoch the directory holds a checkpoint for.</p>
+<p>Not iterating this leaves the run a straight pass with the UI's Time
+Travel button disabled; on a disabled session it is inert and nothing
+touches the disk (<code>start_epoch</code> is then ignored). Under DDP call it
+on every rank — a leader jump is broadcast so all ranks re-yield the
+same epoch in lockstep.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.set_schedule" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">set_schedule</span>
+
+
+<a href="#nansense.Session.set_schedule" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">set_schedule</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">epochs</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">phases</span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="int">int</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Re-declare the schedule mid-run; batch counters are kept.</p>
+<p><code>phases</code> switches the schedule to declared mode and replaces the phase
+set and their batch counts, so it is the way to express a shape that
+varies per epoch — validating every N epochs declares a train-only
+schedule on the epochs that skip it (what the Lightning integration
+does on each <code>on_train_epoch_start</code>). A schedule fixed for the whole
+run is better passed to <code>start(phases=...)</code> once.</p>
+<p>Either argument may be omitted to leave that part unchanged.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.restore_point" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">restore_point</span>
+
+
+<a href="#nansense.Session.restore_point" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">restore_point</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n"><span title="contextlib.AbstractContextManager">AbstractContextManager</span></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-internal" title="nansense.TrainingRestorer (nansense.restore.TrainingRestorer)" href="#nansense.TrainingRestorer">TrainingRestorer</a></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Per-epoch restore boundary for the <code>session.epochs()</code> loop.</p>
+<p>Enter it around each epoch's body (both train and val phases): on a
+time-travel jump the <code>TimeTravelJump</code> unwinds to here, is suppressed,
+and <code>session.epochs()</code> re-yields the target epoch with state restored.
+Loop state that depends on history (a running <code>best_acc</code>, metric
+curves) belongs inside it, so a jump rewinds it naturally. Must be
+used inside a <code>for epoch in session.epochs():</code> loop.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.training_restorer" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">training_restorer</span>
+
+
+<a href="#nansense.Session.training_restorer" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">training_restorer</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span> <span class="n">cache_dir</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">=</span> <span class="n"><span title="nansense.restore.DEFAULT_CACHE_DIR">DEFAULT_CACHE_DIR</span></span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.TrainingRestorer (nansense.restore.TrainingRestorer)" href="#nansense.TrainingRestorer">TrainingRestorer</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Create the restorer that opts this session into time travel.</p>
+<p>Wrapping the epoch loop in the returned object (see
+<code>TrainingRestorer</code>) enables both epoch-start checkpointing to
+<code>cache_dir</code> and UI-driven jumps back to any cached epoch. A session
+without a restorer never writes checkpoints and never raises
+<code>TimeTravelJump</code>. On a disabled session the restorer is inert: the
+loop runs exactly once and nothing touches the disk.</p>
+<p>Under DDP every rank wraps its epoch loop in a restorer the same way:
+a UI-requested jump on the leader is broadcast to all ranks at the
+next batch-start barrier, where every rank raises <code>TimeTravelJump</code> in
+lockstep and restores from its own per-rank checkpoint (see
+<code>nansense.distributed</code>).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.close" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">close</span>
+
+
+<a href="#nansense.Session.close" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">close</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Mark training finished once the loop completes.</p>
+<p>Releases anything waiting on the session and finalizes in-flight
+recordings so their MP4 files are playable. The served page stays up
+for post-mortem browsing of the last captured state — <code>close</code> ends
+the <em>training</em> side of the session, not the UI.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.time_travel_status" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">time_travel_status</span>
+
+
+<a href="#nansense.Session.time_travel_status" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">time_travel_status</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.TimeTravelStatus
+
+
+  
+      dataclass
+   (nansense.restore.TimeTravelStatus)" href="#nansense.TimeTravelStatus">TimeTravelStatus</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>What the UI needs to render the time-travel button and dialog.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.lock" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">lock</span>
+
+
+<a href="#nansense.Session.lock" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">lock</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Lock run control and global settings for a shared demo deployment.</p>
+<p>Intended for a publicly hosted playground where many anonymous
+visitors share one session. Once locked:</p>
+<ul>
+<li>the run-control methods (<code>stop</code>, every <code>step_*</code>, <code>detach</code>),
+  <code>request_time_travel</code>, <code>watch</code>/<code>unwatch</code>, the probe surface
+  (<code>pin_current_batch</code>, <code>unpin_batch</code>, <code>add_perturbation</code>,
+  <code>clear_perturbations</code>, <code>set_probe_mode</code> — all shared state every
+  visitor sees), and the global settings (<code>set_stats_scope</code>,
+  <code>set_update_frequency</code>, <code>set_watch_performance</code>,
+  <code>set_debug_settings</code>, <code>disable_debug_check</code>,
+  <code>set_auto_run_experiments</code>, <code>set_experiment_defaults</code>) become
+  no-ops (<code>request_time_travel</code> raises <code>TimeTravelError</code>, so the UI
+  can show why);</li>
+<li>the stats scope is forced to <code>ALL</code> — every layer collects, so the
+  UI's per-tab show/hide never touches shared state;</li>
+<li>experiment requests still run, with their parameters clamped and
+  the queue depth capped (see <code>nansense.experiments</code>);</li>
+<li>registering instruments (<code>watch_metric</code>, <code>watch_layer_tensor</code>,
+  <code>watch_weight_tensor</code>) raises — register them, like every other
+  host-script setting, <em>before</em> locking.</li>
+</ul>
+<p>Everything read-only stays available, as do experiments. The lock is
+one-way by design — arm the wanted mode (e.g. <code>step_run()</code>), the
+settings, and any demo pin <em>before</em> locking. <code>close()</code> is not
+locked; it belongs to the hosting script.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.freeze_moment" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">freeze_moment</span>
+
+
+<a href="#nansense.Session.freeze_moment" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">freeze_moment</span><span class="p">(</span>
+    <span class="n">path</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">|</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">phase</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="n">epoch</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+    <span class="n">batch_idx</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Arm a one-shot moment freeze at an exact batch position.</p>
+<p>When training reaches <code>(phase, epoch, batch_idx)</code>, that batch installs
+hooks and publishes a snapshot like a capture — whatever the mode, so
+a detached prepare run works — and, after folding its watch stats,
+writes the complete debugger moment to <code>path</code> without pausing: the
+batch's loader item (the replay seed the snapshot is regenerated
+from — drive the loop with <code>batches()</code>, or pass <code>item=</code> to a manual
+<code>batch()</code>), running statistics, watched set, model weights and
+buffers, and the schedule shape. <code>nansense.load_moment</code> later rebuilds
+the view around a fresh model of the same architecture, the backing
+for a locked showcase (see <code>nansense.moments</code> and
+<code>examples/playground</code>).</p>
+<p>One request at a time — arming again replaces an unconsumed target; a
+target the run never reaches is reported at <code>close()</code>. No-op on a
+disabled or locked session; leader-only under DDP (the frozen
+statistics are the leader's shard).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.set_patch_layers" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">set_patch_layers</span>
+
+
+<a href="#nansense.Session.set_patch_layers" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">set_patch_layers</span><span class="p">(</span><span class="n">layers</span><span class="p">:</span> <span class="n"><span title="collections.abc.Iterable">Iterable</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Restrict extreme-patch collection to <code>layers</code> (<code>None</code> = every layer).</p>
+<p>Histogram/min-max/graph statistics are unaffected — this only gates
+the per-channel extreme-input patch buffers, by far the largest watch
+state (input crops, whole-image samples, and activation heatmaps per
+channel per layer). A scope-<code>all</code> run on a deep model at real image
+sizes spends gigabytes there; restricting patches to the layers a
+demo actually showcases keeps memory (and a frozen moment's file
+size) proportional to the shortlist while every layer keeps its
+statistics views.</p>
+<p>Unknown layer names raise <code>ValueError</code> on an enabled session (they
+would silently collect nothing). No-op when locked; layers already
+holding patch buffers keep them (this gates new accumulation only).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.park" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">park</span>
+
+
+<a href="#nansense.Session.park" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">park</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Hold the calling thread at a pause, serving UI requests, until
+<code>close()</code>.</p>
+<p>The showcase counterpart of a training loop: a script that restored a
+frozen moment (<code>nansense.load_moment</code>) has no batches to drive, but
+experiments and probes still execute on the pause loop of whatever
+thread owns the model — this provides that loop. Call it from the
+thread that built the model, typically right after <code>lock()</code>; on an
+unlocked session a Run/Step click simply re-enters the park. Returns
+once the session is closed.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_metric" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_metric</span>
+
+
+<a href="#nansense.Session.watch_metric" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_metric</span><span class="p">(</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">on</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;batch&quot;</span><span class="p">,</span>
+    <span class="n">reduce</span><span class="p">:</span> <span class="n"><span title="nansense.instruments.MetricReduce">MetricReduce</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">],</span> <span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Register a custom scalar metric, evaluated per collected layer.</p>
+<p>Use as a decorator (or call the returned registrar directly with any
+callable — a stateful object works too):</p>
+<div class="highlight"><pre><span></span><code>@session.watch_metric(&quot;sparsity&quot;)
+def sparsity(ctx: nansense.LayerContext) -&gt; float:
+    return (ctx.activation &gt; 0).float().mean().item()
+</code></pre></div>
+<p>The callback runs on the training thread, under <code>torch.no_grad()</code>,
+once per stats batch for every layer the stats scope collects (the
+watched set by default) — it receives a <code>LayerContext</code> with the
+batch's live activation, its gradient, and the layer's weights /
+optimizer state, and must not mutate them. It may return a number
+(or 1-element tensor), a mapping of named scalars (one plot trace
+per key), or <code>None</code> to skip the layer.</p>
+<p><code>on="batch"</code> plots every batch's value; <code>on="epoch"</code> folds each
+epoch's values through <code>reduce</code> — <code>"mean"</code> (default), <code>"sum"</code>,
+<code>"min"</code>, <code>"max"</code>, <code>"last"</code>, or any <code>values -&gt; float</code> callable — into
+one point. The series appear in the <code>/stats</code> GRAPHS view, one plot
+per metric. A raising callback is disabled (training continues) and
+reported via <code>instrument_errors</code>. Raises <code>ValueError</code> on invalid
+arguments and <code>RuntimeError</code> on a locked session.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_layer_tensor" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_layer_tensor</span>
+
+
+<a href="#nansense.Session.watch_layer_tensor" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_layer_tensor</span><span class="p">(</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">],</span> <span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Register a custom activation-shaped tensor per collected layer.</p>
+<div class="highlight"><pre><span></span><code>@session.watch_layer_tensor(&quot;zscore&quot;)
+def zscore(ctx: nansense.LayerContext) -&gt; Tensor:
+    a = ctx.activation
+    return (a - a.mean()) / (a.std() + 1e-6)
+</code></pre></div>
+<p>The callback follows <code>watch_metric</code>'s contract (training thread,
+<code>torch.no_grad()</code>, live tensors, <code>None</code> skips) but runs on publish
+batches only and must return a tensor of the activation's shape —
+it lands on <code>BatchSnapshot.custom_activations</code> and renders as an
+extra strip under the layer card's activation/gradient strips.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_weight_tensor" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_weight_tensor</span>
+
+
+<a href="#nansense.Session.watch_weight_tensor" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_weight_tensor</span><span class="p">(</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">],</span> <span class="n"><span title="nansense.session._InstrumentFn">_InstrumentFn</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Register a custom weight-shaped tensor per collected parameter.</p>
+<div class="highlight"><pre><span></span><code>@session.watch_weight_tensor(&quot;adam_update&quot;)
+def adam_update(ctx: nansense.WeightContext) -&gt; Tensor | None:
+    if &quot;exp_avg&quot; not in ctx.optimizer_state:
+        return None
+    m = ctx.optimizer_state[&quot;exp_avg&quot;]
+    v = ctx.optimizer_state[&quot;exp_avg_sq&quot;]
+    return m / (v.sqrt() + 1e-8)
+</code></pre></div>
+<p>The callback follows <code>watch_metric</code>'s contract but runs on publish
+batches only, once per (collected layer, parameter), receiving a
+<code>WeightContext</code>; it must return a tensor of the parameter's shape —
+it lands on <code>BatchSnapshot.custom_weight_tensors</code> and renders on the
+<code>/weights</code> page alongside the weight/gradient/optimizer strips.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Session.watch_metrics_snapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">watch_metrics_snapshot</span>
+
+
+<a href="#nansense.Session.watch_metrics_snapshot" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">watch_metrics_snapshot</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">,</span> <span class="n">layers</span><span class="p">:</span> <span class="n"><span title="collections.abc.Iterable">Iterable</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.MetricsSnapshot
+
+
+  
+      dataclass
+   (nansense.instruments.MetricsSnapshot)" href="#nansense.MetricsSnapshot">MetricsSnapshot</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Frozen view of the custom scalar-metric series (see <code>watch_metric</code>).</p>
+<p>The GRAPHS view's data source for the custom-metric plots; safe to
+call from any thread. Pass <code>layers</code> to restrict the copy.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="pytorch-lightning-integration">PyTorch Lightning integration<a class="headerlink" href="#pytorch-lightning-integration" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.lightning.NansenseCallback" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.lightning.NansenseCallback</span>
+
+
+<a href="#nansense.lightning.NansenseCallback" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="lightning.pytorch.Callback">Callback</span></code></p>
+
+
+
+        <p>Drive a NaNsense session from a Lightning <code>Trainer</code>.</p>
+<p>The session is created when <code>fit</code> starts (optimizers exist by then) and
+closed when it ends — the UI stays up for post-mortem browsing, exactly
+like a hand-written loop. Pass <code>model="net"</code> (an attribute path inside
+the LightningModule) to point NaNsense at the actual network; this is
+recommended whenever the module wraps its layers in a submodule, both
+for fx tracing and so input capture sees the real forward signature.</p>
+<p><code>port</code> / <code>host</code> / <code>open_browser</code> / <code>enabled</code> / <code>input_mean</code> /
+<code>input_std</code> / <code>input_transform</code> mean the same as on <code>nansense.start</code>;
+the UI comes up once <code>fit</code> begins.</p>
+<p>Supported out of the box: automatic optimization, epoch-boundary
+validation (including <code>check_val_every_n_epoch &gt; 1</code>), sanity-check
+skipping, and <code>enabled=False</code> as the zero-overhead off switch. Mid-epoch
+validation (<code>val_check_interval &lt; 1.0</code> or step-based) is rejected with a
+clear error, and iterable-style dataloaders without a length are not
+supported — NaNsense declares the schedule up-front.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.lightning.NansenseCallback.session" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">session</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.lightning.NansenseCallback.session" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">session</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.Session (nansense.session.Session)" href="#nansense.Session">Session</a></span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The live session, or None before <code>fit</code> has started.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="nansense.lightning.fit_with_time_travel" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">nansense.lightning.fit_with_time_travel</span>
+
+
+<a href="#nansense.lightning.fit_with_time_travel" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">fit_with_time_travel</span><span class="p">(</span>
+    <span class="n">make_trainer</span><span class="p">:</span> <span class="n"><span title="collections.abc.Callable">Callable</span></span><span class="p">[[],</span> <span class="n"><span title="lightning.pytorch.Trainer">Trainer</span></span><span class="p">],</span>
+    <span class="n">model</span><span class="p">:</span> <span class="n"><span title="lightning.pytorch.LightningModule">LightningModule</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">callback</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.lightning.NansenseCallback" href="#nansense.lightning.NansenseCallback">NansenseCallback</a></span><span class="p">,</span>
+    <span class="n">train_dataloaders</span><span class="p">:</span> <span class="n"><span title="nansense.lightning._Dataloaders">_Dataloaders</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">val_dataloaders</span><span class="p">:</span> <span class="n"><span title="nansense.lightning._Dataloaders">_Dataloaders</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">datamodule</span><span class="p">:</span> <span class="n"><span title="lightning.pytorch.LightningDataModule">LightningDataModule</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">cache_dir</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">=</span> <span class="n"><span title="nansense.restore.DEFAULT_CACHE_DIR">DEFAULT_CACHE_DIR</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Run <code>trainer.fit</code> under NaNsense time travel.</p>
+<p>Equivalent to <code>make_trainer().fit(model, ...)</code> with <code>callback</code> attached,
+plus the UI's Time Travel button: every epoch boundary is checkpointed
+to <code>cache_dir</code>, and a jump re-enters training at the chosen epoch with
+model / optimizer / scheduler / RNG state restored. <code>model</code>,
+<code>train_dataloaders</code>, <code>val_dataloaders</code> and <code>datamodule</code> are forwarded
+to <code>trainer.fit</code> unchanged.</p>
+<p><code>make_trainer</code> is a factory because each jump needs a fresh <code>Trainer</code>:
+Lightning treats a trainer as single-use for <code>fit</code>, and after the
+<code>TimeTravelJump</code> unwinds, the old one has already torn itself down. The
+callback (and its session, UI included) lives across attempts.</p>
+<p>Note that metric loggers cannot time-travel — after a jump, an attached
+logger sees the replayed epochs again (overlapping curves or a fresh
+run per attempt, depending on the logger).</p>
+
+
+    </div>
+
+</div><h2 id="positions-and-snapshots">Positions and snapshots<a class="headerlink" href="#positions-and-snapshots" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.BatchPosition" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.BatchPosition</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.BatchPosition" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Where a batch sits in the run: the <code>phase</code> name plus 0-indexed <code>epoch</code>
+and <code>batch_idx</code>. This is the position record carried by
+<code>BatchSnapshot.position</code>, <code>DebugError.position</code> and <code>Session.live_position</code>.</p>
+<p>The <code>is_last_*</code> flags mark boundaries — the last batch of the phase, of
+the epoch, and of the whole run. They are best-effort: with a lazy
+schedule they stay <code>False</code> until the phase's batch count has been learned
+at the end of the first epoch.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.Mode" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.Mode</span>
+
+
+<a href="#nansense.Mode" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="nansense.session.StrEnum">StrEnum</span></code></p>
+
+
+
+        <p>How training proceeds after a resume, exposed as <code>Session.mode</code>.</p>
+<p>Each mode maps to a top-bar control: <code>STEP</code> pauses on every batch (Step
+Batch; also the initial mode, so the first batch always pauses),
+<code>UNTIL_PHASE_CHANGE</code> / <code>UNTIL_EPOCH_CHANGE</code> run to the first batch of the
+next phase/epoch (Step Phase / Step Epoch), <code>UNTIL_POSITION</code> runs to an
+exact position (the step-until dialog), <code>UNTIL_END</code> runs to the run's
+last batch (Run), and <code>DETACH</code> never pauses again — capture overhead
+drops to near zero until the UI re-engages.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.Schedule" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.Schedule</span>
+
+
+<a href="#nansense.Schedule" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Batch-position bookkeeping, safe to touch from both session threads.</p>
+<p><code>advance</code> and <code>record_phase_length</code> run on the training thread (every
+batch / each phase end) while the UI thread reads <code>epochs</code>/<code>phases</code>/
+<code>phase_order</code> and may <code>update</code>/<code>set_epochs</code>/<code>rewind_to_epoch</code>; a lock guards
+the shared counters and the phase/epoch fields so a mid-<code>advance</code> schedule
+swap can't yield an inconsistent <code>BatchPosition</code> or corrupt the counters.
+The lock is never held while touching the session's condition variable, so
+it only ever nests <em>inside</em> it — no lock-ordering cycle.</p>
+<p><code>phases</code> may be <code>None</code> (lazy mode): phase names and counts are then learned
+by observation. A declared <code>phases</code> dict pins both up front and keeps the
+stricter validation (unknown phase / more batches than declared raise).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Schedule.epochs" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">epochs</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Schedule.epochs" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">epochs</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Total epochs, or <code>None</code> until <code>set_epochs</code>/<code>session.epochs(n)</code> runs.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Schedule.phases" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">phases</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Schedule.phases" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">phases</span><span class="p">:</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="int">int</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Known phases mapped to their batch counts, in first-seen order.</p>
+<p>Declared mode returns the full dict up front; lazy mode grows it as each
+phase's count is learned (so it can be empty during the first epoch).</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.Schedule.phase_order" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">phase_order</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.Schedule.phase_order" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">phase_order</span><span class="p">:</span> <span class="n"><span title="list">list</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>All phase names seen so far, in order — including ones whose count is
+not yet known (unlike <code>phases</code>, which only lists counted phases).</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.Schedule.phase_count" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">phase_count</span>
+
+
+<a href="#nansense.Schedule.phase_count" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">phase_count</span><span class="p">(</span><span class="n">phase</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The known batch count for <code>phase</code>, or <code>None</code> if not yet learned.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.BatchSnapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.BatchSnapshot</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.BatchSnapshot" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Immutable per-batch view, fully resident on CPU.</p>
+<p>All tensor dicts are independent CPU clones taken at snapshot time,
+so the snapshot survives subsequent batches freeing the live tensors and
+can be safely read from any thread.</p>
+<p><code>position</code> is where the batch sat in the run. <code>activations</code> /
+<code>activation_gradients</code> are keyed by watched-layer name (the names shown
+in the architecture graph); <code>weights</code> / <code>weight_gradients</code> by parameter
+name, matching <code>model.named_parameters()</code>.</p>
+<p><code>optimizer_state</code> / <code>optimizer_hyperparams</code> are populated only when the
+session was given an optimizer at <code>start()</code>; otherwise they stay empty.
+State entries are keyed <code>param name -&gt; state key -&gt; tensor</code> (scalar
+entries like Adam's <code>step</code> become 0-dim tensors); hyperparams are the
+numeric knobs of the parameter's group (<code>lr</code>, <code>momentum</code>, ...), read at
+the same instant — so a scheduler-driven <code>lr</code> is the batch's actual one.</p>
+<p><code>custom_activations</code> / <code>custom_weight_tensors</code> carry the tensor
+instruments' outputs (see <code>Session.watch_layer_tensor</code> /
+<code>watch_weight_tensor</code>): activation-shaped tensors keyed
+<code>layer -&gt; instrument name</code>, weight-shaped ones <code>param -&gt; instrument
+name</code>. Empty without registered instruments (or when nothing collects).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="watch-statistics">Watch statistics<a class="headerlink" href="#watch-statistics" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.StatsScope" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.StatsScope</span>
+
+
+<a href="#nansense.StatsScope" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="nansense.session.StrEnum">StrEnum</span></code></p>
+
+
+
+        <p>Which layers fold their batches into the running statistics.</p>
+<ul>
+<li><code>NONE</code>: nothing is collected; already-collected stats are kept frozen
+  (the pause the top bar's stats toggle uses).</li>
+<li><code>WATCHED</code> (default): the watched layers collect, and watching a layer is
+  also what shows its cards — the classic coupled behaviour.</li>
+<li><code>ALL</code>: every layer in <code>layer_names</code> collects, independent of the watched
+  set.</li>
+</ul>
+<p>Outside <code>WATCHED</code>, the watched set no longer drives collection, so the UI
+treats showing/hiding a layer's cards as per-tab state that never touches
+the session (see <code>main_page</code>).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.WatchSnapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.WatchSnapshot</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.WatchSnapshot" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Immutable view of all accumulated stats at a point in time.</p>
+<p>Keyed by <code>(layer, phase, epoch)</code>. The UI is expected to filter to the
+layers it wants to display (typically the latest epoch for each phase).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.WatchSnapshot.latest_per_phase" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">latest_per_phase</span>
+
+
+<a href="#nansense.WatchSnapshot.latest_per_phase" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">latest_per_phase</span><span class="p">(</span>
+    <span class="n">layer</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.LayerStatsSnapshot
+
+
+  
+      dataclass
+   (nansense.watch.LayerStatsSnapshot)" href="#nansense.LayerStatsSnapshot">LayerStatsSnapshot</a></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>For <code>layer</code>, return <code>phase -&gt; stats</code> for the most recent epoch seen.</p>
+<p>Returns an empty dict if the layer has no entries yet.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.WatchSnapshot.phase_history" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">phase_history</span>
+
+
+<a href="#nansense.WatchSnapshot.phase_history" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">phase_history</span><span class="p">(</span>
+    <span class="n">layer</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n">phase</span><span class="p">:</span> <span class="n"><span title="str">str</span></span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="list">list</span></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-internal" title="nansense.LayerStatsSnapshot
+
+
+  
+      dataclass
+   (nansense.watch.LayerStatsSnapshot)" href="#nansense.LayerStatsSnapshot">LayerStatsSnapshot</a></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>layer</code>'s buckets for <code>phase</code>, ordered by epoch.</p>
+<p>The epoch-by-epoch series behind the value-vs-epoch stats view.
+Older epochs carry universal-histogram stats only (their per-channel
+buffers collapsed when a newer epoch started).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.WatchSnapshot.weight_history" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">weight_history</span>
+
+
+<a href="#nansense.WatchSnapshot.weight_history" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">weight_history</span><span class="p">(</span>
+    <span class="n">layer</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="list">list</span></span><span class="p">[</span><span class="n"><span title="tuple">tuple</span></span><span class="p">[</span><span class="n"><span title="int">int</span></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.TensorStatsSnapshot
+
+
+  
+      dataclass
+   (nansense.watch.TensorStatsSnapshot)" href="#nansense.TensorStatsSnapshot">TensorStatsSnapshot</a></span><span class="p">]]]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>layer</code>'s per-epoch weight samples, <code>param -&gt; [(epoch, stats)]</code>.</p>
+<p>Each list is ordered by epoch — the series behind the GRAPHS view's
+weight plots. Empty for layers without parameters (fx
+intermediates, graph inputs).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.LayerStatsSnapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.LayerStatsSnapshot</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.LayerStatsSnapshot" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One watched layer's statistics for a (phase, epoch) bucket.</p>
+<p>Bundles the layer's activation and gradient <code>TensorStatsSnapshot</code>s with
+the extreme-input patch gallery; <code>layer</code> / <code>phase</code> / <code>epoch</code> locate the
+bucket within <code>WatchSnapshot.stats</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.TensorStatsSnapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.TensorStatsSnapshot</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.TensorStatsSnapshot" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Immutable CPU-side view of a single (layer, phase, epoch, kind) accumulator.</p>
+<p><code>n</code> / <code>sum</code> / <code>sum_sq</code> / <code>min</code> / <code>max</code> are running scalars over every
+tensor element seen so far, feeding the <code>mean</code> / <code>variance</code> / <code>std</code>
+properties. <code>hist</code> is the layer-wide histogram: one count per bin over
+the fixed symmetric-log bin edges of <code>histogram_edges()</code>; <code>None</code> when an
+older epoch's bins were collapsed by a newer one starting for its phase
+(only the latest epoch per phase renders bins — the per-epoch GRAPHS
+curves read the scalars and <code>median</code>, which survives the collapse via
+<code>collapsed_median</code>).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.TensorStatsSnapshot.mean" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">mean</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.TensorStatsSnapshot.mean" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">mean</span><span class="p">:</span> <span class="n"><span title="float">float</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Arithmetic mean of all elements seen; <code>nan</code> before any data.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.TensorStatsSnapshot.variance" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">variance</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.TensorStatsSnapshot.variance" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">variance</span><span class="p">:</span> <span class="n"><span title="float">float</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Population variance; <code>nan</code> with fewer than two elements.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.TensorStatsSnapshot.std" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">std</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.TensorStatsSnapshot.std" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">std</span><span class="p">:</span> <span class="n"><span title="float">float</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Population standard deviation derived from <code>variance</code>.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.TensorStatsSnapshot.median" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">median</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.TensorStatsSnapshot.median" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">median</span><span class="p">:</span> <span class="n"><span title="float">float</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Histogram-derived median: midpoint of the bin that holds the median.</p>
+<p>For a collapsed bucket (<code>hist is None</code>) this is the value cached at
+collapse time (<code>collapsed_median</code>).</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.TensorStatsSnapshot.dead_channel_count" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">dead_channel_count</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.TensorStatsSnapshot.dead_channel_count" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">dead_channel_count</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>How many channels only ever hit the zero bin, <code>None</code> when unknown.</p>
+<p>Live from <code>channel_hists</code> while the per-channel histogram exists;
+the count stored at collapse time for an evicted older epoch.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="custom-instruments">Custom instruments<a class="headerlink" href="#custom-instruments" title="Permanent link">&para;</a></h2>
+<p>See the <a href="../instruments/">Custom metrics &amp; tensors guide</a> for usage; the registration decorators live on the session (<code>Session.watch_metric</code>, <code>Session.watch_layer_tensor</code>, <code>Session.watch_weight_tensor</code> above).</p>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.LayerContext" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.LayerContext</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.LayerContext" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One watched layer's live tensors for a batch, passed to instruments.</p>
+<p><code>activation</code> / <code>gradient</code> are the layer's captured output and its
+retained grad (<code>None</code> in forward-only phases); <code>weights</code>,
+<code>weight_gradients</code>, and <code>optimizer_state</code> cover the layer's own
+parameters, keyed by qualified parameter name. All tensors are the live
+training-device tensors — treat them as read-only. <code>module</code> is the
+owning <code>nn.Module</code>, or <code>None</code> for fx intermediates (<code>relu</code>, <code>add</code>) and
+graph inputs.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.WeightContext" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.WeightContext</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.WeightContext" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One (layer, parameter) pair's live tensors, passed to weight-tensor
+instruments once per parameter on publish batches.</p>
+<p><code>weight</code> / <code>gradient</code> are the live parameter and its <code>.grad</code> (<code>None</code>
+before the first backward); <code>optimizer_state</code> is this parameter's state
+entries (empty without an optimizer, or before its lazy init) and
+<code>hyperparams</code> its param group's numeric knobs (<code>lr</code>, <code>momentum</code>, ...).
+All tensors are live training-device tensors — treat them as read-only.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.MetricsSnapshot" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.MetricsSnapshot</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.MetricsSnapshot" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Immutable view of every custom-metric series at a point in time.</p>
+<p>Keyed by <code>(layer, phase, metric, series)</code> — <code>series</code> is the mapping key
+for dict-returning metrics and <code>""</code> for plain scalar returns.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.MetricsSnapshot.plots" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">plots</span>
+
+
+<a href="#nansense.MetricsSnapshot.plots" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">plots</span><span class="p">(</span>
+    <span class="n">layer</span><span class="p">:</span> <span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n">phase</span><span class="p">:</span> <span class="n"><span title="str">str</span></span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.MetricSeries
+
+
+  
+      dataclass
+   (nansense.instruments.MetricSeries)" href="#nansense.MetricSeries">MetricSeries</a></span><span class="p">]]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>metric -&gt; series name -&gt; series</code> for one layer and phase.</p>
+<p>The per-figure view behind the GRAPHS custom-metric plots, in sorted
+(metric, series) order so trace order is stable across refreshes.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.MetricSeries" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.MetricSeries</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.MetricSeries" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>One plot trace of a custom metric: points ordered by (epoch, batch).</p>
+<p><code>xs</code> is the shared epoch-fraction axis: an <code>on="epoch"</code> point sits at
+its integer epoch, an <code>on="batch"</code> point at <code>epoch + batch_idx / n</code>
+where <code>n</code> spans the epoch's observed batches — so batch series line up
+under the per-epoch GRAPHS figures. <code>batches[i]</code> is <code>None</code> for reduced
+epoch points. Values are stored as-is; render paths gap non-finite ones.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="time-travel">Time travel<a class="headerlink" href="#time-travel" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.TrainingRestorer" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.TrainingRestorer</span>
+
+
+<a href="#nansense.TrainingRestorer" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Restores the training loop at a cached epoch after a time-travel jump.</p>
+<p>The session drives this through two equivalent loop shapes. The flat one
+(<code>iter_epochs</code> + <code>epoch_guard</code>, surfaced as <code>session.epochs()</code> and
+<code>session.restore_point()</code>) is what hand-written loops use::</p>
+<div class="highlight"><pre><span></span><code>for epoch in session.epochs(cache_dir=...):
+    with session.restore_point():
+        ...
+</code></pre></div>
+<p>The nested one (<code>pending</code> + the restorer itself as a context manager) is
+what the Lightning integration transplants around <code>trainer.fit</code>::</p>
+<div class="highlight"><pre><span></span><code>while restorer.pending():
+    with restorer:
+        for epoch in restorer.epochs():
+            ...
+</code></pre></div>
+<p>Both re-enter at the start of an epoch: entering after a jump loads the
+cached epoch state back into the model / optimizer / scheduler and RNG,
+rewinds the session's schedule and watch statistics, and sets
+<code>start_epoch</code> to the jump target (<code>_apply_pending_jump</code>). The exit
+suppresses <code>TimeTravelJump</code> (and only that), so any other exception still
+propagates normally.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.TrainingRestorer.start_epoch" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">start_epoch</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.TrainingRestorer.start_epoch" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">start_epoch</span><span class="p">:</span> <span class="n"><span title="int">int</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>First epoch the current attempt should train (0, or a jump target).</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="nansense.TrainingRestorer.finished" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">finished</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#nansense.TrainingRestorer.finished" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">finished</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Whether a <code>with</code> block completed without a time-travel jump.</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.TrainingRestorer.epochs" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">epochs</span>
+
+
+<a href="#nansense.TrainingRestorer.epochs" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">epochs</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n"><span title="range">range</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Epochs the current attempt should run: <code>start_epoch</code> to the end.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.TrainingRestorer.pending" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">pending</span>
+
+
+<a href="#nansense.TrainingRestorer.pending" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">pending</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n"><span title="bool">bool</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Whether another <code>with restorer:</code> attempt should run.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.TrainingRestorer.iter_epochs" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">iter_epochs</span>
+
+
+<a href="#nansense.TrainingRestorer.iter_epochs" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">iter_epochs</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Iterator">Iterator</span></span><span class="p">[</span><span class="n"><span title="int">int</span></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Yield epoch indices for the flat <code>session.epochs()</code> loop.</p>
+<p>Drives the whole run as a generator: it yields <code>start_epoch …
+schedule.epochs - 1</code>, but after a time-travel jump (recorded by the
+<code>with session.restore_point():</code> block's exit) it re-yields the jump
+target and continues from there instead of advancing. The run is
+finished once the last epoch's body completes without a jump.</p>
+<p>Each body must be wrapped in <code>with session.restore_point():</code> — that
+context manager is what catches the <code>TimeTravelJump</code> (a <code>for</code> loop
+never throws its body's exception back into the iterator, so the
+generator cannot catch it itself), and a missing wrapper is reported
+rather than left to crash training or loop forever.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.TrainingRestorer.epoch_guard" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">epoch_guard</span>
+
+
+<a href="#nansense.TrainingRestorer.epoch_guard" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">epoch_guard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n"><span title="collections.abc.Iterator">Iterator</span></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-internal" title="nansense.TrainingRestorer (nansense.restore.TrainingRestorer)" href="#nansense.TrainingRestorer">TrainingRestorer</a></span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Per-epoch context for the flat loop (<code>session.restore_point()</code>).</p>
+<p>On entry it restores the cached state when the previous epoch's exit
+armed a jump; on exit it catches <code>TimeTravelJump</code> and re-arms it,
+suppressing the exception so <code>iter_epochs</code> re-yields the target.
+Unlike the restorer's own <code>__exit__</code>, completing one epoch does not
+mark the run finished — <code>iter_epochs</code> owns completion.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.TrainingRestorer.save_epoch_start" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">save_epoch_start</span>
+
+
+<a href="#nansense.TrainingRestorer.save_epoch_start" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">save_epoch_start</span><span class="p">(</span><span class="n">epoch</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Checkpoint the training state at the start of <code>epoch</code>.</p>
+<p>Called by the session on the first batch of each epoch, before any
+forward pass — so the file holds exactly the state a jump to this
+epoch should restore (including any between-epoch user code such as
+<code>scheduler.step()</code> that already ran).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.TimeTravelStatus" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.TimeTravelStatus</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.TimeTravelStatus" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>UI-facing view of whether/where time travel can jump.</p>
+<p><code>available</code> is False when no restorer wraps the training loop (or the
+run already completed); <code>reason</code> then carries the human-readable
+explanation for the disabled button's tooltip. <code>cached_epochs</code> are the
+epochs with a loadable checkpoint on disk, restricted to the current
+schedule's range. <code>total_epochs</code> is the run's known epoch count (<code>0</code>
+while a lazy schedule hasn't learned it), bounding the jump target picker.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.TimeTravelJump" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.TimeTravelJump</span>
+
+
+<a href="#nansense.TimeTravelJump" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="BaseException">BaseException</span></code></p>
+
+
+
+        <p>Raised by the session inside a batch to unwind to the restorer.</p>
+<p>A <code>BaseException</code> on purpose: the jump must travel through the user's
+training code (which may contain broad <code>except Exception</code> handlers)
+all the way to the <code>with restorer:</code> block that suppresses it.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.TimeTravelError" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.TimeTravelError</span>
+
+
+<a href="#nansense.TimeTravelError" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="RuntimeError">RuntimeError</span></code></p>
+
+
+
+        <p>A time-travel request that cannot be honored (shown in the UI).</p>
+
+
+
+
+
+
+
+
+
+    </div>
+
+</div><h2 id="frozen-moments">Frozen moments<a class="headerlink" href="#frozen-moments" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="nansense.load_moment" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">nansense.load_moment</span>
+
+
+<a href="#nansense.load_moment" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">load_moment</span><span class="p">(</span>
+    <span class="n">model</span><span class="p">:</span> <span class="n"><span title="torch.nn.Module">Module</span></span><span class="p">,</span>
+    <span class="n">path</span><span class="p">:</span> <span class="n"><span title="pathlib.Path">Path</span></span> <span class="o">|</span> <span class="n"><span title="str">str</span></span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">replay</span><span class="p">:</span> <span class="n"><span title="typing.Callable">Callable</span></span><span class="p">[[</span><span class="n"><span title="torch.nn.Module">Module</span></span><span class="p">,</span> <span class="n"><span title="typing.Any">Any</span></span><span class="p">],</span> <span class="n"><span title="torch.Tensor">Tensor</span></span><span class="p">],</span>
+    <span class="n">port</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">host</span><span class="p">:</span> <span class="n"><span title="str">str</span></span> <span class="o">=</span> <span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span>
+    <span class="n">open_browser</span><span class="p">:</span> <span class="n"><span title="bool">bool</span></span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">input_mean</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_std</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span> <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.MeanStd">MeanStd</span></span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">input_transform</span><span class="p">:</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span>
+    <span class="o">|</span> <span class="n"><span title="dict">dict</span></span><span class="p">[</span><span class="n"><span title="str">str</span></span><span class="p">,</span> <span class="n"><span title="nansense.input_config.InputTransform">InputTransform</span></span><span class="p">]</span>
+    <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" title="nansense.Session (nansense.session.Session)" href="#nansense.Session">Session</a></span>
+</code></pre></div>
+
+    <div class="doc doc-contents first">
+
+        <p>Rebuild a frozen moment around <code>model</code> for browsing or a locked demo.</p>
+<p><code>model</code> must be a fresh instance of the architecture the moment was
+frozen from (validated against the file: parameter names/shapes and the
+discovered layer names must match); its device is kept, and the frozen
+parameters and buffers are loaded into it. <code>replay</code> is the training
+step's forward in miniature — given the model and the stored batch item
+it returns the loss, e.g. <code>lambda m, batch: criterion(m(batch[0]),
+batch[1])</code> — and is run once, here, to regenerate the frozen batch's
+activations and gradients (see the module docstring for why they are not
+stored). The returned session shows exactly the frozen pause — snapshot,
+watch statistics, watched set, and schedule totals — with stats
+collection off (scope <code>"none"</code>), so the numbers sit frozen while every
+view, and experiments, keep working. Nothing trains: the session is a
+viewer. Raises <code>MomentError</code> when the file is unreadable or does not fit
+<code>model</code>.</p>
+<p><code>port</code> / <code>host</code> / <code>open_browser</code> / <code>input_*</code> mirror <code>nansense.start</code> and
+serve the UI immediately when <code>port</code> is given. For a shared deployment,
+follow with <code>session.lock()</code> and <code>session.park()</code> — see
+<code>examples/playground</code> and <code>Session.freeze_moment</code> for the saving side.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.MomentError" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.MomentError</span>
+
+
+<a href="#nansense.MomentError" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="RuntimeError">RuntimeError</span></code></p>
+
+
+
+        <p>A moment file could not be read or does not fit the given model.</p>
+
+
+
+
+
+
+
+
+
+    </div>
+
+</div><h2 id="numerical-debugging">Numerical debugging<a class="headerlink" href="#numerical-debugging" title="Permanent link">&para;</a></h2>
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.DebugSettings" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.DebugSettings</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.DebugSettings" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>User-facing configuration of the debugger (mutated via the gear menu).</p>
+<p><code>interval</code> is the batch cadence (1 = every batch). <code>check_nan_inf</code> scans
+activations and gradients for NaN/Inf; <code>check_under_over</code> watches for
+gradient underflow/overflow, tripping when more than <code>threshold</code> (a
+fraction of summed <code>|grad|</code>) lands in the dtype's subnormal/overflow
+band. The two checks toggle independently; <code>enabled</code> is the master switch.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="nansense.DebugSettings.any_check" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">any_check</span>
+
+
+<a href="#nansense.DebugSettings.any_check" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">any_check</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n"><span title="bool">bool</span></span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Whether at least one check would run (master + one sub-toggle).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.DebugError" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.DebugError</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.DebugError" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>An immutable record of one detected numerical error.</p>
+<p><code>position</code> is the batch the error was detected on.
+<code>reasons</code> is the subset of <code>REASONS</code> that tripped; <code>checks_used</code> is the
+subset of categories that actually ran (so the UI shows only the relevant
+table columns even for an error that tripped just one of them);
+<code>layers</code> are the affected layers, in <code>layer_names</code> order.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="nansense.LayerReport" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">nansense.LayerReport</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#nansense.LayerReport" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+
+
+
+        <p>Per-layer fractions for one detected error (a row in the dialog table).</p>
+<p><code>layer</code> names the affected layer, as shown in the architecture graph.
+<code>nan</code> / <code>inf</code> are fractions of <em>element count</em>; <code>underflow</code> / <code>overflow</code>
+are fractions of the layer's summed <code>|grad|</code>. All in <code>[0, 1]</code>. <code>dtype</code>
+is the gradient dtype the under/overflow band was measured against (its
+<code>finfo.tiny</code> / <code>finfo.max</code> are the band edges), or <code>None</code> when no
+floating-point gradient was scanned for the layer.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../instruments/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Custom metrics &amp; tensors">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Custom metrics & tensors
+              </div>
+            </div>
+          </a>
+        
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy", "navigation.footer", "navigation.top"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/prompt-toggle.js"></script>
+      
+        <script src="../javascripts/playground-embed.js"></script>
+      
+    
+  </body>
+</html>

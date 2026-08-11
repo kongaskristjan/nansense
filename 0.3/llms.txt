@@ -1,0 +1,19 @@
+# NaNsense
+
+> PyTorch debugger: pause training, step batch by batch, and look inside every layer — activations, gradients, weights, optimizer state.
+
+NaNsense is a PyTorch debugger that works inside the live training loop: it pauses training so you can step batch by batch, time-travel to earlier epochs, and inspect the activations, gradients, weights and optimizer state of every layer, plus run interpretability experiments (deep dream, Grad-CAM and other attributions) on the paused model. Each page below also exists as plain Markdown at the listed .md URL. For library internals, see https://github.com/kongaskristjan/nansense/blob/main/INTERNALS.md
+
+## Usage
+
+- [Home](https://kongaskristjan.github.io/nansense/0.3/index.md)
+- [Showcase](https://kongaskristjan.github.io/nansense/0.3/showcase/index.md)
+- [Getting started](https://kongaskristjan.github.io/nansense/0.3/getting-started/index.md)
+- [Integrate with one prompt](https://kongaskristjan.github.io/nansense/0.3/integrate/index.md)
+- [Wiring guide](https://kongaskristjan.github.io/nansense/0.3/wiring/index.md)
+- [UI guide](https://kongaskristjan.github.io/nansense/0.3/ui/index.md)
+
+## API
+
+- [API reference](https://kongaskristjan.github.io/nansense/0.3/api/index.md)
+
