@@ -14,18 +14,18 @@ Live playground Easy: MNIST · LeNet-5 Advanced: Imagenette · ResNet
 
 The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.
 
-[](https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44)
+[](https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4)
 
 *NaNsense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 
-[🕹️ Try the Playground](https://kongaskristjan.github.io/nansense/0.3/playground/index.md) [✨ Integrate with one prompt](https://kongaskristjan.github.io/nansense/0.3/integrate/index.md) [🤖 Debug with a coding agent](https://kongaskristjan.github.io/nansense/0.3/mcp/index.md)
+[🕹️ Try the Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) [✨ Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) [🤖 Debug with a coding agent](https://kongaskristjan.github.io/nansense/dev/mcp/index.md)
 
 Here's how *NaNsense* can help:
 
-- **See what is actually going on.** [Visualize activations and gradients](https://kongaskristjan.github.io/nansense/0.3/showcase/#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](https://kongaskristjan.github.io/nansense/0.3/showcase/#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](https://kongaskristjan.github.io/nansense/0.3/showcase/#simulate-what-a-neuron-is-searching-for-deep-dream).
-- **Spot optimization bottlenecks.** [Discover insufficient receptive fields](https://kongaskristjan.github.io/nansense/0.3/showcase/#measure-the-receptive-field-of-a-neuron), [measure neuron death](https://kongaskristjan.github.io/nansense/0.3/showcase/#investigate-dead-neurons), [discover padding artifacts](https://kongaskristjan.github.io/nansense/0.3/showcase/#padding-artifacts) and [spot gradient underflow](https://kongaskristjan.github.io/nansense/0.3/showcase/#spot-gradient-underflow).
+- **See what is actually going on.** [Visualize activations and gradients](https://kongaskristjan.github.io/nansense/dev/showcase/#visualize-activations-and-gradients-throughout-training), [find image patches with minimal or maximal activation for a given channel](https://kongaskristjan.github.io/nansense/dev/showcase/#minmax-activation-patches) and [simulate what each neuron is searching for (deep dream)](https://kongaskristjan.github.io/nansense/dev/showcase/#simulate-what-a-neuron-is-searching-for-deep-dream).
+- **Spot optimization bottlenecks.** [Discover insufficient receptive fields](https://kongaskristjan.github.io/nansense/dev/showcase/#measure-the-receptive-field-of-a-neuron), [measure neuron death](https://kongaskristjan.github.io/nansense/dev/showcase/#investigate-dead-neurons), [discover padding artifacts](https://kongaskristjan.github.io/nansense/dev/showcase/#padding-artifacts) and [spot gradient underflow](https://kongaskristjan.github.io/nansense/dev/showcase/#spot-gradient-underflow).
 
-The [Showcase](https://kongaskristjan.github.io/nansense/0.3/showcase/index.md) walks through all of these with real screenshots. [Getting started](https://kongaskristjan.github.io/nansense/0.3/getting-started/index.md) runs an example in minutes, the [UI guide](https://kongaskristjan.github.io/nansense/0.3/ui/index.md) tours every page, and the [Wiring guide](https://kongaskristjan.github.io/nansense/0.3/wiring/index.md) adds NaNsense to your own training loop — it's just a few lines of code. It also speaks [MCP](https://kongaskristjan.github.io/nansense/0.3/mcp/index.md), so a coding agent can drive the debugger itself and look at the same views you do.
+The [Showcase](https://kongaskristjan.github.io/nansense/dev/showcase/index.md) walks through all of these with real screenshots. [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) runs an example in minutes, the [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md) tours every page, and the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) adds NaNsense to your own training loop — it's just a few lines of code. It also speaks [MCP](https://kongaskristjan.github.io/nansense/dev/mcp/index.md), so a coding agent can drive the debugger itself and look at the same views you do.
 
 ## How is this different from wandb or TensorBoard?
 
@@ -33,7 +33,7 @@ Loggers record external metrics — the loss and accuracy curves you scroll thro
 
 # Showcase
 
-What NaNsense shows you, with real screenshots from the bundled examples. Every one of these is a few clicks away in the [Playground](https://kongaskristjan.github.io/nansense/0.3/playground/index.md) — no install needed.
+What NaNsense shows you, with real screenshots from the bundled examples. Every one of these is a few clicks away in the [Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) — no install needed.
 
 ## Visualize activations and gradients throughout training
 
@@ -89,7 +89,7 @@ Curious how it works? The repository's [INTERNALS.md](https://github.com/kongask
 
 # Getting started
 
-The fastest way to try NaNsense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add NaNsense to your own training loop instead, paste [one prompt](https://kongaskristjan.github.io/nansense/0.3/integrate/index.md) into your coding agent, or install the library and follow the [Wiring guide](https://kongaskristjan.github.io/nansense/0.3/wiring/index.md) yourself.
+The fastest way to try NaNsense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add NaNsense to your own training loop instead, paste [one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) into your coding agent, or install the library and follow the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) yourself.
 
 ## Run the examples
 
@@ -131,7 +131,7 @@ uv run --group cpu examples/depth_make3d/main.py --nansense-port 8080
 uv run --group cpu examples/multimodal/main.py --nansense-port 8080
 ```
 
-A focused browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar — see the [UI guide](https://kongaskristjan.github.io/nansense/0.3/ui/index.md).
+A focused browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar — see the [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md).
 
 Memory and speed
 
@@ -160,7 +160,7 @@ for epoch in session.epochs(50):
 session.close()
 ```
 
-The [Wiring guide](https://kongaskristjan.github.io/nansense/0.3/wiring/index.md) walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training — or let a coding agent do the wiring via [Integrate with one prompt](https://kongaskristjan.github.io/nansense/0.3/integrate/index.md).
+The [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training — or let a coding agent do the wiring via [Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md).
 
 # Integrate with one prompt
 
@@ -187,13 +187,13 @@ Gate NaNsense behind a `--debugger-port PORT` flag, so it stays a zero-overhead 
 
 ## Prefer to look first?
 
-- The [Wiring guide](https://kongaskristjan.github.io/nansense/0.3/wiring/index.md) shows the exact code the prompt produces, for raw PyTorch and PyTorch Lightning — plus time travel, input display and distributed training.
-- [Getting started](https://kongaskristjan.github.io/nansense/0.3/getting-started/index.md) runs a bundled example on your machine, without touching your project.
-- The [Playground](https://kongaskristjan.github.io/nansense/0.3/playground/index.md) is a trained network you can inspect right in the browser, no install at all.
+- The [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) shows the exact code the prompt produces, for raw PyTorch and PyTorch Lightning — plus time travel, input display and distributed training.
+- [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) runs a bundled example on your machine, without touching your project.
+- The [Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) is a trained network you can inspect right in the browser, no install at all.
 
 # Wiring guide
 
-Adding NaNsense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the [API reference](https://kongaskristjan.github.io/nansense/0.3/api/index.md). Prefer not to do it by hand? [Integrate with one prompt](https://kongaskristjan.github.io/nansense/0.3/integrate/index.md) has a copy-paste prompt for your coding agent.
+Adding NaNsense to a training loop is a few lines of code. This page covers raw PyTorch and PyTorch Lightning; the full argument reference lives in the [API reference](https://kongaskristjan.github.io/nansense/dev/api/index.md). Prefer not to do it by hand? [Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) has a copy-paste prompt for your coding agent.
 
 ## Wire it into your loop: raw PyTorch
 
@@ -232,22 +232,22 @@ session.close()
 
 The pieces:
 
-- [`nansense.start(model, ...)`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.start) creates the [`Session`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.Session) and, when `port=` is given, serves the UI. Pass `optimizer=` to get per-parameter optimizer state and live hyperparameters on the weights page, and `scheduler=` so time travel restores the LR schedule.
-- [`session.batches(loader, phase=...)`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.Session.batches) wraps each phase's dataloader — this is where NaNsense pauses, steps and captures.
-- [`session.close()`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.Session.close) marks training finished; the served page stays up for post-mortem browsing.
+- [`nansense.start(model, ...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.start) creates the [`Session`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session) and, when `port=` is given, serves the UI. Pass `optimizer=` to get per-parameter optimizer state and live hyperparameters on the weights page, and `scheduler=` so time travel restores the LR schedule.
+- [`session.batches(loader, phase=...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session.batches) wraps each phase's dataloader — this is where NaNsense pauses, steps and captures.
+- [`session.close()`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session.close) marks training finished; the served page stays up for post-mortem browsing.
 - `enabled=False` makes the whole session a near-zero-overhead no-op, so you can leave the wiring in place and switch the UI off with one flag.
 
-To serve the UI separately from session creation (or pick a custom uvicorn log level), omit `port` and call [`nansense.serve(session, port=...)`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.serve) yourself.
+To serve the UI separately from session creation (or pick a custom uvicorn log level), omit `port` and call [`nansense.serve(session, port=...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.serve) yourself.
 
 ### Time travel
 
-Time travel needs an epoch cache: drive the epoch loop with [`for epoch in session.epochs(N, cache_dir=...)`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.Session.epochs) (default `.nansense_cache`) and wrap each iteration's body in [`with session.restore_point():`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.Session.restore_point) as shown above. Each epoch start is checkpointed to disk — model, optimizer, scheduler and RNG state — and a UI-requested jump unwinds the loop body and re-enters it at the chosen epoch.
+Time travel needs an epoch cache: drive the epoch loop with [`for epoch in session.epochs(N, cache_dir=...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session.epochs) (default `.nansense_cache`) and wrap each iteration's body in [`with session.restore_point():`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session.restore_point) as shown above. Each epoch start is checkpointed to disk — model, optimizer, scheduler and RNG state — and a UI-requested jump unwinds the loop body and re-enters it at the chosen epoch.
 
 ### The schedule
 
 The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate `session.batches`, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass `phases={"train": a, "val": b}` to `start()` if you want that precision from the very first epoch — an optional up-front declaration, usually just `len(loader)` per phase. Every bundled example declares it this way, and the PyTorch Lightning integration does it for you from the trainer's dataloaders.
 
-A declared schedule is also validated: an unseen phase name, or more batches than declared, raises instead of passing silently. That is what you want when the counts are known up front, but it means a phase that does not run every epoch (validating every N epochs, say) should be re-declared with [`session.set_schedule(phases=...)`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.Session.set_schedule) rather than pinned once.
+A declared schedule is also validated: an unseen phase name, or more batches than declared, raises instead of passing silently. That is what you want when the counts are known up front, but it means a phase that does not run every epoch (validating every N epochs, say) should be re-declared with [`session.set_schedule(phases=...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session.set_schedule) rather than pinned once.
 
 ## Wire it into your loop: PyTorch Lightning
 
@@ -268,7 +268,7 @@ trainer_factory = lambda: L.Trainer(max_epochs=50)
 fit_with_time_travel(trainer_factory, module, datamodule=datamodule, callback=callback)
 ```
 
-Attach a [`NansenseCallback(model="<attr path to the network>", ...)`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.lightning.NansenseCallback) to your trainer and run the fit through [`fit_with_time_travel`](https://kongaskristjan.github.io/nansense/0.3/api/#nansense.lightning.fit_with_time_travel), which owns the jump-and-replay loop. The callback accepts the same `port` / `host` / `open_browser` / `enabled` / `input_mean` / `input_std` / `input_transform` arguments as `start`.
+Attach a [`NansenseCallback(model="<attr path to the network>", ...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.lightning.NansenseCallback) to your trainer and run the fit through [`fit_with_time_travel`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.lightning.fit_with_time_travel), which owns the jump-and-replay loop. The callback accepts the same `port` / `host` / `open_browser` / `enabled` / `input_mean` / `input_std` / `input_transform` arguments as `start`.
 
 ## Displaying inputs correctly
 
@@ -294,7 +294,7 @@ When a session starts, NaNsense serves a web page and pauses on the first batch.
 
 You drive the run from the top bar: **Step Batch** advances one batch, **Run** runs to the end and then pauses, and **Stop** pauses a free-running session. The dropdown next to Step Batch steps a whole phase, a whole epoch, or up to a custom position.
 
-**Time Travel** jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a [restorer](https://kongaskristjan.github.io/nansense/0.3/wiring/#time-travel), which checkpoints each epoch start to disk.
+**Time Travel** jumps back to the start of any cached epoch. It is enabled once the training loop is wrapped in a [restorer](https://kongaskristjan.github.io/nansense/dev/wiring/#time-travel), which checkpoints each epoch start to disk.
 
 **Refresh** pulls a fresh snapshot while training free-runs, without pausing it. The settings dialog (gear icon) sets the automatic *Update frequency* — how often views refresh during Run — plus the [recording and snapshot](#recording-videos-and-snapshots) and [numerical debugging](#numerical-debugging) options.
 
@@ -308,19 +308,19 @@ Each card renders one strip per tensor: a row of per-channel images on a shared 
 
 ## The input panel
 
-The right sidebar controls which input the layer views are computed from. A model with several inputs gets an **Input** dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an `input_transform` to display (see the [Wiring guide](https://kongaskristjan.github.io/nansense/0.3/wiring/#displaying-inputs-correctly)), and a flat `(N, C)` input shows as a clickable per-feature strip. **Select sample in batch** picks which sample of the current batch to show.
+The right sidebar controls which input the layer views are computed from. A model with several inputs gets an **Input** dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an `input_transform` to display (see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/#displaying-inputs-correctly)), and a flat `(N, C)` input shows as a clickable per-feature strip. **Select sample in batch** picks which sample of the current batch to show.
 
 The views follow the live training batch by default; **Pin** freezes the current batch as a fixed input that NaNsense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. **Forward mode** (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.
 
-**Perturb** lets you click pixels to edit the input; NaNsense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you [measure a receptive field](https://kongaskristjan.github.io/nansense/0.3/showcase/#measure-the-receptive-field-of-a-neuron).
+**Perturb** lets you click pixels to edit the input; NaNsense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you [measure a receptive field](https://kongaskristjan.github.io/nansense/dev/showcase/#measure-the-receptive-field-of-a-neuron).
 
 ## The stats page
 
 Open a watched layer's **stats view** for a closer look at its distributions over the epoch. The page has three views, switchable per layer:
 
-**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](https://kongaskristjan.github.io/nansense/0.3/showcase/#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](https://kongaskristjan.github.io/nansense/0.3/showcase/#spot-gradient-underflow); it is pre-checked when a numerical warning is active.
+**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](https://kongaskristjan.github.io/nansense/dev/showcase/#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](https://kongaskristjan.github.io/nansense/dev/showcase/#spot-gradient-underflow); it is pre-checked when a numerical warning is active.
 
-**Min/max** is a gallery of the input patches that drove each channel to its most extreme responses — see the [showcase](https://kongaskristjan.github.io/nansense/0.3/showcase/#minmax-activation-patches).
+**Min/max** is a gallery of the input patches that drove each channel to its most extreme responses — see the [showcase](https://kongaskristjan.github.io/nansense/dev/showcase/#minmax-activation-patches).
 
 **Graphs** plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a **Weights** section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.
 
@@ -338,7 +338,7 @@ Per-axis controls choose which tensor axes map to X, Y and tile, so any weight s
 
 Note
 
-Weight *gradients* are read when a batch exits, so keep `optimizer.zero_grad()` at the start of your batch body — zeroing after `step()` would leave the gradient views empty (see the [Wiring guide](https://kongaskristjan.github.io/nansense/0.3/wiring/#wire-it-into-your-loop-raw-pytorch)).
+Weight *gradients* are read when a batch exits, so keep `optimizer.zero_grad()` at the start of your batch body — zeroing after `step()` would leave the gradient views empty (see the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/#wire-it-into-your-loop-raw-pytorch)).
 
 ## The experiment page
 
@@ -954,7 +954,7 @@ Live from `channel_hists` while the per-channel histogram exists; the count stor
 
 ## Custom instruments
 
-See the [Custom metrics & tensors guide](https://kongaskristjan.github.io/nansense/0.3/instruments/index.md) for usage; the registration decorators live on the session (`Session.watch_metric`, `Session.watch_layer_tensor`, `Session.watch_weight_tensor` above).
+See the [Custom metrics & tensors guide](https://kongaskristjan.github.io/nansense/dev/instruments/index.md) for usage; the registration decorators live on the session (`Session.watch_metric`, `Session.watch_layer_tensor`, `Session.watch_weight_tensor` above).
 
 ## nansense.LayerContext
 
