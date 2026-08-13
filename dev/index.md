@@ -6,7 +6,7 @@ Live playground Easy: MNIST · LeNet-5 Advanced: Imagenette · ResNet
 
 The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.
 
-[](https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44)
+[](https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4)
 
 *NaNsense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 
