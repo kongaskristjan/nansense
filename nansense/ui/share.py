@@ -32,14 +32,14 @@ from nansense.session import Session
 
 #: The demo video, hosted as a GitHub asset — the same file the README and the
 #: docs home page play as their hero (`tests/nansense/ui/test_share.py` keeps
-#: the three in sync). 1280x720 webm, ~9 MB.
+#: the three in sync). 1920x1080 mp4, ~10 MB.
 _VIDEO_URL: str = (
-    "https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44"
+    "https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4"
 )
 #: Where the app re-serves that video from its own origin (see
 #: `add_video_download_route`), and the name the browser saves it under.
-VIDEO_DOWNLOAD_PATH: str = "/nansense/share-video.webm"
-_VIDEO_FILENAME: str = "nansense.webm"
+VIDEO_DOWNLOAD_PATH: str = "/nansense/share-video.mp4"
+_VIDEO_FILENAME: str = "nansense.mp4"
 _VIDEO_TIMEOUT_S: float = 30.0
 _VIDEO_CHUNK: int = 256 * 1024
 
@@ -223,7 +223,7 @@ def add_video_download_route(app: FastAPI) -> None:
         if length is not None:
             headers["Content-Length"] = length
         return StreamingResponse(
-            _stream(upstream), media_type="video/webm", headers=headers
+            _stream(upstream), media_type="video/mp4", headers=headers
         )
 
 

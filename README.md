@@ -4,7 +4,7 @@
 
 <p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
 
-https://github.com/user-attachments/assets/d7ee7ecc-4828-4655-866d-a220174c2b44
+https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4
 
 <p align="center"><em>The main NaNsense UI: click layers to see activations and gradients, measure receptive fields, collect per-channel statistics, and run deep dream mid-training.</em></p>
 

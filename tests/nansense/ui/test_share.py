@@ -292,7 +292,7 @@ def test_the_download_route_streams_the_video_as_an_attachment(
 ) -> None:
     """The app re-serves the remote video from its own origin with the
     `Content-Disposition` that makes the browser save it."""
-    payload = b"webm-bytes" * 100
+    payload = b"mp4-bytes" * 100
     monkeypatch.setattr(
         share, "urlopen", lambda url, timeout: _FakeUpstream(payload)
     )
@@ -301,7 +301,7 @@ def test_the_download_route_streams_the_video_as_an_attachment(
     with TestClient(app) as client:
         response = client.get(VIDEO_DOWNLOAD_PATH)
     assert response.status_code == 200
-    assert response.headers["content-type"] == "video/webm"
+    assert response.headers["content-type"] == "video/mp4"
     assert (
         response.headers["content-disposition"]
         == f'attachment; filename="{_VIDEO_FILENAME}"'
