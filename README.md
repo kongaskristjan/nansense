@@ -6,7 +6,13 @@
 
 https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4
 
-<p align="center"><em>The main NaNsense UI: click layers to see activations and gradients, measure receptive fields, collect per-channel statistics, and run deep dream mid-training.</em></p>
+<p align="center"><em>Cut from a real training run — one channel at four depths across every epoch, deep dream building a neuron's favourite picture out of noise, and a single changed input pixel spreading outwards to measure the receptive field.</em></p>
+
+<p align="center">
+  <img src="docs/images/readme_hero.png" alt="The NaNsense main view: architecture graph on the left, layer cards showing activations and gradients in the centre, input panel on the right">
+</p>
+
+<p align="center"><em>And where you do it: click a layer in the architecture graph to open its card — activations above, gradients below, one image per channel. The top bar steps batches and time-travels between epochs; the right pane chooses, pins and perturbs the input every view is computed from.</em></p>
 
 - 🕹️ **[Try the Playground](https://kongaskristjan.github.io/nansense/dev/playground/)** — inspect a trained network in your browser, no install
 - ✨ **[Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/)** — a coding agent wires it into your training loop
