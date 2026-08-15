@@ -225,8 +225,15 @@ def sync_batch_control(
         with session._cv:
             removed = session._watched_layers - set(new_watched)
             session._watched_layers = set(new_watched)
-        for name in removed:
-            session._watch_accumulator.forget_layer(name)
+            # Same rule as `Session.unwatch`: the buckets go only under the
+            # `watched` scope, where leaving the set also stops the layer
+            # collecting. Under `all` the leader keeps its bucket and keeps
+            # folding the layer in, so a follower that dropped its own would
+            # contribute a restarted-from-zero shard to the next reduce.
+            collection_scoped = str(session._stats_scope) == "watched"
+        if collection_scoped:
+            for name in removed:
+                session._watch_accumulator.forget_layer(name)
     return flag, recv_jump
 
 

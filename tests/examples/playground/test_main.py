@@ -144,6 +144,14 @@ def test_serve_reseeds_the_watched_cards_from_the_spec(tmp_path: Path) -> None:
         port=None,
     )
     assert session.watched_layers == frozenset({"conv2"})
+    # Re-seeding drops `relu1` from the shown cards, but the moment's frozen
+    # history for it must survive: a parked demo has no batches left to
+    # re-collect it, so an unwatch that also forgot the buckets would leave
+    # the layer's GRAPHS view permanently empty.
+    dropped_from_seed = set(spec.shown_layers) - set(served.shown_layers)
+    assert dropped_from_seed
+    for name in dropped_from_seed:
+        assert session.stats_phases(name) == frozenset({"train", "val"})
     # Demo preferences armed ahead of the lock: experiments wait for a
     # manual Run, and the spec's deep-dream form defaults rode along.
     assert session.auto_run_experiments is False
@@ -170,7 +178,14 @@ def test_serve_reseeds_the_watched_cards_from_the_spec(tmp_path: Path) -> None:
         assert (position.phase, position.epoch) == ("train", _EPOCHS - 1)
         assert position.batch_idx == _BATCHES - 1
         # The prepare run collected stats for every layer, not just the seed.
+        # `stats_layers` alone cannot show this — the locked scope is `all`,
+        # which reports every name whether or not a bucket backs it — so
+        # check the frozen history each layer actually carries.
         assert session.stats_layers == frozenset(session.layer_names)
+        assert all(
+            session.stats_phases(name) == frozenset({"train", "val"})
+            for name in session.layer_names
+        )
         # The frozen snapshot is a train batch: gradients are populated.
         snapshot = session.snapshot
         assert snapshot is not None and snapshot.activation_gradients

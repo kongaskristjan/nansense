@@ -294,8 +294,10 @@ def open_showcase(
         session.set_experiment_defaults(steps=spec.dream_steps)
     if spec.dream_channels is not None:
         session.set_experiment_defaults(channels=spec.dream_channels)
-    # Scope is `all` (restored from the moment), so the watched set only
-    # picks which cards new tabs show first — never what collects stats.
+    # `load_moment` parks under scope `none` (and `lock()` below pins `all`),
+    # so the watched set here only picks which cards new tabs show first —
+    # re-seeding it leaves every frozen bucket intact, and a layer dropped
+    # from `shown_layers` keeps the run history the moment froze for it.
     for name in session.watched_layers - set(spec.shown_layers):
         session.unwatch(name)
     for name in spec.shown_layers:

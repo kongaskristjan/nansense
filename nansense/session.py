@@ -766,14 +766,28 @@ class Session:
         return True
 
     def unwatch(self, layer: str) -> None:
-        """Stop watching `layer` and drop any stats already collected for it."""
+        """Stop showing `layer`, dropping its stats only if it stops collecting.
+
+        Under the default `WATCHED` scope the watched set *is* the collection
+        set, so the layer's buckets go with it — the next batch's
+        `retain_layers` pass would reap them anyway, and dropping here frees
+        the memory promptly. Under `ALL` and `NONE` the watched set only picks
+        which cards the UI shows, so the buckets stay: `ALL` keeps collecting
+        the layer regardless, and `NONE` promises every already-collected
+        bucket stays frozen and browsable (`stats_layers`). Dropping them
+        there would silently destroy history nothing can rebuild — a restored
+        moment (`load_moment` parks under `NONE`) has no batches left to
+        re-collect it.
+        """
         if self._locked:
             return
         with self._cv:
             self._watched_layers.discard(layer)
             self._watch_version += 1
-        self._watch_accumulator.forget_layer(layer)
-        self._instruments.forget_layer(layer)
+            collection_scoped = self._stats_scope is StatsScope.WATCHED
+        if collection_scoped:
+            self._watch_accumulator.forget_layer(layer)
+            self._instruments.forget_layer(layer)
 
     def watch_metric(
         self,

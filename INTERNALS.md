@@ -362,10 +362,17 @@ capture-mode cost above disappears) and the `_update_watch_stats` call at
 `__exit__` (so even a capture batch, which installs hooks for its snapshot,
 folds nothing in); cards stay visible and keep rendering from the published
 snapshot while the running aggregates freeze. Narrowing to `"watched"`
-drops the buckets of layers outside the watched set (the same semantics as
-unwatching them); `Session.stats_layers` — the `/stats` page's selectable
-universe — is the collecting set plus every layer with retained buckets, so
-`"none"` keeps previously collected layers browsable. In distributed runs
+drops the buckets of layers outside the watched set — the same semantics as
+unwatching them *under that scope*: `unwatch` forgets a layer's buckets
+only while `"watched"` is in force, because that is the only scope where
+leaving the watched set also stops the layer collecting. Under `"all"` the
+next batch would re-collect it anyway (so forgetting just resets its
+history), and under `"none"` nothing is left to re-collect it at all — a
+restored moment parks under `"none"`, so an unconditional drop would erase
+run history the file froze (see the playground's card re-seed in
+`examples/playground/main.py`). `Session.stats_layers` — the `/stats`
+page's selectable universe — is the collecting set plus every layer with
+retained buckets, so `"none"` keeps previously collected layers browsable. In distributed runs
 the scope rides the per-batch control broadcast (followers mirror it and
 accumulate the same buckets), and `sync_batch_control` only sets the
 leader's reduce flag when `publish` and some layer is collecting.
@@ -615,8 +622,9 @@ error (`Session.instrument_errors`, shown under the GRAPHS plots, one
 console line), and never touches the training thread's health. Collected
 data outlives the disable.
 
-Lifecycle mirrors the accumulator: `unwatch`/`retain_layers` drop a layer's
-series, time travel drops `epoch >=` buckets and additionally calls the
+Lifecycle mirrors the accumulator: `unwatch` (under the `watched` scope
+only) and `retain_layers` drop a layer's series, time travel drops
+`epoch >=` buckets and additionally calls the
 optional `on_rewind(epoch)` hook on stateful callables (state from the
 abandoned timeline must not leak into the replay). Frozen moments store the
 *reduced* snapshot (`InstrumentManager.state_dict` — a callable reduce
@@ -746,7 +754,8 @@ on the training thread:
    accumulates the same buckets), and its armed time-travel target. On a
    version change, a follow-up object broadcast carries the
    watched-layer list; followers apply it, dropping buckets of unwatched
-   layers like `Session.unwatch` does. The version advances in lockstep
+   layers exactly like `Session.unwatch` does — under the `watched` scope
+   only, so a follower never restarts a shard the leader is still folding. The version advances in lockstep
    on every rank, so "changed since the last batch" is a decision each
    rank makes identically and the object broadcast stays collective.
    This is also the pacing point: a paused leader holds every follower

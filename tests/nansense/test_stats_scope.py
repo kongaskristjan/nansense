@@ -100,3 +100,60 @@ def test_unknown_scope_raises() -> None:
     session, _model = make_session()
     with pytest.raises(ValueError):
         session.set_stats_scope("everything")
+
+
+@pytest.mark.parametrize(
+    ("scope", "keeps_buckets"),
+    [
+        # The watched set *is* the collection set: unwatching stops the layer
+        # collecting, so its buckets go too.
+        (StatsScope.WATCHED, False),
+        # The watched set only picks which cards the UI shows: `ALL` keeps
+        # collecting the layer, and `NONE` promises frozen buckets stay
+        # browsable — dropping either would destroy history nothing rebuilds.
+        (StatsScope.ALL, True),
+        (StatsScope.NONE, True),
+    ],
+)
+def test_unwatch_drops_buckets_only_when_the_scope_follows_the_watched_set(
+    scope: StatsScope, keeps_buckets: bool
+) -> None:
+    session, model = make_session(epochs=1, phases={"train": 1})
+    session.watch("fc1")
+    session.watch_metric("m")(lambda ctx: 1.0)
+    session.detach()
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+    key = ("fc1", "train", 0)
+    assert key in session.watch_snapshot().stats
+    assert session.watch_metrics_snapshot().plots("fc1", "train")
+
+    session.set_stats_scope(scope)
+    session.unwatch("fc1")
+
+    assert session.watched_layers == frozenset()
+    assert (key in session.watch_snapshot().stats) is keeps_buckets
+    assert bool(session.watch_metrics_snapshot().plots("fc1", "train")) is keeps_buckets
+    expected_phases = frozenset({"train"}) if keeps_buckets else frozenset()
+    assert session.stats_phases("fc1") == expected_phases
+    session.close()
+
+
+def test_unwatching_under_scope_none_keeps_the_layer_browsable() -> None:
+    """The bug a restored moment hits: `load_moment` parks under `NONE`, so
+    re-seeding the shown cards must not delete the run history it froze —
+    with no batches left, nothing can re-collect it."""
+    session, model = make_session(epochs=1, phases={"train": 2})
+    session.set_stats_scope("all")
+    session.detach()
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+    session.watch("fc1")
+
+    session.set_stats_scope("none")
+    session.unwatch("fc1")
+
+    snap = session.watch_snapshot()
+    assert {key[0] for key in snap.stats} == set(_TINYNET_LAYERS)
+    assert session.stats_phases("fc1") == frozenset({"train"})
+    session.close()

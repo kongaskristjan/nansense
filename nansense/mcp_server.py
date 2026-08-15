@@ -684,7 +684,12 @@ def build_server(
 
     @server.tool()
     async def unwatch_layers(layers: list[str]) -> dict[str, Any]:
-        """Stop watching these layers and drop the statistics collected for them."""
+        """Stop watching these layers, dropping the stats they stop collecting.
+
+        Under the default "watched" scope the statistics collected for them go
+        too; under "all" or "none" the watched set only picks which cards the
+        UI shows, so their buckets stay browsable.
+        """
         refusal = _settings_refusal(session)
         if refusal is not None:
             return refusal
