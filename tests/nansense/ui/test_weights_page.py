@@ -8,12 +8,15 @@ import asyncio
 import pytest
 import torch
 
+from nicegui import ui
 from nicegui.element import Element
 
 from nansense.session import Session
+from nansense.ui.top_bar import _TOP_BAR_CLASSES
 from nansense.ui.weights_page import (
     _NO_GRADIENT_HTML,
     _axes_anchor_param,
+    _build_weights_page,
     _compute_snapshot_renders,
     _default_roles,
     _PanelRender,
@@ -22,6 +25,7 @@ from nansense.ui.weights_page import (
 )
 from tests.nansense.helpers import _make_snapshot, make_session
 from tests.nansense.ui.test_common import _tooltip_texts
+from tests.nansense.ui.test_top_bar import _descendants
 
 
 @pytest.mark.parametrize(
@@ -187,6 +191,36 @@ def test_weight_strip_marker_carries_descriptive_tooltip() -> None:
     texts = _tooltip_texts(weight_row)
     assert "The parameter's current values" in texts
     assert "Weight" not in texts
+
+
+def test_heading_sits_below_the_top_bar_without_the_layer() -> None:
+    """The top bar holds controls only, and the heading doesn't repeat the layer.
+
+    Every other page keeps its name out of the bar (Stats and Experiment
+    title their control pane instead), and each panel below is headed by a
+    parameter name that already carries the layer.
+    """
+    session, _model = make_session()
+    layer = next(name for name, weights in session.layer_weights.items() if weights)
+    with ui.element("div") as root:
+        _build_weights_page(session, layer)
+
+    bar = next(
+        element
+        for element in _descendants(root)
+        if set(_TOP_BAR_CLASSES.split()) <= set(element._classes)
+    )
+    bar_labels = [
+        element.text for element in _descendants(bar) if isinstance(element, ui.label)
+    ]
+    assert not any("Weights" in text for text in bar_labels)
+
+    headings = [
+        element
+        for element in _descendants(root)
+        if isinstance(element, ui.label) and element.text.startswith("Weights")
+    ]
+    assert [element.text for element in headings] == ["Weights"]
 
 
 def test_weight_graphs_href_carries_view_scroll_and_watch() -> None:

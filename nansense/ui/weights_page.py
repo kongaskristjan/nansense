@@ -107,6 +107,9 @@ def _build_weights_page(session: Session, layer: str) -> None:
     remap which tensor axes become the X / Y / tiling axes and pins the rest
     by index.
     """
+    # The layer stays in the browser tab title, where it's the only thing
+    # telling two open weight pages apart; the page's own heading drops it
+    # (the panels below are headed by parameter names that carry it).
     title = f"Weights · {layer}" if layer else "Weights"
     _page_scaffold(title)
     ui.add_head_html(_STRIP_MARKER_CSS)
@@ -148,9 +151,6 @@ def _build_weights_page(session: Session, layer: str) -> None:
             # never needs re-syncing.
             _back_button(layer if session.locked else None)
             _refresh_button(session)
-            ui.label(title).classes(
-                "font-mono text-base font-bold ml-2 truncate max-w-64"
-            )
             _add_step_controls(session, step_until_custom)
             if layer in session.layer_names and weight_names:
                 # A real anchor (href, not an `on_click` navigate) so
@@ -174,6 +174,11 @@ def _build_weights_page(session: Session, layer: str) -> None:
         with ui.column().classes(
             "w-full grow min-h-0 overflow-auto p-4 gap-4 bg-slate-200"
         ):
+            # The heading titles the page from below the top bar, the way
+            # Stats and Experiment title their control panes — the top bar
+            # itself stays all controls. The layer isn't repeated here: every
+            # panel below is headed by a parameter name that carries it.
+            ui.label("Weights").classes("font-mono text-base font-bold")
             if layer not in session.layer_names:
                 _weights_placeholder(f"Unknown layer {layer!r}.")
             elif not weight_names:
