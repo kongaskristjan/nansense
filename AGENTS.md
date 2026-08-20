@@ -18,7 +18,9 @@
 
 ## Prompts
 
-- If the user request is unclear, ask questions instead of proceeding to implement
+- Ask questions before instead of guessing, especially with
+  - UX decisions
+  - library architecture, that may have future impact on refactorability
 
 ## Worktrees
 
@@ -44,6 +46,9 @@
 
 - Consider moving files to subdirectories if a large number of files appear in `lib/` or `tests/`
 - Proactively refactor clearly redundant or suboptimal code. Refactor big functions into smaller ones if reasonable.
+- Avoid verbosity in
+  - comments
+  - tests. Avoid overlapping tests just because of "more testing" of same feature
 
 ## Type hints
 
