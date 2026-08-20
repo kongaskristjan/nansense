@@ -80,6 +80,9 @@ EXPERIMENT_KINDS: dict[str, str] = {
 _MODULE_KINDS = frozenset({"gradcam", "neuron_gradient", "neuron_ig"})
 
 # How many intermediate publishes a deep-dream run spreads over its steps.
+# The starting image publishes as step 0 on top of these, so a run streams
+# `_PUBLISH_COUNT` + 1 frames in all: the picture before the ascent, and the
+# ascent.
 _PUBLISH_COUNT: int = 20
 
 # Default count for deep dream channels and the Captum input batch — a cap a
@@ -201,11 +204,12 @@ _ZOOM_PARAM = ExperimentParam(
     step=0.01,
     tooltip="Zoom into the centre a little each step (1 = no zoom)",
 )
-# Deep dream publishes `_PUBLISH_COUNT` evenly spaced snapshots of a run by
-# default — enough for a page that only ever draws the freshest one, and far
-# fewer CPU copies than one per step. This knob publishes every step instead,
-# which is what a recorded run (`ExperimentRequest.video`) needs to replay the
-# ascent frame by frame rather than in ~20 jumps.
+# Deep dream publishes the starting image and then `_PUBLISH_COUNT` evenly
+# spaced snapshots of a run by default — enough for a page that only ever
+# draws the freshest one, and far fewer CPU copies than one per step. This
+# knob publishes every step instead, which is what a recorded run
+# (`ExperimentRequest.video`) needs to replay the ascent frame by frame
+# rather than in ~20 jumps.
 _ALL_STEPS_PARAM = ExperimentParam(
     "all_steps",
     "Publish every step",
@@ -939,10 +943,12 @@ def _run_deep_dream(
     behaves comparably across layers and channels. `reference` (the shown
     input) is carried only for the current-batch start; noise has none.
 
-    Progress publishes at `_PUBLISH_COUNT` evenly spaced steps, or at every
-    step under the `all_steps` knob — the difference between a recorded run
+    Progress publishes at step 0 — the untouched starting image — and then at
+    `_PUBLISH_COUNT` evenly spaced steps, or at every step under the
+    `all_steps` knob: the difference between a recorded run
     (`ExperimentRequest.video`) that skips through the ascent and one that
-    replays all of it.
+    replays all of it. Either way the first frame is the one nothing has
+    happened to yet.
     """
     p = request.params
     steps = max(1, int_param(p, "steps", 300))
@@ -998,7 +1004,19 @@ def _run_deep_dream(
         # batch (noise has nothing meaningful to show); all channels share it.
         if from_sample:
             reference = x[:1].detach().cpu()
-        objective_value = 0.0
+        # Step 0 is the image the ascent has not touched yet — the noise it
+        # starts from, or the sample it starts from. It is published like any
+        # other progress frame because it is the run's own baseline: without
+        # it the earliest frame anyone can see is already `publish_every`
+        # steps up the climb, and a viewer has to take the starting point on
+        # trust. Its objective is measured rather than assumed, so the series
+        # a caller reads back begins at the value the run actually set out
+        # from and "did this climb?" is a comparison against the start.
+        with torch.no_grad():
+            objective_value = float(
+                _channels_objective(_target_activation(session, x, request.layer))
+            )
+        yield partial(x, 0, objective_value, done=False)
         step_done = 0
         for step in range(steps):
             if should_abort():

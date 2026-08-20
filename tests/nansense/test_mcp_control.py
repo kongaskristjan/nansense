@@ -366,7 +366,8 @@ def test_a_recorded_deep_dream_returns_the_video_of_its_ascent(
         assert path.exists() and path.suffix == ".mp4"
         assert "fps" in view["video_hint"]
         with av.open(str(path)) as container:
-            assert sum(1 for _ in container.decode(video=0)) == 6
+            # Six steps, and the image before the first of them.
+            assert sum(1 for _ in container.decode(video=0)) == 7
 
 
 def test_a_video_of_a_captum_method_is_refused_with_the_reason(

@@ -299,7 +299,9 @@ class ExperimentClip:
     (unlike a browser watching the page stream) see only whatever result was
     published the moment they polled; the run's `all_steps` knob turns the
     ~20 evenly spaced publishes into one per step, so the clip can show every
-    frame the ascent produced.
+    frame the ascent produced. The first frame is always the step-0 publish —
+    the image before the ascent touched it — so a clip opens on where the run
+    started rather than on where it had already got to.
 
     Frames are rendered and encoded inline on the training thread as they
     arrive. That keeps the memory flat — one frame at a time, never a run's

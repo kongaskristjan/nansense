@@ -341,36 +341,80 @@ def test_deep_dream_works_on_vector_input() -> None:
 # --- progress cadence and recorded runs -------------------------------
 
 
-def _published_steps(session: Session, **params: object) -> list[int]:
-    """The `step` of every result one deep-dream run publishes."""
-    steps: list[int] = []
+def _published_results(
+    session: Session, **params: object
+) -> tuple[int, list[experiments.ExperimentResult]]:
+    """One deep-dream run's `seq` and every result it published, in order."""
+    results: list[experiments.ExperimentResult] = []
     original = experiments._publish_experiment
 
     def spy(target: Session, result: experiments.ExperimentResult) -> None:
-        steps.append(result.step)
+        results.append(result)
         original(target, result)
 
     with mock.patch.object(experiments, "_publish_experiment", spy):
-        session.request_experiment(
+        seq = session.request_experiment(
             kind="deep_dream", layer="conv", params=_dream_params(**params)
         )
         assert session.wait_for_experiment(timeout=20)
-    return steps
+    return seq, results
+
+
+def _published_steps(session: Session, **params: object) -> list[int]:
+    """The `step` of every result one deep-dream run publishes."""
+    return [result.step for result in _published_results(session, **params)[1]]
 
 
 def test_deep_dream_publishes_a_sample_of_its_steps_by_default() -> None:
-    """~`_PUBLISH_COUNT` snapshots of the ascent, not one per step: the page
-    only ever draws the freshest, so the rest are copies nobody sees."""
+    """The starting image, then ~`_PUBLISH_COUNT` snapshots of the ascent —
+    not one per step: the page only ever draws the freshest, so the rest are
+    copies nobody sees."""
     with _paused_session() as (session, _):
         steps = _published_steps(session, steps=40)
-        assert steps == [2 * n for n in range(1, 21)]
+        assert steps == [0, *(2 * n for n in range(1, 21))]
 
 
 def test_all_steps_publishes_every_step() -> None:
     """The knob that makes a recorded run replay the whole ascent."""
     with _paused_session() as (session, _):
         steps = _published_steps(session, steps=40, all_steps=True)
-        assert steps == list(range(1, 41))
+        assert steps == list(range(0, 41))
+
+
+def test_deep_dream_publishes_its_starting_noise_untouched() -> None:
+    """Step 0 is the picture before the ascent, not one publish interval into
+    it — which is what makes "this was built out of noise" something a viewer
+    is shown rather than something they are asked to take on trust."""
+    with _paused_session() as (session, _):
+        seq, results = _published_results(session, steps=8, start="noise")
+        first = results[0]
+        assert first.step == 0 and not first.done and first.image is not None
+        # The same noise `_dream_start` draws for this seq, with nothing done
+        # to it: no step, no jitter, no diffusion, no clamp.
+        request = experiments.ExperimentRequest(
+            "deep_dream", "conv", _dream_params(start="noise"), seq
+        )
+        expected = experiments._dream_start(
+            session, request, torch.Generator().manual_seed(seq), 4
+        )
+        assert isinstance(expected, Tensor)
+        assert torch.equal(first.image, expected)
+        # And the ascent moved off it.
+        last = results[-1]
+        assert last.image is not None and not torch.equal(last.image, first.image)
+
+
+def test_deep_dream_step_zero_reports_the_objective_it_starts_from() -> None:
+    """The published objective series begins at the starting image's own
+    value, so "did this climb?" is a comparison against the start rather than
+    against a frame already part of the way up."""
+    with _paused_session() as (session, _):
+        _, results = _published_results(session, steps=8, start="noise", lr=1.0)
+        objectives: list[float] = []
+        for result in results:
+            assert isinstance(result.objective, float)
+            objectives.append(result.objective)
+        assert objectives[-1] > objectives[0]
 
 
 def test_all_steps_is_a_declared_deep_dream_knob() -> None:
@@ -411,7 +455,8 @@ def test_a_recorded_deep_dream_writes_one_frame_per_published_step(
         path = Path(result.video)
         assert path.parent == manager.directory
         assert path.exists() and path.stat().st_size > 0
-        assert _frame_count(path) == 40
+        # Forty steps plus the image they started from.
+        assert _frame_count(path) == 41
 
 
 def test_an_unrecorded_run_leaves_no_video(tmp_path: Path) -> None:
@@ -449,7 +494,8 @@ def test_a_cancelled_recording_keeps_the_frames_it_got(tmp_path: Path) -> None:
         result = session.experiment_result_for(seq)
         assert result is not None and result.done and result.step < 200
         assert result.video is not None
-        assert _frame_count(Path(result.video)) == result.step
+        # Every step it got to, plus the step-0 frame it opened on.
+        assert _frame_count(Path(result.video)) == result.step + 1
 
 
 def test_a_dream_on_a_vector_input_records_its_strips(tmp_path: Path) -> None:
@@ -474,7 +520,7 @@ def test_a_dream_on_a_vector_input_records_its_strips(tmp_path: Path) -> None:
         result = session.experiment_result_for(seq)
         assert result is not None and result.error is None
         assert result.video is not None
-        assert _frame_count(Path(result.video)) == 4
+        assert _frame_count(Path(result.video)) == 5  # four steps and the start
 
 
 def test_a_dream_with_nothing_to_draw_records_no_file(tmp_path: Path) -> None:

@@ -963,9 +963,11 @@ jitter (random roll, undone after the update — drawn from the same
 request-seeded generator), diffusion (blend with a 3×3 box blur), center
 zoom (a per-step multiplier, ≥ 1), and clamping to `_value_bounds` — the
 displayable `[0, 1]` range mapped through the input mean/std. Progress
-publishes at `_PUBLISH_COUNT` (20) evenly spaced steps — the page only ever
-draws the freshest, so the rest would be CPU copies nobody sees — or at
-every step under the `all_steps` knob, which is what a recorded run needs to
+publishes at step 0 — the starting image, with its own measured objective, so
+that what the ascent was built out of is a frame rather than a claim — and
+then at `_PUBLISH_COUNT` (20) evenly spaced steps: the page only ever draws
+the freshest, so the rest would be CPU copies nobody sees. The `all_steps`
+knob publishes every step instead, which is what a recorded run needs to
 replay the ascent frame by frame instead of in twenty jumps.
 
 **Recorded runs.** `ExperimentRequest.video` (a field, not an

@@ -1055,8 +1055,9 @@ def build_server(
         returns its path: `render_experiment` shows what a channel converged
         *to*, the video shows how it got there — whether the image formed
         steadily or the objective went somewhere and came back. It records the
-        progress the run publishes, which is ~20 evenly spaced steps; add
-        `{"all_steps": true}` to `params` for a frame per step. Both cost the
+        progress the run publishes, which is the starting image and then ~20
+        evenly spaced steps; add `{"all_steps": true}` to `params` for a frame
+        per step — the start is in the file either way. Both cost the
         run time — the frames are drawn on the training thread, inside the
         same wall-clock ceiling as the ascent itself.
         """
