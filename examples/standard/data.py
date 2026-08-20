@@ -8,6 +8,8 @@ from pathlib import Path
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from torchvision import datasets, transforms
 
+from examples.mirrors import cifar10
+
 
 @dataclass(frozen=True)
 class DatasetConfig:
@@ -116,9 +118,7 @@ def _build_dataset(
             root=str(data_dir), train=train, download=download, transform=transform
         )
     if config.name == "cifar10":
-        return datasets.CIFAR10(
-            root=str(data_dir), train=train, download=download, transform=transform
-        )
+        return cifar10(data_dir, train=train, download=download, transform=transform)
     return datasets.Imagenette(
         root=str(data_dir),
         split="train" if train else "val",

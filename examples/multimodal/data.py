@@ -22,7 +22,9 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
-from torchvision import datasets, transforms
+from torchvision import transforms
+
+from examples.mirrors import cifar10
 
 # CIFAR-10 per-channel RGB normalization; the input_transform in `main.py`
 # inverts it to recover the displayable image from the first three channels.
@@ -74,9 +76,7 @@ class MultiModalCIFAR(Dataset[tuple[tuple[Tensor, Tensor], int]]):
     """CIFAR-10 wrapped to yield `((image, stats), label)` per `to_multimodal`."""
 
     def __init__(self, root: Path, *, train: bool) -> None:
-        self._base = datasets.CIFAR10(
-            str(root), train=train, download=True, transform=transforms.ToTensor()
-        )
+        self._base = cifar10(root, train=train, transform=transforms.ToTensor())
 
     def __len__(self) -> int:
         return len(self._base)
