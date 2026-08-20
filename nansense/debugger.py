@@ -34,6 +34,7 @@ renders the result.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 import torch
@@ -153,35 +154,55 @@ def _ordered_layers(
     return list(activations)
 
 
+def accumulate_dtype(device: torch.device) -> torch.dtype:
+    """The widest float `device` can reduce in: float64, or float32 on MPS.
+
+    The counters accumulate in double precision wherever it exists, because a
+    single-precision accumulator saturates: summing ``|x|`` over a large
+    tensor of near-`finfo.max` float32 gradients reaches ``inf`` partway
+    through, and the band metric would then be measuring its own overflow.
+    Apple's MPS backend has no float64 at all — allocating one raises — so
+    there the same sums run in float32. That is exact enough for what the
+    fractions are asked to answer (MPS tensors are float32 at widest, so their
+    ``|x|`` sums only saturate for a run already exploding), and `run_checks`
+    reads a saturated total as an overflow rather than dividing by it.
+    """
+    return torch.float32 if device.type == "mps" else torch.float64
+
+
 def _layer_metrics(
-    ni_tensors: list[Tensor], grad_tensors: list[Tensor], device: torch.device
+    ni_tensors: list[Tensor],
+    grad_tensors: list[Tensor],
+    device: torch.device,
+    dtype: torch.dtype,
 ) -> Tensor:
     """One layer's raw counters as a 6-vector, computed on `device`.
 
     ``[nan_count, inf_count, total_count, underflow_abssum, overflow_abssum,
     finite_abssum]`` — counts over `ni_tensors` (NaN/Inf scan), abs-sums over
-    `grad_tensors` (band metric). Returned as a device tensor so the caller
-    can stack every layer and sync once.
+    `grad_tensors` (band metric). Accumulated in `dtype` (see
+    `accumulate_dtype`) and returned as a device tensor so the caller can
+    stack every layer and sync once.
     """
-    nan_count = torch.zeros((), device=device, dtype=torch.float64)
-    inf_count = torch.zeros((), device=device, dtype=torch.float64)
+    nan_count = torch.zeros((), device=device, dtype=dtype)
+    inf_count = torch.zeros((), device=device, dtype=dtype)
     total_count = 0
     for t in ni_tensors:
-        nan_count = nan_count + torch.isnan(t).sum().to(torch.float64)
-        inf_count = inf_count + torch.isinf(t).sum().to(torch.float64)
+        nan_count = nan_count + torch.isnan(t).sum().to(dtype)
+        inf_count = inf_count + torch.isinf(t).sum().to(dtype)
         total_count += t.numel()
 
-    under_sum = torch.zeros((), device=device, dtype=torch.float64)
-    over_sum = torch.zeros((), device=device, dtype=torch.float64)
-    finite_sum = torch.zeros((), device=device, dtype=torch.float64)
-    zero = torch.zeros((), device=device, dtype=torch.float64)
+    under_sum = torch.zeros((), device=device, dtype=dtype)
+    over_sum = torch.zeros((), device=device, dtype=dtype)
+    finite_sum = torch.zeros((), device=device, dtype=dtype)
+    zero = torch.zeros((), device=device, dtype=dtype)
     for t in grad_tensors:
         finfo = torch.finfo(t.dtype)
         absx = t.abs()
         finite = torch.isfinite(t)
         # Non-finite slots contribute 0 to every sum — they belong to the
         # NaN/Inf check, and an inf would otherwise poison the totals.
-        absf = torch.where(finite, absx.to(torch.float64), zero)
+        absf = torch.where(finite, absx.to(dtype), zero)
         finite_sum = finite_sum + absf.sum()
         underflow = finite & (absx > 0) & (absx < finfo.tiny)
         overflow = finite & (absx >= finfo.max / OVERFLOW_HEADROOM)
@@ -192,12 +213,30 @@ def _layer_metrics(
         [
             nan_count,
             inf_count,
-            torch.full((), float(total_count), device=device, dtype=torch.float64),
+            torch.full((), float(total_count), device=device, dtype=dtype),
             under_sum,
             over_sum,
             finite_sum,
         ]
     )
+
+
+def _band_fractions(
+    under_sum: float, over_sum: float, finite_sum: float
+) -> tuple[float, float]:
+    """The subnormal / overflow shares of a layer's summed ``|grad|``.
+
+    A `finite_sum` that is itself non-finite means the accumulator saturated:
+    the layer's summed ``|grad|`` passed the accumulation dtype's ceiling
+    (reachable in float32 on MPS). Dividing by it would report ``nan``/0 and
+    trip nothing, so a saturated total is read as what it is — magnitudes over
+    every band edge — and reported as a full overflow.
+    """
+    if not math.isfinite(finite_sum):
+        return 0.0, 1.0
+    if finite_sum <= 0:
+        return 0.0, 0.0
+    return under_sum / finite_sum, over_sum / finite_sum
 
 
 def run_checks(
@@ -223,6 +262,7 @@ def run_checks(
     device = _pick_device(activations, activation_grads, weight_grads)
     if device is None:
         return None
+    accum = accumulate_dtype(device)
 
     names: list[str] = []
     # The gradient dtype each layer's under/overflow band was measured against
@@ -251,7 +291,7 @@ def run_checks(
             continue
         names.append(name)
         dtypes.append(grad_tensors[0].dtype if grad_tensors else None)
-        vectors.append(_layer_metrics(ni_tensors, scan_grads, device))
+        vectors.append(_layer_metrics(ni_tensors, scan_grads, device, accum))
 
     if not vectors:
         return None
@@ -266,8 +306,7 @@ def run_checks(
     ):
         nan_f = nan_c / total_c if total_c > 0 else 0.0
         inf_f = inf_c / total_c if total_c > 0 else 0.0
-        under_f = under_s / finite_s if finite_s > 0 else 0.0
-        over_f = over_s / finite_s if finite_s > 0 else 0.0
+        under_f, over_f = _band_fractions(under_s, over_s, finite_s)
 
         layer_nan = check_ni and nan_f > 0.0
         layer_inf = check_ni and inf_f > 0.0

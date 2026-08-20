@@ -202,6 +202,57 @@ def test_dtype_band_matches_finfo(dtype: torch.dtype) -> None:
     )
 
 
+# --- Accumulation dtype: the counters cannot use float64 everywhere -------
+
+
+@pytest.mark.parametrize(
+    ("device_type", "expected"),
+    [("cpu", torch.float64), ("cuda", torch.float64), ("mps", torch.float32)],
+)
+def test_accumulate_dtype_drops_to_float32_only_on_mps(
+    device_type: str, expected: torch.dtype
+) -> None:
+    assert debugger.accumulate_dtype(torch.device(device_type)) is expected
+
+
+@pytest.mark.parametrize(
+    ("under", "over", "finite", "expected"),
+    [
+        (1.0, 3.0, 4.0, (0.25, 0.75)),
+        (0.0, 0.0, 0.0, (0.0, 0.0)),  # nothing scanned
+        # A total that saturated the accumulator: reported as full overflow
+        # rather than divided by (inf/inf is a nan that trips nothing).
+        (float("inf"), float("inf"), float("inf"), (0.0, 1.0)),
+    ],
+)
+def test_band_fractions_read_a_saturated_total_as_overflow(
+    under: float, over: float, finite: float, expected: tuple[float, float]
+) -> None:
+    assert debugger._band_fractions(under, over, finite) == expected
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="needs an Apple MPS device"
+)
+def test_checks_run_on_mps_tensors() -> None:
+    """Regression: the counters allocated float64, which MPS refuses outright,
+    so every debug-check batch of an `mps` run died in `__exit__`."""
+    device = torch.device("mps")
+    error = _check(
+        activations={"l": torch.tensor([1.0, float("nan")], device=device)},
+        # 3e-7 is subnormal in fp16 (tiny is ~6.1e-5) and survives the cast.
+        activation_grads={
+            "l": torch.full((8,), 3e-7, dtype=torch.float16, device=device)
+        },
+        layer_weights={"l": []},
+    )
+    assert error is not None
+    assert error.reasons == ("nan", "underflow")
+    # One NaN across the 2 activation + 8 gradient elements scanned.
+    assert error.layers[0].nan == 0.1
+    assert error.layers[0].underflow == 1.0
+
+
 # --- merged: accumulate later detections into the standing banner ----------
 
 

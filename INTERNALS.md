@@ -632,7 +632,13 @@ nothing.
 `[nan_count, inf_count, total_count, underflow_abssum, overflow_abssum,
 finite_abssum]` vector per layer (weight gradients are mapped to layers via
 `Session.layer_weights`, exactly like the snapshot), stacks them, and pulls
-the whole batch's counters to the CPU in a single transfer. It returns a
+the whole batch's counters to the CPU in a single transfer. The counters
+accumulate in the widest float the device has (`debugger.accumulate_dtype`):
+float64 everywhere except MPS, which has no float64 at all — allocating one
+raises, so an `mps` run used to die in every debug-check batch's `__exit__`.
+Float32 sums are exact enough there (MPS tensors are float32 at widest), and a
+summed `|grad|` that does saturate the accumulator is read as an overflow
+rather than divided by (`_band_fractions`). It returns a
 frozen `DebugError` (the tripped `reasons`, the `checks_used` categories, and
 a `LayerReport` per affected layer) or `None`. Each `LayerReport` also carries
 the scanned gradient's `dtype`, so the UI can name the band edges (the
