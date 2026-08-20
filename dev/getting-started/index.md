@@ -44,6 +44,10 @@ uv run --group cpu examples/multimodal/main.py --nansense-port 8080
 
 A focused browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar — see the [UI guide](https://kongaskristjan.github.io/nansense/dev/ui/index.md).
 
+The first run is the slow one
+
+A cold start installs torch and downloads the example's dataset before the UI can come up — a few minutes, and the example says so as it starts. Everything is cached under `--data-dir` (`./data` by default), so later runs skip straight to training. `examples/depth_make3d/main.py` is the outlier: Make3D is 914 MB from a slow host.
+
 Memory and speed
 
 If you hit out-of-memory errors, lower `--batch-size`. If training is slow and you have GPU VRAM left, increase `--batch-size`. Both memory and training speed can be improved with `--dtype bf16` (older GPUs don't support it).
