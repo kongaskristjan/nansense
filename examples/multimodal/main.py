@@ -21,6 +21,12 @@ activation strips and the perturbation diff propagate through both branches.
 
 from __future__ import annotations
 
+from examples.first_run import note_first_run
+
+# Above the torch / nansense imports on purpose: on a cold start the wait
+# those imports and the dataset download add up to is what the notice is for.
+note_first_run("cifar10")
+
 import argparse
 import contextlib
 import time

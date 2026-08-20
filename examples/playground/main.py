@@ -31,6 +31,12 @@ experiments; stepping, time travel, the shared probe state
 
 from __future__ import annotations
 
+from examples.first_run import argv_value, note_first_run
+
+# Above the torch / nansense imports on purpose: on a cold start the wait
+# those imports and the dataset download add up to is what the notice is for.
+note_first_run(argv_value("--playground", ""))
+
 import argparse
 import time
 from dataclasses import dataclass

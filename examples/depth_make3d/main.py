@@ -15,6 +15,12 @@ predicted log-depth renders as an image strip alongside the input photo.
 
 from __future__ import annotations
 
+from examples.first_run import note_first_run
+
+# Above the torch / nansense imports on purpose: on a cold start the wait
+# those imports and the dataset download add up to is what the notice is for.
+note_first_run("make3d")
+
 import argparse
 import time
 from pathlib import Path

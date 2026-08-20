@@ -30,7 +30,7 @@ Unlike wandb or TensorBoard, which log external metrics (loss, accuracy) to scro
 
 ## Try it
 
-Clone the repository and run a bundled example with [uv](https://docs.astral.sh/uv/getting-started/installation) — Python, dependencies, datasets and pretrained networks download automatically, and a browser tab opens with the UI:
+Clone the repository and run a bundled example with [uv](https://docs.astral.sh/uv/getting-started/installation) — Python, dependencies, datasets and pretrained networks download automatically, and a browser tab opens with the UI. The first run fetches all of that, so give it a few minutes; later runs start in seconds:
 
 ```bash
 # Install uv (Windows: https://docs.astral.sh/uv/getting-started/installation):
