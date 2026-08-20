@@ -32,7 +32,7 @@ import torch
 
 from nansense import debugger, experiments, instruments
 from nansense.schedule import BatchPosition, Schedule, format_position
-from nansense.session import Session
+from nansense.session import Session, lost_loop_reason
 from nansense.watch import (
     TensorStatsSnapshot,
     bin_midpoint,
@@ -98,9 +98,14 @@ def _run_state(session: Session) -> str:
     `"not_started"` is called out separately from `"running"`: a session whose
     loop has not reached its first batch is *technically* not paused, but an
     agent told "running" would wait for a pause that nothing is driving toward.
+    `"lost"` is the same trap after the fact — a training loop that raised
+    still reads as running (the thread never reached the pause that clears
+    it), so an agent told "running" would wait out every timeout it has.
     """
     if session.closed:
         return "finished"
+    if session.training_lost:
+        return "lost"
     if session.live_position is None:
         return "not_started"
     return "running" if session.is_running else "paused"
@@ -113,6 +118,12 @@ def _state_hint(session: Session) -> str | None:
         return (
             "Training has finished. The last captured batch stays inspectable, "
             "but stepping and time travel no longer do anything."
+        )
+    if session.training_lost:
+        return (
+            f"{lost_loop_reason(session.training_error)} Nothing can be "
+            "stepped, resumed or probed; the last captured batch stays "
+            "inspectable. Fix the training script and start the run again."
         )
     if session.locked:
         return (
@@ -171,6 +182,10 @@ def status_view(session: Session) -> dict[str, Any]:
         "stats_collecting": session.stats_collecting,
         "numerical_warning": _warning_summary(session.debug_error),
     }
+    # Only when there is one: a run that is still going has nothing to say
+    # here, and the field would read as an error every caller has to dismiss.
+    if session.training_lost and session.training_error is not None:
+        view["training_error"] = session.training_error
     hint = _state_hint(session)
     if hint is not None:
         view["hint"] = hint

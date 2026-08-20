@@ -14,6 +14,7 @@ from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.top_bar import (
     _DEBUG_UNDER_OVER_TIP,
+    _lost_loop_summary,
     _BRAND_NAME,
     _BRAND_TAGLINE,
     _REPO_URL,
@@ -35,10 +36,12 @@ from nansense.ui.top_bar import (
 from tests.nansense.helpers import (
     TinyNet,
     _make_snapshot,
+    crashing_loop,
     make_position,
     make_session,
     paused_session,
     paused_worker,
+    run_to_death,
     train_step,
 )
 
@@ -403,9 +406,12 @@ def test_brand_wordmark_names_the_library_and_what_it_is() -> None:
     assert len(_BRAND_TAGLINE) <= 20
 
 
-def _step_controls_children(*, locked: bool) -> list[Element]:
-    """Build the step-control cluster for a fresh session and return its children."""
-    session, _model = make_session(epochs=1, phases={"train": 2})
+def _step_controls_children(
+    *, locked: bool = False, session: Session | None = None
+) -> list[Element]:
+    """Build the step-control cluster for a session and return its children."""
+    if session is None:
+        session, _model = make_session(epochs=1, phases={"train": 2})
     if locked:
         session.lock()
     dialog = ui.dialog()  # built outside the card so it is not counted
@@ -430,10 +436,76 @@ def test_locked_step_controls_are_a_demo_chip_without_a_position_label() -> None
 
 def test_unlocked_step_controls_keep_the_live_position_label() -> None:
     """The counterpart: while training is steppable the position readout is the
-    only thing saying where the run is, so it must survive."""
+    only thing saying where the run is, so it must survive. The ended chip sits
+    beside it, empty and hidden while the run can still advance."""
     children = _step_controls_children(locked=False)
     labels = [c for c in children if isinstance(c, ui.label)]
-    assert [label.text for label in labels] == ["(waiting for first batch)"]
+    assert [label.text for label in labels] == ["(waiting for first batch)", ""]
+    assert labels[0].visible and not labels[1].visible
+
+
+# --- a run that is over: nothing left to advance ---------------------
+
+
+def _lost_session() -> Session:
+    """A session whose training loop died inside its first batch."""
+    session, model = make_session(epochs=1, phases={"train": 2})
+    session.detach()
+    run_to_death(crashing_loop(session, model))
+    assert session.training_lost
+    return session
+
+
+def _controls(
+    session: Session,
+) -> tuple[dict[str, ui.button | ui.dropdown_button], ui.label]:
+    """The named buttons of the step cluster, and its ended chip."""
+    children = _step_controls_children(session=session)
+    buttons = {
+        str(element.text): element
+        for child in children
+        for element in [child, *_descendants(child)]
+        if isinstance(element, (ui.button, ui.dropdown_button)) and element.text
+    }
+    chip = [c for c in children if isinstance(c, ui.label)][-1]
+    return buttons, chip
+
+
+def test_a_lost_training_loop_grays_every_control_and_names_the_error() -> None:
+    """The bug this fixes: a crash unwinds past the pause that clears
+    `_paused`, so Run alone would stay grayed — reading as "training is
+    running" for a run whose thread is gone."""
+    session = _lost_session()
+    buttons, chip = _controls(session)
+
+    assert not buttons["Run"].enabled
+    assert not buttons["Step Batch"].enabled
+    assert not buttons["Stop"].enabled
+    # The red banner carries the exception, so the chip stays out of the bar.
+    assert not chip.visible
+    summary = _lost_loop_summary(session)
+    assert summary is not None
+    assert summary.startswith("Training loop exited — RuntimeError: boom — at ")
+
+
+def test_a_finished_run_says_so_instead_of_offering_a_dead_run_button() -> None:
+    session, _model = make_session(epochs=1, phases={"train": 2})
+    session.close()
+    buttons, chip = _controls(session)
+
+    assert not buttons["Run"].enabled
+    assert not buttons["Stop"].enabled
+    assert chip.visible
+    assert chip.text == "training finished"
+
+
+def test_a_live_run_shows_no_chip_and_keeps_run_clickable() -> None:
+    with paused_session(TinyNet()) as session:
+        buttons, chip = _controls(session)
+
+        assert buttons["Run"].enabled
+        assert not buttons["Stop"].enabled  # nothing to stop while paused
+        assert not chip.visible
 
 
 # --- settings dialog: snapshot & record -------------------------------

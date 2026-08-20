@@ -68,7 +68,7 @@ from nansense.mcp_views import (
 )
 from nansense.patches import PATCH_TYPES
 from nansense.restore import TimeTravelError
-from nansense.session import Session, StatsScope
+from nansense.session import Session, StatsScope, lost_loop_reason
 
 #: Where the MCP endpoint sits on the UI's server.
 DEFAULT_MCP_PATH = "/mcp"
@@ -163,7 +163,24 @@ def _control_refusal(session: Session) -> dict[str, Any] | None:
             ),
             "state": "finished",
         }
+    if session.training_lost:
+        return _lost_refusal(session, "the run cannot be advanced")
     return None
+
+
+def _lost_refusal(session: Session, consequence: str) -> dict[str, Any]:
+    """The refusal every command shares once the training loop has died.
+
+    Without it a command would be accepted by a session nobody is driving and
+    then wait out its full timeout — the loop it is waiting for is gone.
+    """
+    return {
+        "error": (
+            f"{lost_loop_reason(session.training_error)} The last captured "
+            f"batch stays inspectable, but {consequence}."
+        ),
+        "state": "lost",
+    }
 
 
 def _settings_refusal(session: Session) -> dict[str, Any] | None:
@@ -1215,7 +1232,8 @@ def _probe_refusal(session: Session) -> dict[str, Any] | None:
     no-op: the setters still record their state, but the pause loop that runs
     probes is gone, so the request is armed and never served — and
     `wait_for_probe` returns immediately on a closed session, which would make
-    that look like a completed run.
+    that look like a completed run. A loop that *died* is the same dead end
+    without the tidy ending, which is what `training_lost` catches.
     """
     if session.locked:
         return {
@@ -1231,6 +1249,10 @@ def _probe_refusal(session: Session) -> dict[str, Any] | None:
             ),
             "state": "finished",
         }
+    if session.training_lost:
+        return _lost_refusal(
+            session, "no further probe can run (probes execute on that thread)"
+        )
     return None
 
 
@@ -1382,8 +1404,9 @@ def _await_experiment(
         if result is not None and result.done:
             return True
         # Experiments run on the training thread's pause loop; once the run is
-        # closed nothing will ever pick this request up.
-        if session.closed or time.monotonic() >= deadline:
+        # closed — or that thread has died — nothing will ever pick this
+        # request up.
+        if session.closed or session.training_lost or time.monotonic() >= deadline:
             # One last look: a result published during the final sleep would
             # otherwise be reported as a timeout beside its own `done: true`.
             result = session.experiment_result_for(seq)
@@ -1403,6 +1426,12 @@ async def _run_experiment(
     video: bool = False,
 ) -> dict[str, Any]:
     """Validate, arm and await one experiment; report whatever it published."""
+    if session.training_lost:
+        # Same thread, same dead end as a probe: the request would sit in a
+        # queue nobody drains, and the tool would wait out its whole timeout.
+        return _lost_refusal(
+            session, "no experiment can run (they execute on that thread)"
+        )
     if kind not in experiments.EXPERIMENT_KINDS:
         return {
             "error": f"Unknown experiment kind {kind!r}.",

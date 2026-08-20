@@ -163,6 +163,30 @@ class StatsScope(StrEnum):
 
 FREQUENCY_UNITS: tuple[str, ...] = ("batch", "epoch")
 
+# How much of a failed batch's exception message `training_error` keeps: a
+# shape mismatch says what it needs to in one line, and the rest belongs in
+# the traceback the training script already printed.
+_ERROR_DETAIL_CHARS: int = 200
+
+
+def lost_loop_reason(error: str | None) -> str:
+    """Why every run control refuses once the training loop has died.
+
+    One sentence, shared by the time-travel refusals, the MCP tools and the
+    UI's top-bar chip, naming the exception when there is one (see
+    `Session.training_error`) — the top bar and the agent should not disagree
+    about what happened to the run.
+    """
+    cause = (
+        f"it raised {error}"
+        if error
+        else "it raised, or returned without calling close()"
+    )
+    return (
+        f"The training loop is gone — {cause} — so there is no thread left to "
+        "advance the run."
+    )
+
 # Element type of a loader passed to `Session.batches` (PEP 695 `def batches[T]`
 # would require Python 3.12; this keeps the floor at 3.10).
 _BatchItem = TypeVar("_BatchItem")
@@ -352,6 +376,14 @@ class Session:
         # while stopped.
         self._paused = False
         self._closed = False
+        # The thread driving `batch()` (recorded on every batch entry) and the
+        # exception the most recent batch context saw unwind through it. Plain
+        # attribute writes from the training thread, read point-in-time by the
+        # UI — the lock-free contract `_snapshot` and `_live_position` use.
+        # Together they answer "is the training loop still there?"; see
+        # `training_lost`.
+        self._training_thread: threading.Thread | None = None
+        self._batch_error: str | None = None
         self._activations: dict[str, Tensor] = {}
         self._hook_handles: list[RemovableHandle] = []
         self._snapshot: BatchSnapshot | None = None
@@ -608,9 +640,56 @@ class Session:
         False while paused at a batch (waiting for a UI Step/Run/Stop command)
         or once the session has closed; True while a step/run/detach is in
         flight. The top bar grays out Run while running and Stop while stopped.
+
+        A loop that *died* mid-batch leaves this True forever — the thread
+        never reached the pause that would clear it — so anything offering run
+        controls must check `training_lost` too.
         """
         with self._cv:
             return not self._paused and not self._closed
+
+    @property
+    def training_lost(self) -> bool:
+        """Whether the training loop is gone without the session being closed.
+
+        True once the thread that was driving `batch()` has died while
+        `close()` was never called: the script raised, or returned without
+        closing. The served page outlives the training loop either way, so
+        without this the UI would keep presenting a run that nothing can
+        advance — a crash mid-batch grays out Run permanently (`is_running`
+        stays True) and every step command lands on a thread that is not
+        there. False before the first batch: a loop that has not started yet
+        is not a loop that has ended.
+        """
+        thread = self._training_thread
+        return thread is not None and not thread.is_alive() and not self.closed
+
+    @property
+    def training_error(self) -> str | None:
+        """The exception that unwound through the last batch, as `Type: msg`.
+
+        Cleared whenever another batch begins, so it names why *this* loop
+        stopped rather than something it recovered from — a user who catches
+        an exception around a batch and keeps training leaves nothing behind.
+        `None` when the loop died between batches (in the loader, say) or
+        never raised at all, so `training_lost` is the state and this is only
+        its reason, when there is one.
+        """
+        return self._batch_error
+
+    def _note_batch_error(self, exc: BaseException) -> None:
+        """Record an exception unwinding through a batch context, for the UI.
+
+        `TimeTravelJump` and `GeneratorExit` are the loop's own control flow —
+        a rewind and a `break` out of `batches()` — not failures.
+        """
+        if isinstance(exc, (TimeTravelJump, GeneratorExit)):
+            return
+        detail = str(exc).strip().splitlines()
+        summary = type(exc).__name__
+        if detail:
+            summary = f"{summary}: {detail[0][:_ERROR_DETAIL_CHARS]}"
+        self._batch_error = summary
 
     def batch(
         self, *, phase: str, epoch: int, item: object = None
@@ -1894,6 +1973,8 @@ class Session:
             )
         if restorer.finished:
             raise TimeTravelError("the training run has already completed")
+        if self.training_lost:
+            raise TimeTravelError(lost_loop_reason(self.training_error))
         total = self._schedule.epochs
         if total is None or not 0 <= epoch < total:
             raise TimeTravelError(f"epoch {epoch} out of range [0, {total or 0})")
@@ -1943,6 +2024,13 @@ class Session:
                 total_epochs=total or 0,
             )
         cached = [e for e in restorer.cache.cached_epochs() if 0 <= e < total]
+        if self.training_lost:
+            return TimeTravelStatus(
+                available=False,
+                reason=lost_loop_reason(self.training_error),
+                cached_epochs=cached,
+                total_epochs=total,
+            )
         if restorer.finished:
             return TimeTravelStatus(
                 available=False,
@@ -2676,6 +2764,11 @@ class _BatchContext:
         # `__exit__` also returns immediately.
         if not self._session._enabled or self._session.closed:
             return self
+        # Whose thread is driving, and a clean slate for `_batch_error`: an
+        # error only describes the loop's *last* batch, so a batch that starts
+        # at all clears whatever the previous one raised and was caught.
+        self._session._training_thread = threading.current_thread()
+        self._session._batch_error = None
         self._position = self._session._schedule.advance(self._phase, self._epoch)
         # Publish the live position before the forward pass so the UI top bar
         # tracks progress on every batch, even in modes that don't capture
@@ -2766,6 +2859,8 @@ class _BatchContext:
     ) -> None:
         if self._position is None:
             return
+        if exc is not None:
+            self._session._note_batch_error(exc)
         if self._publishes or self._stats_only or self._debug_check:
             # Hook removal MUST run once hooks were installed, even if the
             # watch-stats update raises — otherwise the fx-patched forward

@@ -30,7 +30,31 @@ Synchronization is a single `threading.Condition` (`Session._cv`) protecting:
 `_snapshot`, `_activations`, and `_hook_handles` are written only by the
 training thread and read by the UI thread; reads are point-in-time and
 don't need a lock because Python attribute assignment is atomic under the
-GIL.
+GIL. `_training_thread` and `_batch_error` join them — see below.
+
+### When the training loop goes away
+
+The served page outlives the training loop: a script that raises unwinds past
+`_wait_for_proceed`, so `_paused` never flips and `is_running` reports a run
+that is still going while its thread is gone. Every batch entry therefore
+records `threading.current_thread()` in `_training_thread` (and clears
+`_batch_error`), and `__exit__` records any exception unwinding through it in
+`_batch_error` — skipping `TimeTravelJump` and `GeneratorExit`, which are the
+loop's own control flow (a rewind and a `break` out of `batches()`).
+
+`Session.training_lost` is then "that thread has died and `close()` was never
+called", and `Session.training_error` names the exception when there was one
+(first line, capped at `_ERROR_DETAIL_CHARS`). Everything that needs the
+training thread reads it and refuses instead of waiting: the top bar grays
+Run / Step / Stop and raises a full-width **red error banner** naming the
+exception and the batch it died on (`top_bar._add_lost_loop_banner`, stacked
+above the numerical warning), time travel reports itself unavailable, and the
+MCP side reports `state: "lost"` with a `training_error`, refusing run
+controls, probes and experiments. `session.lost_loop_reason` is the one
+sentence all of them share. A run that ended the tidy way — `close()` — grays
+the same controls but only earns an amber "training finished" chip beside the
+position label (`top_bar._ended_note`): nothing failed, there is just nothing
+left to advance.
 
 ## Schedule
 
@@ -675,7 +699,8 @@ time-travel rewind (`_rewind_to_epoch`, the abandoned timeline's banner).
 `"under_over"`) and trims that category's reasons/columns from the active
 error via `without_category` (the banner clears entirely if nothing remains).
 
-**UI** (`top_bar._add_error_banner`, added under every page's top bar): a
+**UI** (`top_bar._add_debug_warning_banner`, placed under every page's top
+bar by `_add_error_banner` along with the lost-loop banner above it): a
 0.2 s timer polls `session.debug_error`, rebuilding the full-width yellow
 warning banner (amber background, ⚠ icon) when the record identity changes
 (every detection / merge makes a fresh frozen record) and hiding it when it

@@ -116,6 +116,39 @@ def run_in_thread(target: Callable[[], None]) -> threading.Thread:
     return thread
 
 
+def run_to_death(loop: Callable[[], None], *, timeout: float = 5.0) -> None:
+    """Run `loop` on a worker thread until it ends, and join it.
+
+    A `RuntimeError` is suppressed *outside* the loop, so it really does unwind
+    through the batch context on its way out — the path a crashing training
+    script takes — without a traceback landing in the test output. The session
+    is left `training_lost`: its thread is gone and nothing called `close()`.
+    """
+
+    def target() -> None:
+        try:
+            loop()
+        except RuntimeError:
+            pass
+
+    thread = run_in_thread(target)
+    thread.join(timeout=timeout)
+    assert not thread.is_alive()
+
+
+def crashing_loop(
+    session: Session, model: nn.Module, message: str = "boom"
+) -> Callable[[], None]:
+    """A loop that raises `RuntimeError(message)` from inside its first batch."""
+
+    def loop() -> None:
+        with session.batch(phase="train", epoch=0):
+            train_step(model)
+            raise RuntimeError(message)
+
+    return loop
+
+
 @contextmanager
 def paused_worker(
     session: Session, loop: Callable[[], None], *, timeout: float = 5.0

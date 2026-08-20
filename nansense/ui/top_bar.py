@@ -25,7 +25,12 @@ from nansense.patches import DEFAULT_SAMPLES_PER_CHANNEL
 from nansense.recording import RecordedView
 from nansense.restore import TimeTravelError
 from nansense.schedule import BatchPosition, format_position
-from nansense.session import BatchSnapshot, Session, StatsScope
+from nansense.session import (
+    BatchSnapshot,
+    Session,
+    StatsScope,
+    lost_loop_reason,
+)
 from nansense.watch import DEFAULT_CHANNEL_LIMIT
 
 
@@ -293,13 +298,18 @@ def _add_step_controls(
             .props("dense size=md")
             .tooltip("Run to the end of training")
         )
-        with ui.dropdown_button(
-            "Step Batch",
-            on_click=step_batch,
-            split=True,
-            auto_close=True,
-            color="orange",
-        ).props("dense size=md").tooltip("Advance one batch"):
+        step_button = (
+            ui.dropdown_button(
+                "Step Batch",
+                on_click=step_batch,
+                split=True,
+                auto_close=True,
+                color="orange",
+            )
+            .props("dense size=md")
+            .tooltip("Advance one batch")
+        )
+        with step_button:
             _step_menu_item(
                 "Step epoch",
                 "Run to the start of the next epoch",
@@ -317,20 +327,64 @@ def _add_step_controls(
         )
         _add_time_travel_button(session)
     _add_position_label(session)
+    ended_chip, ended_tooltip = _add_ended_chip()
     # Run is grayed while training advances (started by Run or any Step), Stop
     # while it sits paused — a 0.2s timer toggles both off
-    # `session.is_running`. `None` forces the first apply.
-    last_running: bool | None = None
+    # `session.is_running`. Once the run is over, every control is grayed: a
+    # finished run has nothing left to advance, and a loop that died would
+    # leave Run grayed forever anyway (`is_running` never clears without the
+    # pause the thread never reached). `None` forces the first apply.
+    last_state: tuple[bool, bool, tuple[str, str] | None] | None = None
 
     def refresh_buttons() -> None:
-        nonlocal last_running
+        nonlocal last_state
+        over = session.closed or session.training_lost
         running = session.is_running
-        if running != last_running:
-            last_running = running
-            run_button.set_enabled(not running)
-            stop_button.set_enabled(running)
+        finished = _ended_note(session)
+        state = (running, over, finished)
+        if state == last_state:
+            return
+        last_state = state
+        run_button.set_enabled(not running and not over)
+        step_button.set_enabled(not over)
+        stop_button.set_enabled(running and not over)
+        if finished is not None:
+            ended_chip.text, ended_tooltip.text = finished
+        ended_chip.set_visibility(finished is not None)
 
+    refresh_buttons()
     ui.timer(0.2, refresh_buttons)
+
+
+def _ended_note(session: Session) -> tuple[str, str] | None:
+    """Chip text and tooltip for a run that ended cleanly, else `None`.
+
+    A finished run leaves controls that cannot do anything, and a grayed-out
+    Run with no explanation is the thing this chip exists to prevent. The
+    other way a run ends — the loop dying — grays the same controls but says
+    so in the red banner under the bar (`_add_lost_loop_banner`), which has
+    room for the exception; repeating it here would be noise.
+    """
+    if not session.closed:
+        return None
+    return (
+        "training finished",
+        "The training loop ran to the end and closed the session. Stepping "
+        "and running do nothing; everything already captured stays "
+        "inspectable.",
+    )
+
+
+def _add_ended_chip() -> tuple[ui.label, ui.tooltip]:
+    """The (initially hidden) amber chip and tooltip `refresh_buttons` fills in."""
+    chip = ui.label().classes(
+        "ml-3 px-2 py-1 rounded bg-amber-100 text-amber-800 text-sm "
+        "font-medium max-w-xl truncate"
+    )
+    with chip:
+        tooltip = ui.tooltip("")
+    chip.set_visibility(False)
+    return chip, tooltip
 
 
 def _add_position_label(session: Session) -> None:
@@ -1096,15 +1150,82 @@ def _add_settings_button(
 
 
 def _add_error_banner(session: Session) -> None:
-    """Full-width red banner shown while a numerical error is active.
+    """The full-width banners every page places directly under its top bar.
 
-    Placed by every page directly under its top bar. A 0.2 s timer polls
-    `session.debug_error`: the banner rebuilds when the error identity changes
-    (every detection / merge makes a fresh frozen record) and hides when it
-    clears. It is a yellow *warning* — training paused at the first issue, but
-    resuming keeps the banner standing while later issues fold into it.
-    Clicking the message opens the details dialog; "Silence warning" turns off
-    the active checks and clears the banner.
+    Two of them, stacked: a red *error* strip once the training loop has died
+    (`_add_lost_loop_banner`) above the yellow numerical *warning* below, so a
+    run that tripped a check and then crashed shows both, worst first.
+    """
+    _add_lost_loop_banner(session)
+    _add_debug_warning_banner(session)
+
+
+def _lost_loop_summary(session: Session) -> str | None:
+    """The one-line error-banner message for a dead training loop, or `None`.
+
+    Shaped like `_debug_banner_summary`: what happened, what it was, where —
+    with the position naming the batch the loop died on, since the traceback
+    went to a terminal the user may no longer be looking at.
+    """
+    if not session.training_lost:
+        return None
+    error = session.training_error
+    what = error if error is not None else "it returned without calling close()"
+    position = session.live_position
+    where = "" if position is None else f" — at {format_position(position)}"
+    return f"Training loop exited — {what}{where}"
+
+
+def _add_lost_loop_banner(session: Session) -> None:
+    """Full-width red banner shown once the training loop has died.
+
+    Red rather than the numerical check's amber, because this one is not a
+    warning to weigh: the thread is gone, every run control is grayed out
+    behind it, and no amount of resuming brings it back. It offers no
+    "Silence" — there is no check to turn off, only a run to restart — and
+    hides again only if a fresh loop starts driving the same session.
+    """
+    container = ui.element("div").classes("w-full shrink-0")
+    container.set_visibility(False)
+    shown: dict[str, str | None] = {"key": None}
+
+    def rebuild(summary: str) -> None:
+        container.clear()
+        with container:
+            with ui.row().classes(
+                "w-full bg-red-600 text-white items-center gap-3 px-4 py-2 "
+                "no-wrap shadow-md"
+            ):
+                ui.icon("error").classes("text-2xl shrink-0")
+                ui.label(summary).classes(
+                    "text-sm font-medium grow min-w-0 truncate"
+                ).tooltip(
+                    f"{lost_loop_reason(session.training_error)} Everything "
+                    "already captured stays inspectable."
+                )
+
+    def refresh() -> None:
+        summary = _lost_loop_summary(session)
+        if summary == shown["key"]:
+            return
+        shown["key"] = summary
+        if summary is not None:
+            rebuild(summary)
+        container.set_visibility(summary is not None)
+
+    refresh()
+    ui.timer(0.2, refresh)
+
+
+def _add_debug_warning_banner(session: Session) -> None:
+    """Full-width yellow banner shown while a numerical error is active.
+
+    A 0.2 s timer polls `session.debug_error`: the banner rebuilds when the
+    error identity changes (every detection / merge makes a fresh frozen
+    record) and hides when it clears. It is a *warning* — training paused at
+    the first issue, but resuming keeps the banner standing while later issues
+    fold into it. Clicking the message opens the details dialog; "Silence
+    warning" turns off the active checks and clears the banner.
     """
     container = ui.element("div").classes("w-full shrink-0")
     container.set_visibility(False)
