@@ -28,6 +28,8 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets.utils import download_and_extract_archive
 
+from examples.common import default_num_workers
+
 try:
     import torchaudio
     from torchaudio.transforms import MelSpectrogram
@@ -199,7 +201,7 @@ def build_dataloaders(
     config: AudioConfig,
     data_dir: Path,
     batch_size: int = 64,
-    num_workers: int = 2,
+    num_workers: int = default_num_workers(),
     val_fraction: float = 0.15,
     download: bool = True,
 ) -> tuple[DataLoader, DataLoader]:

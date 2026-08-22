@@ -32,6 +32,7 @@ from examples.audio_keywords.data import AudioConfig, build_dataloaders
 from examples.audio_keywords.model import KeywordResNet
 from examples.common import (
     add_dtype_arg,
+    add_num_workers_arg,
     amp_dtype_from_name,
     enable_line_buffering,
     evaluate,
@@ -52,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
-    parser.add_argument("--num-workers", type=int, default=2)
+    add_num_workers_arg(parser)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
     add_dtype_arg(parser)
     parser.add_argument("--seed", type=int, default=0)

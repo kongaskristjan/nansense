@@ -50,6 +50,9 @@ A focused browser tab opens automatically at the boxed URL it prints (open it yo
 !!! tip "Memory and speed"
     If you hit out-of-memory errors, lower `--batch-size`. If training is slow and you have GPU VRAM left, increase `--batch-size`. Both memory and training speed can be improved with `--dtype bf16` (older GPUs don't support it).
 
+!!! tip "`--num-workers` on macOS and Windows"
+    The examples default `--num-workers` to 2 on Linux and 0 on macOS and Windows, where PyTorch's `file_system` tensor sharing makes each DataLoader worker cost five seconds to shut down. Since a fresh iterator is built per phase, workers there stall the run at every train/val boundary rather than speeding it up — see [Data loading stalls between phases](wiring.md#data-loading-stalls-between-phases). Pass `--num-workers` explicitly to override.
+
 ## Install the library
 
 ```bash

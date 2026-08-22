@@ -36,6 +36,7 @@ from torch.nn.parallel import DistributedDataParallel
 import nansense
 from examples.common import (
     add_dtype_arg,
+    add_num_workers_arg,
     amp_dtype_from_name,
     enable_line_buffering,
     evaluate,
@@ -113,7 +114,7 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="ResNet depth knob: 2 * stages * n + 2 layers (e.g. ResNet-20 at 3 stages)",
     )
-    parser.add_argument("--num-workers", type=int, default=2)
+    add_num_workers_arg(parser)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
     add_dtype_arg(parser)
     parser.add_argument(

@@ -8,6 +8,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from torchvision import datasets, transforms
 
+from examples.common import default_num_workers
 from examples.mirrors import cifar10
 
 
@@ -132,7 +133,7 @@ def build_dataloaders(
     config: DatasetConfig,
     data_dir: Path,
     batch_size: int = 64,
-    num_workers: int = 2,
+    num_workers: int = default_num_workers(),
     download: bool = True,
     padding: str = "zero",
 ) -> tuple[DataLoader, DataLoader]:
@@ -172,7 +173,7 @@ def build_distributed_dataloaders(
     config: DatasetConfig,
     data_dir: Path,
     batch_size: int = 64,
-    num_workers: int = 2,
+    num_workers: int = default_num_workers(),
     download: bool = True,
     padding: str = "zero",
 ) -> tuple[DataLoader, DataLoader, DistributedSampler]:

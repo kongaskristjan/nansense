@@ -32,6 +32,8 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchvision.datasets.utils import download_and_extract_archive
 
+from examples.common import default_num_workers
+
 # ImageNet statistics — the encoder is pretrained on ImageNet, so inputs are
 # normalised to match (and passed to NaNsense as input_mean / input_std).
 IMAGENET_MEAN: tuple[float, float, float] = (0.485, 0.456, 0.406)
@@ -219,7 +221,7 @@ def build_dataloaders(
     config: DatasetConfig,
     data_dir: Path,
     batch_size: int = 8,
-    num_workers: int = 2,
+    num_workers: int = default_num_workers(),
     download: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
     train_set = Make3DDataset(config, data_dir, train=True, download=download)

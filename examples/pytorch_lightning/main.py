@@ -25,7 +25,14 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-from examples.common import add_dtype_arg, amp_dtype_from_name, autocast, enable_line_buffering
+from examples.common import (
+    add_dtype_arg,
+    add_num_workers_arg,
+    amp_dtype_from_name,
+    autocast,
+    default_num_workers,
+    enable_line_buffering,
+)
 from nansense.lightning import NansenseCallback, fit_with_time_travel
 
 MNIST_MEAN: tuple[float, ...] = (0.1307,)
@@ -90,7 +97,7 @@ class MNISTClassifier(LightningModule):
 def build_dataloaders(
     data_dir: Path,
     batch_size: int = 128,
-    num_workers: int = 2,
+    num_workers: int = default_num_workers(),
     download: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
     transform = transforms.Compose(
@@ -127,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lr", type=float, default=0.05)
     add_dtype_arg(parser)
-    parser.add_argument("--num-workers", type=int, default=2)
+    add_num_workers_arg(parser)
     parser.add_argument(
         "--cache-dir",
         type=Path,

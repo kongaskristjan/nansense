@@ -47,6 +47,7 @@ from torch import nn
 
 import nansense
 from examples.common import (
+    add_num_workers_arg,
     enable_line_buffering,
     evaluate,
     select_device,
@@ -164,7 +165,7 @@ def parse_args() -> argparse.Namespace:
             "(default .nansense_cache/playground/<playground>/moment.pt)."
         ),
     )
-    parser.add_argument("--num-workers", type=int, default=2)
+    add_num_workers_arg(parser)
     parser.add_argument(
         "--device", type=str, default=None, help="cpu / cuda / mps; default auto"
     )

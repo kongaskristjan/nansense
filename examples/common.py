@@ -186,3 +186,40 @@ def select_device(name: str | None) -> torch.device:
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def default_num_workers() -> int:
+    """The `--num-workers` default: 2, or 0 where DataLoader workers stall.
+
+    On Linux, worker processes are forked and their teardown is free, so two
+    of them overlap augmentation with the forward pass for nothing.
+
+    macOS and Windows are the platforms where `torch.multiprocessing` offers
+    only the `file_system` sharing strategy, and that strategy makes workers
+    pathological for a training loop that starts a fresh iterator per phase.
+    Every worker forks a `torch_shm_manager` helper which outlives it and
+    inherits the worker's sentinel pipe, so the pipe never reaches EOF: the
+    `join(timeout=MP_STATUS_CHECK_INTERVAL)` in PyTorch's worker shutdown
+    always waits out its full 5 seconds. A train phase followed by a val
+    phase therefore stops dead for `5s * num_workers` at each boundary — with
+    the NaNsense UI still showing the last batch of the phase, so the run
+    looks frozen — and leaks one orphaned `torch_shm_manager` per worker per
+    phase. Loading in-process instead costs a fraction of that and leaks
+    nothing; pass `--num-workers` explicitly to override.
+    """
+    if "file_descriptor" in torch.multiprocessing.get_all_sharing_strategies():
+        return 2
+    return 0
+
+
+def add_num_workers_arg(parser: argparse.ArgumentParser) -> None:
+    """Register the shared `--num-workers` flag (see `default_num_workers`)."""
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=default_num_workers(),
+        help=(
+            "DataLoader worker processes (default 2 on Linux, 0 on "
+            "macOS/Windows, where per-phase worker shutdown costs 5s each)."
+        ),
+    )

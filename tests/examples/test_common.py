@@ -78,3 +78,33 @@ def test_every_entrypoint_wires_dtype_flag(
     assert main_module.parse_args().dtype == "fp32"
     monkeypatch.setattr(sys, "argv", ["main.py", "--dtype", "fp16"])
     assert main_module.parse_args().dtype == "fp16"
+
+
+def test_default_num_workers_follows_the_sharing_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Workers only where `file_descriptor` sharing exists (Linux): on the
+    `file_system`-only platforms their per-phase shutdown costs 5s each."""
+    monkeypatch.setattr(
+        torch.multiprocessing, "get_all_sharing_strategies", lambda: {"file_system"}
+    )
+    assert common.default_num_workers() == 0
+    monkeypatch.setattr(
+        torch.multiprocessing,
+        "get_all_sharing_strategies",
+        lambda: {"file_system", "file_descriptor"},
+    )
+    assert common.default_num_workers() == 2
+
+
+@pytest.mark.parametrize("module_name", _ENTRYPOINTS)
+def test_every_entrypoint_wires_num_workers_flag(
+    module_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each training script must take `--num-workers` from the shared default,
+    so no example reintroduces the per-phase worker stall."""
+    main_module = importlib.import_module(module_name)
+    monkeypatch.setattr(sys, "argv", ["main.py"])
+    assert main_module.parse_args().num_workers == common.default_num_workers()
+    monkeypatch.setattr(sys, "argv", ["main.py", "--num-workers", "3"])
+    assert main_module.parse_args().num_workers == 3
