@@ -729,6 +729,10 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
 <p class="admonition-title">Memory and speed</p>
 <p>If you hit out-of-memory errors, lower <code>--batch-size</code>. If training is slow and you have GPU VRAM left, increase <code>--batch-size</code>. Both memory and training speed can be improved with <code>--dtype bf16</code> (older GPUs don't support it).</p>
 </div>
+<div class="admonition tip">
+<p class="admonition-title"><code>--num-workers</code> on macOS and Windows</p>
+<p>The examples default <code>--num-workers</code> to 2 on Linux and 0 on macOS and Windows, where PyTorch's <code>file_system</code> tensor sharing makes each DataLoader worker cost five seconds to shut down. Since a fresh iterator is built per phase, workers there stall the run at every train/val boundary rather than speeding it up — see <a href="../wiring/#data-loading-stalls-between-phases">Data loading stalls between phases</a>. Pass <code>--num-workers</code> explicitly to override.</p>
+</div>
 <h2 id="install-the-library">Install the library<a class="headerlink" href="#install-the-library" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>nansense
 </code></pre></div>

@@ -56,6 +56,12 @@ The schedule is discovered as you go: phase names and per-phase batch counts are
 
 A declared schedule is also validated: an unseen phase name, or more batches than declared, raises instead of passing silently. That is what you want when the counts are known up front, but it means a phase that does not run every epoch (validating every N epochs, say) should be re-declared with [`session.set_schedule(phases=...)`](https://kongaskristjan.github.io/nansense/dev/api/#nansense.Session.set_schedule) rather than pinned once.
 
+### Data loading stalls between phases
+
+On macOS and Windows a `DataLoader` with `num_workers > 0` pauses the run for `5s * num_workers` at the end of every phase, and leaks one orphaned `torch_shm_manager` process per worker. Those platforms only offer PyTorch's `file_system` tensor sharing, which forks that helper per worker; it outlives the worker holding its sentinel pipe open, so the `join(timeout=5.0)` in PyTorch's worker shutdown always waits out the full five seconds. Nothing about NaNsense causes it — but NaNsense makes it visible, because the UI keeps showing the phase's last batch throughout and the run looks frozen.
+
+Building one iterator per phase is what makes this bite once per boundary rather than once per run, so use `num_workers=0` there; loading in-process is usually faster anyway for datasets that fit in memory. `persistent_workers=True` also avoids the stall, but it stops a time-travel jump from reproducing the epoch it replays: worker RNG state is fixed when the worker starts, so the augmentations differ the second time through. `examples/common.py:default_num_workers` is the platform check the bundled examples share.
+
 ## Wire it into your loop: PyTorch Lightning
 
 ```
