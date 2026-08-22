@@ -39,7 +39,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/kongaskristjan/nansense
 cd nansense
 
-# --group: cpu | cuda (NVIDIA) | cuda-legacy (pre-Turing NVIDIA) | rocm (AMD)
+# --group: cpu (CPU or mac MPS acceleration) | cuda (NVIDIA) | cuda-legacy (pre-Turing NVIDIA) | rocm (AMD)
 uv run --group cpu examples/standard/main.py --nansense-port 8080
 ```
 
