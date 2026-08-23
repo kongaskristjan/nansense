@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import logging
 import shutil
-import sys
 import threading
 import time
 import warnings
@@ -47,6 +46,7 @@ from fastapi import FastAPI
 from nicegui import ui
 
 from nansense.assets import logo_small_path
+from nansense.console import console_print, stream_encoding
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.mcp_server import build_mount
 from nansense.session import Session
@@ -151,12 +151,13 @@ def _box_chars(stream: TextIO | None = None) -> _BoxChars:
     Windows hands a *redirected* stdout the legacy ANSI codepage (cp1252 in
     Western locales), which has no box-drawing characters at all — printing them
     there raises `UnicodeEncodeError` on the announcer thread, taking the address
-    and the browser tab down with it. A plainer box beats no box.
+    and the browser tab down with it. `console_print` would degrade them to `?`;
+    picking the glyphs up front gives a plainer box instead of a broken one.
     """
-    encoding = getattr(stream or sys.stdout, "encoding", None) or "ascii"
+    encoding = stream_encoding(stream)
     try:
         "".join(_UNICODE_BOX).encode(encoding)
-    except (LookupError, UnicodeEncodeError):
+    except UnicodeEncodeError:
         return _ASCII_BOX
     return _UNICODE_BOX
 
@@ -198,7 +199,7 @@ def _announce(url: str, mcp_url: str | None = None) -> None:
             f"claude mcp add --transport http nansense {mcp_url}",
         ]
     box = _format_box(lines, width, _box_chars())
-    print(f"\n{box}\n", flush=True)
+    console_print(f"\n{box}\n")
 
 
 class _Startable(Protocol):

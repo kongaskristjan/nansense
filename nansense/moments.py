@@ -61,6 +61,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import torch
 
+from nansense.console import console_print
 from nansense.input_config import InputTransform, MeanStd
 from nansense.restore import validate_model_state
 from nansense.schedule import BatchPosition, format_position
@@ -172,10 +173,9 @@ def write_moment(session: Session, path: Path, *, batch_item: Any) -> None:
     tmp = path.with_name(path.name + ".tmp")
     torch.save(payload, tmp)
     tmp.replace(path)
-    print(
+    console_print(
         f"NaNsense: moment frozen at {format_position(snapshot.position)}"
-        f" -> {path}",
-        flush=True,
+        f" -> {path}"
     )
 
 

@@ -62,6 +62,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
 from nansense import capture, debugger, distributed, experiments, probe
+from nansense.console import console_print
 from nansense.debugger import DebugError, DebugSettings
 from nansense.input_config import InputTransform, MeanStd
 from nansense.experiments import (
@@ -2073,11 +2074,10 @@ class Session:
             # The run ended without reaching the armed freeze position — say
             # so instead of leaving a prepare script silently moment-less.
             path, phase, epoch, batch_idx = freeze_request
-            print(
+            console_print(
                 f"NaNsense: freeze_moment target (epoch {epoch} | {phase} "
                 f"batch {batch_idx}) was never reached; {path} was not "
-                "written.",
-                flush=True,
+                "written."
             )
         # Finalize any in-flight recordings so their MP4 files are playable
         # even when the training script simply runs to completion.
@@ -2242,12 +2242,11 @@ class Session:
         # Surface the first detection on the console too, so a headless run
         # (no browser) still sees it. Later merges stay quiet — only the
         # episode's onset prints.
-        print(
+        console_print(
             f"NaNsense: numerical issue detected ({debugger.reasons_text(error)}) "
             f"at {format_position(error.position)} — training paused. See the "
             "UI banner for affected layers and fixes (e.g. loss scaling or "
-            "bfloat16 for fp16 subnormal gradients).",
-            flush=True,
+            "bfloat16 for fp16 subnormal gradients)."
         )
         # Re-check the very next batch so a Step immediately re-evaluates,
         # rather than waiting out the rest of the interval.
@@ -2622,9 +2621,7 @@ class Session:
         self._epoch_start_saved_for = None
         # Note the jump on the console too (covers both the plain-loop and
         # Lightning restorers, which funnel through here).
-        print(
-            f"NaNsense: time-traveled to the start of epoch {epoch}.", flush=True
-        )
+        console_print(f"NaNsense: time-traveled to the start of epoch {epoch}.")
 
     def _wait_for_proceed(self) -> None:
         # A pending time-travel jump also ends the wait: its request already

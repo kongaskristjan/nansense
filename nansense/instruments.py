@@ -52,6 +52,8 @@ from typing import Any, Literal, cast
 import torch
 from torch import Tensor, nn
 
+from nansense.console import console_print
+
 InstrumentKind = Literal["metric", "layer_tensor", "weight_tensor"]
 MetricCadence = Literal["batch", "epoch"]
 
@@ -294,10 +296,9 @@ class InstrumentManager:
             if instrument.error is None:
                 instrument.error = error
                 self._rebuild_caches_locked()
-        print(
+        console_print(
             f"NaNsense: {instrument.kind} instrument {instrument.name!r} "
-            f"disabled after an error: {error}",
-            flush=True,
+            f"disabled after an error: {error}"
         )
 
     def has_metrics(self) -> bool:

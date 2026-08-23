@@ -1526,11 +1526,12 @@ prints the address in a box spanning the terminal width
 (`shutil.get_terminal_size`, so it stands out in the training log) and, unless
 `open_browser=False`, opens a focused new browser tab (`new=2`, `autoraise=True`,
 a no-op on a headless box). `_box_chars` picks the frame glyphs by asking
-`sys.stdout.encoding` what it can carry: Unicode box-drawing where that works,
-ASCII (`+`/`-`/`|`) where it doesn't. Windows hands a *redirected* stdout the
-legacy ANSI codepage (cp1252), which has no box-drawing characters at all, and
-the raising `print` used to kill this daemon thread outright — costing both the
-address and the browser tab while training carried on regardless.
+`stream_encoding()` what stdout can carry — Unicode box-drawing where that
+works, ASCII (`+`/`-`/`|`) where it doesn't — because the generic degrading in
+`nansense.console` would turn an unencodable frame into a row of `?`. This is
+where the encoding problem bit hardest: the raising `print` killed the daemon
+thread outright, costing both the address and the browser tab while training
+carried on as if nothing had happened.
 The wait is what makes a concurrent session safe: if
 another session already holds the port, uvicorn's bind raises, it logs the
 `address already in use` error and `sys.exit`s its own thread, so `started` never
@@ -2021,6 +2022,29 @@ frozen-batch size are the remaining sizing levers. Serving replays that
 batch once at boot (seconds for LeNet, under a minute for the imagenette
 ResNet on the free Space's CPUs); the container ships no dataset and no
 epoch cache (time travel is disabled under lock anyway).
+
+## Console output (`nansense.console`)
+
+Every line NaNsense prints to stdout goes through `console_print` rather than
+`print`. Python gives stdout UTF-8 on Windows only when it is a *real* console;
+a pipe or a file gets the legacy ANSI codepage (cp1252 in Western locales)
+instead, and the non-ASCII characters NaNsense emits — the em dash in the
+paused-run notice, `±Inf` from `debugger.reasons_text`, an accented directory in
+a frozen-moment path — then raise `UnicodeEncodeError` mid-print. There is no
+safe place for that to happen: on the UI announcer thread it killed the banner,
+and from the training loop it would end a run over a log line.
+
+`console_print` degrades instead. `stream_encoding()` resolves what the stream
+actually writes with (falling back to `ascii` when stdout has no `encoding`, is
+`None` under `pythonw`, or names a codec this Python lacks), and `encodable`
+returns the text untouched when it already fits. Only when it doesn't are the
+`_STAND_INS` applied — `—` to `-`, `±` to `+/-` — so a degraded line still
+reads as prose rather than as `?`; whatever has no stand-in is left to the
+codec's own `replace` handler. Callers pass plain text and never think about it.
+
+The one place that resolves the encoding itself is the UI banner's `_box_chars`
+(see the UI layer): a frame degrades better by choosing ASCII glyphs up front
+than by having Unicode ones replaced character by character.
 
 ## Lifecycle summary
 
