@@ -35,11 +35,12 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sys
 import threading
 import time
 import warnings
 import webbrowser
-from typing import Protocol
+from typing import NamedTuple, Protocol, TextIO
 
 import uvicorn
 from fastapi import FastAPI
@@ -129,17 +130,54 @@ def _display_url(host: str, port: int) -> str:
     return f"http://{shown_host}:{port}"
 
 
-def _format_box(lines: list[str], width: int) -> str:
-    """Frame `lines` in a Unicode box `width` columns wide so the address
-    stands out in the busy training log it is printed amongst.
+class _BoxChars(NamedTuple):
+    """The six glyphs `_format_box` draws its frame from."""
+
+    horizontal: str
+    vertical: str
+    top_left: str
+    top_right: str
+    bottom_left: str
+    bottom_right: str
+
+
+_UNICODE_BOX = _BoxChars("─", "│", "┌", "┐", "└", "┘")
+_ASCII_BOX = _BoxChars("-", "|", "+", "+", "+", "+")
+
+
+def _box_chars(stream: TextIO | None = None) -> _BoxChars:
+    """Box-drawing glyphs where `stream` can carry them, ASCII where it can't.
+
+    Windows hands a *redirected* stdout the legacy ANSI codepage (cp1252 in
+    Western locales), which has no box-drawing characters at all — printing them
+    there raises `UnicodeEncodeError` on the announcer thread, taking the address
+    and the browser tab down with it. A plainer box beats no box.
+    """
+    encoding = getattr(stream or sys.stdout, "encoding", None) or "ascii"
+    try:
+        "".join(_UNICODE_BOX).encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return _ASCII_BOX
+    return _UNICODE_BOX
+
+
+def _format_box(lines: list[str], width: int, chars: _BoxChars = _UNICODE_BOX) -> str:
+    """Frame `lines` in a box `width` columns wide so the address stands out in
+    the busy training log it is printed amongst.
 
     The interior is widened to span `width` (one space of padding on each
     side of the text), but never shrinks below the longest line.
     """
     inner = max(width - 4, max(len(line) for line in lines))
-    rule = "─" * (inner + 2)
-    body = [f"│ {line.ljust(inner)} │" for line in lines]
-    return "\n".join([f"┌{rule}┐", *body, f"└{rule}┘"])
+    rule = chars.horizontal * (inner + 2)
+    body = [f"{chars.vertical} {line.ljust(inner)} {chars.vertical}" for line in lines]
+    return "\n".join(
+        [
+            f"{chars.top_left}{rule}{chars.top_right}",
+            *body,
+            f"{chars.bottom_left}{rule}{chars.bottom_right}",
+        ]
+    )
 
 
 def _announce(url: str, mcp_url: str | None = None) -> None:
@@ -159,7 +197,7 @@ def _announce(url: str, mcp_url: str | None = None) -> None:
             "Debug this run from a coding agent:",
             f"claude mcp add --transport http nansense {mcp_url}",
         ]
-    box = _format_box(lines, width)
+    box = _format_box(lines, width, _box_chars())
     print(f"\n{box}\n", flush=True)
 
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import sys
 import threading
 import warnings
 
@@ -156,11 +158,20 @@ def test_format_box_never_shrinks_below_content() -> None:
     assert long_line in box
 
 
-def test_announce_prints_boxed_url(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("encoding, corner", [("utf-8", "┌"), ("cp1252", "+")])
+def test_announce_prints_a_box_the_console_can_encode(
+    monkeypatch: pytest.MonkeyPatch, encoding: str, corner: str
+) -> None:
+    """cp1252 is the regression: Windows hands a redirected stdout the legacy
+    ANSI codepage, which carries no box-drawing characters, so the print raised
+    and killed the announcer thread — costing both the address and the tab."""
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding=encoding))
     _announce("http://127.0.0.1:8080")
-    out = capsys.readouterr().out
+    sys.stdout.flush()
+    out = raw.getvalue().decode(encoding)
     assert "http://127.0.0.1:8080" in out
-    assert "┌" in out and "└" in out
+    assert corner in out
 
 
 class _FakeServer:
@@ -193,8 +204,7 @@ def test_announce_when_ready_announces_and_opens_focused_tab(
         _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:8080", True,
         timeout=0.0,
     )
-    out = capsys.readouterr().out
-    assert "http://127.0.0.1:8080" in out and "┌" in out and "└" in out
+    assert "http://127.0.0.1:8080" in capsys.readouterr().out
     assert calls == [("http://127.0.0.1:8080", 2, True)]
 
 
@@ -235,7 +245,7 @@ def test_announce_when_ready_respects_open_browser_false(
         _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:8080", False,
         timeout=0.0,
     )
-    assert "┌" in capsys.readouterr().out
+    assert "http://127.0.0.1:8080" in capsys.readouterr().out
     assert calls == []
 
 
@@ -253,7 +263,8 @@ def test_announce_when_ready_swallows_browser_backend_errors(
         _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:8080", True,
         timeout=0.0,
     )
-    assert "┌" in capsys.readouterr().out  # banner printed despite the error
+    out = capsys.readouterr().out
+    assert "http://127.0.0.1:8080" in out  # banner printed despite the error
 
 
 def _nicegui_record(message: object) -> logging.LogRecord:

@@ -1522,10 +1522,16 @@ patched to a no-op because uvicorn can't register signal handlers off the main
 thread. `serve()` no-ops on non-leader ranks and on a disabled session. Once the
 server thread is launched, a second **daemon** thread (`_announce_when_ready`)
 waits for `server.started` before doing anything user-facing: on a clean bind it
-prints the address in a Unicode box spanning the terminal width
+prints the address in a box spanning the terminal width
 (`shutil.get_terminal_size`, so it stands out in the training log) and, unless
 `open_browser=False`, opens a focused new browser tab (`new=2`, `autoraise=True`,
-a no-op on a headless box). The wait is what makes a concurrent session safe: if
+a no-op on a headless box). `_box_chars` picks the frame glyphs by asking
+`sys.stdout.encoding` what it can carry: Unicode box-drawing where that works,
+ASCII (`+`/`-`/`|`) where it doesn't. Windows hands a *redirected* stdout the
+legacy ANSI codepage (cp1252), which has no box-drawing characters at all, and
+the raising `print` used to kill this daemon thread outright — costing both the
+address and the browser tab while training carried on regardless.
+The wait is what makes a concurrent session safe: if
 another session already holds the port, uvicorn's bind raises, it logs the
 `address already in use` error and `sys.exit`s its own thread, so `started` never
 flips — the announcer sees the dead thread (or times out), prints nothing and
