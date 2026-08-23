@@ -35,10 +35,12 @@ from __future__ import annotations
 
 import logging
 import shutil
+import signal
 import threading
 import time
 import warnings
 import webbrowser
+from types import FrameType
 from typing import NamedTuple, Protocol, TextIO
 
 import uvicorn
@@ -249,6 +251,56 @@ def _announce_when_ready(
             pass
 
 
+class _Stoppable(Protocol):
+    """The slice of `uvicorn.Server` the SIGINT handler writes — the flag its
+    serve loop polls to begin an orderly shutdown."""
+
+    should_exit: bool
+
+
+def _stop_server_on_sigint(server: _Stoppable) -> None:
+    """Make Ctrl-C end the *process*, not just the training loop.
+
+    Two deliberate choices meet badly here. The UI thread is non-daemon so the
+    page outlives a finished training script (post-mortem browsing), and
+    uvicorn's own signal handlers are disabled because it doesn't run on the
+    main thread. So nothing ever told the server to stop: a KeyboardInterrupt
+    unwound the training loop, and then the interpreter blocked forever in
+    `threading._shutdown()`, joining a server still happily serving. The script
+    looked crashed and hung at once — a traceback, then nothing.
+
+    Setting `should_exit` is all uvicorn needs; its serve loop polls the flag
+    and shuts down within a tick. The previous handler is then chained rather
+    than replaced, so Ctrl-C keeps meaning exactly what it meant — normally
+    `default_int_handler`, i.e. raise KeyboardInterrupt in the main thread, or
+    a training script's own handler if it installed one.
+
+    No-ops off the main thread (where `signal.signal` is an error at all) and
+    when SIGINT is being ignored, since overriding `SIG_IGN` would resurrect a
+    Ctrl-C the program explicitly asked to swallow.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
+    previous = signal.getsignal(signal.SIGINT)
+    if previous is signal.SIG_IGN:
+        return
+    # SIG_DFL (and a handler set outside Python) reports as an int rather than
+    # a callable — nothing to chain to, so Ctrl-C keeps the platform default.
+    chain = None if isinstance(previous, int) else previous
+
+    def handle_sigint(signum: int, frame: FrameType | None) -> None:
+        server.should_exit = True
+        if chain is not None:
+            chain(signum, frame)
+
+    try:
+        signal.signal(signal.SIGINT, handle_sigint)
+    except (OSError, ValueError):
+        # Some embeddings refuse signal registration; a UI that outlives its
+        # Ctrl-C beats no UI at all.
+        pass
+
+
 def serve(
     session: Session,
     *,
@@ -402,6 +454,7 @@ def serve(
 
     thread = threading.Thread(target=server.run, name="nansense-ui", daemon=False)
     thread.start()
+    _stop_server_on_sigint(server)
 
     url = _display_url(host, port)
     threading.Thread(

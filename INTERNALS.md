@@ -1519,7 +1519,23 @@ Render conventions worth knowing before editing `render.py`:
 uvicorn on a **non-daemon background thread**, so the UI outlives the training
 script's main thread for post-mortem browsing. `install_signal_handlers` is
 patched to a no-op because uvicorn can't register signal handlers off the main
-thread. `serve()` no-ops on non-leader ranks and on a disabled session. Once the
+thread.
+
+Those two together are what made Ctrl-C look like a crash that would not die:
+nothing was left to tell the server to stop, so a KeyboardInterrupt unwound the
+training loop, printed its traceback, and then the interpreter blocked forever
+inside `threading._shutdown()` joining a server still serving happily — a
+script that had apparently crashed and hung at the same time. `serve` therefore
+installs `_stop_server_on_sigint`, whose handler sets `server.should_exit` (the
+flag uvicorn's serve loop polls, so shutdown follows within a tick) and then
+**chains** to whatever handler was there before — `default_int_handler`, i.e.
+raise `KeyboardInterrupt`, or a training script's own. Chaining rather than
+replacing is what keeps Ctrl-C meaning Ctrl-C. It declines to install off the
+main thread (`signal.signal` is an error there, and `serve` may be called from
+a worker) and when SIGINT is `SIG_IGN`, which is a program explicitly asking
+for Ctrl-C to do nothing.
+
+`serve()` no-ops on non-leader ranks and on a disabled session. Once the
 server thread is launched, a second **daemon** thread (`_announce_when_ready`)
 waits for `server.started` before doing anything user-facing: on a clean bind it
 prints the address in a box spanning the terminal width

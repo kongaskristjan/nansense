@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import io
 import logging
+import signal
 import sys
 import threading
 import warnings
+from collections.abc import Callable, Iterator
+from types import FrameType
 
 import pytest
 
@@ -23,6 +26,7 @@ from nansense.ui.app import (
     _announce_when_ready,
     _display_url,
     _format_box,
+    _stop_server_on_sigint,
     serve,
 )
 
@@ -172,6 +176,103 @@ def test_announce_prints_a_box_the_console_can_encode(
     out = raw.getvalue().decode(encoding)
     assert "http://127.0.0.1:8080" in out
     assert corner in out
+
+
+class _FakeStoppable:
+    """Stands in for a uvicorn server; only `should_exit` is ever written."""
+
+    def __init__(self) -> None:
+        self.should_exit = False
+
+
+def _installed_sigint_handler() -> Callable[[int, FrameType | None], object]:
+    """The current SIGINT handler, narrowed past the `SIG_DFL`/`SIG_IGN`
+    integers `getsignal` can also return, so it can be called."""
+    handler = signal.getsignal(signal.SIGINT)
+    assert handler is not None and not isinstance(handler, int)
+    return handler
+
+
+@pytest.fixture
+def sigint_restored() -> Iterator[None]:
+    """Put the process's real SIGINT handler back: these tests install one for
+    real rather than faking `signal.signal`, which is what makes them prove the
+    handler is reachable the way CPython will reach it."""
+    previous = signal.getsignal(signal.SIGINT)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_sigint_stops_the_server_and_still_raises(sigint_restored: None) -> None:
+    """Both halves matter. Without `should_exit` the interpreter hangs forever
+    joining the non-daemon UI thread; without the re-raise Ctrl-C would stop
+    meaning Ctrl-C and the training loop would carry on."""
+    server = _FakeStoppable()
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    _stop_server_on_sigint(server)
+
+    with pytest.raises(KeyboardInterrupt):
+        _installed_sigint_handler()(signal.SIGINT, None)
+    assert server.should_exit
+
+
+def test_sigint_chains_a_training_scripts_own_handler(sigint_restored: None) -> None:
+    """A script that installed its own Ctrl-C handling keeps it."""
+    server = _FakeStoppable()
+    seen: list[int] = []
+    signal.signal(signal.SIGINT, lambda signum, frame: seen.append(signum))
+    _stop_server_on_sigint(server)
+
+    _installed_sigint_handler()(signal.SIGINT, None)
+    assert seen == [signal.SIGINT]
+    assert server.should_exit
+
+
+def test_sigint_handler_left_alone_when_ctrl_c_is_ignored(
+    sigint_restored: None,
+) -> None:
+    """`SIG_IGN` is a program saying Ctrl-C must do nothing; reinstating it to
+    shut the UI down would override that."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _stop_server_on_sigint(_FakeStoppable())
+    assert signal.getsignal(signal.SIGINT) is signal.SIG_IGN
+
+
+def test_sigint_handler_not_installed_off_the_main_thread(
+    sigint_restored: None,
+) -> None:
+    """`signal.signal` raises off the main thread, and `serve()` may be called
+    from a worker — so this has to decline rather than blow up."""
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    thread = threading.Thread(target=_stop_server_on_sigint, args=(_FakeStoppable(),))
+    thread.start()
+    thread.join()
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_serve_installs_the_sigint_shutdown(
+    monkeypatch: pytest.MonkeyPatch, sigint_restored: None
+) -> None:
+    """A correct handler nobody installs is exactly the hang this fixes, so the
+    wiring is asserted separately from the handler's behaviour."""
+
+    class _StubServer:
+        def __init__(self, config: object) -> None:
+            self.started = False
+            self.should_exit = False
+
+        def run(self) -> None:
+            return None
+
+    monkeypatch.setattr(app.uvicorn, "Server", _StubServer)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    session = nansense.start(torch.nn.Linear(4, 2), epochs=1, phases={"train": 1})
+    thread = serve(session, port=0, open_browser=False, mcp=False)
+    assert thread is not None
+    thread.join(timeout=10)
+    assert signal.getsignal(signal.SIGINT) is not signal.default_int_handler
 
 
 class _FakeServer:
