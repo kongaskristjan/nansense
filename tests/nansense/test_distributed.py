@@ -8,12 +8,16 @@ The spawned runs are hang-proofed in layers: waits *inside* a collective
 trip gloo's 120s timeout, each worker arms a `faulthandler` watchdog that
 dumps every thread's stack and dies if it wedges *outside* one, and the
 parent's join carries a wall-clock ceiling as the last resort — so a wedged
-run fails loudly with diagnostics instead of hanging pytest forever.
+run fails loudly with diagnostics instead of hanging pytest forever. A
+finished worker leaves through `os._exit` rather than a normal return, which
+sidesteps a torch teardown race (see `_worker_entry`).
 """
 
 from __future__ import annotations
 
 import faulthandler
+import os
+import sys
 import time
 from collections.abc import Callable
 from datetime import timedelta
@@ -163,6 +167,31 @@ def _arm_worker_watchdog() -> None:
     faulthandler.dump_traceback_later(_WORKER_WATCHDOG_S, exit=True)
 
 
+def _worker_entry(rank: int, worker: Callable[..., None], *args: object) -> None:
+    """Run one rank's `worker`, then leave without interpreter finalization.
+
+    `DistributedDataParallel` keeps torch's `ProcessGroupGloo` alive past
+    `destroy_process_group()` — the backend's two `pt_gloo_runloop` threads
+    are demonstrably still running after the group is destroyed, the wrapper
+    is dropped and the cycle collector has run (reproducible in ten lines of
+    plain torch, with no nansense in the picture). Those threads then race the
+    C++ static teardown that follows `Py_Finalize`, and in roughly 1% of runs
+    the race is lost: a worker that passed every assertion dies with
+    "terminate called without an active exception" (SIGABRT), failing the
+    parent's join. The abort lands after the interpreter is gone — a
+    `faulthandler` dump of it shows no Python frame on any thread.
+
+    A rank has nothing left to do once `worker` returns, so it exits with the
+    success code `mp.spawn` checks for instead of finalizing. A raising worker
+    never gets here: the exception propagates into torch's spawn wrapper,
+    which reports the traceback to the parent as usual.
+    """
+    worker(rank, *args)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+
+
 def _spawn_two_ranks(worker: Callable[..., None], *args: object) -> None:
     """`mp.spawn(nprocs=2, join=True)` with a wall-clock ceiling.
 
@@ -170,7 +199,7 @@ def _spawn_two_ranks(worker: Callable[..., None], *args: object) -> None:
     wedges before it even arms one (e.g. during interpreter startup), the
     join here still kills it and fails the test instead of hanging pytest.
     """
-    ctx = mp.spawn(worker, args=args, nprocs=2, join=False)
+    ctx = mp.spawn(_worker_entry, args=(worker, *args), nprocs=2, join=False)
     assert ctx is not None
     deadline = time.monotonic() + _JOIN_CEILING_S
     while not ctx.join(timeout=deadline - time.monotonic()):
