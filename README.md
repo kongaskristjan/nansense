@@ -4,7 +4,7 @@
 
 <p align="center"><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
 
-https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4
+https://github.com/user-attachments/assets/b15f7dc5-1a6f-44d2-81fa-a97daafa89c6
 
 <p align="center"><em>Cut from a real training run — one channel at four depths across every epoch, deep dream building a neuron's favourite picture out of noise, and a single changed input pixel spreading outwards to measure the receptive field.</em></p>
 

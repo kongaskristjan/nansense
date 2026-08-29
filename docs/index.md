@@ -24,7 +24,7 @@ hide:
   <p class="pg-embed__note">The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.</p>
 </div>
 
-<video controls muted style="max-width: 100%;" src="https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4"></video>
+<video controls muted style="max-width: 100%;" src="https://github.com/user-attachments/assets/b15f7dc5-1a6f-44d2-81fa-a97daafa89c6"></video>
 
 *NaNsense* is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can **pause, step batch-by-batch, and time-travel to a different epoch while training**, and see exactly what every layer is doing.
 

@@ -34,7 +34,7 @@ from nansense.session import Session
 #: docs home page play as their hero (`tests/nansense/ui/test_share.py` keeps
 #: the three in sync). 1920x1080 mp4, ~10 MB.
 _VIDEO_URL: str = (
-    "https://github.com/user-attachments/assets/07063057-7891-4c52-89be-ced10012c6f4"
+    "https://github.com/user-attachments/assets/b15f7dc5-1a6f-44d2-81fa-a97daafa89c6"
 )
 #: Where the app re-serves that video from its own origin (see
 #: `add_video_download_route`), and the name the browser saves it under.
