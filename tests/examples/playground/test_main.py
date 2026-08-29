@@ -10,7 +10,7 @@ statistics browsable.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -29,15 +29,22 @@ from nansense.ui import render
 from tests.nansense.helpers import run_in_thread
 
 _EPOCHS = 2
-_BATCHES = 3
-# Both demo models accept 32x32 inputs: it is the real MNIST size, and the
-# resnet is fully convolutional — so the imagenette flow tests cheaply too.
-_IMAGE_SIZE = 32
+_BATCHES = 2
+# Synthetic stand-ins for the real frames. 32x32 is MNIST's real size (and
+# what LeNet's classifier head is shaped for); the imagenette resnet is fully
+# convolutional and its real input is 128x128, so a 16x16 stand-in exercises
+# the same flow for a quarter of the per-batch statistics work.
+_IMAGE_SIZES = {"mnist": 32, "imagenette": 16}
 _DEVICE = torch.device("cpu")
 
 playgrounds = pytest.mark.parametrize(
     "spec", [PLAYGROUNDS[name] for name in sorted(PLAYGROUNDS)], ids=sorted(PLAYGROUNDS)
 )
+
+# Every test here shares one `--prepare` run per playground (the `prepared`
+# fixture). That fixture is per-process, so under xdist the tests have to stay
+# on one worker or each worker that gets one re-trains the demo.
+pytestmark = pytest.mark.xdist_group("playground")
 
 
 @pytest.fixture(autouse=True)
@@ -49,14 +56,25 @@ def _restore_strip_format() -> Iterator[None]:
 
 def _loaders(spec: PlaygroundSpec) -> tuple[DataLoader, DataLoader]:
     config = spec.config
-    x = torch.randn(_BATCHES * 4, config.in_channels, _IMAGE_SIZE, _IMAGE_SIZE)
+    size = _IMAGE_SIZES[spec.dataset]
+    x = torch.randn(_BATCHES * 4, config.in_channels, size, size)
     y = torch.randint(0, config.num_classes, (_BATCHES * 4,))
     train = DataLoader(TensorDataset(x, y), batch_size=4, shuffle=True)
     val = DataLoader(TensorDataset(x[:4], y[:4]), batch_size=4)
     return train, val
 
 
-def _prepare(spec: PlaygroundSpec, moment_path: Path) -> PlaygroundSpec:
+@dataclasses.dataclass(frozen=True)
+class _Prepared:
+    """One playground's `--prepare` run: the spec it ran, the moment it
+    froze, and everything the run left in its directory."""
+
+    spec: PlaygroundSpec
+    moment_path: Path
+    written: tuple[str, ...]
+
+
+def _prepare(spec: PlaygroundSpec, moment_path: Path) -> _Prepared:
     spec = dataclasses.replace(spec, epochs=_EPOCHS)
     model = spec.build()
     train_loader, val_loader = _loaders(spec)
@@ -68,7 +86,33 @@ def _prepare(spec: PlaygroundSpec, moment_path: Path) -> PlaygroundSpec:
         device=_DEVICE,
         moment_path=moment_path,
     )
-    return spec
+    directory = moment_path.parent
+    return _Prepared(
+        spec=spec,
+        moment_path=moment_path,
+        written=tuple(sorted(path.name for path in directory.iterdir())),
+    )
+
+
+@pytest.fixture(scope="module")
+def prepared(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Callable[[PlaygroundSpec], _Prepared]:
+    """Run each playground's `--prepare` once and share the frozen moment.
+
+    Preparing is this file's dominant cost — a full run collecting statistics
+    for *every* layer — and serving only ever reads the moment back, so the
+    run is cached per playground instead of repeated per test.
+    """
+    runs: dict[str, _Prepared] = {}
+
+    def prepare(spec: PlaygroundSpec) -> _Prepared:
+        if spec.dataset not in runs:
+            directory = tmp_path_factory.mktemp(f"prepare-{spec.dataset}")
+            runs[spec.dataset] = _prepare(spec, directory / "moment.pt")
+        return runs[spec.dataset]
+
+    return prepare
 
 
 @pytest.mark.parametrize(
@@ -104,24 +148,23 @@ def test_imagenette_dream_defaults_stay_under_the_locked_ceilings() -> None:
 
 @playgrounds
 def test_prepare_freezes_the_moment_and_nothing_else(
-    spec: PlaygroundSpec, tmp_path: Path
+    spec: PlaygroundSpec, prepared: Callable[[PlaygroundSpec], _Prepared]
 ) -> None:
-    moment_path = tmp_path / "moment.pt"
-    _prepare(spec, moment_path)
-    assert moment_path.exists()
+    run = prepared(spec)
+    assert run.moment_path.exists()
     # No epoch cache: the frozen moment is the only artifact serving needs.
-    assert not list(tmp_path.glob("epoch_*.pt"))
+    assert not [name for name in run.written if name.startswith("epoch_")]
 
 
 @playgrounds
 def test_serve_parks_locked_at_the_frozen_train_batch(
-    spec: PlaygroundSpec, tmp_path: Path
+    spec: PlaygroundSpec, prepared: Callable[[PlaygroundSpec], _Prepared]
 ) -> None:
-    moment_path = tmp_path / "moment.pt"
-    spec = _prepare(spec, moment_path)
+    run = prepared(spec)
+    spec = run.spec
     session = open_showcase(
         spec.build(),
-        moment_path,
+        run.moment_path,
         spec=spec,
         port=None,  # no UI in tests; the parked, locked state is under test
     )
@@ -130,16 +173,18 @@ def test_serve_parks_locked_at_the_frozen_train_batch(
     assert session.watched_layers == frozenset(spec.shown_layers)
 
 
-def test_serve_reseeds_the_watched_cards_from_the_spec(tmp_path: Path) -> None:
+def test_serve_reseeds_the_watched_cards_from_the_spec(
+    prepared: Callable[[PlaygroundSpec], _Prepared],
+) -> None:
     """The moment freezes the watched seed it was prepared with; serving
     must re-base it on the spec's `shown_layers`, so the default cards can
     change without re-training the demo."""
-    moment_path = tmp_path / "moment.pt"
-    spec = _prepare(PLAYGROUNDS["mnist"], moment_path)
+    run = prepared(PLAYGROUNDS["mnist"])
+    spec = run.spec
     served = dataclasses.replace(spec, shown_layers=("conv2",))
     session = open_showcase(
         served.build(),
-        moment_path,
+        run.moment_path,
         spec=served,
         port=None,
     )

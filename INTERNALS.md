@@ -1753,8 +1753,12 @@ inside JSON, paying for them twice. They are downscaled past `MAX_SIDE`
 reader mistake the smoothing for data. And a render that produces nothing
 returns a reason instead — "no image" and "an image of nothing" are the same
 thing on the wire and very different to a reader. `mcp_images` imports
-`nansense.ui.*` lazily inside its functions: `nansense.ui.app` imports
-`mcp_server` while `nansense.ui.__init__` is still executing.
+`nansense.ui.*` lazily inside its functions, keeping the module-scope import
+graph one-way: the MCP modules reach into the UI, never the reverse.
+`nansense.ui.app` in turn imports `mcp_server` inside `serve()` rather than at
+module scope — the MCP SDK is a second of import time that only serving needs,
+and at module scope every `import nansense` paid it, spawned DDP ranks
+included.
 
 **Two invariants shape every tool.** First, *never block the event loop*:
 uvicorn serves NiceGUI's websockets from the same loop on a ~6 s keepalive

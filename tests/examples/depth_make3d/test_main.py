@@ -110,11 +110,18 @@ def test_dataset_raises_when_empty(tmp_path: Path) -> None:
         Make3DDataset(DatasetConfig(), tmp_path, train=True, download=False)
 
 
+# Quarter-scale stand-ins for the real 192x256 frames (and their 48x64 depth
+# maps). The network is fully convolutional, so the loops below exercise the
+# same wiring on a sixteenth of the convolution work.
+_IMAGE_HW = (96, 128)
+_DEPTH_HW = (24, 32)
+
+
 def _synthetic_depth_loader(n: int = 8, batch_size: int = 4) -> DataLoader:
     """A handful of (image, depth) pairs as a DataLoader, depth in metres."""
     torch.manual_seed(0)
-    images = torch.randn(n, 3, 192, 256)
-    depths = torch.rand(n, 1, 48, 64) * 40.0 + 1.0  # 1..41 m, all valid
+    images = torch.randn(n, 3, *_IMAGE_HW)
+    depths = torch.rand(n, 1, *_DEPTH_HW) * 40.0 + 1.0  # 1..41 m, all valid
     return DataLoader(TensorDataset(images, depths), batch_size=batch_size)
 
 
@@ -151,8 +158,8 @@ def test_training_reduces_loss_on_fixed_batch() -> None:
     torch.manual_seed(0)
     model = build_model(pretrained=False)
     model.train()
-    images = torch.randn(2, 3, 192, 256)
-    depths = torch.rand(2, 1, 48, 64) * 40.0 + 1.0
+    images = torch.randn(2, 3, *_IMAGE_HW)
+    depths = torch.rand(2, 1, *_DEPTH_HW) * 40.0 + 1.0
     criterion = ScaleInvariantLogLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
 

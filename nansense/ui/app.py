@@ -50,7 +50,6 @@ from nicegui import ui
 from nansense.assets import logo_small_path
 from nansense.console import console_print, stream_encoding
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
-from nansense.mcp_server import build_mount
 from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
 from nansense.ui.graph import build_mermaid
@@ -375,6 +374,11 @@ def serve(
     # input and is the one place `input_transform` is applied.
     primary_mean = resolve_per_input(input_mean, input_name)
     primary_std = resolve_per_input(input_std, input_name)
+
+    # Imported here rather than at module scope: the MCP SDK is a second of
+    # import time that only `serve()` ever needs, and every process that pulls
+    # in `nansense` — spawned DDP ranks included — would otherwise pay it.
+    from nansense.mcp_server import build_mount
 
     mount = (
         build_mount(

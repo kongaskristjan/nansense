@@ -22,9 +22,11 @@ added here is about the wire:
   a 4-D activation with no 2-D view), because "no image" and "an image of
   nothing" are the same thing on the wire and very different to a reader.
 
-Import `nansense.ui.*` lazily here, inside the functions: this module is
-imported by `nansense.mcp_server`, which `nansense.ui.app` imports while
-`nansense.ui.__init__` is still running.
+Import `nansense.ui.*` lazily here, inside the functions. It keeps the
+module-scope import graph one-way — the MCP modules reach into the UI, never
+the other way — which is what lets `nansense.ui.app` defer its own
+`mcp_server` import into `serve()` and so keep the MCP SDK off the import path
+of every process that merely does `import nansense`.
 """
 
 from __future__ import annotations

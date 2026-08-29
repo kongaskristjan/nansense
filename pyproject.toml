@@ -78,6 +78,8 @@ rocm = [
 dev = [
     "lightning>=2.4",
     "pytest>=9.0.3",
+    # Runs the suite across worker processes (see `addopts` below).
+    "pytest-xdist>=3.8",
     "scipy>=1.14",
     # tomllib landed in 3.11; the pyproject test falls back to tomli on 3.10.
     # Unconditional (not markered) so the type checker can resolve it when it
@@ -158,6 +160,13 @@ packages = ["nansense"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The suite is short but wide — over 1600 mostly-millisecond tests — so it is
+# run in parallel by default. `loadgroup` is what makes the `xdist_group` mark
+# work (tests/examples/playground shares one trained demo per worker). Workers
+# past ~10 stop paying for themselves: every one of them re-imports torch and
+# friends, and that fixed cost already dominates the run. Add `-n0` to any
+# invocation for a serial run when debugging.
+addopts = ["-n", "auto", "--maxprocesses", "10", "--dist", "loadgroup"]
 
 [tool.ty.src]
 # The README wiring snippets under assets/code-examples are illustrative

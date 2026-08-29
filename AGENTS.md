@@ -61,6 +61,9 @@
 - Framework: pytest
 - Keep tests reasonably fast: no sleeps, no many-batch neural network training, use small tensors etc.
 - Use `pytest.mark.parametrize` for testing multiple inputs instead of duplicating test functions.
+- The suite runs in parallel by default (`pytest-xdist`, configured in `pyproject.toml`). Pass `-n0` for a serial run when debugging a failure or reading print output.
+  - Every worker re-imports torch and re-collects the suite, so that fixed cost dominates the run — a test that is slow *once* costs far more than the same milliseconds spread over many tests.
+  - A module-scoped fixture runs once *per worker*. When one is expensive, mark the module `pytest.mark.xdist_group("<name>")` so its tests stay on a single worker (see `tests/examples/playground/test_main.py`).
 
 ## Commit discipline
 
