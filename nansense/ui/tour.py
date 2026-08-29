@@ -233,8 +233,8 @@ def _playground_closing_step() -> TourStep:
     from here to a wired-up training loop of their own.
     """
     return TourStep(
-        "This is a hosted playground — run NaNsense on your own net, "
-        "fully unlocked.",
+        "This is a hosted playground. Run NaNsense on your own net, "
+        "it's fully open source.",
         ('[data-tour="brand"]',),
         host_anchor=True,
     )

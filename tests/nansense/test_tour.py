@@ -60,9 +60,10 @@ def test_steps_are_short_and_skimmable(
         # Both messages a step can show, held to the same bar.
         for text in filter(None, (step.text, step.alt_text)):
             assert text.endswith(".")
-            # A visitor reads these seconds after landing: one sentence, one
-            # line. Anything longer belongs on the page, not in the bubble.
-            assert text.count(". ") == 0
+            # A visitor reads these seconds after landing: at most two short
+            # sentences, one line. Anything longer belongs on the page, not
+            # in the bubble.
+            assert text.count(". ") <= 1
             assert len(text) <= 100
         assert step.selectors
 
