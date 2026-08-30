@@ -1049,7 +1049,11 @@ def _run_deep_dream(
             step_done = step + 1
             if step_done % publish_every == 0 and step_done < steps:
                 yield partial(x, step_done, objective_value, done=False)
-        yield partial(x, step_done, objective_value, done=True)
+    # Outside the isolation context on purpose: the final result is what
+    # `wait_for_experiment` and every polling client wake on, and a generator
+    # suspended on a `yield` has not run `isolated_model`'s restore yet. Yield
+    # it from inside and whoever wakes sees the model still flipped to eval.
+    yield partial(x, step_done, objective_value, done=True)
 
 
 def _resolve_target(

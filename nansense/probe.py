@@ -384,6 +384,11 @@ def isolated_model(session: Session, mode: str) -> Iterator[torch.device]:
     `torch.no_grad()`; experiments take input gradients via
     `torch.autograd.grad`, which leaves parameter `.grad` untouched.
     Yields the model's device.
+
+    A generator body restores nothing while it is suspended on a `yield`, so
+    an experiment must yield its *final* result after the `with` block: that
+    result is what waiters wake on, and they must not find the model still
+    flipped to eval.
     """
     device = model_device(session.model)
     saved_flags = [(m, m.training) for m in session.model.modules()]

@@ -940,6 +940,11 @@ in that window still bites.
 with per-module flags and all buffers restored, forked RNG. Gradients are
 taken w.r.t. the *input* only (`torch.autograd.grad`), so parameter
 `.grad` — which the snapshot path reads at `__exit__` — is never touched.
+Progress may be yielded from inside the scope; the *final* result may not.
+A generator suspended on a `yield` has restored nothing yet, so publishing
+the done result from inside would hand every waiter (`wait_for_experiment`,
+a polling page, an MCP call) a model still flipped to eval, restored only
+whenever the training thread happened to resume the generator.
 
 **Deep dream** (`_run_deep_dream`) is per-sample-normalized gradient ascent
 that runs **one sample per channel** over the layer's first `channels`

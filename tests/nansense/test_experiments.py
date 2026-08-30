@@ -21,6 +21,7 @@ from nansense.recording import RecordingManager
 from nansense.experiments import (
     EXPERIMENT_KINDS,
     ExperimentQueueState,
+    ExperimentResult,
     _value_bounds,
     _zoom_in,
     available_experiment_kinds,
@@ -285,6 +286,42 @@ def test_deep_dream_leaves_training_state_untouched() -> None:
             torch.testing.assert_close(param.grad, grads_before[name])
         assert torch.equal(torch.get_rng_state(), rng_before)
         assert [m.training for m in model.modules()] == flags_before
+
+
+@pytest.mark.parametrize(
+    "kind, params",
+    [
+        ("deep_dream", _dream_params(steps=2)),
+        ("gradcam", {"target": -1}),
+        ("neuron_gradient", {"channel": 0}),
+        ("neuron_ig", {"channel": 0, "ig_steps": 2}),
+        ("occlusion", {"channel": 0, "window": 2, "stride": 2}),
+    ],
+)
+def test_final_result_publishes_after_isolation_unwinds(
+    kind: str, params: dict[str, object]
+) -> None:
+    """The final result is what every waiter wakes on, so the isolation must
+    already be restored when it publishes. A kind that yields it from inside
+    `isolated_model` only restores when its generator is next resumed, which
+    leaves waiters racing the training thread for a model still in eval mode.
+    """
+    with _paused_session() as (session, model):
+        expected = [m.training for m in model.modules()]
+        flags_at_publish: list[list[bool]] = []
+        publish = experiments._publish_experiment
+
+        def spy(sess: Session, result: ExperimentResult) -> None:
+            if result.done:
+                flags_at_publish.append([m.training for m in model.modules()])
+            publish(sess, result)
+
+        with mock.patch.object(experiments, "_publish_experiment", spy):
+            session.request_experiment(kind=kind, layer="conv", params=params)
+            assert session.wait_for_experiment(timeout=15)
+        assert session.experiment_result is not None
+        assert session.experiment_result.error is None
+        assert flags_at_publish == [expected]
 
 
 def test_deep_dream_works_on_fx_intermediate_layer() -> None:
