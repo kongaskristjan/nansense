@@ -1,8 +1,8 @@
 # Debug with a coding agent (MCP)
 
-NaNsense speaks [MCP](https://modelcontextprotocol.io), so a coding agent can drive the debugger itself: pause your training run, read any layer's activations and gradients, and find out which layer started producing NaNs — without you clicking through the UI and pasting screenshots back into the chat.
+NaNsense supports [MCP](https://modelcontextprotocol.io), so a coding agent can pause training, inspect layers, and trace numerical problems for you.
 
-The agent connects to the same session the browser shows. Both are front-ends onto one paused training loop, so you can watch in the UI while the agent works.
+The agent and browser share one session, so you can follow its work in the UI.
 
 ## Connect
 
@@ -24,7 +24,7 @@ The startup banner prints the command to register it:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Run that command in the directory you're working in, and the agent has the tools. Other MCP clients take the same URL — the transport is streamable HTTP.
+Run the printed command in your project directory. For other MCP clients, connect to the same `/mcp` URL over Streamable HTTP.
 
 To turn the endpoint off, pass `mcp=False` to [`serve`][nansense.serve].
 
@@ -87,11 +87,11 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 
 **Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks(interval_batches=1)` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.
 
-**Probes hold the input still.** Stepping normally changes the weights *and* the batch at once, which makes it hard to say which caused a change. Pinning a batch re-runs the model on that one input at every capture, so what you see between steps is the weights alone. `set_probe_mode("eval")` runs the probe with BatchNorm on its running statistics — a model that looks fine in train mode and broken in eval usually has statistics that have drifted.
+**Pin inputs for fair comparisons.** Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use `set_probe_mode("eval")` to check evaluation behavior, including BatchNorm's running statistics.
 
 **Experiments run on the paused training thread**, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and `run_experiment` returns statistics while `render_experiment` draws the result. A result you poll before it exists is not simply missing: `get_experiment_result` reports the request's `stage` — `running`, `queued` (with `queued_ahead`), or `absent` — so waiting longer and re-requesting are told apart.
 
-**A deep dream can hand back the whole ascent.** `render_experiment` shows what a channel converged *to*; `run_experiment(..., video=True)` writes the run itself to an MP4 and returns the path, which is how you tell an image that formed steadily from one that went somewhere and came back. The page streams every step to a watching human, but a tool call only sees the snapshot it polled — so the video is the agent-side equivalent, and it records the starting image plus the ~20 evenly spaced snapshots a run publishes — unless `params: {"all_steps": true}` asks for one frame per step. Both cost the run time: frames are drawn on the training thread, inside the same ceiling as the ascent.
+**Record deep dream as a video.** `render_experiment` returns the final image. Use `run_experiment(..., video=True)` when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass `params: {"all_steps": true}` to keep every step.
 
 **Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. `save_snapshot` is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the `render_*` tools return the picture to *you*.
 
@@ -109,7 +109,7 @@ Because the agent is driving the same session, you can open the UI at any point 
 
 **Two positions.** `live_position` is where training is now; `snapshot_position` is the batch the statistics describe. They're identical while paused and diverge once the run advances freely — the tools report both so the agent doesn't read stale numbers as current.
 
-**Non-finite values survive.** JSON has no NaN literal, so the tools report them as the strings `"nan"`, `"inf"` and `"-inf"` rather than as nulls. A layer whose values are *all* non-finite reports a `non_finite_count` instead of pretending it captured nothing — the statistics themselves only ever describe the finite values.
+**Non-finite values are explicit.** Since JSON has no NaN literal, tools return `"nan"`, `"inf"`, and `"-inf"` as strings. Statistics describe finite values; `non_finite_count` reports the rest.
 
 **Long steps don't hang.** A `step` over a slow epoch returns after a timeout with a note that the run is still going; the command stays in effect and the agent polls `get_status`.
 

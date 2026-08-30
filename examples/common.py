@@ -49,10 +49,8 @@ _AMP_DTYPES: dict[str, torch.dtype | None] = {
 # Kept as a help-text constant so every example's --dtype flag reads identically
 # and the "no GradScaler" caveat below stays in one place.
 DTYPE_HELP = (
-    "Compute dtype for the autocast forward/loss (default fp32). fp16/bf16 keep "
-    "the model weights in fp32 and only cast the forward pass via torch.autocast. "
-    "No GradScaler is used: fp16 gradients are deliberately left unscaled, so this "
-    "is a way to watch gradient underflow happen in the NaNsense views."
+    "Compute precision (default fp32). This example does not use GradScaler, "
+    "so fp16 also demonstrates gradient underflow in NaNsense."
 )
 
 

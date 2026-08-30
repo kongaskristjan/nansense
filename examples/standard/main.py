@@ -1,16 +1,10 @@
-"""Train a small ResNet, Vision Transformer, or LeNet on MNIST, CIFAR10, or Imagenette.
+"""Train an image classifier and inspect it with NaNsense.
 
-Single-process by default, with the full NaNsense wiring (scheduler, time
-travel, checkpoints):
+Choose a dataset and model with command-line options:
 
     uv run examples/standard/main.py --nansense-port 8080
 
-Pass `--distributed` and launch under torchrun for multi-rank
-DistributedDataParallel training — one process per rank. NaNsense's wiring is
-identical (every rank calls `nansense.start`); rank 0 serves the UI and drives
-pausing/stepping while the other ranks follow and fold their data shard into the
-watch-page statistics. Time travel works here too: every rank drives the same
-`session.epochs()` loop, and a jump rewinds all ranks in lockstep.
+Distributed training is also supported:
 
     uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080
 """
@@ -70,9 +64,8 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(PADDING_MODES),
         default="zero",
         help=(
-            "Crop-augmentation padding mode for mnist/cifar10 (default zero). "
-            "Zero padding leaks hard border seams into the hidden activations — "
-            "see for yourself in the NaNsense layer views, then try reflection."
+            "Padding used by MNIST and CIFAR-10 crop augmentation (default zero). "
+            "Try reflection to compare its effect on edge activations."
         ),
     )
     parser.add_argument(
@@ -80,8 +73,7 @@ def parse_args() -> argparse.Namespace:
         choices=["resnet", "resnet_deep", "vit", "lenet"],
         default="resnet",
         help=(
-            "Architecture: the small pre-activation ResNet, its five-stage "
-            "variant, the simple ViT, or LeNet-5 (default resnet)."
+            "Model architecture (default resnet)."
         ),
     )
     parser.add_argument(
@@ -89,10 +81,8 @@ def parse_args() -> argparse.Namespace:
         choices=list(LOSSES),
         default="cross_entropy",
         help=(
-            "Training loss (default cross_entropy). mse/mae/mae_30 instead "
-            "regress softmax probabilities onto the one-hot label; mae_30 is a "
-            "balanced (asymmetric) absolute error penalising under-prediction "
-            "more — compare their effect in the NaNsense views."
+            "Training loss (default cross_entropy). The alternatives make it "
+            "easy to compare how different losses affect the network."
         ),
     )
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
@@ -102,8 +92,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Batch size (default: 64 for cifar10/mnist, 32 for imagenette's "
-            "larger 128x128 inputs — kept modest for low GPU memory)."
+            "Batch size (default 64, or 32 for Imagenette)."
         ),
     )
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -112,7 +101,7 @@ def parse_args() -> argparse.Namespace:
         "--blocks-per-stage",
         type=int,
         default=3,
-        help="ResNet depth knob: 2 * stages * n + 2 layers (e.g. ResNet-20 at 3 stages)",
+        help="Number of residual blocks in each stage (default 3).",
     )
     add_num_workers_arg(parser)
     parser.add_argument("--device", type=str, default=None, help="cpu / cuda / mps; default auto")
@@ -121,8 +110,7 @@ def parse_args() -> argparse.Namespace:
         "--distributed",
         action="store_true",
         help=(
-            "Train with DistributedDataParallel; launch under torchrun "
-            "(one process per rank). Time travel is supported."
+            "Train with DistributedDataParallel; launch with torchrun."
         ),
     )
     parser.add_argument("--checkpoint", type=Path, default=None)
@@ -145,7 +133,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable NaNsense with near-zero overhead (run as plain training).",
+        help="Run the example without NaNsense.",
     )
     return parser.parse_args()
 

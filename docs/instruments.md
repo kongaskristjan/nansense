@@ -1,6 +1,6 @@
 # Custom metrics & tensors
 
-Instruments let you log your own per-layer quantities and see them in the UI next to the built-in statistics. You register a callback once; the session evaluates it for every **watched** layer on the training thread, against the batch's live activations, gradients, and the layer's weights/optimizer state. They're the escape hatch for research ideas the built-in stats can't anticipate.
+Instruments add your own per-layer metrics and tensors to the UI. Register a callback and NaNsense evaluates it for each watched layer using that batch's activations, gradients, weights, and optimizer state.
 
 There are three kinds:
 
@@ -38,7 +38,7 @@ The callback receives a [`LayerContext`](api.md#nansense.LayerContext) and may r
 - a mapping of named scalars (`{"lo": ..., "hi": ...}`) — one trace per key,
 - `None` — skip this layer for this batch (also a natural per-layer filter).
 
-`on="batch"` keeps every batch's value as its own point, plotted at epoch fractions so the curves line up under the built-in per-epoch figures. `on="epoch"` folds each epoch's values through `reduce` — `"mean"` (default), `"sum"`, `"min"`, `"max"`, `"last"`, or any `values -> float` callable — into one point per epoch. The plots appear in `/stats` → GRAPHS below the built-in statistics, per layer and phase.
+Use `on="batch"` to plot every batch. Use `on="epoch"` to reduce each epoch to one point with `"mean"` (the default), `"sum"`, `"min"`, `"max"`, `"last"`, or a custom `values -> float` function. The plots appear under **Stats → Graphs**.
 
 ## Layer tensors
 
@@ -49,7 +49,7 @@ def zscore(ctx: nansense.LayerContext) -> torch.Tensor:
     return (a - a.mean()) / (a.std() + 1e-6)
 ```
 
-The result must share the activation's shape; it rides on the published snapshot and renders as an extra labelled strip under the layer card's ACTIVATIONS/GRADIENTS strips. Layer tensors are evaluated only on batches that publish a snapshot (pauses, visualization updates, Refresh) — they are display cargo, not running statistics.
+The result must have the same shape as the activation. It appears as another strip in the layer card and is evaluated whenever the UI receives a new snapshot.
 
 ## Weight tensors
 
@@ -62,7 +62,7 @@ def adam_dir(ctx: nansense.WeightContext) -> torch.Tensor | None:
     return state["exp_avg"] / (state["exp_avg_sq"].sqrt() + 1e-8)
 ```
 
-Weight-tensor callbacks run once per (watched layer, parameter) with a [`WeightContext`](api.md#nansense.WeightContext); the result must share the parameter's shape and renders on `/weights` under the same axis controls as the weight itself. Also evaluated on publish batches only.
+Weight-tensor callbacks receive a [`WeightContext`](api.md#nansense.WeightContext). The result must match the parameter's shape and appears beside it on the weights page.
 
 ## The rules
 

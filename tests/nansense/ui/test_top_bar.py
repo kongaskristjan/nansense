@@ -387,9 +387,9 @@ def test_logo_data_uri_is_a_cached_png() -> None:
     assert _logo_data_uri() is uri  # lru_cache hands back the same string
 
 
-def test_repo_logo_links_repo_and_nudges_a_star() -> None:
+def test_repo_logo_links_repo() -> None:
     assert _REPO_URL == "https://github.com/kongaskristjan/nansense"
-    assert "star" in _STAR_TOOLTIP.lower()
+    assert "github" in _STAR_TOOLTIP.lower()
 
 
 def test_brand_wordmark_names_the_library_and_what_it_is() -> None:

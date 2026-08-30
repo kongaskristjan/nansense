@@ -4,7 +4,7 @@ When a session starts, NaNsense serves a web page and pauses on the first batch.
 
 ![Main view of the UI](images/ui_with_elements.png)
 
-*The main view: stepping controls, architecture graph, layer cards with activations/gradients, and the input panel. Each layer in the architecture can be clicked to open the respective layer card.*
+*The main view, with training controls, the model architecture, layer cards, and the current input.*
 
 ## The top bar
 
@@ -24,11 +24,11 @@ Each card renders one strip per tensor: a row of per-channel images on a shared 
 
 ## The input panel
 
-The right sidebar controls which input the layer views are computed from. A model with several inputs gets an **Input** dropdown to choose which one the pane shows and perturbs; a non-RGB image needs an `input_transform` to display (see the [Wiring guide](wiring.md#displaying-inputs-correctly)), and a flat `(N, C)` input shows as a clickable per-feature strip. **Select sample in batch** picks which sample of the current batch to show.
+The right sidebar chooses the input shown throughout the page. For a model with several inputs, use the **Input** menu; use **Sample** to move through the current batch. See [Displaying inputs correctly](wiring.md#displaying-inputs-correctly) for non-RGB and flat inputs.
 
-The views follow the live training batch by default; **Pin** freezes the current batch as a fixed input that NaNsense re-runs at every update, so you can watch one input's activations evolve as training proceeds and across time travel. **Forward mode** (Unchanged / Eval / Train) sets how BatchNorm and dropout behave on those re-runs.
+Views follow the live training batch by default. **Pin batch** keeps the current batch visible as training advances. **Forward mode** controls whether reruns use the model's current mode, evaluation mode, or training mode.
 
-**Perturb** lets you click pixels to edit the input; NaNsense re-runs the model and the layer cards switch to the diff, so you can trace a single changed pixel through the network — this is how you [measure a receptive field](showcase.md#measure-the-receptive-field-of-a-neuron).
+**Perturb** lets you edit a pixel and see how the change spreads through the network. This is useful for [measuring a receptive field](showcase.md#measure-the-receptive-field-of-a-neuron).
 
 ## The stats page
 
@@ -40,7 +40,7 @@ Open a watched layer's **stats view** for a closer look at its distributions ove
 
 **Graphs** plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a **Weights** section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.
 
-The Phase dropdown's last entry, **Current batch**, switches the data source from the epoch accumulators to the last captured batch. In this mode *any* layer can be selected, watched or not. The page opens on the phase currently training once that phase has collected stats for the opened layer, and on Current batch otherwise.
+Choose **Current batch** in the Phase menu to inspect the latest capture instead of statistics collected across an epoch. This view is available for any layer.
 
 The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.
 
@@ -50,7 +50,7 @@ The settings dialog can switch stats collection between the watched layers (the 
 
 Every layer with parameters has a **weights view**. Each parameter gets a panel rendering the weight tensor, its gradient, and — when the session was given an optimizer — one strip per tensor-valued optimizer-state entry (momentum buffers, Adam moments; 0-dim entries like Adam's `step` join a scalar line below), plus the parameter group's live hyperparameters such as the current learning rate.
 
-Per-axis controls choose which tensor axes map to X, Y and tile, so any weight shape — conv kernels, matrices, embeddings — can be laid out sensibly. A **Weight graphs** button jumps to the layer's per-epoch weight series in the stats page's Graphs view.
+Use the axis controls to lay out convolution kernels, matrices, or embeddings. **Weight graphs** opens the layer's per-epoch history.
 
 !!! note
     Weight *gradients* are read when a batch exits, so keep `optimizer.zero_grad()` at the start of your batch body — zeroing after `step()` would leave the gradient views empty (see the [Wiring guide](wiring.md#wire-it-into-your-loop-raw-pytorch)).
@@ -59,7 +59,7 @@ Per-axis controls choose which tensor axes map to X, Y and tile, so any weight s
 
 Each layer card has an **Experiment** button. On the experiment page, pick a method — deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion — set its parameters, and run it on the layer. Experiments run between batches, so training must be paused; results show one card per input sample.
 
-An experiment can also be kept **live**: it re-runs on every visualization update, so you can watch a deep dream or attribution evolve as training proceeds.
+Turn on **Live** to rerun the experiment as training advances.
 
 ## Numerical debugging
 

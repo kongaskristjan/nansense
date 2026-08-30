@@ -195,10 +195,9 @@ def test_buttons_step_carries_a_message_per_card_flavor() -> None:
     # Both messages name exactly the buttons they point at, with the labels
     # the card actually prints on them ("Experiment", not "Experiments").
     for text in (buttons.text, buttons.alt_text):
-        assert "Experiment and" in text or "Experiment, and" in text
+        assert "Experiment" in text
         assert "Stats" in text
         assert "Experiments" not in text
-        assert text.endswith(" go deeper.")
 
 
 def test_buttons_step_uses_the_cards_own_button_labels() -> None:
@@ -213,8 +212,7 @@ def test_buttons_step_uses_the_cards_own_button_labels() -> None:
         for s in main_tour_steps("conv1", locked=True)
         if s.ensure_card and "deeper" in s.text
     ]
-    named = buttons.text.removesuffix(" go deeper.").replace(" and", "")
-    labels = [word.strip() for word in named.split(",")]
+    labels = [label for label in ("Weights", "Experiment", "Stats") if label in buttons.text]
     assert labels == ["Weights", "Experiment", "Stats"]
     for label in labels:
         assert re.search(rf'ui\.button\(\s*"{label}"', source), label
@@ -321,7 +319,7 @@ def test_playground_tour_closes_with_the_library_pitch(locked: bool) -> None:
     # It names the library, and says both what this is and what to do next.
     assert "NaNsense" in last.text
     assert "playground" in last.text
-    assert "your own net" in last.text
+    assert "your own training loop" in last.text
     # The in-app arrow rings the top bar's brand mark — the repo link, and
     # the only place the app names itself.
     assert last.selectors == ('[data-tour="brand"]',)
@@ -439,7 +437,7 @@ def test_config_carries_driver_contract() -> None:
     # The buttons step is the one that ships a second message, for a card
     # without a Weights button; every other step has a single one.
     assert json.dumps(config).count('"altText": null') == len(steps) - 1
-    assert '"altText": "Experiment and Stats go deeper."' in json.dumps(config)
+    assert '"altText": "For a deeper look, open Experiment or Stats."' in json.dumps(config)
     subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
     assert subpage["autoStart"] is False
     assert subpage["autoWatchSlug"] is None

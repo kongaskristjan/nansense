@@ -40,9 +40,7 @@ _TOP_BAR_CLASSES: str = (
 )
 
 _REPO_URL: str = "https://github.com/kongaskristjan/nansense"
-_STAR_TOOLTIP: str = (
-    "Like NaNsense? A GitHub ★ star ★ means a lot and keeps me hacking."
-)
+_STAR_TOOLTIP: str = "View NaNsense on GitHub"
 # The wordmark beside the brand mark (`_add_repo_logo`). The tagline is the
 # docs site's own one-liner, cut to what fits a top bar.
 _BRAND_NAME: str = "NaNsense"
@@ -50,10 +48,8 @@ _BRAND_TAGLINE: str = "PyTorch debugger"
 # The dialog's own explanation of what tripped. The banner links to the
 # dialog rather than repeating this on hover — see `_DEBUG_BANNER_TOOLTIP`.
 _DEBUG_DESCRIPTION: str = (
-    "A numerical issue was detected: NaN/±Inf values, or gradients whose "
-    "magnitude collapsed into a precision-losing under/overflow range. "
-    "Training paused at the first issue; resuming keeps running and folds any "
-    "further issues into this warning."
+    "NaNsense found NaN or infinite values, or gradients near the limits of "
+    "their numeric format. Training paused at the first issue."
 )
 _DEBUG_BANNER_TOOLTIP: str = "Click for the affected layers"
 _DEBUG_UNDER_OVER_INTRO: str = (
@@ -682,10 +678,8 @@ def _add_settings_button(
         ui.separator()
         ui.label("Statistics collection").classes("text-lg font-bold")
         ui.label(
-            "Which layers fold training batches into the running statistics "
-            "(histograms, extreme-input patches, per-epoch graphs). With "
-            "anything other than \"Watched layers\", showing or hiding a "
-            "card on the main page is per-tab and never affects collection."
+            "Choose which layers contribute to histograms, input galleries, "
+            "and per-epoch graphs."
         ).classes("text-sm text-slate-600")
         scope_select = ui.select(
             _STATS_SCOPE_OPTIONS,
@@ -699,15 +693,11 @@ def _add_settings_button(
         ui.separator()
         ui.label("Performance").classes("text-lg font-bold")
         ui.label(
-            "How much NaNsense computes and stores while training runs — "
-            "these trade visualization detail for GPU VRAM and overhead."
+            "Reduce the detail below if NaNsense uses too much memory or slows training."
         ).classes("text-sm text-slate-600")
         ui.label("Watched-layer memory").classes("text-sm font-medium mt-1")
         ui.label(
-            "Watched layers keep, per channel, a histogram and a gallery of "
-            "extreme input patches. The patches store an input image per "
-            "channel, so this is the dominant GPU VRAM cost; the layer-wide "
-            "histogram always covers every channel."
+            "Channel galleries are usually the largest memory cost."
         ).classes("text-xs text-slate-500")
         channel_limit_switch = ui.switch(
             "Limit recorded channels",
@@ -744,13 +734,11 @@ def _add_settings_button(
             "Also collect the max/min-average galleries (extra VRAM)"
         )
         ui.label(
-            "Changing the channel limit, samples per channel, or the average "
-            "galleries flushes all collected statistics."
+            "Changing these options clears collected statistics."
         ).classes("text-xs text-red-500")
         ui.label("Update frequency").classes("text-sm font-medium mt-1")
         ui.label(
-            "How often all visualizations refresh while training runs. "
-            "They additionally refresh whenever training stops."
+            "How often views refresh while training runs. They also refresh when training stops."
         ).classes("text-xs text-slate-500")
         with ui.row().classes("w-full gap-2 no-wrap items-start"):
             unit_select = ui.select(
@@ -785,10 +773,8 @@ def _add_settings_button(
         ui.separator()
         ui.label("Error checks").classes("text-lg font-bold")
         ui.label(
-            "Pause training automatically on numerical trouble: NaN/±Inf "
-            "values, or gradients collapsing into a precision-losing "
-            "under/overflow range. Checks run every nth batch on the compute "
-            "device."
+            "Pause when NaN or infinite values appear, or when gradients approach "
+            "the limits of their numeric format."
         ).classes("text-sm text-slate-600")
         debug_enable = ui.switch(
             "Enable error checks",
@@ -827,9 +813,7 @@ def _add_settings_button(
         ui.separator()
         ui.label("Recording").classes("text-lg font-bold")
         ui.label(
-            "Each recorded view becomes an MP4 file — one frame per "
-            "visualization update. Snapshot writes that same frame once, as "
-            "a PNG of the view right now."
+            "Record the current view as an MP4, or save one frame as a PNG."
         ).classes("text-sm text-slate-600")
         recording_section = ui.column().classes("w-full gap-3")
         ui.separator()

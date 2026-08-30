@@ -52,15 +52,13 @@ Time travel needs an epoch cache: drive the epoch loop with [`for epoch in sessi
 
 ### The schedule
 
-The schedule is discovered as you go: phase names and per-phase batch counts are learned while you iterate `session.batches`, so the UI's per-phase progress and boundary stops become exact after the first epoch. Pass `phases={"train": a, "val": b}` to `start()` if you want that precision from the very first epoch — an optional up-front declaration, usually just `len(loader)` per phase. Every bundled example declares it this way, and the PyTorch Lightning integration does it for you from the trainer's dataloaders.
+NaNsense learns phase names and batch counts as training runs. To show exact progress from the first epoch, pass the counts up front: `phases={"train": len(train_dl), "val": len(val_dl)}`. The bundled examples and Lightning integration do this for you.
 
-A declared schedule is also validated: an unseen phase name, or more batches than declared, raises instead of passing silently. That is what you want when the counts are known up front, but it means a phase that does not run every epoch (validating every N epochs, say) should be re-declared with [`session.set_schedule(phases=...)`](api.md#nansense.Session.set_schedule) rather than pinned once.
+A declared schedule is validated. If a phase does not run every epoch, update it with [`session.set_schedule(phases=...)`](api.md#nansense.Session.set_schedule).
 
 ### Data loading stalls between phases
 
-On macOS and Windows a `DataLoader` with `num_workers > 0` pauses the run for `5s * num_workers` at the end of every phase, and leaks one orphaned `torch_shm_manager` process per worker. Those platforms only offer PyTorch's `file_system` tensor sharing, which forks that helper per worker; it outlives the worker holding its sentinel pipe open, so the `join(timeout=5.0)` in PyTorch's worker shutdown always waits out the full five seconds. Nothing about NaNsense causes it — but NaNsense makes it visible, because the UI keeps showing the phase's last batch throughout and the run looks frozen.
-
-Building one iterator per phase is what makes this bite once per boundary rather than once per run, so use `num_workers=0` there; loading in-process is usually faster anyway for datasets that fit in memory. `persistent_workers=True` also avoids the stall, but it stops a time-travel jump from reproducing the epoch it replays: worker RNG state is fixed when the worker starts, so the augmentations differ the second time through. `examples/common.py:default_num_workers` is the platform check the bundled examples share.
+If macOS or Windows pauses for several seconds between training and validation, set `num_workers=0` on your data loaders. Avoid `persistent_workers=True` when using time travel because replayed augmentations may differ.
 
 ## Wire it into your loop: PyTorch Lightning
 
@@ -93,6 +91,6 @@ See `examples/multimodal/main.py` for all three in action.
 
 ## Distributed training (DDP)
 
-Distributed (DDP) needs no special wiring: call `nansense.start()` on every rank (the DDP-wrapped model is unwrapped automatically). Rank 0 serves the UI and drives pausing and stepping; the other ranks follow its pace and fold their data shard into the watch-page statistics. Time travel works under DDP: drive every rank's epoch loop with `session.epochs()`, and a jump rewinds all ranks in lockstep.
+For distributed training, call `nansense.start()` on every rank. Rank 0 serves the UI and controls the run; statistics include data from every rank. Use `session.epochs()` on every rank to enable time travel.
 
 See `examples/standard/main.py --distributed`. Keep in mind that DDP support is currently **experimental**.

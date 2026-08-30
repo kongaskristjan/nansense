@@ -149,14 +149,14 @@ def _buttons_step() -> TourStep:
     along with it rather than pointing the visitor at another card.
     """
     return TourStep(
-        "Weights, Experiment, and Stats go deeper.",
+        "For a deeper look, open Weights, Experiment, or Stats.",
         (
             _card_anchor("weights"),
             _card_anchor("experiment"),
             _card_anchor("stats"),
         ),
         ensure_card=True,
-        alt_text="Experiment and Stats go deeper.",
+        alt_text="For a deeper look, open Experiment or Stats.",
     )
 
 
@@ -186,11 +186,11 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
     node = _mermaid_node_selector(layer_slug) if layer_slug else "g.node"
     steps = [
         TourStep(
-            "Click any layer in the neural network.",
+            "Click a layer to inspect it.",
             (node,),
         ),
         TourStep(
-            "A card opens: activations above, gradients below.",
+            "The card shows activations above and gradients below.",
             (_card_anchor("strips"),),
             ensure_card=True,
         ),
@@ -201,7 +201,7 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
         ),
         _buttons_step(),
         TourStep(
-            "Select the input to inspect.",
+            "Choose which sample to inspect.",
             ('[data-tour="input-image"]', '[data-tour="sample"]'),
             ensure_input=True,
         ),
@@ -233,8 +233,7 @@ def _playground_closing_step() -> TourStep:
     from here to a wired-up training loop of their own.
     """
     return TourStep(
-        "This is a hosted playground. Run NaNsense on your own net, "
-        "it's fully open source.",
+        "This playground runs NaNsense, an open-source debugger you can add to your own training loop.",
         ('[data-tour="brand"]',),
         host_anchor=True,
     )

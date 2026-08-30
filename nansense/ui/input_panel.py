@@ -186,7 +186,7 @@ class InputPanel:
             ).props('data-tour="sample"'):
                 # The batch size is filled in once known (see
                 # `sync_spinner_max`); the sample index itself is 0-based.
-                self._sample_label = ui.label("Select sample in batch:").classes(
+                self._sample_label = ui.label("Sample:").classes(
                     "text-sm"
                 )
                 self._sample_input = ui.number(
@@ -222,8 +222,7 @@ class InputPanel:
                     value=self._session.is_pinned,
                     on_change=self._on_pin_change,
                 ).props("dense").classes("self-start").tooltip(
-                    "Keep showing this batch instead of the changing "
-                    "training batch"
+                    "Keep this batch visible while training advances"
                 )
                 self._pinned_caption = ui.label("").classes(
                     "text-xs text-slate-500 font-mono self-start"
@@ -239,7 +238,7 @@ class InputPanel:
                     value=self._session.probe_mode,
                     on_change=self._on_mode_change,
                 ).props("dense no-caps spread").classes("w-full").tooltip(
-                    "Which mode to run the model in"
+                    "Choose how the model behaves when NaNsense reruns this input"
                 )
 
                 ui.separator()
@@ -253,8 +252,7 @@ class InputPanel:
                         value=bool(self._session.perturbations),
                         on_change=self._on_perturb_change,
                     ).props("dense").tooltip(
-                        "Click a pixel to change it — the strips then show "
-                        "the difference"
+                        "Click a pixel to change it and compare the result"
                     )
                     # The value control (color swatch or per-channel fields) is
                     # built lazily for the selected input by `_sync_perturb_control`.
@@ -280,8 +278,7 @@ class InputPanel:
                         "Remove all perturbations"
                     )
                 self._compare_caption = ui.label(
-                    "Comparing with original: layer strips show the "
-                    "activation diff (perturbed − original)"
+                    "Layer cards now show the change from the original input"
                 ).classes("text-xs text-slate-500 self-start")
                 self._compare_caption.set_visibility(
                     bool(self._session.perturbations)
@@ -525,7 +522,7 @@ class InputPanel:
             return
         self._spinner_max = new_max
         self._sample_input.max = new_max
-        self._sample_label.text = f"Select sample in batch ({batch_size}):"
+        self._sample_label.text = f"Sample (of {batch_size}):"
         if self.sample_idx > new_max:
             self.sample_idx = new_max
             self._sample_input.value = new_max

@@ -332,12 +332,9 @@ def _build_page(
     # confirmation.
     watch_all_dialog = ui.dialog()
     with watch_all_dialog, ui.card().classes("max-w-md"):
-        ui.label("Show all layers?").classes("text-lg font-medium")
+        ui.label("Show every layer?").classes("text-lg font-medium")
         ui.label(
-            "Every layer card will be rendered on every pause — and, while "
-            "stats are collected for watched layers, per-layer statistics "
-            "will accumulate on every batch. On larger models this can make "
-            "the interface very slow and may even crash the browser tab."
+            "This can slow down large models and use a lot of browser memory."
         ).classes("text-sm text-slate-600")
         with ui.row().classes("w-full justify-end gap-2"):
             ui.button("Cancel", on_click=watch_all_dialog.close).props("flat")
@@ -442,7 +439,7 @@ def _build_page(
             input_toggle = ui.button(
                 icon="image", color="slate-500"
             ).props("dense size=md").tooltip(
-                "Toggle input selection pane"
+                "Show or hide the input panel"
             )
             _add_tour_button()
             _add_share_button(session)
@@ -484,13 +481,13 @@ def _build_page(
             watch_list_container.clear()
             with watch_list_container:
                 if not shown:
-                    ui.label("No layers shown").classes(
+                    ui.label("No layers selected").classes(
                         "px-3 py-2 text-slate-500 text-sm italic"
                     )
                     return
                 # Section header: each entry below opens the stats view
                 # focused on that layer.
-                ui.label("Open stats view").classes(
+                ui.label("Open statistics").classes(
                     "px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider "
                     "text-slate-400 select-none"
                 )
@@ -570,9 +567,7 @@ def _build_page(
                 "grow min-w-0 h-full overflow-auto p-3 bg-slate-200 gap-3"
             ):
                 empty_hint = _notice_banner(
-                    "No layers shown — click a node in the architecture "
-                    "diagram to show a layer's activations and gradients "
-                    "and start collecting stats.",
+                    "Select a layer in the architecture to inspect it.",
                     icon="touch_app",
                 )
                 empty_hint.set_visibility(not state.last_watched)
