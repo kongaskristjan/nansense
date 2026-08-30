@@ -650,7 +650,7 @@
 
 
 <h1 id="nansense">NaNsense<a class="headerlink" href="#nansense" title="Permanent link">&para;</a></h1>
-<p><em>Don't guess why your neural network fails to learn. Instead, have a look inside.</em></p>
+<p><em>See what your neural network is doing while it trains.</em></p>
 <div class="pg-embed">
   <div class="pg-embed__bar" role="group" aria-label="Playground variant">
     <span class="pg-embed__label">Live playground</span>
@@ -665,23 +665,22 @@
   <div class="pg-embed__screen">
     <iframe class="pg-embed__frame" title="NaNsense playground" src="https://kongaskristjan-nansense-playground-mnist.hf.space" allow="fullscreen; clipboard-write"></iframe>
   </div>
-  <p class="pg-embed__note">The playground starts a real training run, so it can take 1–2 minutes to boot — watch the video below while it loads.</p>
+  <p class="pg-embed__note">The playground may take a minute or two to start. The video below gives you a quick tour while it loads.</p>
 </div>
 
 <video controls muted style="max-width: 100%;" src="https://github.com/user-attachments/assets/b15f7dc5-1a6f-44d2-81fa-a97daafa89c6"></video>
 
-<p><em>NaNsense</em> is a PyTorch debugger that visualizes activations, gradients, weights, optimizer state and various statistics. You can <strong>pause, step batch-by-batch, and time-travel to a different epoch while training</strong>, and see exactly what every layer is doing.</p>
+<p><em>NaNsense</em> is a visual debugger for PyTorch. Pause training, step through batches, revisit earlier epochs, and inspect activations, gradients, weights, and optimizer state.</p>
 <p><a class="md-button md-button--primary" href="playground/">🕹️ Try the Playground</a>
 <a class="md-button md-button--primary" href="integrate/">✨ Integrate with one prompt</a>
 <a class="md-button md-button--primary" href="mcp/">🤖 Debug with a coding agent</a></p>
-<p>Here's how <em>NaNsense</em> can help:</p>
 <ul>
-<li><strong>See what is actually going on.</strong> <a href="showcase/#visualize-activations-and-gradients-throughout-training">Visualize activations and gradients</a>, <a href="showcase/#minmax-activation-patches">find image patches with minimal or maximal activation for a given channel</a> and <a href="showcase/#simulate-what-a-neuron-is-searching-for-deep-dream">simulate what each neuron is searching for (deep dream)</a>.</li>
-<li><strong>Spot optimization bottlenecks.</strong> <a href="showcase/#measure-the-receptive-field-of-a-neuron">Discover insufficient receptive fields</a>, <a href="showcase/#investigate-dead-neurons">measure neuron death</a>, <a href="showcase/#padding-artifacts">discover padding artifacts</a> and <a href="showcase/#spot-gradient-underflow">spot gradient underflow</a>.</li>
+<li><strong>Understand learned features.</strong> <a href="showcase/#visualize-activations-and-gradients-throughout-training">See activations and gradients</a>, <a href="showcase/#minmax-activation-patches">find the inputs that excite a channel</a>, and <a href="showcase/#simulate-what-a-neuron-is-searching-for-deep-dream">use deep dream to reveal what it has learned</a>.</li>
+<li><strong>Find training problems.</strong> Spot <a href="showcase/#measure-the-receptive-field-of-a-neuron">small receptive fields</a>, <a href="showcase/#investigate-dead-neurons">dead channels</a>, <a href="showcase/#padding-artifacts">padding artifacts</a>, and <a href="showcase/#spot-gradient-underflow">gradient underflow</a>.</li>
 </ul>
-<p>The <a href="showcase/">Showcase</a> walks through all of these with real screenshots. <a href="getting-started/">Getting started</a> runs an example in minutes, the <a href="ui/">UI guide</a> tours every page, and the <a href="wiring/">Wiring guide</a> adds NaNsense to your own training loop — it's just a few lines of code. It also speaks <a href="mcp/">MCP</a>, so a coding agent can drive the debugger itself and look at the same views you do.</p>
+<p>See the <a href="showcase/">Showcase</a> for screenshots, <a href="getting-started/">Getting started</a> to run an example, and the <a href="wiring/">Wiring guide</a> to add NaNsense to your project. A coding agent can also inspect the same session through <a href="mcp/">MCP</a>.</p>
 <h2 id="how-is-this-different-from-wandb-or-tensorboard">How is this different from wandb or TensorBoard?<a class="headerlink" href="#how-is-this-different-from-wandb-or-tensorboard" title="Permanent link">&para;</a></h2>
-<p>Loggers record external metrics — the loss and accuracy curves you scroll through after the run. NaNsense is focused on understanding the internals of the network. A logger tells you <em>that</em> the loss stopped falling; NaNsense shows you <em>why</em> — say, half a layer's channels died after epoch three, or fp16 gradients are underflowing.</p>
+<p>Experiment trackers show that a run went wrong. NaNsense helps you find where it went wrong inside the network—for example, a layer with dead channels or underflowing gradients.</p>
 
 
 

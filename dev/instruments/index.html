@@ -712,7 +712,7 @@
 
 
 <h1 id="custom-metrics-tensors">Custom metrics &amp; tensors<a class="headerlink" href="#custom-metrics-tensors" title="Permanent link">&para;</a></h1>
-<p>Instruments let you log your own per-layer quantities and see them in the UI next to the built-in statistics. You register a callback once; the session evaluates it for every <strong>watched</strong> layer on the training thread, against the batch's live activations, gradients, and the layer's weights/optimizer state. They're the escape hatch for research ideas the built-in stats can't anticipate.</p>
+<p>Instruments add your own per-layer metrics and tensors to the UI. Register a callback and NaNsense evaluates it for each watched layer using that batch's activations, gradients, weights, and optimizer state.</p>
 <p>There are three kinds:</p>
 <table>
 <thead>
@@ -762,14 +762,14 @@
 <li>a mapping of named scalars (<code>{"lo": ..., "hi": ...}</code>) — one trace per key,</li>
 <li><code>None</code> — skip this layer for this batch (also a natural per-layer filter).</li>
 </ul>
-<p><code>on="batch"</code> keeps every batch's value as its own point, plotted at epoch fractions so the curves line up under the built-in per-epoch figures. <code>on="epoch"</code> folds each epoch's values through <code>reduce</code> — <code>"mean"</code> (default), <code>"sum"</code>, <code>"min"</code>, <code>"max"</code>, <code>"last"</code>, or any <code>values -&gt; float</code> callable — into one point per epoch. The plots appear in <code>/stats</code> → GRAPHS below the built-in statistics, per layer and phase.</p>
+<p>Use <code>on="batch"</code> to plot every batch. Use <code>on="epoch"</code> to reduce each epoch to one point with <code>"mean"</code> (the default), <code>"sum"</code>, <code>"min"</code>, <code>"max"</code>, <code>"last"</code>, or a custom <code>values -&gt; float</code> function. The plots appear under <strong>Stats → Graphs</strong>.</p>
 <h2 id="layer-tensors">Layer tensors<a class="headerlink" href="#layer-tensors" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="nd">@session</span><span class="o">.</span><span class="n">watch_layer_tensor</span><span class="p">(</span><span class="s2">&quot;zscore&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">zscore</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">nansense</span><span class="o">.</span><span class="n">LayerContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">activation</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">a</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span> <span class="o">/</span> <span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">+</span> <span class="mf">1e-6</span><span class="p">)</span>
 </code></pre></div>
-<p>The result must share the activation's shape; it rides on the published snapshot and renders as an extra labelled strip under the layer card's ACTIVATIONS/GRADIENTS strips. Layer tensors are evaluated only on batches that publish a snapshot (pauses, visualization updates, Refresh) — they are display cargo, not running statistics.</p>
+<p>The result must have the same shape as the activation. It appears as another strip in the layer card and is evaluated whenever the UI receives a new snapshot.</p>
 <h2 id="weight-tensors">Weight tensors<a class="headerlink" href="#weight-tensors" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="nd">@session</span><span class="o">.</span><span class="n">watch_weight_tensor</span><span class="p">(</span><span class="s2">&quot;adam_dir&quot;</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">adam_dir</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">nansense</span><span class="o">.</span><span class="n">WeightContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
@@ -778,7 +778,7 @@
         <span class="k">return</span> <span class="kc">None</span>                                    <span class="c1"># Adam state is lazy</span>
     <span class="k">return</span> <span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="p">(</span><span class="n">state</span><span class="p">[</span><span class="s2">&quot;exp_avg_sq&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sqrt</span><span class="p">()</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">)</span>
 </code></pre></div>
-<p>Weight-tensor callbacks run once per (watched layer, parameter) with a <a href="../api/#nansense.WeightContext"><code>WeightContext</code></a>; the result must share the parameter's shape and renders on <code>/weights</code> under the same axis controls as the weight itself. Also evaluated on publish batches only.</p>
+<p>Weight-tensor callbacks receive a <a href="../api/#nansense.WeightContext"><code>WeightContext</code></a>. The result must match the parameter's shape and appears beside it on the weights page.</p>
 <h2 id="the-rules">The rules<a class="headerlink" href="#the-rules" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Watched layers only.</strong> Instruments run for the layers the stats scope collects — the watched set by default, every layer under scope <code>"all"</code>, nothing under <code>"none"</code>.</li>

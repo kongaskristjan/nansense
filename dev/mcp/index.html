@@ -756,8 +756,8 @@
 
 
 <h1 id="debug-with-a-coding-agent-mcp">Debug with a coding agent (MCP)<a class="headerlink" href="#debug-with-a-coding-agent-mcp" title="Permanent link">&para;</a></h1>
-<p>NaNsense speaks <a href="https://modelcontextprotocol.io">MCP</a>, so a coding agent can drive the debugger itself: pause your training run, read any layer's activations and gradients, and find out which layer started producing NaNs — without you clicking through the UI and pasting screenshots back into the chat.</p>
-<p>The agent connects to the same session the browser shows. Both are front-ends onto one paused training loop, so you can watch in the UI while the agent works.</p>
+<p>NaNsense supports <a href="https://modelcontextprotocol.io">MCP</a>, so a coding agent can pause training, inspect layers, and trace numerical problems for you.</p>
+<p>The agent and browser share one session, so you can follow its work in the UI.</p>
 <h2 id="connect">Connect<a class="headerlink" href="#connect" title="Permanent link">&para;</a></h2>
 <p>The endpoint is served alongside the UI, on the same port. Start your run as usual:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
@@ -771,7 +771,7 @@
 │ claude mcp add --transport http nansense http://127.0.0.1:8080/mcp │
 └──────────────────────────────────────────────────────────────┘
 </code></pre></div>
-<p>Run that command in the directory you're working in, and the agent has the tools. Other MCP clients take the same URL — the transport is streamable HTTP.</p>
+<p>Run the printed command in your project directory. For other MCP clients, connect to the same <code>/mcp</code> URL over Streamable HTTP.</p>
 <p>To turn the endpoint off, pass <code>mcp=False</code> to <a class="autorefs autorefs-internal" title="nansense.serve" href="../api/#nansense.serve"><code>serve</code></a>.</p>
 <div class="admonition note">
 <p class="admonition-title">It listens on localhost</p>
@@ -908,9 +908,9 @@
 </tbody>
 </table>
 <p><strong>Time travel is the one that changes how debugging goes.</strong> An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with <code>configure_debug_checks(interval_batches=1)</code> and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by <code>session.epochs()</code> with <code>session.restore_point()</code>; <code>get_time_travel_status</code> says whether yours is.</p>
-<p><strong>Probes hold the input still.</strong> Stepping normally changes the weights <em>and</em> the batch at once, which makes it hard to say which caused a change. Pinning a batch re-runs the model on that one input at every capture, so what you see between steps is the weights alone. <code>set_probe_mode("eval")</code> runs the probe with BatchNorm on its running statistics — a model that looks fine in train mode and broken in eval usually has statistics that have drifted.</p>
+<p><strong>Pin inputs for fair comparisons.</strong> Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use <code>set_probe_mode("eval")</code> to check evaluation behavior, including BatchNorm's running statistics.</p>
 <p><strong>Experiments run on the paused training thread</strong>, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and <code>run_experiment</code> returns statistics while <code>render_experiment</code> draws the result. A result you poll before it exists is not simply missing: <code>get_experiment_result</code> reports the request's <code>stage</code> — <code>running</code>, <code>queued</code> (with <code>queued_ahead</code>), or <code>absent</code> — so waiting longer and re-requesting are told apart.</p>
-<p><strong>A deep dream can hand back the whole ascent.</strong> <code>render_experiment</code> shows what a channel converged <em>to</em>; <code>run_experiment(..., video=True)</code> writes the run itself to an MP4 and returns the path, which is how you tell an image that formed steadily from one that went somewhere and came back. The page streams every step to a watching human, but a tool call only sees the snapshot it polled — so the video is the agent-side equivalent, and it records the starting image plus the ~20 evenly spaced snapshots a run publishes — unless <code>params: {"all_steps": true}</code> asks for one frame per step. Both cost the run time: frames are drawn on the training thread, inside the same ceiling as the ascent.</p>
+<p><strong>Record deep dream as a video.</strong> <code>render_experiment</code> returns the final image. Use <code>run_experiment(..., video=True)</code> when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass <code>params: {"all_steps": true}</code> to keep every step.</p>
 <p><strong>Recordings capture change over time.</strong> One frame per visualization update — so <code>set_update_frequency</code> is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. <code>save_snapshot</code> is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the <code>render_*</code> tools return the picture to <em>you</em>.</p>
 <h2 id="a-worked-example">A worked example<a class="headerlink" href="#a-worked-example" title="Permanent link">&para;</a></h2>
 <p>A typical exchange, once the run is paused:</p>
@@ -921,7 +921,7 @@
 <p>Because the agent is driving the same session, you can open the UI at any point and see exactly the batch it stopped on.</p>
 <h2 id="things-worth-knowing">Things worth knowing<a class="headerlink" href="#things-worth-knowing" title="Permanent link">&para;</a></h2>
 <p><strong>Two positions.</strong> <code>live_position</code> is where training is now; <code>snapshot_position</code> is the batch the statistics describe. They're identical while paused and diverge once the run advances freely — the tools report both so the agent doesn't read stale numbers as current.</p>
-<p><strong>Non-finite values survive.</strong> JSON has no NaN literal, so the tools report them as the strings <code>"nan"</code>, <code>"inf"</code> and <code>"-inf"</code> rather than as nulls. A layer whose values are <em>all</em> non-finite reports a <code>non_finite_count</code> instead of pretending it captured nothing — the statistics themselves only ever describe the finite values.</p>
+<p><strong>Non-finite values are explicit.</strong> Since JSON has no NaN literal, tools return <code>"nan"</code>, <code>"inf"</code>, and <code>"-inf"</code> as strings. Statistics describe finite values; <code>non_finite_count</code> reports the rest.</p>
 <p><strong>Long steps don't hang.</strong> A <code>step</code> over a slow epoch returns after a timeout with a note that the run is still going; the command stays in effect and the agent polls <code>get_status</code>.</p>
 <p><strong>Locked sessions refuse.</strong> On a <a href="../playground/">locked</a> demo session the control tools return an explicit refusal rather than silently doing nothing, so an agent can't loop forever stepping a run that never moves. Inspection keeps working.</p>
 

@@ -668,9 +668,9 @@
 
 
 <h1 id="getting-started">Getting started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h1>
-<p>The fastest way to try NaNsense is to run one of the bundled examples — they download their datasets and pretrained networks automatically. To add NaNsense to your own training loop instead, paste <a href="../integrate/">one prompt</a> into your coding agent, or install the library and follow the <a href="../wiring/">Wiring guide</a> yourself.</p>
+<p>The fastest way to try NaNsense is the standard example. To add it to your own training loop, use the <a href="../integrate/">integration prompt</a> or follow the <a href="../wiring/">Wiring guide</a>.</p>
 <h2 id="run-the-examples">Run the examples<a class="headerlink" href="#run-the-examples" title="Permanent link">&para;</a></h2>
-<p>The examples run with <a href="https://docs.astral.sh/uv/getting-started/installation">uv</a>, a fast Python package manager. <code>uv</code> does not pollute your other Python environments, and automatically installs Python and the necessary packages when running a script. Datasets and any pretrained networks are downloaded automatically too, and the UI serves on <code>--nansense-port</code>.</p>
+<p>The examples use <a href="https://docs.astral.sh/uv/getting-started/installation">uv</a>, which installs Python and the required packages for you. Datasets and pretrained models are downloaded when needed.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Install uv (Windows: https://docs.astral.sh/uv/getting-started/installation):</span>
 curl<span class="w"> </span>-LsSf<span class="w"> </span>https://astral.sh/uv/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sh
 
@@ -678,11 +678,9 @@ git<span class="w"> </span>clone<span class="w"> </span>https://github.com/konga
 <span class="nb">cd</span><span class="w"> </span>nansense
 
 <span class="c1"># --group: cpu | cuda (NVIDIA) | cuda-legacy (pre-Turing NVIDIA) | rocm (AMD)</span>
-<span class="c1"># `examples/standard/main.py` is a good starting point; `--dataset` and</span>
-<span class="c1"># `--model` switch between mnist, cifar10 and imagenette.</span>
 uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
 </code></pre></div>
-<p><code>--group cpu</code> is the torch build that works everywhere. If you have a GPU, swap it for the group matching your hardware — nothing else about the commands changes:</p>
+<p><code>--group cpu</code> works on any machine. For a GPU build, use the matching group:</p>
 <table>
 <thead>
 <tr>
@@ -710,35 +708,29 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
 </tbody>
 </table>
 <p>The other bundled examples run the same way:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># More exotic, but harder to interpret tasks:</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Other examples</span>
 uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/game_of_life/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
 uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/audio_keywords/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
 uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/depth_make3d/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
 
-<span class="c1"># Multi-input demo: a 5-channel image + a flat stats vector. Shows the input</span>
-<span class="c1"># pane&#39;s input picker, the `input_transform` for non-RGB images, and the</span>
-<span class="c1"># flat-input strip.</span>
+<span class="c1"># Multiple model inputs</span>
 uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/multimodal/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
 </code></pre></div>
-<p>A focused browser tab opens automatically at the boxed URL it prints (open it yourself if your environment has no browser); training pauses on the first batch. Drive it from the top bar — see the <a href="../ui/">UI guide</a>.</p>
+<p>A browser tab opens and training pauses on the first batch. Use the top bar to run or step through training; see the <a href="../ui/">UI guide</a>.</p>
 <div class="admonition note">
 <p class="admonition-title">The first run is the slow one</p>
-<p>A cold start installs torch and downloads the example's dataset before the UI can come up — a few minutes, and the example says so as it starts. Everything is cached under <code>--data-dir</code> (<code>./data</code> by default), so later runs skip straight to training. <code>examples/depth_make3d/main.py</code> is the outlier: Make3D is 914 MB from a slow host.</p>
+<p>The first run installs packages and downloads data, so it can take a few minutes. Later runs use the cache in <code>--data-dir</code> (<code>./data</code> by default).</p>
 </div>
 <div class="admonition tip">
 <p class="admonition-title">Memory and speed</p>
 <p>If you hit out-of-memory errors, lower <code>--batch-size</code>. If training is slow and you have GPU VRAM left, increase <code>--batch-size</code>. Both memory and training speed can be improved with <code>--dtype bf16</code> (older GPUs don't support it).</p>
-</div>
-<div class="admonition tip">
-<p class="admonition-title"><code>--num-workers</code> on macOS and Windows</p>
-<p>The examples default <code>--num-workers</code> to 2 on Linux and 0 on macOS and Windows, where PyTorch's <code>file_system</code> tensor sharing makes each DataLoader worker cost five seconds to shut down. Since a fresh iterator is built per phase, workers there stall the run at every train/val boundary rather than speeding it up — see <a href="../wiring/#data-loading-stalls-between-phases">Data loading stalls between phases</a>. Pass <code>--num-workers</code> explicitly to override.</p>
 </div>
 <h2 id="install-the-library">Install the library<a class="headerlink" href="#install-the-library" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>nansense
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Install torch first</p>
-<p>Install your PyTorch build first (see <a href="https://pytorch.org/get-started/locally/">pytorch.org</a>) so your CUDA / ROCm / CPU choice is preserved: NaNsense bundles <code>captum</code> for the experiment page's attribution methods, and captum needs torch ≥ 2.3, so a pre-existing torch keeps <code>pip</code> from pulling a default CPU build. <code>pip install lightning</code> additionally enables <code>nansense.lightning</code>. Runs on Python 3.10–3.14.</p>
+<p>Install the <a href="https://pytorch.org/get-started/locally/">PyTorch build for your hardware</a> first. NaNsense supports Python 3.10–3.14 and PyTorch 2.3 or newer. Install <code>lightning</code> as well to use the PyTorch Lightning integration.</p>
 </div>
 <p>Wiring NaNsense into a training loop is a few lines:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">nansense</span>
@@ -750,7 +742,7 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
             <span class="o">...</span>  <span class="c1"># your usual training step</span>
 <span class="n">session</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </code></pre></div>
-<p>The <a href="../wiring/">Wiring guide</a> walks through this for raw PyTorch and PyTorch Lightning, including time travel and distributed training — or let a coding agent do the wiring via <a href="../integrate/">Integrate with one prompt</a>.</p>
+<p>The <a href="../wiring/">Wiring guide</a> covers raw PyTorch, PyTorch Lightning, time travel, and distributed training.</p>
 
 
 
