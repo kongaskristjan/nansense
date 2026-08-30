@@ -217,7 +217,6 @@ def add_num_workers_arg(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=default_num_workers(),
         help=(
-            "DataLoader worker processes (default 2 on Linux, 0 on "
-            "macOS/Windows, where per-phase worker shutdown costs 5s each)."
+            "Data-loading workers (default 2 on Linux, 0 on macOS and Windows)."
         ),
     )

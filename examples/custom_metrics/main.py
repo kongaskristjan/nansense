@@ -1,23 +1,10 @@
-"""Custom instruments demo: log your own metrics and tensors per layer.
+"""See how to add custom metrics and tensors to NaNsense.
 
-A tiny CNN classifies which quadrant of a synthetic 16x16 image holds a
-bright Gaussian blob (no download needed). The point of the example is the
-NaNsense *instrument* wiring — user callbacks the session evaluates for every
-watched layer, against the live activations/gradients/weights:
+A small CNN classifies synthetic images, so no download is required. The
+example demonstrates ``watch_metric``, ``watch_layer_tensor``, and
+``watch_weight_tensor``.
 
-- ``@session.watch_metric``: scalars plotted in `/stats` -> GRAPHS, either
-  every batch (``sparsity``) or reduced to one point per epoch
-  (``grad_rms``).
-- ``@session.watch_layer_tensor``: an activation-shaped tensor (``zscore``)
-  rendered as an extra strip on the layer's card on the main page.
-- ``@session.watch_weight_tensor``: a weight-shaped tensor (``adam_dir``,
-  Adam's effective update direction) rendered on `/weights` next to the
-  weight/gradient/optimizer strips.
-
-    uv run examples/custom_metrics/main.py --nansense-port 8080
-
-Two layers are watched from the script so every instrument shows data
-immediately; watch more by clicking nodes in the architecture diagram.
+Two layers are selected initially so each instrument has data to show.
 """
 
 from __future__ import annotations
@@ -147,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable NaNsense with near-zero overhead (run as plain training).",
+        help="Run the example without NaNsense.",
     )
     parser.add_argument(
         "--cache-dir",

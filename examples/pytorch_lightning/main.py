@@ -1,10 +1,6 @@
-"""Train a tiny convnet on MNIST with PyTorch Lightning + NaNsense.
+"""Train an MNIST classifier with PyTorch Lightning and NaNsense.
 
-The minimal Lightning wiring: a `NansenseCallback` on a stock `Trainer`,
-run through `fit_with_time_travel` so the UI's Time Travel button works.
-This is also the manual testbed for changes to `nansense.lightning` —
-small enough to start in seconds, full enough to exercise the callback,
-scheduler restore, and time travel.
+This example shows the ``NansenseCallback`` and time-travel integration.
 """
 
 from __future__ import annotations
@@ -130,7 +126,7 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=64,
-        help="Batch size (default 64; the tiny convnet uses very little GPU memory).",
+        help="Batch size (default 64).",
     )
     parser.add_argument("--lr", type=float, default=0.05)
     add_dtype_arg(parser)
@@ -151,7 +147,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable NaNsense with near-zero overhead (run as plain training).",
+        help="Run the example without NaNsense.",
     )
     return parser.parse_args()
 

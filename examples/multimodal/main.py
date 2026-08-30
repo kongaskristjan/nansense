@@ -1,22 +1,9 @@
-"""Multimodal CIFAR-10 (image + tabular features), with full NaNsense wiring.
+"""Inspect a model with image and tabular inputs.
 
-A two-input network classifies CIFAR-10 from a 5-channel image (normalized RGB
-plus a luma and a Sobel edge channel) *and* a flat 6-feature stats vector
-derived from the same image. It exists to exercise the NaNsense input pane on
-inputs that aren't a plain RGB image:
+The model classifies CIFAR-10 using a five-channel image and six image summary
+features. It demonstrates NaNsense with multiple, non-RGB inputs.
 
-    uv run examples/multimodal/main.py --nansense-port 8080
-
-In the input pane you get a dropdown to switch between the two model inputs:
-
-- `image` has 5 channels, so it can't be shown directly — the `input_transform`
-  below maps it back to displayable RGB (drop it to see the channel-count hint
-  instead). "Click to perturb" then edits all five channel values of a pixel.
-- `stats` is a flat `[6]` vector, shown as a per-feature colormapped strip with
-  a scale legend; clicking a cell perturbs that single feature.
-
-Either way, pinning / perturbing re-runs the whole two-input model, so the
-activation strips and the perturbation diff propagate through both branches.
+Use the input menu to switch between the image and feature vector.
 """
 
 from __future__ import annotations
@@ -82,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable NaNsense with near-zero overhead (run as plain training).",
+        help="Run the example without NaNsense.",
     )
     parser.add_argument(
         "--cache-dir",

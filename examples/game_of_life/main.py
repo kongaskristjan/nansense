@@ -1,18 +1,9 @@
-"""Predict Conway's Game of Life K steps into the future, with full NaNsense wiring.
+"""Train a model to predict Conway's Game of Life and inspect it with NaNsense.
 
-A fully-convolutional residual net learns the Game-of-Life rule from synthetic
-random boards (no download): the input is a binary board ``[1, H, W]`` (a random
-draw advanced one silent Game-of-Life step, so it looks less random) and the
-target is that board advanced ``--steps`` (K) further steps under toroidal
-boundaries.
-Training minimises a per-cell ``BCEWithLogitsLoss`` and tracks per-cell accuracy.
+The example generates random boards, so no download is required. Use ``--steps``
+to choose how far ahead the model predicts.
 
-    uv run examples/game_of_life/main.py --nansense-port 8080
-
-The board-shaped input, target, activations and output make this a vivid
-NaNsense demo: clicking to perturb a single cell shows its K-step influence
-light-cone (the model's learned receptive field), deep-dream surfaces glider /
-oscillator motifs, and time travel watches the rule itself being learned.
+Edit a cell in the input panel to trace its effect through the network.
 """
 
 from __future__ import annotations
@@ -47,7 +38,7 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=64,
-        help="Batch size (default 64, kept modest for low GPU memory).",
+        help="Batch size (default 64).",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
@@ -55,7 +46,7 @@ def parse_args() -> argparse.Namespace:
         "--steps",
         type=int,
         default=2,
-        help="K: how many Game-of-Life steps ahead to predict (default 2).",
+        help="How many Game of Life steps ahead to predict (default 2).",
     )
     parser.add_argument("--board-size", type=int, default=32)
     parser.add_argument(
@@ -67,15 +58,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-size", type=int, default=8192)
     parser.add_argument("--val-size", type=int, default=1024)
     parser.add_argument(
-        "--channels", type=int, default=32, help="Feature width of the conv net (default 32)."
+        "--channels", type=int, default=32, help="Model width (default 32)."
     )
     parser.add_argument(
         "--depth",
         type=int,
         default=None,
         help=(
-            "Number of residual blocks. Default scales with --steps to cover the "
-            "K-step light cone (each block has receptive radius 2)."
+            "Number of residual blocks (default depends on --steps)."
         ),
     )
     add_num_workers_arg(parser)
@@ -91,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable NaNsense with near-zero overhead (run as plain training).",
+        help="Run the example without NaNsense.",
     )
     parser.add_argument(
         "--cache-dir",

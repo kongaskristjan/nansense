@@ -1,13 +1,7 @@
-"""Spoken keyword classification from log-mel spectrograms (8 keywords).
+"""Train a speech-command classifier and inspect its spectrograms with NaNsense.
 
-Trains an ImageNet-style ResNet on Google's "mini Speech Commands" set (8
-keywords: down, go, left, no, right, stop, up, yes) with the full NaNsense
-wiring (scheduler, time travel, checkpoints). Each ~1 s 16 kHz clip is turned
-into a `[1, n_mels, n_frames]` log-mel spectrogram in the dataset (via
-torchaudio's `MelSpectrogram` front end) and fed to the ResNet as a
-single-channel image:
-
-    uv run examples/audio_keywords/main.py --nansense-port 8080
+The example recognizes eight words from Google's Mini Speech Commands dataset:
+down, go, left, no, right, stop, up, and yes.
 
 The first run downloads ~180 MB and extracts to `--data-dir`.
 """
@@ -49,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=64,
-        help="Batch size (default 64; the ResNet-18 peaks well under 4 GB at this size).",
+        help="Batch size (default 64).",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
@@ -79,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable NaNsense with near-zero overhead (run as plain training).",
+        help="Run the example without NaNsense.",
     )
     return parser.parse_args()
 

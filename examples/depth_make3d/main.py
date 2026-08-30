@@ -1,16 +1,8 @@
-"""Monocular depth estimation on Make3D via transfer learning.
+"""Train a model to estimate depth from one image and inspect it with NaNsense.
 
-Predict a per-pixel depth map from a single RGB photo with a pretrained ResNet
-encoder and a small U-Net decoder, under the full NaNsense wiring (scheduler,
-time travel, checkpoints):
+The model uses a pretrained ResNet encoder and a small U-Net decoder.
 
-    uv run examples/depth_make3d/main.py --nansense-port 8080
-
-The first run downloads the Make3D archives (~0.9 GB; the host can be slow) and
-the ImageNet encoder weights (~45 MB). Pass `--freeze-encoder` to train only the
-decoder. NaNsense shows a *dense, non-classification* model end to end: the
-ImageNet encoder's early activations stay structured (edges, textures), and the
-predicted log-depth renders as an image strip alongside the input photo.
+The first run downloads Make3D (~0.9 GB) and the encoder weights (~45 MB).
 """
 
 from __future__ import annotations
@@ -57,10 +49,7 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=None,
-        help=(
-            "Batch size (default: 24 for resnet18, 16 for resnet34 — kept "
-            "modest for low GPU memory)."
-        ),
+        help="Batch size (default 24 for resnet18, 16 for resnet34).",
     )
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.05)
@@ -88,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-nansense",
         action="store_true",
-        help="Disable NaNsense with near-zero overhead (run as plain training).",
+        help="Run the example without NaNsense.",
     )
     return parser.parse_args()
 

@@ -1,32 +1,8 @@
-"""Hosted NaNsense playgrounds: locked, shared demos of trained networks.
+"""Prepare or serve a hosted NaNsense playground.
 
-Two playgrounds share this entrypoint — each is deployed as its own Hugging
-Face Space (see deploy/README.md):
+Choose the MNIST or Imagenette demo. By default, the command serves a saved
+training moment; ``--prepare`` trains the model and creates that moment.
 
-    mnist       LeNet-5 on MNIST, 20 epochs
-    imagenette  the five-stage PreActResNet (resnet_deep) on Imagenette, 50 epochs
-
-Two modes, connected by one frozen-moment file per playground:
-
-    # Train once and freeze the final train batch (run locally, on a GPU):
-    uv run --group cuda examples/playground/main.py --playground mnist --prepare --device cuda
-
-    # Serve the demo (run at container start):
-    uv run examples/playground/main.py --playground mnist --nansense-port 7860 --host 0.0.0.0
-
-`--prepare` trains the full run with statistics collected for *every* layer
-(`StatsScope.ALL`) and freezes the complete debugger moment — the last train
-batch's snapshot plus all running statistics — to disk with
-`Session.freeze_moment`. The run ends at the last training phase (the final
-epoch skips validation), so the frozen batch is the run's last
-gradient-carrying one.
-
-Serving needs no dataset, optimizer, or training loop: `nansense.load_moment`
-rebuilds the frozen pause around a fresh model in seconds, and the session
-parks locked. Visitors show/hide layers per tab, browse stats, and run
-experiments; stepping, time travel, the shared probe state
-(pinning/perturbation), and the global settings are disabled (see
-`Session.lock`).
 """
 
 from __future__ import annotations
@@ -174,13 +150,13 @@ def parse_args() -> argparse.Namespace:
         "--nansense-port",
         type=int,
         default=7860,
-        help="Port the demo UI serves on (default 7860, the HF Spaces port).",
+        help="Port for the demo UI (default 7860).",
     )
     parser.add_argument(
         "--host",
         type=str,
         default="127.0.0.1",
-        help="Bind address; a hosted deployment wants 0.0.0.0.",
+        help="Address to bind (default 127.0.0.1).",
     )
     return parser.parse_args()
 
