@@ -14,12 +14,14 @@ import nansense
 from nansense.capture import _CaptureInterpreter
 from nansense.probe import (
     _MAX_PROBE_CLIENTS,
+    _shared_base_caps,
     apply_perturbations,
     gc_probe_clients,
     request_probe_locked,
     run_probe_guarded,
 )
 from nansense.session import Session
+from nansense.ui.render import probe_act_tensor
 from tests.nansense.helpers import DynamicNet, paused_session, train_step
 
 
@@ -663,6 +665,64 @@ def test_clear_perturbations_for_one_client_leaves_others() -> None:
         # B is untouched.
         assert session.probe_result_for("B") is not None
         assert session.perturbations_for("B") != {}
+
+
+def test_probe_retains_only_the_perturbed_sample_rows() -> None:
+    """The perturbed forward runs the whole batch but only the edited rows are
+    kept — the difference between megabytes and gigabytes at the client cap."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        session.add_perturbation(
+            input_name="x", sample=1, index=(0, 0), values=(4.0, 4.0, 4.0),
+            client="A",
+        )
+        assert session.wait_for_probe(client="A", timeout=5)
+        probe = session.probe_result_for("A")
+        assert probe is not None and probe.perturbed_activations is not None
+        assert probe.perturbed_samples == (1,)
+        # The shared base keeps the full batch; the per-client forward keeps one row.
+        assert all(t.shape[0] == 2 for t in probe.activations.values() if t.ndim)
+        assert all(
+            t.shape[0] == 1 for t in probe.perturbed_activations.values() if t.ndim
+        )
+
+
+def test_probe_act_tensor_resolves_perturbed_and_unperturbed_samples() -> None:
+    """The strip shows the edited row's perturbed activations, and falls back to
+    the base row for a sample nobody perturbed (its diff is zero)."""
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        session.add_perturbation(
+            input_name="x", sample=1, index=(0, 0), values=(9.0, 9.0, 9.0),
+            client="A",
+        )
+        assert session.wait_for_probe(client="A", timeout=5)
+        probe = session.probe_result_for("A")
+        assert probe is not None
+
+        edited = probe_act_tensor(probe, "conv", compare=True, sample_idx=1)
+        untouched = probe_act_tensor(probe, "conv", compare=True, sample_idx=0)
+        assert edited is not None and untouched is not None
+        assert edited.shape[0] == 1 and edited.abs().sum() > 0
+        torch.testing.assert_close(untouched, torch.zeros_like(untouched))
+
+        # Without `compare`, an unperturbed sample renders its base row.
+        base_row = probe_act_tensor(probe, "conv", compare=False, sample_idx=0)
+        assert base_row is not None
+        torch.testing.assert_close(base_row, probe.activations["conv"][0:1])
+
+
+def test_shared_base_cache_keys_on_base_identity() -> None:
+    """A fresh base recomputes even when it holds equal values.
+
+    Keying on `id()` would let a new snapshot reuse a freed one's address and
+    serve every client a stale base to diff against.
+    """
+    with paused_session(BnDropNet(), _bn_drop_step) as session:
+        bases = session._snapshot_inputs()
+        first = _shared_base_caps(session, bases, "eval")
+        assert _shared_base_caps(session, bases, "eval") is first  # cache hit
+        assert _shared_base_caps(session, bases, "train") is not first  # mode differs
+        replacement = {name: t.clone() for name, t in bases.items()}
+        assert _shared_base_caps(session, replacement, "eval") is not first
 
 
 def test_probe_clients_capped_lru() -> None:

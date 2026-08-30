@@ -62,8 +62,12 @@ PerturbationMap = dict[PerturbationKey, tuple[float, ...]]
 # container survives without a page heartbeat before it is reaped (a closed tab
 # stops ticking and is dropped ~this many seconds later, like an auto
 # experiment). The base activations are computed once and shared across every
-# client's diff (see `_shared_base_caps`), so a client stores only its own
-# perturbed forward — roughly one image's activations per visitor.
+# client's diff (see `_shared_base_caps`), and a client retains only the rows
+# it actually edited (see `ProbeResult`) — so a visitor costs one *sample's*
+# activations, not one batch's. That distinction is the difference between
+# megabytes and gigabytes at the cap: a capture holds every layer the model
+# has, so on a 128px ResNet at batch 16 the full batch is ~800 MB per visitor
+# against ~50 MB for the one row anyone is looking at.
 _MAX_PROBE_CLIENTS: int = 16
 _PROBE_CLIENT_TTL: float = 5.0
 
@@ -106,6 +110,16 @@ class ProbeResult:
     tensor), and `perturbed_activations` its layer outputs from a second
     forward in the same isolation scope; both stay `None` otherwise. Probes
     are forward-only: there are no activation gradients.
+
+    The perturbed forward runs the *whole* batch — batch-dependent layers
+    (BatchNorm in train mode) would otherwise see different statistics — but
+    only the edited samples' rows are retained, in `perturbed_samples` order.
+    Every other sample's perturbed activation is by definition its base
+    activation, so keeping the full batch would store `B` copies of a result
+    that differs in one row; `perturbed_act` resolves a sample against that
+    layout. `perturbed_inputs` stays full-batch: it is one input tensor
+    rather than every layer's output, so slicing it saves little and would
+    complicate `shown_input`.
     """
 
     inputs: dict[str, Tensor]
@@ -113,6 +127,23 @@ class ProbeResult:
     mode: str
     perturbed_inputs: dict[str, Tensor] | None = None
     perturbed_activations: dict[str, Tensor] | None = None
+    perturbed_samples: tuple[int, ...] = ()
+
+    def perturbed_act(self, name: str, sample_idx: int) -> Tensor | None:
+        """Layer `name`'s perturbed activation for one sample, shaped `[1, ...]`.
+
+        `None` when no perturbed forward ran, when `sample_idx` carries no
+        edit (its perturbed activation is the base one), or when the layer is
+        absent from the perturbed capture.
+        """
+        acts = self.perturbed_activations
+        if acts is None or sample_idx not in self.perturbed_samples:
+            return None
+        tensor = acts.get(name)
+        if tensor is None or tensor.ndim == 0:
+            return None
+        row = self.perturbed_samples.index(sample_idx)
+        return tensor[row : row + 1] if row < tensor.shape[0] else None
 
     def shown_input(self, name: str | None) -> Tensor | None:
         """The (perturbed if edited, else base) tensor for input `name`."""
@@ -132,6 +163,42 @@ class ProbeResult:
             if tensor.ndim > 0:
                 return int(tensor.shape[0])
         return None
+
+
+def perturbed_samples(perturbations: PerturbationMap) -> tuple[int, ...]:
+    """The sample indices carrying at least one edit, ascending."""
+    return tuple(sorted({sample for _, sample, _ in perturbations}))
+
+
+def _batch_size(bases: dict[str, Tensor]) -> int | None:
+    """Batch size of the base inputs, read off whichever input has a batch axis."""
+    for tensor in bases.values():
+        if tensor.ndim > 0:
+            return int(tensor.shape[0])
+    return None
+
+
+def _select_samples(
+    caps: dict[str, Tensor], samples: tuple[int, ...], batch: int | None
+) -> dict[str, Tensor]:
+    """Keep only `samples`' rows of every batched capture in `caps`.
+
+    A capture whose leading axis isn't the batch (a 0-dim scalar, or a tensor
+    the model produced at some other size) is passed through untouched.
+    `index_select` copies, so the full-batch tensors are freed once the caller
+    drops `caps` — that release is the whole point (see `ProbeResult`).
+    """
+    if batch is None or not samples or samples[-1] >= batch:
+        return caps
+    index = torch.tensor(samples)
+    return {
+        name: (
+            tensor.index_select(0, index)
+            if tensor.ndim > 0 and tensor.shape[0] == batch
+            else tensor
+        )
+        for name, tensor in caps.items()
+    }
 
 
 def apply_perturbations(
@@ -383,8 +450,11 @@ def _run_probe(session: Session) -> None:
         return
     perturbed = apply_perturbations(bases, perturbations)
     base_caps = _probe_forward(session, bases, mode=mode)
+    samples = perturbed_samples(perturbations)
     pert_caps = (
-        _probe_forward(session, perturbed, mode=mode)
+        _select_samples(
+            _probe_forward(session, perturbed, mode=mode), samples, _batch_size(bases)
+        )
         if perturbed is not None
         else None
     )
@@ -394,6 +464,7 @@ def _run_probe(session: Session) -> None:
         mode=mode,
         perturbed_inputs=perturbed,
         perturbed_activations=pert_caps,
+        perturbed_samples=samples,
     )
     with session._cv:
         if session._probe_version != version:
@@ -601,23 +672,34 @@ def _shared_base_caps(
 
     Every client's perturbed probe diffs against the *same* unperturbed base,
     which in a locked demo never changes — so this caches the single base
-    forward and hands the same capture dict to each client. The cache key is
-    the identity of the snapshot / pinned inputs the base came from plus the
-    mode, so a new snapshot or a re-pin (unlocked sessions) recomputes it.
-    Runs on the training thread only, serialized with every other probe, so no
-    two clients race to fill the cache.
+    forward and hands the same capture dict to each client. A new snapshot or
+    a re-pin (unlocked sessions) recomputes it. Runs on the training thread
+    only, serialized with every other probe, so no two clients race to fill
+    the cache.
+
+    The cache holds the base tensors it was built from and validates by
+    identity. Keying on `id()` alone would be a correctness bug: CPython
+    reuses an address once the old object is freed, so a fresh snapshot
+    landing where its predecessor sat would match a stale entry and every
+    client would silently diff against the wrong base. Holding the references
+    makes the comparison meaningful — and costs only the model's inputs, not
+    the snapshot they came from.
     """
-    sig: tuple[int, int, str] = (
-        id(session._snapshot),
-        id(session._pinned_inputs),
-        mode,
-    )
     cached = session._shared_base_cache
-    if cached is not None and cached[0] == sig:
-        return cached[1]
+    if cached is not None:
+        cached_bases, cached_mode, caps = cached
+        if cached_mode == mode and _same_bases(cached_bases, bases):
+            return caps
     caps = _probe_forward(session, bases, mode=mode)
-    session._shared_base_cache = (sig, caps)
+    session._shared_base_cache = (dict(bases), mode, caps)
     return caps
+
+
+def _same_bases(cached: dict[str, Tensor], bases: dict[str, Tensor]) -> bool:
+    """Whether both mappings name the same input tensor objects."""
+    return cached.keys() == bases.keys() and all(
+        cached[name] is tensor for name, tensor in bases.items()
+    )
 
 
 def run_client_probe_guarded(session: Session, key: str) -> None:
@@ -669,8 +751,11 @@ def _run_client_probe(session: Session, key: str, version: int) -> None:
         return
     perturbed = apply_perturbations(bases, perturbations)
     base_caps = _shared_base_caps(session, bases, mode)
+    samples = perturbed_samples(perturbations)
     pert_caps = (
-        _probe_forward(session, perturbed, mode=mode)
+        _select_samples(
+            _probe_forward(session, perturbed, mode=mode), samples, _batch_size(bases)
+        )
         if perturbed is not None
         else None
     )
@@ -680,6 +765,7 @@ def _run_client_probe(session: Session, key: str, version: int) -> None:
         mode=mode,
         perturbed_inputs=perturbed,
         perturbed_activations=pert_caps,
+        perturbed_samples=samples,
     )
     with session._cv:
         client = session._probe_clients.get(key)

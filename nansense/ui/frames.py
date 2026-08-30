@@ -177,12 +177,14 @@ def main_frame(
     # strip captions its channels — the rows under it share those headers.
     for name in layers:
         if probe is not None:
-            act = probe_act_tensor(probe, name, compare=compare)
+            act = probe_act_tensor(
+                probe, name, compare=compare, sample_idx=sample_idx
+            )
             sections.append(Section(f"{name} (probe)", None))
             sections.append(
                 Section(
                     "ACTIVATIONS",
-                    strip_image(render_strip(act, sample_idx, input_hw=input_hw)),
+                    strip_image(render_strip(act, 0, input_hw=input_hw)),
                     ACTIVATIONS,
                     header_gap=True,
                 )

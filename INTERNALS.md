@@ -871,6 +871,18 @@ perturbation exists. Perturbations alone keep probing active without a pin — t
 bases fall back to the snapshot's inputs (`_snapshot_inputs`), so edits track
 the current training batch.
 
+That second forward runs the *whole* batch — slicing to the edited sample first
+would change what batch-dependent layers compute (BatchNorm in train mode reads
+batch statistics) — but only the edited rows are retained, in
+`ProbeResult.perturbed_samples` order (`_select_samples`). Every other sample's
+perturbed activation *is* its base activation, so keeping the full batch would
+store `B` copies of a result that differs in one row. Since a capture holds every
+layer the model has, that is not a micro-optimization: on the 128px ResNet
+playground at batch 16 it is ~800 MB against ~50 MB, per perturbing visitor.
+`render.probe_act_tensor` resolves a sample against that layout — the edited row
+when it exists, the base row otherwise — and returns a `[1, ...]` tensor its
+callers render at index 0.
+
 **Mode activates probing too.** `_probe_active_locked` treats a
 non-`"unchanged"` forward mode as active on its own, alongside a pin or any
 perturbation. So selecting `"eval"`/`"train"` re-runs the model on the
@@ -1942,8 +1954,13 @@ fields — allowed while locked, so "Click to perturb" works in a shared demo
 without one visitor's clicks changing another's view. Each container holds
 only that connection's edits and its perturbed probe result; the unperturbed
 base activations are computed once and reused by every client
-(`probe._shared_base_caps`, keyed by the frozen snapshot/pin identity + mode),
-so a client stores roughly one image's activations. Containers are keyed by a
+(`probe._shared_base_caps`), and the client retains only the rows it edited,
+so a visitor costs one *sample's* activations rather than one batch's. That
+cache holds the base tensors it was built from and validates them by identity:
+keying on `id()` alone would be a correctness bug, since CPython reuses an
+address once the old object is freed, and a fresh snapshot landing where its
+predecessor sat would serve every client a stale base to diff against.
+Containers are keyed by a
 `uuid4` the input panel mints per page, heartbeated from the page tick
 (`touch_probe_client`), LRU-capped at `probe._MAX_PROBE_CLIENTS`, and reaped
 `probe._PROBE_CLIENT_TTL` seconds after the heartbeat stops (a closed tab) —

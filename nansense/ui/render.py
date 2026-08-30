@@ -206,28 +206,42 @@ def tensor_hw(tensor: Tensor | None) -> tuple[int, int] | None:
     return int(tensor.shape[-2]), int(tensor.shape[-1])
 
 
-def probe_act_tensor(probe: ProbeResult, name: str, *, compare: bool) -> Tensor | None:
-    """The probe-sourced activation tensor one layer's strip shows.
+def probe_act_tensor(
+    probe: ProbeResult, name: str, *, compare: bool, sample_idx: int
+) -> Tensor | None:
+    """The probe-sourced activation one layer's strip shows, shaped `[1, ...]`.
 
     With `compare` the strip shows `perturbed − original` (zeros when no
     perturbed forward ran); otherwise the perturbed activations win when
     they exist. Shared by the main page and frame recording, so both render
     the same tensor for the same probe.
+
+    Resolves a single sample rather than the whole batch because a probe only
+    retains the rows it perturbed (see `ProbeResult`); a sample with no edit
+    falls back to its base row, which is what its perturbed forward would have
+    produced anyway. Callers render the result at index 0.
     """
-    base = probe.activations.get(name)
+    base = _sample_row(probe.activations.get(name), sample_idx)
     perturbed_acts = probe.perturbed_activations
+    pert = probe.perturbed_act(name, sample_idx)
     if compare:
         if base is None:
             return None
-        if perturbed_acts is None:
+        if pert is None:
             return torch.zeros_like(base)
-        pert = perturbed_acts.get(name)
-        if pert is None or pert.shape != base.shape:
+        if pert.shape != base.shape:
             return None
         return pert - base
-    if perturbed_acts is not None:
-        return perturbed_acts.get(name)
-    return base
+    if perturbed_acts is not None and name not in perturbed_acts:
+        return None
+    return pert if pert is not None else base
+
+
+def _sample_row(tensor: Tensor | None, sample_idx: int) -> Tensor | None:
+    """Row `sample_idx` of a batched tensor, kept as `[1, ...]`."""
+    if tensor is None or tensor.ndim == 0 or sample_idx >= tensor.shape[0]:
+        return None
+    return tensor[sample_idx : sample_idx + 1]
 
 
 # Leading non-spatial tokens a grid fit may skip: none, a class token, class

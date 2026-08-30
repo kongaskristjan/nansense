@@ -1015,8 +1015,10 @@ def _compute_probe_frame(
             (name, kind, sample_idx),
             lambda: _strip_html(
                 render_strip(
-                    probe_act_tensor(probe, name, compare=compare),
-                    sample_idx,
+                    probe_act_tensor(
+                        probe, name, compare=compare, sample_idx=sample_idx
+                    ),
+                    0,
                     input_hw=input_hw,
                 ),
                 show_labels=True,

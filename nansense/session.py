@@ -459,7 +459,7 @@ class Session:
         # locked), so a client stores only its own perturbed forward.
         self._probe_clients: OrderedDict[str, _ProbeClient] = OrderedDict()
         self._shared_base_cache: (
-            tuple[tuple[int, int, str], dict[str, Tensor]] | None
+            tuple[dict[str, Tensor], str, dict[str, Tensor]] | None
         ) = None
         # Experiment state (see nansense.experiments): requests queue up and
         # the pause loop drains them in order, so concurrent clients (browser
