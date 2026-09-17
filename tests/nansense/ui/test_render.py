@@ -14,6 +14,9 @@ from nansense.patches import TypePatches
 from nansense.ui import render
 from nansense.ui.render import (
     HEAT_MAX_ALPHA,
+    LEGEND_BAR_WIDTH,
+    LEGEND_GAP,
+    LEGEND_LABEL_WIDTH,
     LEGEND_WIDTH,
     LINEAR_BIN_WIDTH,
     LINEAR_MAX_BINS,
@@ -33,6 +36,7 @@ from nansense.ui.render import (
     render_weight,
     transform_preview_color,
 )
+from nansense.ui.render import RenderOptions
 
 
 def _decode(image: bytes) -> Image.Image:
@@ -49,6 +53,13 @@ def _rgb_at(img: Image.Image, x: int, y: int) -> tuple[int, int, int]:
 def _tile_sizes(strip: render.StripRender) -> list[tuple[int, int]]:
     """Native (decoded) `(w, h)` size of each tile image in a strip."""
     return [_decode(tile.image).size for tile in strip.tiles]
+
+
+def _legend_bar(strip: render.StripRender, frac: float) -> tuple[int, int, int]:
+    """Color of the legend's colorbar `frac` of the way down it (0 = top)."""
+    img = _decode(strip.legend_image)
+    x = LEGEND_LABEL_WIDTH + LEGEND_GAP + LEGEND_BAR_WIDTH // 2
+    return _rgb_at(img, x, min(int(frac * img.height), img.height - 1))
 
 
 def test_chw_strip_is_one_native_tile_per_channel() -> None:
@@ -287,6 +298,117 @@ def test_nonfinite_does_not_smear_across_downsampled_tile() -> None:
     transparent = (arr[..., 3] == 0).sum()
     # Only a small corner region goes transparent, not the whole 128x128 tile.
     assert 0 < transparent < arr.shape[0] * arr.shape[1] // 4
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        ("unchanged", (127, 127, 255)),
+        ("abs", (255, 127, 127)),
+        ("square", (255, 191, 191)),
+    ],
+)
+def test_value_mode_transforms_before_the_scale(
+    values: str, expected: tuple[int, int, int]
+) -> None:
+    # A row of -2 and -1. The strip's scale is the *post*-transform absolute
+    # max (2, 2 and 4), so the weaker cell's color says both what the
+    # transform did and what it was normalized against: half-blue raw,
+    # half-red absolute, quarter-red squared.
+    strip = render_strip(
+        torch.tensor([[-2.0, -1.0]]),
+        sample_idx=0,
+        options=RenderOptions(values=values),  # ty: ignore[invalid-argument-type]
+    )
+    assert strip is not None
+    assert _rgb_at(_decode(strip.tiles[0].image), 1, 0) == expected
+
+
+def test_average_collapses_channels_to_one_mean_tile() -> None:
+    sample = torch.randn(4, 8, 8)
+    strip = render_strip(
+        sample.unsqueeze(0), sample_idx=0, options=RenderOptions(average=True)
+    )
+    expected = render_strip(sample.mean(0, keepdim=True).unsqueeze(0), sample_idx=0)
+    assert strip is not None and expected is not None
+    assert len(strip.tiles) == 1
+    # Byte-identical to rendering the mean itself — including the legend, so
+    # the collapsed tile is scaled by its own extremes, not the channels' .
+    assert strip.tiles[0].image == expected.tiles[0].image
+    assert strip.legend_image == expected.legend_image
+
+
+def test_average_takes_the_mean_after_the_value_transform() -> None:
+    # Two channels that cancel: the signed mean is 0 (white), the mean
+    # magnitude is 1 (full red). Transforming first is what stops an opposed
+    # pair averaging away to nothing.
+    sample = torch.stack([torch.ones(4, 4), -torch.ones(4, 4)]).unsqueeze(0)
+    signed = render_strip(sample, sample_idx=0, options=RenderOptions(average=True))
+    magnitude = render_strip(
+        sample, sample_idx=0, options=RenderOptions(average=True, values="abs")
+    )
+    assert signed is not None and magnitude is not None
+    assert _rgb_at(_decode(signed.tiles[0].image), 2, 2) == (255, 255, 255)
+    assert _rgb_at(_decode(magnitude.tiles[0].image), 2, 2) == (255, 0, 0)
+
+
+def test_average_keeps_a_nonfinite_channel_visible() -> None:
+    # A NaN in one channel propagates through the mean, so the averaged tile
+    # keeps the transparent hole rather than diluting the divergence away.
+    sample = torch.zeros(1, 3, 4, 4)
+    sample[0, 1, 2, 2] = float("nan")
+    strip = render_strip(sample, sample_idx=0, options=RenderOptions(average=True))
+    assert strip is not None
+    assert strip.tiles[0].mime == "image/png"
+    assert np.asarray(_decode_rgba(strip.tiles[0].image))[2, 2, 3] == 0
+
+
+def test_average_leaves_single_tile_renders_alone() -> None:
+    # A 1-D heatmap row has no tile axis to collapse; averaging must not turn
+    # it into a single cell.
+    row = torch.arange(12, dtype=torch.float32).unsqueeze(0)
+    plain = render_strip(row, sample_idx=0)
+    averaged = render_strip(row, sample_idx=0, options=RenderOptions(average=True))
+    assert plain is not None and averaged is not None
+    assert _tile_sizes(averaged) == _tile_sizes(plain)
+
+
+def test_magnitude_legend_runs_from_max_down_to_zero() -> None:
+    # abs/square leave only non-negative values, so the colorbar spans 0..max
+    # instead of a ±max scale whose lower half no pixel can reach.
+    tensor = torch.full((1, 1, TILE_SIZE, TILE_SIZE), -4.0)
+    diverging = render_strip(tensor, sample_idx=0)
+    sequential = render_strip(tensor, sample_idx=0, options=RenderOptions(values="abs"))
+    assert diverging is not None and sequential is not None
+    assert _legend_bar(diverging, 0.0) == (255, 0, 0)
+    assert _legend_bar(diverging, 1.0) == (0, 0, 255)
+    assert _legend_bar(sequential, 0.0) == (255, 0, 0)
+    assert _legend_bar(sequential, 1.0) == (255, 255, 255)
+
+
+def test_defaults_render_exactly_what_they_used_to() -> None:
+    tensor = torch.randn(1, 3, 8, 8)
+    plain = render_strip(tensor, sample_idx=0)
+    explicit = render_strip(tensor, sample_idx=0, options=RenderOptions())
+    assert plain is not None and explicit is not None
+    assert [t.image for t in plain.tiles] == [t.image for t in explicit.tiles]
+    assert plain.legend_image == explicit.legend_image
+
+
+def test_cache_key_separates_every_option_combination() -> None:
+    keys = {
+        RenderOptions(average=average, values=values).cache_key
+        for average in (False, True)
+        for values in ("unchanged", "abs", "square")
+    }
+    assert len(keys) == 6
+
+
+def test_options_round_trip_through_recorded_params() -> None:
+    options = RenderOptions(average=True, values="square")
+    assert RenderOptions.from_params(options.as_params()) == options
+    # An unknown mode falls back rather than reaching the renderer.
+    assert RenderOptions.from_params({"render_values": "cube"}) == RenderOptions()
 
 
 def test_strip_uses_diverging_colormap_per_tile() -> None:

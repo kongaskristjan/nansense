@@ -25,7 +25,7 @@ from nansense.recording import (
     _unique_path,
     _VideoStream,
 )
-from nansense.session import Session
+from nansense.session import BatchSnapshot, Session
 from nansense.ui.compose import _CHECKER_DARK, _CHECKER_LIGHT
 
 
@@ -72,7 +72,9 @@ def _frame_count(path: Path) -> int:
         return sum(1 for _ in container.decode(video=0))
 
 
-def _main_view(layers: tuple[str, ...] = ("conv",)) -> RecordedView:
+def _main_view(
+    layers: tuple[str, ...] = ("conv",), **params: object
+) -> RecordedView:
     return RecordedView(
         key="main",
         page="main",
@@ -83,6 +85,7 @@ def _main_view(layers: tuple[str, ...] = ("conv",)) -> RecordedView:
             "input_name": "x",
             "input_mean": None,
             "input_std": None,
+            **params,
         },
     )
 
@@ -114,11 +117,29 @@ def test_stamp_position_adds_banner() -> None:
     assert (stamped[_POSITION_BANNER_HEIGHT:] == 0).all()  # frame below, intact
 
 
+def _nan_free_snapshot() -> BatchSnapshot:
+    from nansense.schedule import BatchPosition
+
+    return BatchSnapshot(
+        position=BatchPosition(
+            phase="train",
+            epoch=0,
+            batch_idx=0,
+            is_last_in_phase=True,
+            is_last_in_epoch=True,
+            is_last_overall=True,
+        ),
+        activations={"conv": torch.randn(2, 3, 6, 6), "x": torch.rand(2, 1, 6, 6)},
+        activation_gradients={"conv": torch.randn(2, 3, 6, 6)},
+        weights={},
+        weight_gradients={},
+    )
+
+
 def test_main_frame_shows_checkerboard_for_nan_activation(tmp_path: Path) -> None:
     # End to end: a snapshot with a NaN activation produces a main frame whose
     # strip region shows both checkerboard grays (not a single gray, not white).
     from nansense.schedule import BatchPosition
-    from nansense.session import BatchSnapshot
 
     session, model, _ = _make_session(tmp_path, epochs=1, phases={"train": 1})
     act = torch.randn(2, 3, 6, 6)
@@ -141,6 +162,20 @@ def test_main_frame_shows_checkerboard_for_nan_activation(tmp_path: Path) -> Non
     assert image is not None
     colors = {tuple(c) for row in np.asarray(image) for c in row}
     assert _CHECKER_LIGHT in colors and _CHECKER_DARK in colors
+
+
+def test_main_frame_honours_recorded_render_options(tmp_path: Path) -> None:
+    # A recording freezes the page's render options with everything else, so
+    # a frame recorded from an averaged view stays averaged — one tile per
+    # layer, hence a narrower frame than the per-channel row.
+    session, _, _ = _make_session(tmp_path, epochs=1, phases={"train": 1})
+    session._snapshot = _nan_free_snapshot()
+    plain = _main_frame(_main_view(), session)
+    averaged = _main_frame(
+        _main_view(render_average=True, render_values="abs"), session
+    )
+    assert plain is not None and averaged is not None
+    assert averaged.width < plain.width
 
 
 def test_manager_start_end_delete(tmp_path: Path) -> None:

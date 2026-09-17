@@ -21,7 +21,13 @@ from nansense.ui.main_page import (
     _seed_shown,
 )
 from nansense.ui.graph import slug_map
-from nansense.ui.render import StripRender, image_mime, render_image, render_strip
+from nansense.ui.render import (
+    RenderOptions,
+    StripRender,
+    image_mime,
+    render_image,
+    render_strip,
+)
 from tests.nansense.helpers import _frame_snapshot, _make_snapshot
 
 
@@ -341,6 +347,83 @@ def test_compute_snapshot_frame_compare_renders_zero_diff() -> None:
     assert rendered["conv"][1] == grad_expected
 
 
+def test_compute_frame_applies_render_options_to_every_strip() -> None:
+    """Activations, gradients and custom tensors all follow the option, so a
+    card reads as one thing rather than a mix of scales."""
+    snap = _make_snapshot(
+        "train",
+        0,
+        0,
+        activations={"x": torch.rand(2, 3, 4, 4), "conv": torch.rand(2, 2, 4, 4)},
+        activation_gradients={"conv": torch.rand(2, 2, 4, 4)},
+        custom_activations={"conv": {"pre": torch.rand(2, 2, 4, 4)}},
+    )
+    options = RenderOptions(average=True, values="abs")
+    rendered, _ = _compute_frame(
+        ["conv"],
+        snap,
+        None,
+        0,
+        options=options,
+        input_name="x",
+        input_mean=None,
+        input_std=None,
+        cache=_RenderCache(),
+    )
+    act, grad, custom = rendered["conv"]
+    assert act == _strip_html(
+        render_strip(snap.activations["conv"], 0, options=options), show_labels=True
+    )
+    assert grad == _strip_html(
+        render_strip(snap.activation_gradients["conv"], 0, options=options)
+    )
+    assert custom == (
+        (
+            "pre",
+            _strip_html(
+                render_strip(snap.custom_activations["conv"]["pre"], 0, options=options)
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize("probe_source", [False, True])
+def test_compute_frame_cache_separates_render_options(probe_source: bool) -> None:
+    """Switching an option must re-render, not serve the previous look back
+    out of the cache — the key carries the options for snapshots and probes
+    alike."""
+    snap = _frame_snapshot()
+    probe = (
+        ProbeResult(
+            inputs={"x": torch.rand(2, 3, 4, 4)},
+            activations={"conv": snap.activations["conv"]},
+            mode="eval",
+        )
+        if probe_source
+        else None
+    )
+    cache = _RenderCache()
+
+    def frame(options: RenderOptions) -> str:
+        rendered, _ = _compute_frame(
+            ["conv"],
+            snap,
+            probe,
+            0,
+            options=options,
+            input_name="x",
+            input_mean=None,
+            input_std=None,
+            cache=cache,
+        )
+        return rendered["conv"][0]
+
+    plain = frame(RenderOptions())
+    assert frame(RenderOptions(average=True)) != plain
+    assert frame(RenderOptions(values="abs")) != plain
+    assert frame(RenderOptions()) == plain  # and back again, from the cache
+
+
 def test_display_batch_size_prefers_probe() -> None:
     snap = _frame_snapshot()  # batch size 2
     probe = ProbeResult(
@@ -417,10 +500,13 @@ def test_compute_frame_raising_layer_does_not_drop_the_frame(
         sample_idx: int,
         *,
         input_hw: tuple[int, int] | None = None,
+        options: RenderOptions = RenderOptions(),
     ) -> StripRender | None:
         if tensor is bad:
             raise RuntimeError("boom")
-        return real_render_strip(tensor, sample_idx, input_hw=input_hw)
+        return real_render_strip(
+            tensor, sample_idx, input_hw=input_hw, options=options
+        )
 
     monkeypatch.setattr(main_page, "render_strip", flaky_render_strip)
     snap = _make_snapshot(

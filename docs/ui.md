@@ -30,6 +30,8 @@ Views follow the live training batch by default. **Pin batch** keeps the current
 
 **Perturb** lets you edit a pixel and see how the change spreads through the network. This is useful for [measuring a receptive field](showcase.md#measure-the-receptive-field-of-a-neuron).
 
+**Render options** change how every strip on the page is drawn. **Average** collapses each strip's channels into a single mean image, which is how you read the *shape* of a wide layer's response without scrolling a row of sixty-four tiles. **Abs** and **Square** drop the sign first, so the strip shows magnitude on a sequential 0..max scale — squaring pulls the loudest features further out of the quiet ones. With both on, the transform happens before the mean, so channels that cancel out no longer average away to nothing. The options are per browser tab, so they work in a [shared playground](playground.md) too.
+
 ## The stats page
 
 Open a watched layer's **stats view** for a closer look at its distributions over the epoch. The page has three views, switchable per layer:

@@ -38,6 +38,8 @@ from nansense.ui.compose import (
     upscaled_image,
 )
 from nansense.ui.render import (
+    DEFAULT_RENDER_OPTIONS,
+    RenderOptions,
     attribution_vmax,
     default_weight_dims,
     probe_act_tensor,
@@ -131,6 +133,7 @@ def main_frame(
     mean: tuple[float, ...] | None = None,
     std: tuple[float, ...] | None = None,
     transform: InputTransform | None = None,
+    options: RenderOptions = DEFAULT_RENDER_OPTIONS,
     show_input: bool = True,
     require_image: bool = False,
 ) -> Image.Image | None:
@@ -146,6 +149,9 @@ def main_frame(
     token-shaped activation (`[B, tokens, dim]`, as a ViT block emits) be
     unflattened back onto the patch grid it came from. Omitting the name to hide
     the picture would silently turn those strips into one flat heatmap.
+
+    `options` is the page's render-options section: magnitude (`abs` /
+    `square`) and channel averaging, applied to every layer strip.
     """
     snap = session.snapshot
     probe = session.probe_result
@@ -184,7 +190,9 @@ def main_frame(
             sections.append(
                 Section(
                     "ACTIVATIONS",
-                    strip_image(render_strip(act, 0, input_hw=input_hw)),
+                    strip_image(
+                        render_strip(act, 0, input_hw=input_hw, options=options)
+                    ),
                     ACTIVATIONS,
                     header_gap=True,
                 )
@@ -197,7 +205,10 @@ def main_frame(
                     "ACTIVATIONS",
                     strip_image(
                         render_strip(
-                            snap.activations.get(name), sample_idx, input_hw=input_hw
+                            snap.activations.get(name),
+                            sample_idx,
+                            input_hw=input_hw,
+                            options=options,
                         )
                     ),
                     ACTIVATIONS,
@@ -212,6 +223,7 @@ def main_frame(
                             snap.activation_gradients.get(name),
                             sample_idx,
                             input_hw=input_hw,
+                            options=options,
                         ),
                         show_labels=False,
                     ),

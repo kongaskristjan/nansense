@@ -146,6 +146,8 @@ def layer_image(
     display: InputDisplay,
     input_name: str | None = None,
     include_input: bool = False,
+    average: bool = False,
+    values: str = "unchanged",
 ) -> RenderedImage:
     """The main page for `layers`: one activation and gradient strip each.
 
@@ -153,8 +155,13 @@ def layer_image(
     (red positive, blue negative), with NaN/±Inf cells left transparent over a
     checkerboard — so a diverged channel is visible as a hole rather than as an
     extreme color.
+
+    `average` and `values` are the page's render options: averaging collapses
+    each strip's channels into one mean tile, and `values` of `"abs"` /
+    `"square"` shows magnitude on a sequential 0..max scale instead.
     """
     from nansense.ui.frames import main_frame
+    from nansense.ui.render import RenderOptions
 
     if session.snapshot is None and session.probe_result is None:
         return _no_snapshot()
@@ -175,10 +182,18 @@ def layer_image(
             mean=mean,
             std=std,
             transform=display.transform(input_name),
+            options=RenderOptions.from_params(
+                {"render_average": average, "render_values": values}
+            ),
             require_image=True,
         )
     )
     note = f"Sample {sample} of the batch at {_position_note(session)}."
+    if average or values != "unchanged":
+        note += (
+            f" Render options: values {values}"
+            f"{', channels averaged' if average else ''}."
+        )
     if session.probe_result is not None:
         note += (
             " Rendered from the probe (a pinned batch or perturbation is "

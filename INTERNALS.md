@@ -1510,6 +1510,21 @@ Render conventions worth knowing before editing `render.py`:
 - Every strip (activations, gradients, weights) uses one diverging
   blue-white-red colormap; strips are told apart by a labelled colored marker
   bar, never by palette.
+- `RenderOptions` (`average` + `values`) is the main page's "Render options"
+  section, threaded into `render_strip` and defaulting to the pre-existing
+  render, so every other caller is unchanged byte for byte. `values`
+  (`abs` / `square`) transforms inside `_render_chw` / `_render_1d` and
+  `average` collapses the tile axis to one mean tile *after* it — so `abs` +
+  `average` is mean magnitude, not the near-zero mean of a signed map, and a
+  NaN channel still carries its hole into the mean. A non-negative strip needs
+  no second colormap (a non-negative norm already maps to the white→red half),
+  only a `sequential` legend spanning `x` … `0` instead of `±x`. The options
+  are **per browser connection**, owned by `InputPanel` like `sample_idx` and
+  never touching the `Session` — which is what keeps them usable in a locked
+  playground, where pin and forward mode are refused. They ride in the render
+  cache key (`RenderOptions.cache_key`) and, via `as_params` / `from_params`,
+  in a recorded view's params and the MCP `render_layer` / `start_recording` /
+  `save_snapshot` arguments.
 - `render_strip` handles `[C,H,W]`, `[F]`, and 2D token shapes
   (`[tokens, dim]`, unflattened onto the input patch grid when `input_hw` is
   threaded in, assuming row-major ViT token order); 4D-and-beyond per-sample

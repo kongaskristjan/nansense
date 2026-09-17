@@ -11,10 +11,13 @@ from nicegui.elements.interactive_image import InteractiveImage
 from nicegui.elements.label import Label
 from nicegui.elements.row import Row
 from nicegui.elements.switch import Switch
+from nicegui.elements.toggle import Toggle
 
 from nansense.session import Session
 from nansense.input_config import InputTransform
+from nansense.ui import input_panel as input_panel_module
 from nansense.ui.input_panel import InputPanel, normalized_color
+from nansense.ui.render import RenderOptions
 
 CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR_STD = (0.2470, 0.2435, 0.2616)
@@ -276,3 +279,60 @@ def test_on_perturb_change_arms_then_disarms() -> None:
     assert wired.panel._perturb_armed is False
     assert wired.image.cursor is False
     assert wired.session.clears == 1  # disarming discards them
+
+
+class _FakeToggle:
+    def __init__(self, value: str | None) -> None:
+        self.value = value
+
+    def set_value(self, value: str | None) -> None:
+        self.value = value
+
+
+def _render_options_panel(
+    *, average: bool, mode: str | None, current: RenderOptions
+) -> tuple[InputPanel, _FakeToggle, list[str]]:
+    panel = InputPanel.__new__(InputPanel)
+    toggle = _FakeToggle(mode)
+    panel._average_switch = cast(Switch, _FakeSwitch(average))
+    panel._values_toggle = cast(Toggle, toggle)
+    panel._render_options = current
+    changes: list[str] = []
+    panel._on_change = lambda: changes.append("dirty")
+    return panel, toggle, changes
+
+
+@pytest.mark.parametrize(
+    "average, mode, expected",
+    [
+        (False, "unchanged", RenderOptions()),
+        (True, "unchanged", RenderOptions(average=True)),
+        (False, "abs", RenderOptions(values="abs")),
+        (True, "square", RenderOptions(average=True, values="square")),
+    ],
+)
+def test_render_options_follow_the_controls(
+    average: bool, mode: str, expected: RenderOptions
+) -> None:
+    panel, _, changes = _render_options_panel(
+        average=average, mode=mode, current=RenderOptions()
+    )
+    panel._on_render_options_change(None)
+    assert panel.render_options == expected
+    assert changes == ["dirty"]  # the page re-renders on the next tick
+
+
+def test_deselecting_the_value_toggle_restores_the_current_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quasar clears a toggle when its selected option is clicked again."""
+    writes: list[Any] = []
+    monkeypatch.setattr(
+        input_panel_module, "_defer_value_write", lambda write: writes.append(write())
+    )
+    panel, toggle, _ = _render_options_panel(
+        average=False, mode=None, current=RenderOptions(values="abs")
+    )
+    panel._on_render_options_change(None)
+    assert panel.render_options == RenderOptions(values="abs")
+    assert toggle.value == "abs"  # and the widget is put back, not left blank

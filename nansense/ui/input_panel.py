@@ -1,10 +1,11 @@
 """The "Input Selection" sidebar of the main page.
 
 Hosts the per-sample spinner (moved out of the top bar), the batch-pinning
-and click-to-perturb controls for probe runs (see `nansense.probe`), and the
-input image. The panel owns the per-connection view state the page's tick
-loop reads (`sample_idx`, plus the derived `compare`) and forwards pin /
-probe-mode / perturbation changes to the session; the session reacts
+and click-to-perturb controls for probe runs (see `nansense.probe`), the
+render options every layer card's strips are drawn with, and the input
+image. The panel owns the per-connection view state the page's tick loop
+reads (`sample_idx`, `render_options`, plus the derived `compare`) and
+forwards pin / probe-mode / perturbation changes to the session; the session reacts
 asynchronously by publishing a new `ProbeResult`, which the tick loop picks
 up like a new snapshot.
 
@@ -18,6 +19,7 @@ pixel of the viewed sample on every subsequent probe input.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 from uuid import uuid4
 
 from nicegui import ui
@@ -26,7 +28,7 @@ from torch import Tensor
 
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
-from nansense.ui.render import transform_preview_color
+from nansense.ui.render import RenderOptions, ValueMode, transform_preview_color
 from nansense.ui.common import (
     _defer_value_write,
     _label_bar_html,
@@ -37,6 +39,12 @@ _PROBE_MODE_OPTIONS: dict[str, str] = {
     "unchanged": "Unchanged",
     "eval": "Eval",
     "train": "Train",
+}
+
+_VALUE_MODE_OPTIONS: dict[str, str] = {
+    "unchanged": "Unchanged",
+    "abs": "Abs",
+    "square": "Square",
 }
 
 
@@ -105,6 +113,11 @@ class InputPanel:
         self._resolve_selected()
         self._on_change = on_change
         self.sample_idx = 0
+        # How this connection draws every strip on the page. Purely local view
+        # state — nothing here touches the session, so a locked playground's
+        # visitors each get their own without the shared-state refusals pin and
+        # forward mode run into.
+        self._render_options = RenderOptions()
         self._color = "#000000"
         self._spinner_max: int | None = None
         self._frozen = False
@@ -308,6 +321,27 @@ class InputPanel:
                     ).classes("text-xs text-slate-500 self-start")
                 self._set_perturb_cursor(self._perturb_switch.value)
 
+            # How the strips below every layer name are drawn. Local to this
+            # connection (see `_render_options`), so it stays available in a
+            # locked session.
+            with ui.column().classes("w-full items-center gap-2"):
+                ui.separator()
+                self._section_label("Render options")
+                self._average_switch = ui.switch(
+                    "Average",
+                    value=self._render_options.average,
+                    on_change=self._on_render_options_change,
+                ).props("dense").classes("self-start").tooltip(
+                    "Collapse each strip's channels into a single mean image"
+                )
+                self._values_toggle = ui.toggle(
+                    _VALUE_MODE_OPTIONS,
+                    value=self._render_options.values,
+                    on_change=self._on_render_options_change,
+                ).props("dense no-caps spread").classes("w-full").tooltip(
+                    "Show values as they are, or their magnitude (Abs / Square)"
+                )
+
     def _set_perturb_cursor(self, active: bool) -> None:
         """Show the crosshair cursor on the image exactly while perturbing."""
         if active:
@@ -349,6 +383,25 @@ class InputPanel:
         no-edit case.
         """
         return bool(self._session.perturbations_for(self._client_key))
+
+    @property
+    def render_options(self) -> RenderOptions:
+        """How this connection draws activation / gradient / custom strips."""
+        return self._render_options
+
+    def _on_render_options_change(self, _e: object) -> None:
+        mode = self._values_toggle.value
+        if mode is None:
+            # Quasar clears a toggle when its selected option is clicked
+            # again, but "no value mode" is not a state the render has — put
+            # the current choice back rather than silently falling to raw.
+            mode = self._render_options.values
+            _defer_value_write(lambda: self._values_toggle.set_value(mode))
+        self._render_options = RenderOptions(
+            average=bool(self._average_switch.value),
+            values=cast(ValueMode, mode),
+        )
+        self._on_change()
 
     @staticmethod
     def _section_label(text: str) -> None:
@@ -499,6 +552,8 @@ class InputPanel:
             self._mode_toggle,
             self._perturb_switch,
             self._clear_button,
+            self._average_switch,
+            self._values_toggle,
             *self._value_controls,
         ]
         if self._input_select is not None:

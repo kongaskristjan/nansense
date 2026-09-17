@@ -34,6 +34,8 @@ from nansense.ui.graph import slug_map
 from nansense.ui.input_panel import InputPanel
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.ui.render import (
+    DEFAULT_RENDER_OPTIONS,
+    RenderOptions,
     input_blank_warning,
     probe_act_tensor,
     render_image,
@@ -279,6 +281,7 @@ def _build_page(
                 "input_mean": resolve_per_input(input_mean, selected),
                 "input_std": resolve_per_input(input_std, selected),
                 "input_transform": resolve_per_input(input_transform, selected),
+                **input_panel.render_options.as_params(),
             },
         )
 
@@ -754,6 +757,7 @@ def _build_page(
                     probe,
                     sample_idx,
                     compare=input_panel.compare,
+                    options=input_panel.render_options,
                     input_name=input_name,
                     selected_input=selected,
                     input_mean=sel_mean,
@@ -864,6 +868,7 @@ def _compute_frame(
     sample_idx: int,
     *,
     compare: bool = False,
+    options: RenderOptions = DEFAULT_RENDER_OPTIONS,
     input_name: str | None,
     selected_input: str | None = None,
     input_mean: tuple[float, ...] | None,
@@ -880,7 +885,9 @@ def _compute_frame(
     anything. `input_name` is the primary image input (its `H × W` sets the
     token grid for 2D activations); `selected_input` is the input shown in the
     pane — it defaults to `input_name` (the same one unless the user picked
-    another from the multi-input dropdown).
+    another from the multi-input dropdown). `options` is the viewer's render
+    choice (magnitude, channel averaging) and rides in the cache keys, so
+    switching it re-renders rather than serving the previous look.
     """
     if selected_input is None:
         selected_input = input_name
@@ -890,6 +897,7 @@ def _compute_frame(
             probe,
             sample_idx,
             compare=compare,
+            options=options,
             input_name=input_name,
             selected_input=selected_input,
             input_mean=input_mean,
@@ -899,6 +907,7 @@ def _compute_frame(
         )
     assert snap is not None  # tick only renders when at least one source exists
     input_hw = tensor_hw(snap.activations.get(input_name) if input_name else None)
+    opt = options.cache_key
 
     def strips(name: str) -> _LayerStrips:
         if compare:
@@ -907,12 +916,13 @@ def _compute_frame(
             # white strip — same as a perturbation-free probe diff.
             act = cache.get_or_render(
                 snap,
-                (name, "act-diff", sample_idx),
+                (name, f"act-diff:{opt}", sample_idx),
                 lambda: _strip_html(
                     render_strip(
                         _zeros_like(snap.activations.get(name)),
                         sample_idx,
                         input_hw=input_hw,
+                        options=options,
                     ),
                     show_labels=True,
                 ),
@@ -920,22 +930,26 @@ def _compute_frame(
         else:
             act = cache.get_or_render(
                 snap,
-                (name, "act", sample_idx),
+                (name, f"act:{opt}", sample_idx),
                 lambda: _strip_html(
                     render_strip(
-                        snap.activations.get(name), sample_idx, input_hw=input_hw
+                        snap.activations.get(name),
+                        sample_idx,
+                        input_hw=input_hw,
+                        options=options,
                     ),
                     show_labels=True,
                 ),
             )
         grad = cache.get_or_render(
             snap,
-            (name, "grad", sample_idx),
+            (name, f"grad:{opt}", sample_idx),
             lambda: _strip_html(
                 render_strip(
                     snap.activation_gradients.get(name),
                     sample_idx,
                     input_hw=input_hw,
+                    options=options,
                 )
             ),
         )
@@ -948,9 +962,14 @@ def _compute_frame(
                     label,
                     cache.get_or_render(
                         snap,
-                        (name, f"custom:{label}", sample_idx),
+                        (name, f"custom:{label}:{opt}", sample_idx),
                         lambda tensor=tensor: _strip_html(
-                            render_strip(tensor, sample_idx, input_hw=input_hw)
+                            render_strip(
+                                tensor,
+                                sample_idx,
+                                input_hw=input_hw,
+                                options=options,
+                            )
                         ),
                     ),
                 )
@@ -983,6 +1002,7 @@ def _compute_probe_frame(
     sample_idx: int,
     *,
     compare: bool,
+    options: RenderOptions,
     input_name: str | None,
     selected_input: str | None,
     input_mean: tuple[float, ...] | None,
@@ -1007,6 +1027,7 @@ def _compute_probe_frame(
     kind = "probe-diff" if compare else (
         "probe-perturbed" if probe.perturbed_activations is not None else "probe-act"
     )
+    kind = f"{kind}:{options.cache_key}"
     input_hw = tensor_hw(probe.base_input(input_name))
 
     def strips(name: str) -> _LayerStrips:
@@ -1020,6 +1041,7 @@ def _compute_probe_frame(
                     ),
                     0,
                     input_hw=input_hw,
+                    options=options,
                 ),
                 show_labels=True,
             ),

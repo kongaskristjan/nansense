@@ -235,6 +235,26 @@ def test_render_layer_names_the_batch_it_drew() -> None:
         assert "train batch 0" in rendered.note
 
 
+def test_render_layer_render_options_reach_the_picture() -> None:
+    """The UI's render-options section has a matching tool surface: the
+    averaged / magnitude picture is a different picture, and the note says
+    which one was drawn."""
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        plain = layer_image(session, layers=["conv"], display=_DISPLAY, input_name="x")
+        averaged = layer_image(
+            session,
+            layers=["conv"],
+            display=_DISPLAY,
+            input_name="x",
+            average=True,
+            values="abs",
+        )
+        assert plain.png is not None and averaged.png is not None
+        assert averaged.png != plain.png
+        assert "abs" in averaged.note and "averaged" in averaged.note
+        assert "Render options" not in plain.note
+
+
 def test_render_layer_reports_unknown_layers_rather_than_dropping_them() -> None:
     with paused_session(TinyConvNet(), _conv_step) as session:
         rendered = layer_image(

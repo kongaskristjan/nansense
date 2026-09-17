@@ -632,6 +632,7 @@ def _array(image: Image.Image | None) -> np.ndarray | None:
 
 def _main_frame(view: RecordedView, session: Session) -> Image.Image | None:
     from nansense.ui.frames import main_frame
+    from nansense.ui.render import RenderOptions
 
     return main_frame(
         session,
@@ -641,6 +642,7 @@ def _main_frame(view: RecordedView, session: Session) -> Image.Image | None:
         mean=float_tuple(view.params.get("input_mean")),
         std=float_tuple(view.params.get("input_std")),
         transform=cast(InputTransform | None, view.params.get("input_transform")),
+        options=RenderOptions.from_params(view.params),
     )
 
 

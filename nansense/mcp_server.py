@@ -358,6 +358,8 @@ def build_server(
         layers: list[str],
         sample: int = 0,
         include_input: bool = False,
+        average: bool = False,
+        values: Literal["unchanged", "abs", "square"] = "unchanged",
     ) -> list[Any]:
         """Picture of what these layers computed on the last captured batch.
 
@@ -367,6 +369,15 @@ def build_server(
         is where a dead channel, a saturated border or a single diverged feature
         map is obvious in a way a mean never is. `sample` picks the sample
         within the batch; `include_input` adds the input image above.
+
+        `average` and `values` are the page's render options. `average`
+        collapses each strip's channels into one mean tile — the shape of the
+        layer's response in one picture, rather than a row too wide to read.
+        `values` of "abs" or "square" drops the sign first, so the picture is
+        magnitude on a sequential 0..max scale (squaring pulls the loudest
+        features further out of the quiet ones); with `average` the transform
+        is applied *before* the mean, so cancelling ± responses no longer
+        average away to nothing.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -377,6 +388,8 @@ def build_server(
                 display=display,
                 input_name=primary_input,
                 include_input=include_input,
+                average=average,
+                values=values,
             )
         )
 
@@ -1126,6 +1139,8 @@ def build_server(
         kind: str | None = None,
         params: dict[str, Any] | None = None,
         overlay: bool = False,
+        average: bool = False,
+        values: Literal["unchanged", "abs", "square"] = "unchanged",
     ) -> dict[str, Any]:
         """Record a view to MP4, one frame per visualization update.
 
@@ -1140,7 +1155,9 @@ def build_server(
         for "weights"/"experiment", `phase` for "histograms"/"patches", and
         `kind` + `params` for "experiment" (which registers its own
         continuously re-running experiment, as the page does, plus `overlay`
-        to blend its attribution over the input in every frame).
+        to blend its attribution over the input in every frame). `average` and
+        `values` are the "layers" render options `render_layer` documents, held
+        fixed for every frame.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -1159,6 +1176,8 @@ def build_server(
             kind=kind,
             params=params,
             overlay=overlay,
+            average=average,
+            values=values,
             display=display,
             input_name=primary_input,
         )
@@ -1181,6 +1200,8 @@ def build_server(
         log_y: bool = False,
         seq: int | None = None,
         overlay: bool = False,
+        average: bool = False,
+        values: Literal["unchanged", "abs", "square"] = "unchanged",
     ) -> dict[str, Any]:
         """Save one still of a view as a PNG file and return its path.
 
@@ -1192,9 +1213,10 @@ def build_server(
         one looking.
 
         Views take the same arguments as `start_recording` — including
-        `overlay` for an attribution — except "experiment", which saves an
-        already-published result: `seq` picks it (default: the newest),
-        rather than registering a rerunning request the way a recording must.
+        `overlay` for an attribution and the "layers" render options `average`
+        / `values` — except "experiment", which saves an already-published
+        result: `seq` picks it (default: the newest), rather than registering
+        a rerunning request the way a recording must.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -1212,6 +1234,8 @@ def build_server(
             log_y=log_y,
             seq=seq,
             overlay=overlay,
+            average=average,
+            values=values,
             display=display,
             input_name=primary_input,
         )
@@ -1523,6 +1547,8 @@ def _recorded_view(
     kind: str | None,
     params: dict[str, Any] | None,
     overlay: bool,
+    average: bool,
+    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> Any:
@@ -1533,6 +1559,7 @@ def _recorded_view(
     exactly — `nansense.recording` unpacks them by key.
     """
     from nansense.recording import RecordedView
+    from nansense.ui.render import RenderOptions
 
     mean, std = display.stats(input_name)
     if view == "layers":
@@ -1558,6 +1585,9 @@ def _recorded_view(
                 "input_mean": mean,
                 "input_std": std,
                 "input_transform": display.transform(input_name),
+                **RenderOptions.from_params(
+                    {"render_average": average, "render_values": values}
+                ).as_params(),
             },
         )
     if view == "weights":
@@ -1697,6 +1727,8 @@ def _start_recording(
     kind: str | None,
     params: dict[str, Any] | None,
     overlay: bool,
+    average: bool,
+    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> dict[str, Any]:
@@ -1713,6 +1745,8 @@ def _start_recording(
         kind=kind,
         params=params,
         overlay=overlay,
+        average=average,
+        values=values,
         display=display,
         input_name=input_name,
     )
@@ -1741,6 +1775,8 @@ def _snapshot_view(
     log_y: bool,
     seq: int | None,
     overlay: bool,
+    average: bool,
+    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> Any:
@@ -1770,6 +1806,8 @@ def _snapshot_view(
             kind=None,
             params=None,
             overlay=overlay,
+            average=average,
+            values=values,
             display=display,
             input_name=input_name,
         )
@@ -1813,6 +1851,8 @@ def _save_snapshot(
     log_y: bool,
     seq: int | None,
     overlay: bool,
+    average: bool,
+    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> dict[str, Any]:
@@ -1828,6 +1868,8 @@ def _save_snapshot(
         log_y=log_y,
         seq=seq,
         overlay=overlay,
+        average=average,
+        values=values,
         display=display,
         input_name=input_name,
     )

@@ -45,6 +45,7 @@ from __future__ import annotations
 import io
 import math
 from dataclasses import dataclass
+from typing import Literal, cast
 
 import numpy as np
 import torch
@@ -53,6 +54,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from nansense.input_config import InputTransform
+from nansense.params import bool_param
 from nansense.patches import TypePatches
 from nansense.probe import ProbeResult
 
@@ -112,6 +114,75 @@ def set_strip_format(fmt: str) -> None:
     STRIP_FORMAT = fmt
 
 
+#: How a strip's values may be transformed before colormapping. `"abs"` and
+#: `"square"` fold the sign away, which is what switches the legend from the
+#: diverging ±max scale to a sequential 0..max one.
+ValueMode = Literal["unchanged", "abs", "square"]
+VALUE_MODES: tuple[ValueMode, ...] = ("unchanged", "abs", "square")
+
+
+@dataclass(frozen=True)
+class RenderOptions:
+    """Per-viewer choices about how activation / gradient strips are drawn.
+
+    `values` transforms every element first; `average` then collapses the
+    strip's tile axis (a conv layer's channels, a ViT block's embedding
+    dims) to a single mean tile, so a layer reads as one picture instead of
+    a row of channels. Averaging happens *after* the value transform, so
+    `abs` + `average` is the mean magnitude rather than the (often
+    near-zero) mean of a signed map. A strip that already has a single tile
+    — a 1-D heatmap row, a token tensor with no matching patch grid — has no
+    tile axis to collapse and is unchanged by `average`.
+
+    The defaults are the pre-existing render, so every caller that doesn't
+    care keeps its current picture byte for byte.
+    """
+
+    average: bool = False
+    values: ValueMode = "unchanged"
+
+    @property
+    def sequential(self) -> bool:
+        """Whether the transform leaves only non-negative values.
+
+        The colormap needs no branch for this — a non-negative normalized
+        value already maps to the white→red half of the diverging ramp — but
+        the legend does, so it labels 0..max instead of a ±max scale whose
+        lower half no pixel can reach.
+        """
+        return self.values != "unchanged"
+
+    @property
+    def cache_key(self) -> str:
+        """Short token distinguishing these options in a render cache key."""
+        return f"{self.values}{'+avg' if self.average else ''}"
+
+    def apply(self, tensor: Tensor) -> Tensor:
+        """`tensor` with the value transform applied (identity by default)."""
+        if self.values == "abs":
+            return tensor.abs()
+        if self.values == "square":
+            return tensor * tensor
+        return tensor
+
+    def as_params(self) -> dict[str, object]:
+        """These options as recorded-view params (see `from_params`)."""
+        return {"render_average": self.average, "render_values": self.values}
+
+    @classmethod
+    def from_params(cls, params: dict[str, object]) -> RenderOptions:
+        """Rebuild options from a recorded view's loosely-typed params."""
+        values = str(params.get("render_values", "unchanged"))
+        return cls(
+            average=bool_param(params, "render_average", False),
+            values=cast(ValueMode, values) if values in VALUE_MODES else "unchanged",
+        )
+
+
+#: The render every caller that doesn't offer the choice gets.
+DEFAULT_RENDER_OPTIONS = RenderOptions()
+
+
 @dataclass(frozen=True)
 class StripTile:
     """One channel/tile of a strip: its own image plus a column caption.
@@ -157,6 +228,7 @@ def render_strip(
     *,
     input_hw: tuple[int, int] | None = None,
     tile_px: int = TILE_SIZE,
+    options: RenderOptions = DEFAULT_RENDER_OPTIONS,
 ) -> StripRender | None:
     """Render a per-channel horizontal strip.
 
@@ -174,6 +246,9 @@ def render_strip(
     experiment page bumps it to `INPUT_IMAGE_SIZE` so attribution strips sit
     at the same size as the input images beside them. It applies to the
     tiled (2D/3D) renders only; a 1D heatmap row keeps its own height.
+
+    `options` transforms the values (`abs` / `square`) and optionally averages
+    the channels into one tile — see `RenderOptions`.
     """
     if tensor is None or tensor.ndim == 0:
         return None
@@ -187,11 +262,11 @@ def render_strip(
     if sample.numel() == 0:
         return None
     if sample.ndim == 3:
-        return _render_chw(sample, tile_px=tile_px)
+        return _render_chw(sample, tile_px=tile_px, options=options)
     if sample.ndim == 2:
-        return _render_tokens_2d(sample, input_hw, tile_px=tile_px)
+        return _render_tokens_2d(sample, input_hw, tile_px=tile_px, options=options)
     if sample.ndim == 1:
-        return _render_1d(sample)
+        return _render_1d(sample, options=options)
     return None
 
 
@@ -273,7 +348,11 @@ def _token_grid(n_tokens: int, input_hw: tuple[int, int]) -> tuple[int, int, int
 
 
 def _render_tokens_2d(
-    sample: Tensor, input_hw: tuple[int, int] | None, *, tile_px: int = TILE_SIZE
+    sample: Tensor,
+    input_hw: tuple[int, int] | None,
+    *,
+    tile_px: int = TILE_SIZE,
+    options: RenderOptions = DEFAULT_RENDER_OPTIONS,
 ) -> StripRender | None:
     """Render a 2D per-sample tensor, recovering a token grid when possible.
 
@@ -294,8 +373,10 @@ def _render_tokens_2d(
                 continue
             extra, h, w = fit
             tokens = sample if token_axis == 0 else sample.T
-            return _render_chw(tokens[extra:].T.reshape(-1, h, w), tile_px=tile_px)
-    return _render_chw(sample.unsqueeze(0), tile_px=tile_px)
+            return _render_chw(
+                tokens[extra:].T.reshape(-1, h, w), tile_px=tile_px, options=options
+            )
+    return _render_chw(sample.unsqueeze(0), tile_px=tile_px, options=options)
 
 
 @dataclass(frozen=True)
@@ -413,7 +494,12 @@ def _tile_labels(count: int, tile_w: int) -> list[str]:
     return [str(i) for i in range(count)]
 
 
-def _render_chw(tensor: Tensor, *, tile_px: int = TILE_SIZE) -> StripRender | None:
+def _render_chw(
+    tensor: Tensor,
+    *,
+    tile_px: int = TILE_SIZE,
+    options: RenderOptions = DEFAULT_RENDER_OPTIONS,
+) -> StripRender | None:
     data = tensor.detach().float()
     # An empty tile (any zero-length dim) has no pixels to colormap, encode,
     # or lay out — the reductions and PIL encode below would raise. The
@@ -421,6 +507,14 @@ def _render_chw(tensor: Tensor, *, tile_px: int = TILE_SIZE) -> StripRender | No
     # way they hide an unsupported shape.
     if data.numel() == 0:
         return None
+    data = options.apply(data)
+    if options.average:
+        # Collapse the tile axis before the scale and the downsample: the
+        # single mean tile gets its own `abs_max`, so it uses the full color
+        # range rather than one set by the loudest channel it averaged away.
+        # A channel holding NaN/±Inf carries it into the mean, which is the
+        # honest answer — the hole stays visible instead of being diluted.
+        data = data.mean(dim=0, keepdim=True)
     abs_max = _finite_abs_max(data)
     if max(data.shape[1], data.shape[2]) > tile_px:
         # Downsampling needs real averaging server-side; *up*scaling small
@@ -447,7 +541,9 @@ def _render_chw(tensor: Tensor, *, tile_px: int = TILE_SIZE) -> StripRender | No
         for i in range(n)
     )
     return StripRender(
-        legend_image=_encode_image(_render_legend(tile_px, abs_max=abs_max)),
+        legend_image=_encode_image(
+            _render_legend(tile_px, abs_max=abs_max, sequential=options.sequential)
+        ),
         tiles=tiles,
     )
 
@@ -980,8 +1076,10 @@ def _nearest_resize(arr: np.ndarray, h: int, w: int) -> np.ndarray:
     return arr[ys[:, None], xs[None, :]]
 
 
-def _render_1d(tensor: Tensor) -> StripRender | None:
-    values = tensor.detach().float()
+def _render_1d(
+    tensor: Tensor, *, options: RenderOptions = DEFAULT_RENDER_OPTIONS
+) -> StripRender | None:
+    values = options.apply(tensor.detach().float())
     if values.numel() == 0:
         return None
     abs_max = _finite_abs_max(values)
@@ -1006,7 +1104,9 @@ def _render_1d(tensor: Tensor) -> StripRender | None:
     # so the single tile carries no column caption.
     return StripRender(
         legend_image=_encode_image(
-            _render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max)
+            _render_legend(
+                LINEAR_TILE_HEIGHT, abs_max=abs_max, sequential=options.sequential
+            )
         ),
         tiles=(
             StripTile(
@@ -1071,14 +1171,22 @@ def _diverging_colormap(norm: np.ndarray) -> np.ndarray:
     return rgb
 
 
-def _render_legend(height: int, *, abs_max: float) -> np.ndarray:
+def _render_legend(
+    height: int, *, abs_max: float, sequential: bool = False
+) -> np.ndarray:
     """Vertical colorbar with `+x` / `0` / `-x` labels.
 
     `+x` sits at the top of the bar, `-x` at the bottom; the middle `0`
     label is dropped on short strips where it would collide with the
     top/bottom labels.
+
+    `sequential` is for a strip whose values are non-negative by construction
+    (`RenderOptions` `abs` / `square`): the bar runs from `x` down to `0` and
+    is labelled `x` / `x/2` / `0`, so the whole colorbar maps to values the
+    strip can actually contain.
     """
-    values = np.linspace(abs_max, -abs_max, height, dtype=np.float32)
+    bottom = 0.0 if sequential else -abs_max
+    values = np.linspace(abs_max, bottom, height, dtype=np.float32)
     bar_col, _ = _apply_colormap(values, abs_max=abs_max)  # finite: always RGB
     bar = np.broadcast_to(bar_col[:, None, :], (height, LEGEND_BAR_WIDTH, 3)).copy()
 
@@ -1087,10 +1195,13 @@ def _render_legend(height: int, *, abs_max: float) -> np.ndarray:
     font = ImageFont.load_default()
     x = LEGEND_LABEL_WIDTH - 2
     color = (0, 0, 0)
-    draw.text((x, 0), f"+{abs_max:.2g}", fill=color, font=font, anchor="ra")
-    draw.text((x, height - 1), f"-{abs_max:.2g}", fill=color, font=font, anchor="rd")
+    top_text = f"{abs_max:.2g}" if sequential else f"+{abs_max:.2g}"
+    bottom_text = "0" if sequential else f"-{abs_max:.2g}"
+    mid_text = f"{abs_max / 2:.2g}" if sequential else "0"
+    draw.text((x, 0), top_text, fill=color, font=font, anchor="ra")
+    draw.text((x, height - 1), bottom_text, fill=color, font=font, anchor="rd")
     if height >= LEGEND_MID_LABEL_MIN_HEIGHT:
-        draw.text((x, height // 2), "0", fill=color, font=font, anchor="rm")
+        draw.text((x, height // 2), mid_text, fill=color, font=font, anchor="rm")
     labels = np.asarray(labels_img)
 
     gap = np.full((height, LEGEND_GAP, 3), 255, dtype=np.uint8)

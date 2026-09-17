@@ -60,7 +60,7 @@ The `render_*` tools return the views as pictures — the same ones the browser 
 
 | Tool | The view |
 | --- | --- |
-| `render_layer` | Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes |
+| `render_layer` | Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes. `average` collapses each strip to one mean tile and `values="abs"`/`"square"` shows magnitude, matching the page's render options |
 | `render_input` | One sample of the model's input, denormalized |
 | `render_weights` | A layer's kernels, gradients and optimizer state, plus the live learning rate |
 | `render_histogram` | Value distributions of watched layers, over the signed-log bins |
