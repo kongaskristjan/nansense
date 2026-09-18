@@ -368,8 +368,9 @@ def histogram_image(
         return RenderedImage(
             None,
             f"No running statistics for {list(layers)}. Histograms come from the "
-            "watch accumulators: call watch_layers (or set_stats_scope('all')) "
-            "and let training advance at least one batch."
+            "watch accumulators: call watch_layers and set_stats_scope('watched') "
+            "(or set_stats_scope('all')) and let training advance at least one "
+            "batch."
             + (f" Unknown layers: {unknown}." if unknown else ""),
         )
     # Without a phase, the one training is actually in — across *all* the

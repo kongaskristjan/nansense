@@ -735,10 +735,10 @@ def _open_debug_dialog(session: Session, error: DebugError) -> None:
     magnitudes (`_under_over_band_lines`).
     """
     cols = debugger.columns(error)
-    # Watch actions only exist in the `watched` stats scope; in `all` every
-    # layer already collects, and in `none` collection is paused, so both
-    # get a plain Stats link.
-    offer_watch = session.stats_scope is StatsScope.WATCHED
+    # Watch actions only exist while the watched set drives collection
+    # (`watched`, paused or not); under `all` every layer already collects,
+    # so it gets a plain Stats link.
+    offer_watch = session.collecting_scope is StatsScope.WATCHED
     watched = session.watched_layers
     with ui.dialog() as dialog, ui.card().classes(
         "min-w-[36rem] max-w-[56rem] p-6 gap-3"

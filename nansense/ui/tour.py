@@ -78,6 +78,10 @@ from nicegui import ui
 # rename.
 SEEN_KEY_PREFIX = "nansense-tour-seen"
 
+# The one named extra tour: the stats page's SHOW ME HOW sends the visitor
+# to the main view with `?tour=stats-howto`, and the driver plays it there.
+STATS_HOWTO = "stats-howto"
+
 
 def seen_key(page: str) -> str:
     """The localStorage seen-flag for one page's tour."""
@@ -104,6 +108,9 @@ class TourStep:
     parameters has. Which card a step lands on is the visitor's to decide,
     so both messages ship and the driver picks once it can see the card
     (`stepText`); until then `text` stands.
+
+    A step with no selectors (the how-to's closing advice) shows the
+    message alone.
 
     `host_anchor` adds one more arrow that leaves the app entirely, aimed
     at the embedding docs page's "one prompt" call to action — the only
@@ -218,6 +225,42 @@ def main_tour_steps(layer_slug: str | None, *, locked: bool) -> list[TourStep]:
     return steps
 
 
+def stats_howto_steps(layer_slug: str | None) -> list[TourStep]:
+    """The stats page's "SHOW ME HOW": what it takes for stats to appear.
+
+    Played on the main view (`?tour=stats-howto`), never auto-started or
+    offered by the `?` button, and skipped on locked sessions, which can't
+    watch, toggle or step. Three pointed steps — the layer's diagram node
+    (the layer the visitor came from), the stats toggle, the step controls
+    — then the trade-off, which has nothing to point at.
+    """
+    node = _mermaid_node_selector(layer_slug) if layer_slug else "g.node"
+    return [
+        TourStep(
+            "First, the layer has to be watched: click its node in the "
+            "diagram and its card opens in the middle pane. Stats are only "
+            "ever kept for watched layers.",
+            (node,),
+        ),
+        TourStep(
+            "Then turn stats collection on with this button. Red and crossed "
+            "out means off; green means every shown layer is collecting.",
+            ('[data-tour="stats-toggle"]',),
+        ),
+        TourStep(
+            "Now let training run — step at least one batch. Every batch "
+            "from here on adds to the running statistics.",
+            ('[data-tour="step-controls"]',),
+        ),
+        TourStep(
+            "One thing to know: collecting stats usually slows training down "
+            "a lot. Keep it off while you are not looking at them, and watch "
+            "only the layers you care about.",
+            (),
+        ),
+    ]
+
+
 def _playground_closing_step() -> TourStep:
     """The locked playground's last step: what this is, and how to get it.
 
@@ -330,29 +373,43 @@ def experiment_tour_steps(*, locked: bool) -> list[TourStep]:
     return steps
 
 
+def _steps_payload(steps: list[TourStep]) -> list[dict[str, object]]:
+    return [
+        {
+            "text": step.text,
+            "selectors": list(step.selectors),
+            "ensureCard": step.ensure_card,
+            "ensureInput": step.ensure_input,
+            "ensureView": step.ensure_view,
+            "hostAnchor": step.host_anchor,
+            "altText": step.alt_text,
+        }
+        for step in steps
+    ]
+
+
 def tour_config(
     steps: list[TourStep],
     *,
     page: str,
     auto_start: bool,
     auto_watch_slug: str | None = None,
+    extras: dict[str, list[TourStep]] | None = None,
+    auto_start_extra: str | None = None,
 ) -> dict[str, object]:
-    """The driver's config object (`window.nansenseTourConfig`)."""
+    """The driver's config object (`window.nansenseTourConfig`).
+
+    `extras` are named tours the page holds besides its own — started by
+    name (`nansenseStartTour(name)`), never marked seen, and never the `?`
+    button's. `auto_start_extra` names the one to play on load instead of
+    the seen-flag auto-start.
+    """
     return {
-        "steps": [
-            {
-                "text": step.text,
-                "selectors": list(step.selectors),
-                "ensureCard": step.ensure_card,
-                "ensureInput": step.ensure_input,
-                "ensureView": step.ensure_view,
-                "hostAnchor": step.host_anchor,
-                "altText": step.alt_text,
-            }
-            for step in steps
-        ],
+        "steps": _steps_payload(steps),
+        "extras": {name: _steps_payload(s) for name, s in (extras or {}).items()},
         "autoWatchSlug": auto_watch_slug,
         "autoStart": auto_start,
+        "autoStartExtra": auto_start_extra,
         "seenKey": seen_key(page),
     }
 
@@ -363,6 +420,8 @@ def add_tour(
     *,
     locked: bool,
     auto_watch_slug: str | None = None,
+    extras: dict[str, list[TourStep]] | None = None,
+    auto_start_extra: str | None = None,
 ) -> None:
     """Install `page`'s tour (config + CSS + driver) into the current page.
 
@@ -372,13 +431,19 @@ def add_tour(
     shared playground) auto-starts, and only when the browser hasn't
     dismissed this page's tour before
     (per-page `seen_key`); everywhere else the tour waits for the top bar's
-    `?` button, which replays it regardless of the seen flag.
+    `?` button, which replays it regardless of the seen flag. `extras` /
+    `auto_start_extra`: see `tour_config`.
     """
     # Same `</`-escape as `main_page._layer_info_script`: layer names (via
     # slugs) are user data and must not terminate the script tag early.
     payload = json.dumps(
         tour_config(
-            steps, page=page, auto_start=locked, auto_watch_slug=auto_watch_slug
+            steps,
+            page=page,
+            auto_start=locked,
+            auto_watch_slug=auto_watch_slug,
+            extras=extras,
+            auto_start_extra=auto_start_extra,
         )
     )
     payload = payload.replace("</", "<\\/")
@@ -468,6 +533,11 @@ _TOUR_JS: str = """
   const cfg = window.nansenseTourConfig;
   if (!cfg) return;
 
+  // The steps of the run in progress: the page's own, or a named extra
+  // (`cfg.extras`) when started by name. Only the page's own tour has a
+  // seen flag to set.
+  let steps = cfg.steps;
+  let isExtra = false;
   let stepIdx = -1;
   let scrolledStep = -1;
   let overlay = null, svg = null, box = null;
@@ -728,7 +798,7 @@ _TOUR_JS: str = """
   // follow the panes as they scroll. A handful of nodes at 5 Hz is cheap.
   function reposition() {
     if (!overlay || stepIdx < 0) return;
-    const step = cfg.steps[stepIdx];
+    const step = steps[stepIdx];
     // Re-resolved every tick, like the rects: the auto-shown card arrives a
     // round-trip late, and the visitor stays free to open and close cards
     // mid-step — the arrows and the message follow what is on screen.
@@ -778,7 +848,7 @@ _TOUR_JS: str = """
 
   function showStep(i) {
     stepIdx = i;
-    const step = cfg.steps[i];
+    const step = steps[i];
     // Card-bound steps talk about a card the visitor actually has open
     // (`openCardSlug`); only when there is none at all does the page get
     // asked for the tour's own layer. The event is show-only (a toggle would
@@ -801,18 +871,18 @@ _TOUR_JS: str = """
     }
     // The message itself is `reposition`'s: it depends on the card the step
     // lands on, which may still be on its way here.
-    countEl.textContent = (i + 1) + ' / ' + cfg.steps.length;
-    nextBtn.textContent = i === cfg.steps.length - 1 ? 'Done' : 'Next';
+    countEl.textContent = (i + 1) + ' / ' + steps.length;
+    nextBtn.textContent = i === steps.length - 1 ? 'Done' : 'Next';
     reposition();
   }
 
   function next() {
-    if (stepIdx + 1 >= cfg.steps.length) { stop(); return; }
+    if (stepIdx + 1 >= steps.length) { stop(); return; }
     showStep(stepIdx + 1);
   }
 
   function stop() {
-    markSeen();
+    if (!isExtra) markSeen();
     if (timer) { clearInterval(timer); timer = null; }
     window.removeEventListener('resize', reposition);
     document.removeEventListener('keydown', onKey);
@@ -829,8 +899,20 @@ _TOUR_JS: str = """
     if (e.key === 'Escape') stop();
   }
 
-  window.nansenseStartTour = function() {
-    if (overlay) { scrolledStep = -1; showStep(0); return; }
+  // No argument: the page's own tour (the `?` button). A name: that extra
+  // tour, if the page holds one.
+  window.nansenseStartTour = function(name) {
+    const extra = name ? (cfg.extras || {})[name] : null;
+    if (name && !extra) return;
+    const sameTour = isExtra ? extra === steps : !extra;
+    if (overlay) {
+      // A mid-run restart of the same tour keeps its context; starting a
+      // different one ends the current run first.
+      if (sameTour) { scrolledStep = -1; showStep(0); return; }
+      stop();
+    }
+    steps = extra || cfg.steps;
+    isExtra = !!extra;
     buildOverlay();
     // Fresh runs only (a mid-run restart keeps the original tour context):
     // pages with view-bound steps snapshot their state on this event so
@@ -855,7 +937,19 @@ _TOUR_JS: str = """
     setTimeout(function() { waited = true; ready(); }, 800);
   }
 
-  if (cfg.autoStart) autoStart();
+  // A `?tour=<name>` deep link plays that extra once, after the same settle
+  // beat; the parameter is dropped from the URL so a reload doesn't replay.
+  function autoStartExtra() {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('tour');
+      history.replaceState(null, '', url.toString());
+    } catch (e) {}
+    setTimeout(function() { window.nansenseStartTour(cfg.autoStartExtra); }, 800);
+  }
+
+  if (cfg.autoStartExtra) autoStartExtra();
+  else if (cfg.autoStart) autoStart();
 })();
 </script>
 """

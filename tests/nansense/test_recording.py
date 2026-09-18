@@ -37,6 +37,7 @@ from nansense.recording import (
 )
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.compose import _CHECKER_DARK, _CHECKER_LIGHT
+from tests.nansense.helpers import collecting
 
 
 class TinyConvNet(nn.Module):
@@ -56,7 +57,9 @@ def _make_session(
         phases = {"train": 2}
     model = TinyConvNet()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-    session = nansense.start(model, epochs=epochs, phases=phases, optimizer=optimizer)
+    session = collecting(
+        nansense.start(model, epochs=epochs, phases=phases, optimizer=optimizer)
+    )
     manager = RecordingManager(directory=tmp_path / "rec")
     session._recording_manager = manager
     return session, model, manager

@@ -48,6 +48,7 @@ def test_instruments_record_through_a_training_step() -> None:
     )
     main_module.register_instruments(session)
     session.watch("conv1")
+    session.set_stats_scope("watched")
     session.detach()
 
     images, labels = main_module.make_blob_dataset(8, seed=0).tensors

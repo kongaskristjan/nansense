@@ -17,6 +17,7 @@ from nansense.instruments import (
 )
 from tests.nansense.helpers import (
     TinyNet,
+    collecting,
     make_session,
     optimizer_train_step,
     paused_worker,
@@ -323,8 +324,8 @@ def test_session_layer_context_carries_weights_and_gradient() -> None:
 def test_session_snapshot_carries_custom_tensors() -> None:
     model = TinyNet()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-    session = nansense.start(
-        model, epochs=1, phases={"train": 1}, optimizer=optimizer
+    session = collecting(
+        nansense.start(model, epochs=1, phases={"train": 1}, optimizer=optimizer)
     )
     session.watch("fc1")
 

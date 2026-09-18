@@ -23,6 +23,7 @@ def main() -> None:
     session.set_experiment_defaults(steps=2, channels=2, jitter=0)
     session.watch("conv1")
     session.watch("conv2")
+    session.set_stats_scope("watched")
     nansense.serve(session, port=args.port, open_browser=False)
     inputs = torch.rand(4, 1, 8, 8)
     labels = torch.tensor([0, 1, 2, 3])

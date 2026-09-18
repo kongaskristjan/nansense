@@ -115,7 +115,8 @@ They are the same while paused and diverge while the run advances freely.
 Statistics come from two places. `get_layer_stats` reads the last captured
 batch and works for any layer. `get_stats_history` reads the running
 accumulators for the epoch-by-epoch trend, which only cover layers that are
-being watched — call `watch_layers` first.
+being watched *while collection is on* — collection is off by default, so
+call `watch_layers` and `set_stats_scope("watched")` first.
 
 The `render_*` tools return the same views as pictures — the strips, weight
 maps, histograms and patch grids the browser draws. Statistics tell you how
@@ -472,7 +473,8 @@ def build_server(
         Activations and gradients, one subplot each, over the signed-log bins.
         Shape is the point: a gradient histogram collapsing toward zero, a
         bimodal activation, a spike in the overflow bin. Covers watched layers
-        only — call `watch_layers` first. `log_x` spreads the bins evenly by
+        only, and only while collection is on — call `watch_layers` and
+        `set_stats_scope("watched")` first. `log_x` spreads the bins evenly by
         magnitude, `log_y` reveals sparse tails. Defaults to the newest phase
         with data.
 
@@ -689,11 +691,13 @@ def build_server(
 
     @server.tool()
     async def watch_layers(layers: list[str]) -> dict[str, Any]:
-        """Start collecting per-epoch statistics for these layers.
+        """Watch these layers: the ones per-epoch statistics are kept for.
 
         Needed only for `get_stats_history`; `get_layer_stats` reads any layer
-        without watching. Watching makes every batch pay capture cost, so watch
-        the layers you are investigating rather than all of them.
+        without watching. Collection is off by default — turn it on with
+        `set_stats_scope("watched")` (or "all") or nothing accumulates.
+        Collecting makes every batch pay capture cost, so watch the layers you
+        are investigating rather than all of them.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -709,9 +713,9 @@ def build_server(
     async def unwatch_layers(layers: list[str]) -> dict[str, Any]:
         """Stop watching these layers, dropping the stats they stop collecting.
 
-        Under the default "watched" scope the statistics collected for them go
-        too; under "all" or "none" the watched set only picks which cards the
-        UI shows, so their buckets stay browsable.
+        Under the "watched" scope the statistics collected for them go too;
+        under "all" or "none" the watched set only picks which cards the UI
+        shows, so their buckets stay browsable.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -726,10 +730,11 @@ def build_server(
     ) -> dict[str, Any]:
         """Choose which layers collect running statistics.
 
-        "watched" (the default) collects for the watched layers, "all" for
-        every layer — convenient but it makes every batch collect for the whole
-        model — and "none" pauses collection while keeping what was already
-        collected browsable.
+        "none" (the default) collects nothing, keeping whatever was already
+        collected browsable; "watched" collects for the watched layers; "all"
+        for every layer — convenient but it makes every batch collect for the
+        whole model. The UI's top-bar stats button flips between "none" and
+        the last collecting scope.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:

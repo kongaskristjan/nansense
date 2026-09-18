@@ -240,6 +240,7 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
             # explicit snapshot request below — after both batches accumulate.
             session.set_update_frequency(unit="batch", n=100)
             assert session.watch("x")
+            session.set_stats_scope("watched")
 
         # Rank-distinguishable data: rank r feeds constant `r + 1`, so the
         # reduced stats are exactly predictable.

@@ -173,10 +173,12 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
         input_std=(1.0,),
     )
     register_instruments(session)
-    # Watch the conv layers up front so the instruments have layers to run
-    # on from batch 0 (instruments only cover watched layers).
+    # Watch the conv layers and turn collection on up front so the
+    # instruments have layers to run on from batch 0 (instruments only cover
+    # collecting layers, and collection is off by default).
     session.watch("conv1")
     session.watch("conv2")
+    session.set_stats_scope("watched")
 
     for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():

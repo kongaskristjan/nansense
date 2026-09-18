@@ -501,8 +501,9 @@ def stats_history_view(
             "history": {},
             "hint": (
                 f"No statistics collected for {layer!r} yet. Call "
-                f"watch_layers(['{layer}']) (or set_stats_scope('all')) and let "
-                "training advance at least one batch."
+                f"watch_layers(['{layer}']) and set_stats_scope('watched') (or "
+                "set_stats_scope('all')) and let training advance at least one "
+                "batch."
             ),
         }
     phases = [phase] if phase is not None else available

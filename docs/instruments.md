@@ -1,6 +1,6 @@
 # Custom metrics & tensors
 
-Instruments add your own per-layer metrics and tensors to the UI. Register a callback and NaNsense evaluates it for each watched layer using that batch's activations, gradients, weights, and optimizer state.
+Instruments add your own per-layer metrics and tensors to the UI. Register a callback and NaNsense evaluates it for each collecting layer using that batch's activations, gradients, weights, and optimizer state.
 
 There are three kinds:
 
@@ -66,7 +66,7 @@ Weight-tensor callbacks receive a [`WeightContext`](api.md#nansense.WeightContex
 
 ## The rules
 
-- **Watched layers only.** Instruments run for the layers the stats scope collects — the watched set by default, every layer under scope `"all"`, nothing under `"none"`.
+- **Collecting layers only.** Instruments run for the layers the stats scope collects — nothing under the default `"none"`, the watched set under `"watched"` (the top bar's stats button), every layer under `"all"`.
 - **Training thread, live tensors, `no_grad`.** Callbacks run inside the batch context against the live device tensors: fast (no copies), but treat every tensor as read-only.
 - **Errors never kill training.** A raising callback (or a wrong-shaped/typed return) disables that instrument, prints one console line, and reports on the `/stats` GRAPHS view and `session.instrument_errors`. Everything else keeps running.
 - **Stateful instruments are just callables.** Pass any object with `__call__` — `session.watch_metric("drift")(DriftTracker(model))`. If it also defines `on_rewind(epoch)`, the session calls it when time travel rewinds, so cross-batch state doesn't leak across timelines. Stored series from rewound epochs are dropped automatically.

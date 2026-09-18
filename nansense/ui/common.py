@@ -160,21 +160,30 @@ class _StatusPill:
         self._row.set_visibility(visible)
 
 
-def _notice_banner(message: str, *, icon: str = "info") -> ui.element:
+def _notice_banner(
+    message: str, *, icon: str = "info", action: tuple[str, str] | None = None
+) -> ui.element:
     """A red notice banner card for empty / no-data states.
 
     Returned so the caller can toggle its visibility as the underlying
     state changes. Intentionally a softer red than the full-strength
     numerical-error banner (`_add_error_banner`): this flags an empty
-    state to act on, not an active error.
+    state to act on, not an active error. `action` is an optional
+    `(label, href)` button below the text — a real anchor, so middle-click
+    opens it in a new tab.
     """
-    banner = ui.row().classes(
-        "w-full items-center gap-2 no-wrap rounded border border-red-300 "
-        "bg-red-50 text-red-700 px-3 py-2"
+    banner = ui.column().classes(
+        "w-full gap-2 rounded border border-red-300 bg-red-50 text-red-700 px-3 py-2"
     )
     with banner:
-        ui.icon(icon).classes("text-xl shrink-0")
-        ui.label(message).classes("text-sm")
+        with ui.row().classes("w-full items-center gap-2 no-wrap"):
+            ui.icon(icon).classes("text-xl shrink-0")
+            ui.label(message).classes("text-sm")
+        if action is not None:
+            label, href = action
+            ui.button(label, color="red").props(f'dense no-caps href="{href}"').classes(
+                "ml-8 self-start px-3 text-xs font-semibold tracking-wide"
+            )
     return banner
 
 

@@ -1,17 +1,19 @@
 """Tests for the three-way stats scope (`Session.set_stats_scope`).
 
-`"watched"` (default) collects for the watched layers only, `"all"` for every
-layer regardless of the watched set, and `"none"` pauses collection while
-keeping every already-collected bucket frozen. Narrowing to `"watched"` drops
-the buckets of layers outside the watched set.
+`"none"` (default) collects nothing while keeping every already-collected
+bucket frozen, `"watched"` collects for the watched layers only, and `"all"`
+for every layer regardless of the watched set. Narrowing to `"watched"` drops
+the buckets of layers outside the watched set. (`make_session` turns
+`"watched"` on; the default is asserted here.)
 """
 
 from __future__ import annotations
 
 import pytest
 
+import nansense
 from nansense.session import StatsScope
-from tests.nansense.helpers import make_session, train_step
+from tests.nansense.helpers import TinyNet, make_session, train_step
 
 # TinyNet's fx-traced layer names, in graph order.
 _TINYNET_LAYERS = ["x", "fc1", "relu", "fc2"]
@@ -69,19 +71,45 @@ def test_narrowing_scope_to_watched_prunes_other_buckets() -> None:
     assert session.stats_layers == frozenset({"fc1"})
 
 
+def test_collection_is_off_by_default_and_resumes_as_watched() -> None:
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    assert session.stats_scope is StatsScope.NONE
+    assert session.stats_collecting is False
+    assert session.collecting_scope is StatsScope.WATCHED
+    assert session.toggle_stats_collecting() is True
+    assert session.stats_scope is StatsScope.WATCHED
+
+
 def test_toggle_restores_the_previous_scope() -> None:
     session, _model = make_session()
     session.set_stats_scope(StatsScope.ALL)
     assert session.toggle_stats_collecting() is False
     assert session.stats_scope is StatsScope.NONE
+    # The resume scope shows through the pause, so the UI keeps its coupling.
+    assert session.collecting_scope is StatsScope.ALL
     assert session.toggle_stats_collecting() is True
     assert session.stats_scope is StatsScope.ALL
+
+
+def test_toggle_resuming_watched_prunes_like_selecting_it() -> None:
+    session, model = make_session(epochs=1, phases={"train": 2})
+    session.set_stats_scope("all")
+    session.detach()
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+    session.watch("fc1")
+    session.set_stats_scope("none")
+    session._prev_stats_scope = StatsScope.WATCHED
+    assert session.toggle_stats_collecting() is True
+    assert {key[0] for key in session.watch_snapshot().stats} == {"fc1"}
 
 
 @pytest.mark.parametrize(
     ("scope", "watched", "expected"),
     [
-        (StatsScope.NONE, ["fc1"], frozenset()),
+        # Paused, the layers a resume would collect are already selectable,
+        # so a freshly watched layer gets its stats card and how-to notice.
+        (StatsScope.NONE, ["fc1"], frozenset({"fc1"})),
         (StatsScope.WATCHED, ["fc1", "relu"], frozenset({"fc1", "relu"})),
         (StatsScope.ALL, [], frozenset(_TINYNET_LAYERS)),
     ],

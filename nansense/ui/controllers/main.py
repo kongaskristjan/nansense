@@ -37,41 +37,33 @@ class MainController:
         self.state = MainState()
         self.session = session
         self.layers = tuple(layers)
-        self.scope = session.stats_scope
+        self.scope = session.collecting_scope
         self.shown = _seed_shown(
             session.watched_layers, focus_layer if session.locked else "", layers
         )
 
     @property
     def decoupled(self) -> bool:
-        return self.session.stats_scope is not StatsScope.WATCHED
+        """Whether this tab's shown set is its own rather than the watched set.
+
+        Only a collecting scope of `ALL` decouples: pausing (`NONE`) keeps
+        whichever coupling the resume scope has, so the toggle never moves
+        cards around.
+        """
+        return self.session.collecting_scope is StatsScope.ALL
 
     @property
     def shown_layers(self) -> frozenset[str]:
         return frozenset(self.shown) if self.decoupled else self.session.watched_layers
 
     def reconcile_scope(self) -> bool:
-        scope = self.session.stats_scope
+        scope = self.session.collecting_scope
         if scope is self.scope:
             return False
-        if scope is not StatsScope.WATCHED and self.scope is StatsScope.WATCHED:
+        if scope is StatsScope.ALL:
             self.shown = set(self.session.watched_layers)
         self.scope = scope
         return True
-
-    def show_all(self) -> None:
-        if self.decoupled:
-            self.shown = set(self.layers)
-        else:
-            for name in self.layers:
-                self.session.watch(name)
-
-    def clear(self) -> None:
-        if self.decoupled:
-            self.shown.clear()
-        else:
-            for name in self.session.watched_layers:
-                self.session.unwatch(name)
 
     def toggle(self, name: str) -> bool:
         if name not in self.layers:

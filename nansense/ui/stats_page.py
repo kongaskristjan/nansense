@@ -100,7 +100,7 @@ from nansense.ui.top_bar import (
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
-from nansense.ui.tour import add_tour, stats_tour_steps
+from nansense.ui.tour import STATS_HOWTO, add_tour, stats_tour_steps
 from nansense.watch import (
     N_BINS,
     LayerStatsSnapshot,
@@ -149,14 +149,15 @@ def _apply_watch_param(session: Session, layer: str, watch: str) -> None:
     weights page's GRAPHS jump, the warning dialog's Stats-with-watch row)
     carry `watch=1` instead of calling `session.watch` in an `on_click` —
     that keeps them real anchors, so middle-click opens a new tab and still
-    starts collection. Only the `watched` scope needs the watch: the other
-    scopes either already collect every layer or are deliberately paused.
-    Unknown layer names are refused by `Session.watch` itself; an already
-    watched layer is left alone so reloading the link stays a no-op.
+    starts collection. Only a `watched` collecting scope needs the watch
+    (paused or not — the watched set is what a resume collects); under `all`
+    every layer already collects. Unknown layer names are refused by
+    `Session.watch` itself; an already watched layer is left alone so
+    reloading the link stays a no-op.
     """
     if (
         watch.strip()
-        and session.stats_scope is StatsScope.WATCHED
+        and session.collecting_scope is StatsScope.WATCHED
         and layer not in session.watched_layers
     ):
         session.watch(layer)
@@ -444,9 +445,10 @@ class _StatsPage:
             if not ordered:
                 with ui.column().classes("items-center gap-2 py-12 w-full"):
                     ui.icon("visibility_off", size="lg").classes("text-slate-400")
-                    ui.label("No layers selected.").classes("text-slate-600")
+                    ui.label("No layers watched.").classes("text-slate-600")
                     ui.label(
-                        "Go back and click the eye icon on a layer card to start watching."
+                        "Go back and click a node in the architecture diagram "
+                        "to start watching a layer."
                     ).classes("text-slate-500 text-sm")
                 return
             for name in _visible_layers(self.state.selected_layer, ordered):
@@ -1312,11 +1314,11 @@ class _WatchLayerPanel:
         self._grid_sig: tuple[object, ...] | None = None
 
         def unwatch() -> None:
-            # Unwatching only exists in the coupled `watched` scope — in the
-            # other scopes the watched set doesn't drive collection, so the
+            # Unwatching only exists while the watched set drives collection
+            # (`watched`, paused or not) — under `all` it doesn't, so the
             # button is not built; this guard covers a stale card after a
             # scope switch.
-            if session.stats_scope is not StatsScope.WATCHED:
+            if session.collecting_scope is not StatsScope.WATCHED:
                 ui.notify(
                     "Layers are only unwatched while stats are collected "
                     "for watched layers",
@@ -1331,7 +1333,7 @@ class _WatchLayerPanel:
         with ui.card().classes("w-full p-4 gap-2"):
             with ui.row().classes("w-full items-center gap-2 no-wrap"):
                 ui.label(name).classes("font-mono text-base font-bold grow")
-                if session.stats_scope is StatsScope.WATCHED:
+                if session.collecting_scope is StatsScope.WATCHED:
                     ui.button(
                         icon="visibility_off",
                         color="amber-600",
@@ -1346,7 +1348,9 @@ class _WatchLayerPanel:
             # them), or the notice below once waiting can't help.
             self._status = _StatusPill(_LOADING_CHIP)
             self._no_data = _notice_banner(
-                _no_stats_message(session.locked), icon="bar_chart"
+                _no_stats_message(session.locked),
+                icon="bar_chart",
+                action=None if session.locked else _show_me_how_action(name),
             )
             self._no_data.set_visibility(False)
             self._hist_section = ui.column().classes("w-full gap-3")
@@ -1713,13 +1717,16 @@ def _no_stats_message(locked: bool) -> str:
     """The layer-card notice shown when waiting can no longer help.
 
     Only reached with training stopped — while it advances the card spins
-    (`_COLLECTING_CHIP`) instead. Unlocked, the notice stresses that only
-    batches stepped after the layer is watched feed the running aggregate
-    (it grows rather than overwriting with the last batch). A locked session
-    (the shared hosted demo) can't step at all and never will collect more,
-    so that variant must not advise stepping: what's missing is missing for
-    this phase, and it points at "Current batch" (the one phase that works
-    for any layer) as the fallback.
+    (`_COLLECTING_CHIP`) instead. Unlocked, the notice is a how-to rather
+    than a diagnosis: watch the layer, turn collection on (off by default),
+    step — and only batches stepped from then on feed the running
+    aggregate (it grows rather than overwriting with the last batch); the
+    SHOW ME HOW button below it (`_show_me_how_action`) walks through the
+    same three things on the main view. A locked session (the shared hosted
+    demo) can't step at all and never will collect more, so that variant
+    must not advise stepping: what's missing is missing for this phase, and
+    it points at "Current batch" (the one phase that works for any layer)
+    as the fallback.
     """
     if locked:
         return (
@@ -1728,10 +1735,20 @@ def _no_stats_message(locked: bool) -> str:
             "any layer."
         )
     return (
-        "No stats collected for this layer yet — step at least one batch to "
-        "start collecting. Each batch you step after watching the layer adds "
-        "to the running statistics."
+        "To get stats here, watch this layer, turn on stats collection with "
+        "the stats button in the main view's top bar, and step at least one "
+        "batch. Every batch from then on adds to the running statistics."
     )
+
+
+def _show_me_how_action(layer: str) -> tuple[str, str]:
+    """The notice's button: the main view, playing the stats how-to tour.
+
+    A `?tour=` deep link (`main_page._requested_extra_tour`) rather than a
+    click handler, so the button stays a real anchor; `layer` makes the
+    tour's first arrow point at the node of the layer the visitor came from.
+    """
+    return ("SHOW ME HOW", f"/?layer={quote(layer)}&tour={STATS_HOWTO}")
 
 
 def _patch_grids_signature(

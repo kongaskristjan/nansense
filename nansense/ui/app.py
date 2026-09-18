@@ -373,12 +373,13 @@ def serve(
     render_cache = _RenderCache()
 
     @ui.page("/", favicon=str(favicon_path))
-    def index(layer: str = "") -> None:
+    def index(layer: str = "", tour: str = "") -> None:
         _build_page(
             session,
             mermaid_src,
             layer_names,
             focus_layer=layer,
+            tour=tour,
             input_names=input_names,
             input_mean=input_mean,
             input_std=input_std,

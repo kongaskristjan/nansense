@@ -9,6 +9,7 @@ from torch import Tensor, nn
 import nansense
 from tests.nansense.helpers import (
     live_hist,
+    collecting,
     make_session,
     paused_worker,
     train_step,
@@ -85,7 +86,7 @@ class TinyConvNet(nn.Module):
 
 def test_watch_gathers_patches_for_image_inputs() -> None:
     model = TinyConvNet()
-    session = nansense.start(model, epochs=1, phases={"train": 2})
+    session = collecting(nansense.start(model, epochs=1, phases={"train": 2}))
     session.watch("conv")
     session.detach()
 

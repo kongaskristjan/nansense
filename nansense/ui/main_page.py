@@ -19,7 +19,7 @@ from nansense.contracts.recording import MainView
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.probe import ProbeResult
 from nansense.recording import RecordedView
-from nansense.session import BatchSnapshot, Session, StatsScope
+from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
     _b64_img_src,
     _install_panel_resize,
@@ -31,7 +31,7 @@ from nansense.ui.common import (
     _strip_html,
     _strip_marker,
 )
-from nansense.ui.components.layer_menu import LayerMenu
+from nansense.ui.components.stats_toggle import STATS_TOGGLE_CSS, StatsToggle
 from nansense.ui.controllers.main import MainController
 from nansense.ui.graph import slug_map
 from nansense.ui.input_panel import InputPanel
@@ -62,7 +62,7 @@ from nansense.ui.top_bar import (
     _refresh_button,
     _top_bar_row,
 )
-from nansense.ui.tour import add_tour, main_tour_steps
+from nansense.ui.tour import STATS_HOWTO, add_tour, main_tour_steps, stats_howto_steps
 
 # Shared pool for strip rendering. Per-layer renders are independent and the
 # heavy parts (torch interpolate, numpy colormap, PIL PNG encode) release the
@@ -147,6 +147,16 @@ def _layer_info_script(layer_info: dict[str, str], slugs: dict[str, str]) -> str
     return f"<script>window.nansenseLayerInfo = {payload};</script>"
 
 
+def _requested_extra_tour(tour: str, locked: bool) -> str | None:
+    """The named extra tour a `?tour=` deep link asks to auto-start.
+
+    Only the stats how-to exists, and it teaches controls (watching, the
+    stats toggle, stepping) a locked demo doesn't offer, so it never runs
+    there. Unknown names are ignored.
+    """
+    return STATS_HOWTO if tour == STATS_HOWTO and not locked else None
+
+
 def _pick_tour_layer(
     layer_names: list[str],
     shown: frozenset[str],
@@ -175,6 +185,7 @@ def _build_page(
     layer_names: list[str],
     *,
     focus_layer: str = "",
+    tour: str = "",
     input_names: list[str],
     input_mean: MeanStd | dict[str, MeanStd] | None,
     input_std: MeanStd | dict[str, MeanStd] | None,
@@ -186,6 +197,7 @@ def _build_page(
         mermaid_src,
         layer_names,
         focus_layer=focus_layer,
+        tour=tour,
         input_names=input_names,
         input_mean=input_mean,
         input_std=input_std,
@@ -204,6 +216,7 @@ class _MainPage:
         layer_names: list[str],
         *,
         focus_layer: str,
+        tour: str,
         input_names: list[str],
         input_mean: MeanStd | dict[str, MeanStd] | None,
         input_std: MeanStd | dict[str, MeanStd] | None,
@@ -214,6 +227,7 @@ class _MainPage:
         self.mermaid_src = mermaid_src
         self.layer_names = layer_names
         self.focus_layer = focus_layer
+        self.tour = tour
         self.input_names = input_names
         self.input_mean = input_mean
         self.input_std = input_std
@@ -241,6 +255,7 @@ class _MainPage:
         _install_panel_resize()
         ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
         ui.add_head_html(_STRIP_MARKER_CSS)
+        ui.add_head_html(STATS_TOGGLE_CSS)
         ui.add_body_html(_ARCHITECTURE_CLICK_JS)
         ui.add_body_html(_layer_info_script(self.session.layer_info, self.slugs))
 
@@ -255,33 +270,20 @@ class _MainPage:
             self.layer_names, self.shown_layers(), self.layer_weights
         )
         tour_slug = self.slugs[tour_layer] if tour_layer is not None else None
+        # The stats how-to (the stats page's SHOW ME HOW) points at the
+        # layer the visitor came from when the deep link names one.
+        howto_slug = self.slugs.get(self.focus_layer, tour_slug)
         add_tour(
             "main",
             main_tour_steps(tour_slug, locked=self.session.locked),
             locked=self.session.locked,
             auto_watch_slug=tour_slug,
+            extras={STATS_HOWTO: stats_howto_steps(howto_slug)},
+            auto_start_extra=_requested_extra_tour(self.tour, self.session.locked),
         )
 
     def _build_dialogs(self) -> None:
         self.step_until_custom = _build_step_until_custom_dialog(self.session)
-
-        # Showing everything turns the lazy-rendering optimization off again:
-        # every card renders on every pause (and in the `watched` scope, stats
-        # accumulate for every layer on every batch). Worth an explicit
-        # confirmation.
-        self.watch_all_dialog = ui.dialog()
-        with self.watch_all_dialog, ui.card().classes("max-w-md"):
-            ui.label("Show every layer?").classes("text-lg font-medium")
-            ui.label(
-                "This can slow down large models and use a lot of browser memory."
-            ).classes("text-sm text-slate-600")
-            with ui.row().classes("w-full justify-end gap-2"):
-                ui.button("Cancel", on_click=self.watch_all_dialog.close).props("flat")
-                ui.button(
-                    "Show all",
-                    color="red",
-                    on_click=lambda: (self.watch_all(), self.watch_all_dialog.close()),
-                )
 
     def _build_header(self) -> None:
         with _top_bar_row():
@@ -292,13 +294,10 @@ class _MainPage:
             )
             _refresh_button(self.session)
             _add_step_controls(self.session, self.step_until_custom)
-            self.layer_menu = LayerMenu(
-                self.layer_names,
+            self.stats_toggle = StatsToggle(
                 self.state.last_watched,
                 locked=self.session.locked,
-                show_all=self.watch_all_dialog.open,
-                clear_all=self.clear_all,
-                toggle_stats=lambda: self.toggle_stats(),
+                toggle=self.toggle_stats,
             )
             _add_settings_button(self.session, self.record_view)
             self.input_toggle = (
@@ -376,7 +375,7 @@ class _MainPage:
         # button may have hidden (a no-op when it is already visible).
         ui.on("nansense_tour_show_input", self.show_input)
 
-        # Populate the chip menu and, if anything is already watched, push the
+        # Set the chip's count and, if anything is already watched, push the
         # set into JS so the MutationObserver applies the amber treatment to
         # mermaid nodes once Mermaid finishes rendering them client-side.
         self.refresh_chip()
@@ -429,18 +428,6 @@ class _MainPage:
             ),
         )
 
-    def watch_all(self) -> None:
-        self.controller.show_all()
-        self.sync_watch_ui()
-
-    def clear_all(self) -> None:
-        if not self.controller.decoupled and _refuse_unwatch_while_recording(
-            self.session
-        ):
-            return
-        self.controller.clear()
-        self.sync_watch_ui()
-
     def on_diagram_toggle(self, e: GenericEventArguments) -> None:
         name = self.slug_to_name.get(e.args)
         if name is not None:
@@ -462,15 +449,13 @@ class _MainPage:
         # perturbations, probe mode) are frozen: the recording renders with
         # the live probe state, so the input controls must not change it.
         self.input_panel.set_frozen(self.session.recording.is_recording("main"))
-        # A stats-scope switch (from the settings gear, possibly in another
-        # tab) re-bases the shown set: entering a decoupled scope seeds this
+        # A collecting-scope switch (from the settings gear, possibly in
+        # another tab) re-bases the shown set: entering `all` seeds this
         # tab's own set from the global watched set, returning to `watched`
-        # re-syncs to it. Switching between the decoupled scopes (the stats
-        # pause toggle) keeps the tab's cards as they are.
-        scope = self.session.stats_scope
+        # re-syncs to it. The stats pause toggle changes neither.
         if self.controller.reconcile_scope():
             for view in self.layer_views.values():
-                view.set_decoupled(scope is not StatsScope.WATCHED)
+                view.set_decoupled(self.controller.decoupled)
             self.sync_watch_ui()
         # Shown-set changes made elsewhere (another tab or the stats page, in
         # the coupled scope) propagate here: sync flips card visibility and
@@ -562,14 +547,14 @@ class _MainPage:
             )
 
     def sync_stats_icon(self) -> None:
-        self.layer_menu.sync_collecting(self.session.stats_collecting)
+        self.stats_toggle.sync_collecting(self.session.stats_collecting)
 
     def toggle_stats(self) -> None:
         self.session.toggle_stats_collecting()
         self.sync_stats_icon()
 
     def refresh_chip(self) -> None:
-        self.layer_menu.update(self.shown_layers())
+        self.stats_toggle.update(self.shown_layers())
 
     def sync_watch_ui(self) -> None:
         """Reflect the shown set in this connection's DOM.
@@ -578,7 +563,7 @@ class _MainPage:
         global set); in the decoupled scopes it is this tab's own `shown`
         set. Either way: cards for newly shown layers appear (and get
         rendered on the next tick via the dirty flag), hidden ones
-        disappear, the diagram's amber classes follow, and the chip menu /
+        disappear, the diagram's amber classes follow, and the chip count /
         empty-pane hint refresh. Diffing against `state.last_watched`
         keeps the JS push proportional to the change, not the model size.
         """

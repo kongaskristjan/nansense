@@ -106,7 +106,14 @@ def make_session(
     if phases is None:
         phases = {"train": 2, "val": 2}
     model = TinyNet()
-    return nansense.start(model, epochs=epochs, phases=phases), model
+    return collecting(nansense.start(model, epochs=epochs, phases=phases)), model
+
+
+def collecting(session: Session) -> Session:
+    """Turn stats collection on (`watched`) — off by default, but nearly every
+    test exercises it; the default itself is `test_stats_scope`'s."""
+    session.set_stats_scope("watched")
+    return session
 
 
 def run_in_thread(target: Callable[[], None]) -> threading.Thread:
@@ -182,7 +189,9 @@ def paused_session(
     batch, yielding once the worker pauses on the first STEP-mode capture."""
     if phases is None:
         phases = {"train": 2}
-    session = nansense.start(model, epochs=epochs, phases=phases, optimizer=optimizer)
+    session = collecting(
+        nansense.start(model, epochs=epochs, phases=phases, optimizer=optimizer)
+    )
 
     def loop() -> None:
         for epoch in range(epochs):

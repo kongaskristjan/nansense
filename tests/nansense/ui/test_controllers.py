@@ -26,14 +26,29 @@ def test_layer_visibility_follows_scope_without_leaking_between_tabs() -> None:
     first.toggle("fc2")
     assert first.shown_layers == {"fc1", "fc2"}
     assert second.shown_layers == session.watched_layers == {"fc1"}
-    session.set_stats_scope(StatsScope.NONE)
-    first.reconcile_scope()
+    # Pausing keeps the `all` coupling: the tab's own cards stay put.
+    session.toggle_stats_collecting()
+    assert not first.reconcile_scope()
     assert first.shown_layers == {"fc1", "fc2"}
     session.set_stats_scope(StatsScope.WATCHED)
     first.reconcile_scope()
     assert first.shown_layers == {"fc1"}
     first.toggle("fc2")
     assert second.shown_layers == {"fc1", "fc2"}
+
+
+def test_paused_collection_keeps_cards_coupled_to_the_watched_set() -> None:
+    """The default state: nothing collects, yet a diagram click watches the
+    layer so turning collection on later collects exactly the shown cards."""
+    session, _ = make_session()
+    session.set_stats_scope(StatsScope.NONE)
+    controller = MainController(session, session.layer_names)
+    assert not controller.decoupled
+    controller.toggle("fc1")
+    assert session.watched_layers == {"fc1"}
+    assert session.toggle_stats_collecting()
+    assert not controller.reconcile_scope()
+    assert controller.shown_layers == {"fc1"}
 
 
 def test_experiment_replacement_and_cancel_are_isolated_to_the_page() -> None:

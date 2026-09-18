@@ -40,7 +40,13 @@ from nansense.mcp_views import (
 from nansense.recording import RecordingManager
 from nansense.session import Mode, Session
 
-from .helpers import TinyNet, optimizer_train_step, paused_session, train_step
+from .helpers import (
+    TinyNet,
+    collecting,
+    optimizer_train_step,
+    paused_session,
+    train_step,
+)
 
 _T = TypeVar("_T")
 
@@ -567,7 +573,7 @@ def test_custom_metrics_come_back_as_series() -> None:
     """These exist only because the training script author wrote them, which
     makes their presence a signal in itself."""
     model = TinyNet()
-    session = nansense.start(model, epochs=1, phases={"train": 1})
+    session = collecting(nansense.start(model, epochs=1, phases={"train": 1}))
     # Nothing here drives the pause loop, so run detached rather than waiting
     # out the unserved-session timeout.
     session.detach()
@@ -938,8 +944,8 @@ def test_stats_history_includes_the_weight_trend() -> None:
 
     model = TinyNet()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
-    session = nansense.start(
-        model, epochs=1, phases={"train": 2}, optimizer=optimizer
+    session = collecting(
+        nansense.start(model, epochs=1, phases={"train": 2}, optimizer=optimizer)
     )
     session.detach()
     session.watch("fc1")
@@ -1029,7 +1035,9 @@ def test_the_default_phase_is_the_one_training_is_in() -> None:
     from nansense.mcp_views import default_phase
 
     model = TinyNet()
-    session = nansense.start(model, epochs=1, phases={"train": 1, "eval": 1})
+    session = collecting(
+        nansense.start(model, epochs=1, phases={"train": 1, "eval": 1})
+    )
     session.detach()
     session.watch("fc1")
     for phase in ("train", "eval"):
@@ -1045,7 +1053,9 @@ def test_the_default_phase_spans_every_requested_layer() -> None:
     from nansense.mcp_views import phases_with_data
 
     model = TinyNet()
-    session = nansense.start(model, epochs=1, phases={"train": 1, "eval": 1})
+    session = collecting(
+        nansense.start(model, epochs=1, phases={"train": 1, "eval": 1})
+    )
     session.detach()
     session.watch("fc1")
     with session.batch(phase="train", epoch=0):

@@ -19,6 +19,7 @@ from nansense.ui.main_page import (
     _layer_info_script,
     _pick_tour_layer,
     _RenderCache,
+    _requested_extra_tour,
 )
 from nansense.ui.render import (
     RenderOptions,
@@ -95,6 +96,20 @@ def test_pick_tour_layer_prefers_a_shown_card(
 def test_pick_tour_layer_without_layers() -> None:
     """A model with nothing captured has no layer to point at."""
     assert _pick_tour_layer([], frozenset(), {}) is None
+
+
+@pytest.mark.parametrize(
+    ("tour", "locked", "expected"),
+    [
+        ("stats-howto", False, "stats-howto"),
+        # A locked demo can't watch, toggle or step, so the how-to is moot.
+        ("stats-howto", True, None),
+        ("bogus", False, None),
+        ("", False, None),
+    ],
+)
+def test_requested_extra_tour(tour: str, locked: bool, expected: str | None) -> None:
+    assert _requested_extra_tour(tour, locked) == expected
 
 
 def test_layer_info_script_publishes_nonempty_entries_by_slug() -> None:

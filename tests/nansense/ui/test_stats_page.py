@@ -44,6 +44,7 @@ from nansense.ui.stats_page import (
     _filter_phase,
     _hover_attach_js,
     _no_stats_message,
+    _show_me_how_action,
     _patch_grids_html,
     _patch_grids_signature,
     _phase_heading,
@@ -103,8 +104,21 @@ def test_no_stats_message_matches_session_kind(locked: bool) -> None:
         assert _PHASE_CURRENT_BATCH_LABEL in text
         assert "nothing further will arrive" in text
     else:
-        assert "step at least one batch" in text
+        # A how-to, not a diagnosis: all three prerequisites, in order.
+        assert text.startswith("To get stats here")
+        watch, on, step = (
+            text.index("watch this layer"),
+            text.index("turn on stats collection"),
+            text.index("step at least one batch"),
+        )
+        assert watch < on < step
         assert "running statistics" in text
+
+
+def test_show_me_how_links_to_the_main_view_howto_for_the_layer() -> None:
+    label, href = _show_me_how_action("conv 1/a")
+    assert label == "SHOW ME HOW"
+    assert href == "/?layer=conv%201/a&tour=stats-howto"
 
 
 def test_the_layer_card_waits_with_a_spinner_never_with_advice() -> None:
@@ -418,7 +432,9 @@ def test_apply_watch_param_watches_in_watched_scope_only() -> None:
     # No flag → the watched set stays untouched.
     _apply_watch_param(session, "fc1", "")
     assert "fc1" not in session.watched_layers
-    # `?watch=1` under the (default) watched scope starts collection.
+    # `?watch=1` under the watched scope starts collection — paused too,
+    # since the watched set is what a resume collects.
+    session.set_stats_scope(StatsScope.NONE)
     _apply_watch_param(session, "fc1", "1")
     assert "fc1" in session.watched_layers
     # Unknown layer names are refused rather than crashing the page.

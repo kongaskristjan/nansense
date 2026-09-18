@@ -16,9 +16,9 @@ You drive the run from the top bar: **Step Batch** advances one batch, **Run** r
 
 ## The main page
 
-The left pane shows the model as a clickable architecture graph. Click a node to **watch** that layer: its activations and gradients appear as a card, and from that point on every batch feeds them into running statistics. Watched views refresh on every pause and, while training runs, on the *Update frequency* cadence.
+The left pane shows the model as a clickable architecture graph. Click a node to **watch** that layer: its activations and gradients appear as a card. Watched views refresh on every pause and, while training runs, on the *Update frequency* cadence.
 
-Watching slows down training and consumes memory, so it's generally better to watch only a few layers at a time.
+Running statistics (histograms, min/max galleries, per-epoch graphs) accumulate for the watched layers only while **stats collection** is on — the stats button in the top bar, off by default. Collecting slows down training and consumes memory, so turn it on when you need the stats and watch only a few layers at a time.
 
 Each card renders one strip per tensor: a row of per-channel images on a shared diverging blue-white-red scale. From the card you can jump to the layer's [stats view](#the-stats-page), [weights view](#the-weights-page), or [experiment page](#the-experiment-page).
 
@@ -44,9 +44,9 @@ Open a watched layer's **stats view** for a closer look at its distributions ove
 
 Choose **Current batch** in the Phase menu to inspect the latest capture instead of statistics collected across an epoch. This view is available for any layer.
 
-The top bar's eye icon shows the shown-layer count and pauses or resumes stats collection without hiding the cards; its menu also shows/hides all layers and deep-links each layer's stats.
+The top bar's stats button shows the shown-layer count next to a stats icon: red and crossed out while collection is off (the default), green while every shown layer is collecting. Clicking it toggles collection without touching the cards; what was already collected stays browsable while off. If a layer's stats view has nothing to show yet, its **SHOW ME HOW** button walks through the three things stats need — a watched layer, collection on, at least one stepped batch.
 
-The settings dialog can switch stats collection between the watched layers (the default), every layer, or none. Outside the default, showing and hiding cards on the main page is per-tab and doesn't affect what is collected.
+The settings dialog can also switch collection between none (the default), the watched layers, or every layer. Under "every layer", showing and hiding cards on the main page is per-tab and doesn't affect what is collected.
 
 ## The weights page
 

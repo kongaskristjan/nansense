@@ -17,10 +17,12 @@ import pytest
 from nansense.ui.tour import (
     _TOUR_JS,
     SEEN_KEY_PREFIX,
+    STATS_HOWTO,
     TourStep,
     experiment_tour_steps,
     main_tour_steps,
     seen_key,
+    stats_howto_steps,
     stats_tour_steps,
     tour_config,
     weights_tour_steps,
@@ -47,8 +49,17 @@ _ALL_PAGE_STEPS: list[tuple[str, bool, list[TourStep]]] = [
 
 def _ui_source() -> str:
     return "\n".join(
-        p.read_text(encoding="utf-8") for p in _UI_DIR.glob("*.py")
+        p.read_text(encoding="utf-8") for p in _UI_DIR.rglob("*.py")
     )
+
+
+def _anchor_names(steps: list[TourStep]) -> list[str]:
+    return [
+        m.group(1)
+        for step in steps
+        for sel in step.selectors
+        if (m := re.search(r'\[data-tour="([a-z-]+)"\]', sel))
+    ]
 
 
 @pytest.mark.parametrize(("page", "locked", "steps"), _ALL_PAGE_STEPS)
@@ -127,14 +138,34 @@ def test_data_tour_anchors_exist_in_ui_sources(
     must fail here rather than silently leaving a tour step with no arrow.
     """
     source = _ui_source()
+    # The mermaid-node selector has no `data-tour` at all (checked below).
+    for name in _anchor_names(steps):
+        assert f'data-tour="{name}"' in source, name
+
+
+@pytest.mark.parametrize("layer_slug", ["conv1", None])
+def test_stats_howto_points_at_watching_collecting_and_stepping(
+    layer_slug: str | None,
+) -> None:
+    """The stats page's SHOW ME HOW: a diagram node (the layer the visitor
+    came from), the stats toggle, the step controls — then the trade-off,
+    which has nothing to ring. Longer than the page tours, since the visitor
+    asked for an explanation, but still a bubble."""
+    steps = stats_howto_steps(layer_slug)
+    assert len(steps) == 4
+    node, toggle, run, tradeoff = steps
+    assert node.selectors == (
+        (f'g.node[id*="-flowchart-{layer_slug}-"]',) if layer_slug else ("g.node",)
+    )
+    assert _anchor_names([toggle, run]) == ["stats-toggle", "step-controls"]
+    assert tradeoff.selectors == ()
+    source = _ui_source()
+    for name in _anchor_names(steps):
+        assert f'data-tour="{name}"' in source, name
     for step in steps:
-        for sel in step.selectors:
-            # `search`, not `fullmatch`: the mermaid-node selector has no
-            # `data-tour` at all (it is checked below).
-            m = re.search(r'\[data-tour="([a-z-]+)"\]', sel)
-            if m is None:
-                continue
-            assert f'data-tour="{m.group(1)}"' in source, sel
+        assert step.text.endswith(".") and len(step.text) <= 220
+        assert not (step.ensure_card or step.ensure_input or step.host_anchor)
+    assert "slow" in tradeoff.text
 
 
 def test_diagram_selector_matches_findmermaidnode_scheme() -> None:
@@ -438,6 +469,8 @@ def test_config_carries_driver_contract() -> None:
     # without a Weights button; every other step has a single one.
     assert json.dumps(config).count('"altText": null') == len(steps) - 1
     assert '"altText": "For a deeper look, open Experiment or Stats."' in json.dumps(config)
+    # Without extras the page's own tour is all the driver gets.
+    assert config["extras"] == {} and config["autoStartExtra"] is None
     subpage = tour_config(stats_tour_steps(), page="stats", auto_start=False)
     assert subpage["autoStart"] is False
     assert subpage["autoWatchSlug"] is None
@@ -452,13 +485,37 @@ def test_config_carries_driver_contract() -> None:
     assert '"ensureView": "HISTOGRAM"' in json.dumps(subpage)
 
 
+@pytest.mark.parametrize("auto_start_extra", [STATS_HOWTO, None])
+def test_config_carries_named_extra_tours(auto_start_extra: str | None) -> None:
+    howto = stats_howto_steps("conv1")
+    config = tour_config(
+        main_tour_steps("conv1", locked=False),
+        page="main",
+        auto_start=False,
+        extras={STATS_HOWTO: howto},
+        auto_start_extra=auto_start_extra,
+    )
+    payload = json.dumps(config)
+    assert payload.count(f'"{STATS_HOWTO}": [') == 1
+    assert payload.count(json.dumps(howto[0].text)) == 1
+    assert payload.count('"selectors": []') == 1
+    assert config["autoStartExtra"] == auto_start_extra
+
+
 def test_driver_js_uses_the_config_hooks() -> None:
     # The JS blob and the Python config must agree on their two globals,
     # and `?`-button clicks depend on the start function's name.
     assert "window.nansenseTourConfig" in _TOUR_JS
-    assert "window.nansenseStartTour" in _TOUR_JS
+    assert "window.nansenseStartTour = function(name)" in _TOUR_JS
     assert "cfg.seenKey" in _TOUR_JS
     assert "cfg.autoWatchSlug" in _TOUR_JS
+    # Named extras: selected by name, never marked seen, auto-started from
+    # the deep link with the parameter stripped so a reload doesn't replay.
+    assert "cfg.extras" in _TOUR_JS and "cfg.autoStartExtra" in _TOUR_JS
+    assert "if (!isExtra) markSeen();" in _TOUR_JS
+    assert "searchParams.delete('tour')" in _TOUR_JS
+    # The run logic reads the active tour's steps, not the page's.
+    assert "cfg.steps[" not in _TOUR_JS
     # View-bound steps reach the stats page through this event name.
     assert "nansense_tour_set_view" in _TOUR_JS
     # Card-bound steps scope their bare anchors to a card that is open, and

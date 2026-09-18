@@ -357,12 +357,14 @@ a snapshot and pauses; stats-only batches just compute stats and let
 the training loop continue.
 
 Which layers feed the accumulators is set by the three-way **stats scope**
-(`Session.set_stats_scope`, a select in the settings dialog): `"watched"`
-(the default) collects for the watched layers, `"all"` for every name in
-`layer_names` regardless of the watched set, and `"none"` collects nothing
-while keeping every already-collected bucket frozen — the pause the top
-bar's stats toggle uses (`toggle_stats_collecting` flips between `"none"`
-and the last collecting scope). Scope `"none"` gates both `_stats_only` (so
+(`Session.set_stats_scope`, a select in the settings dialog): `"none"`
+(the default) collects nothing while keeping every already-collected
+bucket frozen, `"watched"` collects for the watched layers, and `"all"`
+for every name in `layer_names` regardless of the watched set. The top
+bar's stats toggle (`toggle_stats_collecting`) flips between `"none"` and
+the last collecting scope — `Session.collecting_scope`, `"watched"` until
+the settings dialog picks `"all"` — via `set_stats_scope`, so resuming
+`"watched"` prunes like selecting it does. Scope `"none"` gates both `_stats_only` (so
 a non-publishing batch no longer installs hooks just for stats — the
 capture-mode cost above disappears) and the `_update_watch_stats` call at
 `__exit__` (so even a capture batch, which installs hooks for its snapshot,
@@ -1458,9 +1460,17 @@ page and the composed still both draw), `static.py` (the CSS/JS blobs), and
 `tour.py` (the per-page guided tours: Python step data for every page — a
 long tour for the main view, one-to-three-step tours for the subpages —
 plus an overlay-JS driver that draws arrows to `data-tour`-tagged
-elements; every step is one sentence under 100 characters, naming only
+elements; every page step is one sentence under 100 characters, naming only
 what its arrows ring and using the labels the UI actually prints, since
-the reader landed seconds ago (`test_tour.py` enforces both); two of the
+the reader landed seconds ago (`test_tour.py` enforces both); a page can
+also hold named *extra* tours (`extras`), started by name through
+`nansenseStartTour(name)` and never marked seen — the only one is the
+stats how-to (`stats_howto_steps`: watch a layer, turn the stats toggle
+on, step, and the slow-down trade-off as a fourth, arrow-less step),
+reached solely from the stats page's SHOW ME HOW button, an anchor to
+`/?layer=…&tour=stats-howto` that the main page turns into
+`auto_start_extra` (unlocked sessions only; the driver strips the
+parameter from the URL so a reload doesn't replay it); two of the
 main view's steps are the layer card's only written key — which row is
 which, and that the diverging colormap runs red-positive to blue-negative,
 neither of which the card itself spells out; the main view's tour opens on the layer whose card the page
@@ -1642,18 +1652,21 @@ out over a shared `ThreadPoolExecutor` (the torch/numpy/PIL work releases the
 GIL) into a `_RenderCache` keyed `(name, kind, sample_idx)` and invalidated by
 render-source identity, so re-showing a card or a second tab is a dict hit.
 
-The top-bar watch/stats chip shows the shown-layer count behind an eye icon
-whose glyph and colour reflect `session.stats_collecting`: green `visibility`
-when collecting (scope `watched` or `all`), red `visibility_off` (the slashed
-eye of the per-card hide button) when paused (scope `none`).
-`sync_stats_icon` runs on init, on toggle, and on the 200 ms tick so a toggle
-in one tab shows in every other — but it rewrites the icon only when the
-state flips (a guard that also avoids re-adding a tooltip every tick). Its
-menu carries *Show all layers* (behind the perf-warning dialog), *Hide all
-layers*, *Toggle collecting stats* (`session.toggle_stats_collecting`, the
-`none` ↔ previous-scope flip), a *Current batch* submenu listing every
-layer (each a `/stats?layer=…&phase=current` anchor), and the shown-layer
-list (each a plain-phase `/stats?layer=…` anchor).
+The top-bar stats toggle (`components/stats_toggle.py`) is one button: the
+shown-layer count behind a `query_stats` glyph whose colour reflects
+`session.stats_collecting` — green when collecting, red with a CSS
+diagonal strike (Material has no "off" variant of the glyph) when paused,
+the default. Clicking it is `session.toggle_stats_collecting`; a locked
+session disables it. `sync_stats_icon` runs on init, on toggle, and on the
+200 ms tick so a toggle in one tab shows in every other — but it rewrites
+the icon only when the state flips (a guard that also keeps the single
+tooltip's text in step rather than re-adding one). Whether the cards
+follow the watched set is decided by `session.collecting_scope`, not
+`stats_scope`: only a collecting scope of `all` decouples
+(`MainController.decoupled`), so pausing and resuming never moves cards,
+and `stats_layers` lists the collecting scope's layers while paused so a
+freshly watched layer already has a stats card carrying the how-to notice.
+The wrapper div's `data-tour="stats-toggle"` is the how-to tour's anchor.
 
 The right sidebar (`InputPanel`) shows the selected input plus the Pin /
 probe-mode / Perturb controls, and (for a multi-input model) a dropdown

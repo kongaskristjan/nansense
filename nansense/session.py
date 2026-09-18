@@ -143,16 +143,17 @@ class Mode(StrEnum):
 class StatsScope(StrEnum):
     """Which layers fold their batches into the running statistics.
 
-    - `NONE`: nothing is collected; already-collected stats are kept frozen
-      (the pause the top bar's stats toggle uses).
-    - `WATCHED` (default): the watched layers collect, and watching a layer is
-      also what shows its cards — the classic coupled behaviour.
+    - `NONE` (default): nothing is collected; already-collected stats are
+      kept frozen. The top bar's stats toggle flips between this and the
+      last collecting scope (`Session.collecting_scope`).
+    - `WATCHED`: the watched layers collect, and watching a layer is also
+      what shows its cards — the coupled behaviour.
     - `ALL`: every layer in `layer_names` collects, independent of the watched
       set.
 
-    Outside `WATCHED`, the watched set no longer drives collection, so the UI
-    treats showing/hiding a layer's cards as per-tab state that never touches
-    the session (see `main_page`).
+    Only under a collecting scope of `ALL` does the watched set stop driving
+    the cards; the UI then treats showing/hiding a layer's cards as per-tab
+    state that never touches the session (see `main_page`).
     """
 
     NONE = "none"
@@ -418,11 +419,12 @@ class Session:
         self._had_instance_forward: bool = False
         self._watched_layers: set[str] = set()
         # Which layers fold their batches into the running stats (see
-        # `StatsScope`). `NONE` collects nothing but keeps existing buckets
-        # frozen (and non-publishing batches skip the capture-mode hook
-        # install they'd otherwise pay for stats); `_prev_stats_scope` is the
-        # last collecting scope, restored by the top bar's stats toggle.
-        self._stats_scope = StatsScope.WATCHED
+        # `StatsScope`). Off by default: `NONE` collects nothing but keeps
+        # existing buckets frozen (and non-publishing batches skip the
+        # capture-mode hook install they'd otherwise pay for stats);
+        # `_prev_stats_scope` is the scope the top bar's stats toggle
+        # resumes with (`collecting_scope`).
+        self._stats_scope = StatsScope.NONE
         self._prev_stats_scope = StatsScope.WATCHED
         # One-way switch for shared (demo) deployments: run control and every
         # global setting refuse to change once locked (see `lock`).
@@ -724,15 +726,16 @@ class Session:
             return frozenset(self._watched_layers)
 
     def watch(self, layer: str) -> bool:
-        """Start collecting stats for `layer`. Returns False for unknown names.
+        """Watch `layer` (show its cards). Returns False for unknown names.
 
         Any name that appears in `Session.layer_names` is watchable: named
         modules, graph inputs (e.g. `x`), and fx-traced intermediate ops
-        (`relu`, `add`, `mean`). Watching activates the full capture
-        machinery on every batch — fx interpreter when traceable, root
-        pre-hook + per-module hooks otherwise — so the visualisation runs
-        at capture-mode speed regardless of pause behaviour. Real training
-        runs should not enable the UI.
+        (`relu`, `add`, `mean`). Running stats accumulate for it only once
+        collection is on (`set_stats_scope("watched")`, off by default);
+        collecting activates the full capture machinery on every batch — fx
+        interpreter when traceable, root pre-hook + per-module hooks
+        otherwise — so training then runs at capture-mode speed regardless
+        of pause behaviour. Real training runs should not enable the UI.
         """
         if self._locked or layer not in self._layer_names:
             return False
@@ -744,8 +747,8 @@ class Session:
     def unwatch(self, layer: str) -> None:
         """Stop showing `layer`, dropping its stats only if it stops collecting.
 
-        Under the default `WATCHED` scope the watched set *is* the collection
-        set, so the layer's buckets go with it — the next batch's
+        Under the `WATCHED` scope the watched set *is* the collection set,
+        so the layer's buckets go with it — the next batch's
         `retain_layers` pass would reap them anyway, and dropping here frees
         the memory promptly. Under `ALL` and `NONE` the watched set only picks
         which cards the UI shows, so the buckets stay: `ALL` keeps collecting
@@ -782,10 +785,11 @@ class Session:
                 return (ctx.activation > 0).float().mean().item()
 
         The callback runs on the training thread, under `torch.no_grad()`,
-        once per stats batch for every layer the stats scope collects (the
-        watched set by default) — it receives a `LayerContext` with the
-        batch's live activation, its gradient, and the layer's weights /
-        optimizer state, and must not mutate them. It may return a number
+        once per stats batch for every layer the stats scope collects
+        (nothing until collection is turned on; see `set_stats_scope`) — it
+        receives a `LayerContext` with the batch's live activation, its
+        gradient, and the layer's weights / optimizer state, and must not
+        mutate them. It may return a number
         (or 1-element tensor), a mapping of named scalars (one plot trace
         per key), or `None` to skip the layer.
 
@@ -891,14 +895,32 @@ class Session:
         with self._cv:
             return self._stats_scope is not StatsScope.NONE
 
+    @property
+    def collecting_scope(self) -> StatsScope:
+        """The scope collection uses, or would resume with while paused.
+
+        `WATCHED` or `ALL` (never `NONE`, except for a restored moment that
+        has nothing to resume). The UI's coupling rule reads this, not
+        `stats_scope`: cards follow the watched set unless it is `ALL`, so
+        pausing and resuming never re-bases which cards a tab shows.
+        """
+        with self._cv:
+            return self._collecting_scope_locked()
+
+    def _collecting_scope_locked(self) -> StatsScope:
+        if self._stats_scope is StatsScope.NONE:
+            return self._prev_stats_scope
+        return self._stats_scope
+
     def set_stats_scope(self, scope: StatsScope | str) -> None:
         """Set which layers fold their batches into the running stats.
 
-        - `"none"` collects nothing but keeps every already-collected bucket
-          frozen — non-publishing batches also skip the capture-mode hook
-          install they'd otherwise pay just for stats, and switching back to a
-          collecting scope resumes adding to the existing buckets.
-        - `"watched"` (the default) collects for the watched layers only.
+        - `"none"` (the default) collects nothing but keeps every
+          already-collected bucket frozen — non-publishing batches also skip
+          the capture-mode hook install they'd otherwise pay just for stats,
+          and switching back to a collecting scope resumes adding to the
+          existing buckets.
+        - `"watched"` collects for the watched layers only.
           Entering it drops the buckets of layers outside the watched set —
           the same semantics as unwatching them.
         - `"all"` collects for every layer regardless of the watched set; the
@@ -923,21 +945,23 @@ class Session:
             self._instruments.retain_layers(watched)
 
     def toggle_stats_collecting(self) -> bool:
-        """Flip between `NONE` and the last collecting scope; True = collecting.
+        """Flip between `NONE` and `collecting_scope`; True = collecting.
 
         The top bar's stats toggle: pausing keeps every collected bucket (and
-        the shown cards) intact; resuming restores the previous scope
-        (`WATCHED` or `ALL`) and continues adding to the existing buckets.
+        the shown cards) intact; resuming goes through `set_stats_scope`, so
+        `WATCHED` applies its usual narrowing to the watched set and then
+        continues adding to the existing buckets.
         """
         with self._cv:
             if self._locked:
                 return self._stats_scope is not StatsScope.NONE
-            if self._stats_scope is StatsScope.NONE:
-                self._stats_scope = self._prev_stats_scope
-            else:
-                self._prev_stats_scope = self._stats_scope
-                self._stats_scope = StatsScope.NONE
-            return self._stats_scope is not StatsScope.NONE
+            target = (
+                self._prev_stats_scope
+                if self._stats_scope is StatsScope.NONE
+                else StatsScope.NONE
+            )
+        self.set_stats_scope(target)
+        return self.stats_collecting
 
     def _stats_collection_layers_locked(self) -> list[str]:
         """Layers whose batches currently fold into the stats (`_cv` held)."""
@@ -964,13 +988,21 @@ class Session:
     def stats_layers(self) -> frozenset[str]:
         """Layers with running stats available or being collected.
 
-        The `/stats` page's selectable universe: the current scope's
-        collecting layers plus any layer whose buckets are still retained —
-        under scope `NONE` collection stops but nothing is dropped, so
-        previously collected layers stay browsable while paused.
+        The `/stats` page's selectable universe: the `collecting_scope`'s
+        layers (while paused, the ones a resume would collect — a watched
+        layer gets its card and how-to notice before any stats exist) plus
+        any layer whose buckets are still retained — under scope `NONE`
+        collection stops but nothing is dropped, so previously collected
+        layers stay browsable while paused.
         """
         with self._cv:
-            layers = set(self._stats_collection_layers_locked())
+            match self._collecting_scope_locked():
+                case StatsScope.WATCHED:
+                    layers = set(self._watched_layers)
+                case StatsScope.ALL:
+                    layers = set(self._layer_names)
+                case StatsScope.NONE:
+                    layers = set()
         return frozenset(layers | self._watch_accumulator.layers_with_stats())
 
     def stats_phases(self, layer: str | None = None) -> frozenset[str]:
