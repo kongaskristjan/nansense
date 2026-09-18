@@ -1653,7 +1653,7 @@ GIL) into a `_RenderCache` keyed `(name, kind, sample_idx)` and invalidated by
 render-source identity, so re-showing a card or a second tab is a dict hit.
 
 The top-bar stats toggle (`components/stats_toggle.py`) is one button: the
-shown-layer count behind a `query_stats` glyph whose colour reflects
+shown-layer count behind a `bar_chart` glyph (the card's Stats button icon) whose colour reflects
 `session.stats_collecting` — green when collecting, red with a CSS
 diagonal strike (Material has no "off" variant of the glyph) when paused,
 the default. Clicking it is `session.toggle_stats_collecting`; a locked

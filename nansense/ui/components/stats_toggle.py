@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from nicegui import ui
 
-# Material has no "off" glyph for the stats icon, so the paused state draws
+# Material has no "off" variant of `bar_chart`, so the paused state draws
 # its own diagonal strike (top-left to bottom-right, like the `_off` icons).
 STATS_TOGGLE_CSS: str = """
 <style>
@@ -46,7 +46,7 @@ class StatsToggle:
             )
         with self.button:
             self.tooltip = ui.tooltip(_LOCKED_TIP if locked else _OFF_TIP)
-            self.icon = ui.icon("query_stats").classes(
+            self.icon = ui.icon("bar_chart").classes(
                 "text-base nansense-stats-icon"
             )
             self.count_label = ui.label(str(len(shown))).classes("ml-1")
