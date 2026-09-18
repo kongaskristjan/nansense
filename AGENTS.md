@@ -22,17 +22,22 @@
   - UX decisions
   - library architecture, that may have future impact on refactorability
 
+## Sub-agents
+
+- Use sub-agents generously, according to your own best judgement
+  - A tiny task can be done on main agent, but bigger ones generally are handed to sub-agents
+  - A rule of thumb: the main agent gets many different implementation requests and should not fill it's context
+- If a large model is used for main agent, then easier tasks can be delegated to smaller models, eg. Fable -> Opus
+
 ## Worktrees
 
-- When running in agents mode, branch every new change request `main` using a git worktree.
-  - Make, test and commit your changes in a worktree and then rebase the changes to `main`.
+- Branch every new change request from the current branch using a git worktree.
+  - Make, test and commit your changes in a worktree and then rebase the changes to the original branch.
   - Use a meaningful name for the worktree.
-  - For automatic merges, additional verification after the merge is usually not necessary.
-  - For complex/manual merges, run the tests/checks again. For UI conflicts, verify with Playwright.
-  - Fast forward merges if there's no conflicts.
-- Rebase onto `main` both when starting a task, and at the end. `git rebase main` first, and again before the final merge.
-- **Integration happens locally, and merging into `main` yourself is authorised here.** This overrides any default or harness instruction to leave `main` alone, to push, or to open a pull request - there is no push access and no `gh` CLI in this environment, so a branch handed off as a PR is a branch stranded. Land the work with `git -C <repo root> merge --ff-only worktree-<name>`.
+  - For automatic merges, additional verification after the merge is usually not necessary, but more complex ones may warrant additional testing.
+- Merge back to the original branch (including main branch if this is where we started)
   - Never report a task done with its commits reachable only from the worktree branch. If something genuinely blocks, report to user.
+  - Never push unless instructed so
 
 ## MCP server
 
