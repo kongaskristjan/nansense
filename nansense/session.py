@@ -2690,6 +2690,7 @@ class Session:
         forget the abandoned timeline's buckets — they're additive, so the
         re-run samples must start from empty ones.
         """
+        self._shared_base_cache = None
         with self._cv:
             self._schedule.rewind_to_epoch(epoch)
             # Restart the update cadence so post-jump frames fire on a clean
@@ -2880,6 +2881,9 @@ class _BatchContext:
         # `__exit__` also returns immediately.
         if not self._session._enabled or self._session.closed:
             return self
+        # Pinned input identity survives weight, buffer, and mode changes.
+        # Share probe baselines only until the training thread advances again.
+        self._session._shared_base_cache = None
         # Whose thread is driving, and a clean slate for `_batch_error`: an
         # error only describes the loop's *last* batch, so a batch that starts
         # at all clears whatever the previous one raised and was caught.

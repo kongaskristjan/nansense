@@ -1981,6 +1981,10 @@ cache holds the base tensors it was built from and validates them by identity:
 keying on `id()` alone would be a correctness bug, since CPython reuses an
 address once the old object is freed, and a fresh snapshot landing where its
 predecessor sat would serve every client a stale base to diff against.
+Batch entry and time-travel restoration clear this cache: pinned input
+identity alone says nothing about the model's current weights, buffers, or
+training mode. Clients still share a baseline within a pause, including
+indefinitely parked demos.
 Containers are keyed by a
 `uuid4` the input panel mints per page, heartbeated from the page tick
 (`touch_probe_client`), LRU-capped at `probe._MAX_PROBE_CLIENTS`, and reaped

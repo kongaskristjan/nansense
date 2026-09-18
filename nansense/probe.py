@@ -672,8 +672,9 @@ def _shared_base_caps(
 
     Every client's perturbed probe diffs against the *same* unperturbed base,
     which in a locked demo never changes — so this caches the single base
-    forward and hands the same capture dict to each client. A new snapshot or
-    a re-pin (unlocked sessions) recomputes it. Runs on the training thread
+    forward and hands the same capture dict to each client. Batch entry and
+    time-travel restoration clear the cache even when inputs remain pinned;
+    a new input or mode also recomputes it. Runs on the training thread
     only, serialized with every other probe, so no two clients race to fill
     the cache.
 

@@ -725,6 +725,43 @@ def test_shared_base_cache_keys_on_base_identity() -> None:
         assert _shared_base_caps(session, replacement, "eval") is not first
 
 
+def test_pinned_client_probe_recomputes_baseline_after_training() -> None:
+    model = nn.Sequential(nn.Linear(1, 1, bias=False))
+    with torch.no_grad():
+        model.get_parameter("0.weight").fill_(1)
+
+    def step(model: nn.Sequential) -> None:
+        model(torch.ones(2, 1))
+        with torch.no_grad():
+            model.get_parameter("0.weight").add_(1)
+
+    with paused_session(model, step) as session:
+        name = session.input_names[0]
+        assert session.pin_current_batch()
+        assert session.wait_for_probe(timeout=5)
+        session.add_perturbation(
+            input_name=name, sample=0, index=(0,), values=(2.0,), client="A",
+        )
+        assert session.wait_for_probe(client="A", timeout=5)
+        first = session.probe_result_for("A")
+        assert first is not None
+        torch.testing.assert_close(first.activations["0"], torch.full((2, 1), 2.0))
+
+        session.step_batch()
+        assert session.wait_until_paused(after_pauses=1, timeout=5)
+        session.add_perturbation(
+            input_name=name, sample=0, index=(0,), values=(3.0,), client="A",
+        )
+        assert session.wait_for_probe(client="A", after_count=1, timeout=5)
+        result = session.probe_result_for("A")
+        assert result is not None
+        assert result.inputs[name] is first.inputs[name]  # still pinned
+        torch.testing.assert_close(result.activations["0"], torch.full((2, 1), 3.0))
+        diff = probe_act_tensor(result, "0", compare=True, sample_idx=0)
+        assert diff is not None
+        torch.testing.assert_close(diff, torch.tensor([[6.0]]))
+
+
 def test_probe_clients_capped_lru() -> None:
     """Only the most-recent `_MAX_PROBE_CLIENTS` containers are retained."""
     session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
