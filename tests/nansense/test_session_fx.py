@@ -4,6 +4,7 @@ layer_info mappings."""
 from __future__ import annotations
 
 import torch
+import pytest
 from torch import Tensor, nn
 
 import nansense
@@ -15,6 +16,49 @@ from tests.nansense.helpers import (
     paused_worker,
     train_step,
 )
+
+
+@pytest.mark.parametrize("style", ["branch", "identity", "getattr", "dropout"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_mode_dependent_forward_uses_hooks(style: str, nested: bool) -> None:
+    class ModeNet(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fc = nn.Linear(2, 2)
+
+        def forward(self, x: Tensor) -> Tensor:
+            x = self.fc(x)
+            if style == "dropout":
+                return nn.functional.dropout(x, p=1.0, training=self.training)
+            if style == "identity":
+                return x * (2 if self.training is True else 3)
+            if style == "getattr":
+                return x * (2 if getattr(self, "training", False) else 3)
+            return x * (2 if self.training else 3)
+
+    from nansense.ui.graph import ROOT_ID, build_mermaid
+
+    model = nn.Sequential(ModeNet()) if nested else ModeNet()
+    getattribute = nn.Module.__getattribute__
+    session = nansense.start(model, epochs=3, phases={"phase": 1})
+    assert not session.fx_traced
+    assert nn.Module.__getattribute__ is getattribute
+    assert ROOT_ID in build_mermaid(model)
+    session.detach()
+    session.set_update_frequency(unit="batch", n=1)
+    x = torch.ones(2, 2, requires_grad=True)
+    for epoch, training in enumerate((True, False, True)):
+        model.train(training)
+        expected = model(x)
+        expected_grad = torch.autograd.grad(expected.sum(), x)[0]
+        with session.batch(phase="phase", epoch=epoch):
+            actual = model(x)
+            actual_grad = torch.autograd.grad(actual.sum(), x)[0]
+        torch.testing.assert_close(actual, expected)
+        torch.testing.assert_close(actual_grad, expected_grad)
+        assert session.snapshot is not None
+        assert ("0.fc" if nested else "fc") in session.snapshot.activations
+    session.close()
 
 
 def test_fx_mode_captures_function_call_outputs() -> None:

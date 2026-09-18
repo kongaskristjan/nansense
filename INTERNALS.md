@@ -153,7 +153,13 @@ and optimizer reads — lives in `nansense.capture`; `_BatchContext` and the
 thin `Session` methods call into it.
 
 There are two capture paths, picked once at session construction by
-trying `torch.fx.symbolic_trace(model)` (`capture.try_trace`).
+trying a guarded FX trace (`capture.try_trace`). A forward that reads a
+module's `training` flag uses hook fallback: otherwise FX could freeze a
+train/eval branch or functional dropout flag at construction time. The guard
+applies only to the model on the tracing thread and is removed before building
+the GraphModule. Leaf modules such as `nn.Dropout` stay traceable because FX
+records their calls without executing their forwards. The Mermaid builder
+uses the same tracing policy.
 
 **fx path (preferred).** When the trace succeeds, the session holds the
 resulting `fx.GraphModule` and `capture.install_hooks` monkey-patches

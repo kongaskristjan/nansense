@@ -31,6 +31,7 @@ from the UI thread).
 from __future__ import annotations
 
 import inspect
+import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING
@@ -50,10 +51,37 @@ def cpu_clone(t: Tensor) -> Tensor:
 
 
 def try_trace(model: nn.Module) -> fx.GraphModule | None:
-    try:
-        return fx.symbolic_trace(model)
-    except Exception:
-        return None
+    """Trace only forwards that do not specialize on a module's training flag."""
+    # FX patches Module methods while tracing too. Serialize our traces and
+    # restrict this additional guard to this model on the tracing thread.
+    with _TRACE_LOCK:
+        original = nn.Module.__getattribute__
+        modules = {id(module) for module in model.modules()}
+        owner = threading.get_ident()
+
+        def guarded_getattribute(module: nn.Module, name: str) -> object:
+            if (
+                name == "training"
+                and threading.get_ident() == owner
+                and id(module) in modules
+            ):
+                raise RuntimeError("training-dependent forward requires module hooks")
+            return original(module, name)
+
+        tracer = fx.Tracer()
+        try:
+            setattr(nn.Module, "__getattribute__", guarded_getattribute)
+            try:
+                graph = tracer.trace(model)
+            finally:
+                setattr(nn.Module, "__getattribute__", original)
+            # GraphModule itself reads training when copying the root module.
+            return fx.GraphModule(tracer.root, graph)
+        except Exception:
+            return None
+
+
+_TRACE_LOCK = threading.RLock()
 
 
 def compute_input_names(

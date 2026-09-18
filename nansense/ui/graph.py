@@ -15,6 +15,7 @@ from collections.abc import Iterable, Iterator
 import torch
 from torch import fx, nn
 
+from nansense.capture import try_trace
 from nansense.fx_names import friendly_names
 
 CONFIG_HEADER: str = """---
@@ -37,9 +38,8 @@ def build_mermaid(model: nn.Module, *, root_label: str = "model") -> str:
     with dynamic control flow, custom ops, etc.) falls back to the static
     module hierarchy tree rooted at a synthetic "root" node.
     """
-    try:
-        traced = fx.symbolic_trace(model)
-    except Exception:
+    traced = try_trace(model)
+    if traced is None:
         return _build_from_hierarchy(model, root_label=root_label)
     return _build_from_fx(model, traced)
 
