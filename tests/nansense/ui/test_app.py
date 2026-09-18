@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import io
 import logging
 import signal
@@ -12,7 +13,6 @@ from collections.abc import Callable, Iterator
 from types import FrameType
 
 import pytest
-
 import torch
 import torch.distributed as dist
 from fastapi import FastAPI
@@ -21,10 +21,10 @@ from starlette.routing import Mount
 import nansense
 from nansense.ui import app
 from nansense.ui.app import (
-    _DropBenignNiceguiNoise,
     _announce,
     _announce_when_ready,
     _display_url,
+    _DropBenignNiceguiNoise,
     _format_box,
     _stop_server_on_sigint,
     serve,
@@ -69,6 +69,8 @@ def test_serve_registers_the_mcp_route_before_niceguis_catch_all(
     Uvicorn is stubbed out so nothing binds a port: the assertion is about how
     `serve` assembles the app, not about serving it.
     """
+    logger = logging.getLogger("nicegui")
+    monkeypatch.setattr(logger, "filters", [])
     captured: dict[str, FastAPI] = {}
 
     class _StubServer:
@@ -82,6 +84,7 @@ def test_serve_registers_the_mcp_route_before_niceguis_catch_all(
     monkeypatch.setattr(app.uvicorn, "Server", _StubServer)
     session = nansense.start(torch.nn.Linear(4, 2), epochs=1, phases={"train": 1})
     thread = serve(session, port=0, open_browser=False)
+    assert any(isinstance(item, _DropBenignNiceguiNoise) for item in logger.filters)
     assert thread is not None
     thread.join(timeout=10)
 
@@ -401,19 +404,57 @@ def test_unrelated_nicegui_errors_still_pass() -> None:
     assert _DropBenignNiceguiNoise().filter(record) is True
 
 
-def test_noise_filter_installed_on_nicegui_logger() -> None:
-    """Importing the module installs the filter on the `nicegui` logger — the
-    same logger `app.handle_exception` → `log.exception` routes to — so the
-    benign parent-slot teardown traceback is dropped end-to-end, while a real
-    error still passes (`Logger.filter` consults the logger's own filters)."""
+def test_server_filters_are_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     logger = logging.getLogger("nicegui")
-    assert any(isinstance(f, _DropBenignNiceguiNoise) for f in logger.filters)
+    monkeypatch.setattr(logger, "filters", [])
+    with warnings.catch_warnings():
+        app._install_server_filters()
+        initial_warnings = list(warnings.filters)
+        app._install_server_filters()
+        assert warnings.filters == initial_warnings
+    assert sum(isinstance(f, _DropBenignNiceguiNoise) for f in logger.filters) == 1
     benign = _nicegui_record(
         RuntimeError("The parent slot of the element has been deleted.")
     )
     real = _nicegui_record(RuntimeError("the model exploded"))
-    # `Logger.filter` returns a falsy value when a record is dropped and a
-    # truthy one when it passes (a bool on Python <3.12, the record itself on
-    # 3.12+), so assert truthiness rather than identity for version-robustness.
     assert not logger.filter(benign)
     assert logger.filter(real)
+
+
+def test_public_serve_preserves_signature_and_forwards_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert inspect.signature(nansense.serve) == inspect.signature(serve)
+    session = nansense.start(torch.nn.Linear(4, 2), epochs=1, phases={"train": 1})
+    thread = threading.Thread()
+    captured: dict[str, object] = {}
+
+    def start_server(session: nansense.Session, **kwargs: object) -> threading.Thread:
+        captured.update(kwargs)
+        captured["session"] = session
+        return thread
+
+    monkeypatch.setattr(app, "serve", start_server)
+    options = {
+        "port": 8123,
+        "host": "0.0.0.0",
+        "log_level": "error",
+        "open_browser": False,
+        "mcp": False,
+        "input_mean": (0.5,),
+        "input_std": (0.2,),
+        "input_transform": None,
+    }
+    result = nansense.serve(
+        session,
+        port=8123,
+        host="0.0.0.0",
+        log_level="error",
+        open_browser=False,
+        mcp=False,
+        input_mean=(0.5,),
+        input_std=(0.2,),
+    )
+    assert result is thread
+    assert captured == {"session": session, **options}
+    session.close()

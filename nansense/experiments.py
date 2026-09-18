@@ -53,7 +53,6 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import torch
-from captum import attr as captum_attr
 from torch import Tensor, nn
 from torch.nn import functional as F
 
@@ -851,6 +850,8 @@ def _run_captum(
     if should_abort():
         yield _error(request, "cancelled")
         return
+
+    from captum import attr as captum_attr
 
     def attribute(x: Tensor) -> Tensor:
         if isinstance(p, GradCamParams):

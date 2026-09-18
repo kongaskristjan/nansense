@@ -53,7 +53,7 @@ from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
 from nansense.ui.graph import build_mermaid
-from nansense.ui.main_page import _RenderCache, _build_page
+from nansense.ui.main_page import _build_page, _RenderCache
 from nansense.ui.share import add_video_download_route
 from nansense.ui.stats_page import _build_stats_page
 from nansense.ui.weights_page import _build_weights_page
@@ -97,9 +97,6 @@ class _DropBenignNiceguiNoise(logging.Filter):
         return not any(noise in message for noise in self._BENIGN)
 
 
-logging.getLogger("nicegui").addFilter(_DropBenignNiceguiNoise())
-
-
 def _silence_reduce_op_future_warning() -> None:
     """Suppress the spurious `torch.distributed.reduce_op` FutureWarning.
 
@@ -118,7 +115,18 @@ def _silence_reduce_op_future_warning() -> None:
     )
 
 
-_silence_reduce_op_future_warning()
+_server_filters_lock = threading.Lock()
+
+
+def _install_server_filters() -> None:
+    """Install narrow NiceGUI noise filters when a server is actually started."""
+    with _server_filters_lock:
+        logger = logging.getLogger("nicegui")
+        if not any(
+            isinstance(item, _DropBenignNiceguiNoise) for item in logger.filters
+        ):
+            logger.addFilter(_DropBenignNiceguiNoise())
+        _silence_reduce_op_future_warning()
 
 
 def _display_url(host: str, port: int) -> str:
@@ -312,49 +320,7 @@ def serve(
     input_std: MeanStd | dict[str, MeanStd] | None = None,
     input_transform: InputTransform | dict[str, InputTransform] | None = None,
 ) -> threading.Thread | None:
-    """Start the NiceGUI app on a background thread and return that thread.
-
-    `port` / `host` pick the bind address (default `127.0.0.1:8080`).
-    `log_level` is uvicorn's log level — `"warning"` by default, so routine
-    request logging stays out of the training console.
-
-    Returns `None` without starting anything when `session` is disabled
-    (`nansense.start(..., enabled=False)`), so a training script can call
-    `serve()` unconditionally and pay nothing when the UI is turned off —
-    and likewise on the non-zero ranks of a distributed run, where the UI
-    lives on rank 0.
-
-    NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is
-    then served by uvicorn from a non-main thread, with signal handlers
-    disabled so uvicorn doesn't try to wire SIGINT/SIGTERM from a thread
-    that isn't the main one.
-
-    Once the server thread is launched, a daemon thread waits for the port to
-    bind and then prints the UI address inside a box (so it stands out in the
-    training log) and, unless `open_browser` is `False`, opens it in a focused
-    browser tab. If a concurrent session already holds the port the bind
-    fails, so the banner and the browser tab are both suppressed — only
-    uvicorn's own `address already in use` error is shown. On a headless
-    machine the bind still succeeds, so the banner prints and the browser open
-    is a harmless no-op.
-
-    `mcp` (default `True`) also serves the MCP endpoint at `/mcp` on the same
-    port, so a coding agent can drive the debugger through the same session the
-    browser shows (`nansense.mcp_server`). Its route is registered *before*
-    NiceGUI's catch-all mount at `/` — Starlette matches routes in order — and
-    its lifespan is passed to the app at construction, since NiceGUI wraps
-    whatever lifespan it finds and a mounted sub-app never receives one.
-
-    `input_mean` / `input_std` are passed to the input-image pane so the
-    sample is denormalized (`x * std + mean`) before display. When either
-    is `None`, the renderer assumes the input is already in `[0, 1]`.
-    `input_transform` maps a non-RGB input to a displayable 1-/3-channel
-    image. Each of the three is either a single value applied to every input,
-    or a `dict` keyed by input name for a multi-input model (see
-    `nansense.input_config`); the stats and experiment panes use the primary
-    input's resolved values, and so does the MCP server, whose image tools
-    render the same views.
-    """
+    """Start the server; public options are documented in `nansense.ui.serve`."""
     if not session.enabled:
         return None
     if not session.is_leader:
@@ -364,6 +330,7 @@ def serve(
         return None
     # Past the guards we are committed to serving: a pause may now wait for the
     # UI indefinitely (an unserved session would instead detach on a timeout).
+    _install_server_filters()
     session.mark_served()
     mermaid_src = build_mermaid(session.model)
     layer_names = session.layer_names
@@ -378,10 +345,10 @@ def serve(
     # Imported here rather than at module scope: the MCP SDK is a second of
     # import time that only `serve()` ever needs, and every process that pulls
     # in `nansense` — spawned DDP ranks included — would otherwise pay it.
-    from nansense.mcp_server import build_mount
+    if mcp:
+        from nansense.mcp_server import build_mount
 
-    mount = (
-        build_mount(
+        mount = build_mount(
             session,
             mermaid=mermaid_src,
             host=host,
@@ -389,9 +356,8 @@ def serve(
             input_std=input_std,
             input_transform=input_transform,
         )
-        if mcp
-        else None
-    )
+    else:
+        mount = None
     fastapi_app = FastAPI(lifespan=None if mount is None else mount.lifespan)
     if mount is not None:
         # Ahead of NiceGUI's `/` mount, which `ui.run_with` adds below and
