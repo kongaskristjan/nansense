@@ -33,8 +33,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
+import pydantic
 from mcp.server import MCPServer
 from starlette.routing import BaseRoute
 
@@ -220,11 +221,11 @@ async def _run_control(
 ) -> dict[str, Any]:
     """Issue a control command and report where the run ended up.
 
-    Waiting is skipped when the command does not lead to a pause — `detach`
-    never pauses again, and `pause` on an already-paused run has nothing to
-    resume, so waiting for a *new* pause would just burn the timeout. `None`
-    defers that decision to here, where it can be made against the same
-    `pause_count` the wait will use.
+    Waiting is skipped when the command does not lead to a pause —
+    `run(detach=True)` never pauses again, and `pause` on an already-paused
+    run has nothing to resume, so waiting for a *new* pause would just burn
+    the timeout. `None` defers that decision to here, where it can be made
+    against the same `pause_count` the wait will use.
     """
     refusal = _control_refusal(session)
     if refusal is not None:
@@ -586,15 +587,44 @@ def build_server(
 
     @server.tool()
     async def run(
-        timeout_seconds: float = _DEFAULT_WAIT_SECONDS,
+        detach: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "False: keep capturing every batch and pause on the last "
+                    "one. True: release the run to the end, capturing almost "
+                    "nothing and never pausing."
+                )
+            ),
+        ] = False,
+        timeout_seconds: Annotated[
+            float,
+            pydantic.Field(
+                description=(
+                    "How long to wait for the run to pause before returning a "
+                    "'still running' note (the command stays in effect). "
+                    "Unused when detach=True, which returns at once."
+                )
+            ),
+        ] = _DEFAULT_WAIT_SECONDS,
     ) -> dict[str, Any]:
-        """Run training to its last batch, pausing there.
+        """Resume training: attached to its last batch, or detached to the end.
 
-        Statistics keep accruing and the views refresh on the update cadence,
-        but the run will not stop until the end — expect this to return "still
-        running" on any real training run, then poll `get_status`. Use `pause`
-        to stop earlier.
+        Attached (the default) every batch is still captured, statistics keep
+        accruing and the views refresh on the update cadence; training pauses
+        on its last batch. Nothing stops it earlier, so expect this to return
+        "still running" on any real run and poll `get_status`.
+
+        Detached, capture overhead drops to near zero and training never pauses
+        again — not even at the end — so the call returns immediately;
+        statistics only refresh on the update cadence.
+
+        `pause` re-engages either way, stopping the run on its next batch.
         """
+        if detach:
+            return await _run_control(
+                session, session.detach, timeout=0.0, wait=False
+            )
         return await _run_control(
             session, session.step_run, timeout=timeout_seconds
         )
@@ -643,17 +673,6 @@ def build_server(
         """
         return await _run_control(
             session, session.stop, timeout=timeout_seconds, wait=None
-        )
-
-    @server.tool()
-    async def detach() -> dict[str, Any]:
-        """Let training run to completion without pausing again.
-
-        Capture overhead drops to near zero. Statistics stop refreshing except
-        on the update cadence; `pause` re-engages.
-        """
-        return await _run_control(
-            session, session.detach, timeout=0.0, wait=False
         )
 
     @server.tool()

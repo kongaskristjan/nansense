@@ -35,7 +35,7 @@ from nansense.mcp_views import (
     status_view,
     tensor_stats_view,
 )
-from nansense.session import Session
+from nansense.session import Mode, Session
 from nansense.watch import N_BINS, ZERO_BIN, TensorStatsSnapshot, bin_midpoint
 
 from .helpers import TinyNet, make_position, paused_session
@@ -369,7 +369,6 @@ def test_every_tool_is_registered_with_a_description() -> None:
                 "run",
                 "run_until",
                 "pause",
-                "detach",
                 "refresh",
                 "watch_layers",
                 "unwatch_layers",
@@ -408,6 +407,15 @@ def test_step_advances_the_run_and_reports_the_new_position() -> None:
         view = _call(session, "step", {"unit": "batch", "timeout_seconds": 5})
         assert view["state"] == "paused"
         assert view["live_position"]["batch"] == before + 1
+        assert "waiting" not in view
+
+
+def test_run_detaches_without_waiting_when_asked() -> None:
+    """`detach=True` is the old `detach` tool: it releases the run and returns
+    at once rather than waiting out the timeout for a pause that never comes."""
+    with paused_session(TinyNet(), epochs=1, phases={"train": 3}) as session:
+        view = _call(session, "run", {"detach": True, "timeout_seconds": 30})
+        assert session.mode is Mode.DETACH
         assert "waiting" not in view
 
 
@@ -478,14 +486,14 @@ def test_refresh_is_a_no_op_while_paused() -> None:
 def test_control_tools_refuse_on_a_locked_session() -> None:
     """A locked session no-ops its control methods; an agent that reads that as
     success would step forever without moving."""
-    # Deliberately no worker thread: `lock()` refuses `detach()` too, so a
+    # Deliberately no worker thread: `lock()` refuses detaching too, so a
     # locked session cannot be released the way `paused_session` tears down.
     session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
     session.lock()
     for name, arguments in (
         ("step", {"timeout_seconds": 1}),
         ("pause", {"timeout_seconds": 1}),
-        ("detach", {}),
+        ("run", {"detach": True}),
         ("watch_layers", {"layers": ["fc1"]}),
         ("set_stats_scope", {"scope": "all"}),
         ("configure_debug_checks", {"interval_batches": 5}),

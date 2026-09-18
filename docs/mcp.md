@@ -43,7 +43,7 @@ Ask in plain language — "why has my loss stopped falling?" — and the agent w
 | `get_layer_stats` | Activation and gradient statistics for the last captured batch, for any layer |
 | `get_stats_history` | One layer's statistics per epoch — the trend across the run |
 | `get_debug_report` | Which layers produced NaN/Inf or collapsing gradients, with per-layer percentages |
-| `step`, `run`, `run_until`, `pause`, `detach` | The top bar's run controls |
+| `step`, `run`, `run_until`, `pause` | The top bar's run controls — including detach, as `run(detach=True)` |
 | `refresh` | Publish a fresh snapshot from a free-running session without pausing it |
 | `watch_layers`, `unwatch_layers`, `set_stats_scope` | Choose which layers collect running statistics |
 | `configure_debug_checks`, `silence_debug_check` | Tune the numerical-error checks |
