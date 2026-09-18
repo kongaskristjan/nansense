@@ -91,6 +91,8 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 
 **Experiments run on the paused training thread**, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and `run_experiment` returns statistics while `render_experiment` draws the result. A result you poll before it exists is not simply missing: `get_experiment_result` reports the request's `stage` — `running`, `queued` (with `queued_ahead`), or `absent` — so waiting longer and re-requesting are told apart.
 
+Experiment parameters are validated before queuing or replacing a recording’s auto-run. Invalid types and non-finite numbers return an error without changing the existing request. Unknown parameter keys are reported as ignored.
+
 **Record deep dream as a video.** `render_experiment` returns the final image. Use `run_experiment(..., video=True)` when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass `params: {"all_steps": true}` to keep every step.
 
 **Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. `save_snapshot` is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the `render_*` tools return the picture to *you*.

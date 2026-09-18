@@ -63,12 +63,12 @@ from torch.utils.hooks import RemovableHandle
 from nansense import capture, debugger, distributed, experiments, probe
 from nansense.console import console_print
 from nansense.debugger import DebugError, DebugSettings
-from nansense.input_config import InputTransform, MeanStd
 from nansense.experiments import (
     ExperimentQueueState,
     ExperimentRequest,
     ExperimentResult,
 )
+from nansense.input_config import InputTransform, MeanStd
 from nansense.instruments import (
     InstrumentManager,
     LayerContext,
@@ -185,6 +185,7 @@ def lost_loop_reason(error: str | None) -> str:
         f"The training loop is gone — {cause} — so there is no thread left to "
         "advance the run."
     )
+
 
 # Element type of a loader passed to `Session.batches` (PEP 695 `def batches[T]`
 # would require Python 3.12; this keeps the floor at 3.10).
@@ -1317,9 +1318,15 @@ class Session:
         dream, the ascent replayed frame by frame (pair it with the
         `all_steps` param to record every step rather than every ~15th).
         Ignored on a locked session.
+
+        Raises `ValueError` for unknown parameters, invalid types or non-finite
+        numbers before changing the queue. Numeric floors and demo caps apply.
         """
-        return self._experiments.request_experiment(kind=kind, layer=layer, params=params, video=video
-        )
+        with self._cv:
+            validated = experiments.parse_params(kind, params, locked=self._locked)
+            return self._experiments.request_experiment(
+                layer=layer, params=validated, video=video
+            )
 
     def cancel_experiment(self, seq: int | None = None) -> None:
         """Cancel one request by seq, or every request when `seq` is None.
@@ -1615,10 +1622,14 @@ class Session:
         The registration expires a few seconds after the last
         `touch_auto_experiment(key)` heartbeat unless pinned by an active
         recording (`pin_auto_experiment`). Re-registering a key replaces its
-        request. Returns the request's seq.
+        request. Returns the request's seq. Invalid parameters raise `ValueError`
+        before replacing the registration, as in `request_experiment`.
         """
-        return self._experiments.register_auto_experiment(key, kind=kind, layer=layer, params=params
-        )
+        with self._cv:
+            validated = experiments.parse_params(kind, params, locked=self._locked)
+            return self._experiments.register_auto_experiment(
+                key, layer=layer, params=validated
+            )
 
     def touch_auto_experiment(self, key: str) -> None:
         """Heartbeat: keep `key`'s auto experiment alive (no-op when pinned)."""

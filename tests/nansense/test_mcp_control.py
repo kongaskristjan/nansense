@@ -16,19 +16,18 @@ import asyncio
 import json
 from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any, TypeVar
 
 import av
 import pytest
-from typing import Any, TypeVar
-
 import torch
 from mcp.client import Client
 from mcp.types import TextContent
 from torch import Tensor, nn
 
 import nansense
+from nansense.contracts.recording import ExperimentView, MainView
 from nansense.mcp_server import build_server
-from nansense.recording import RecordingManager
 from nansense.mcp_views import (
     experiment_catalog_view,
     metrics_view,
@@ -38,6 +37,7 @@ from nansense.mcp_views import (
     time_travel_view,
     weight_stats_view,
 )
+from nansense.recording import RecordingManager
 from nansense.session import Mode, Session
 
 from .helpers import TinyNet, optimizer_train_step, paused_session, train_step
@@ -985,7 +985,7 @@ def test_the_two_weight_views_agree_on_standard_deviation() -> None:
 
 
 def test_a_frozen_parameter_is_not_blamed_on_the_training_loop() -> None:
-    """"Nothing has run backward yet" sends a reader hunting a bug in their
+    """ "Nothing has run backward yet" sends a reader hunting a bug in their
     loop; the real reason is that the parameter is frozen."""
     from nansense.mcp_views import weight_stats_view
 
@@ -1114,7 +1114,8 @@ def test_recording_the_layers_view_defaults_to_the_watched_ones() -> None:
         started = _call(session, "start_recording", {"view": "layers"})
         assert started["started"] == "main"
         recorded = session.recording.statuses()[0].view
-        assert recorded.params["layers"] == ("fc2",)
+        assert isinstance(recorded.config, MainView)
+        assert recorded.config.layers == ("fc2",)
         session.recording.delete_all()
 
 
@@ -1130,7 +1131,8 @@ def test_recorded_layers_keep_the_models_own_order() -> None:
         )
         assert started["started"] == "main"
         recorded = session.recording.statuses()[0].view
-        assert recorded.params["layers"] == ("fc1", "fc2")
+        assert isinstance(recorded.config, MainView)
+        assert recorded.config.layers == ("fc1", "fc2")
         session.recording.delete_all()
 
 
@@ -1154,9 +1156,10 @@ def test_a_duplicate_experiment_recording_leaves_the_live_one_alone(
         recorded = session.recording.statuses()[0].view
         again = _call(session, "start_recording", request)
         assert "already recording" in again["error"]
+        assert isinstance(recorded.config, ExperimentView)
         # The live recording's seq still owns the registration.
         assert session._experiments._auto["experiment:conv"].request.seq == (
-            recorded.params["seq"]
+            recorded.config.seq
         )
         _call(session, "stop_recording", {"key": "experiment:conv"})
 
@@ -1173,15 +1176,17 @@ def test_stopping_releases_the_auto_experiment_by_its_own_key(
         session._recording_manager = RecordingManager(directory=tmp_path)
         auto_key = "experiment-page-abc123"
         seq = session.register_auto_experiment(
-            auto_key, kind="deep_dream", layer="conv", params={"channels": 1, "steps": 2}
+            auto_key,
+            kind="deep_dream",
+            layer="conv",
+            params={"channels": 1, "steps": 2},
         )
         session.pin_auto_experiment(auto_key)
         session.recording.start(
             RecordedView(
                 key="experiment:conv",
-                page="experiment",
                 label="Experiment",
-                params={"layer": "conv", "seq": seq, "auto_key": auto_key},
+                config=ExperimentView(layer="conv", seq=seq, auto_key=auto_key),
             )
         )
         _call(session, "stop_recording", {"key": "experiment:conv"})
@@ -1193,3 +1198,18 @@ def test_stopping_nothing_does_not_claim_a_recording_existed() -> None:
         view = _call(session, "stop_recording")
         assert view["stopped"] == []
         assert view["note"] == "Nothing was recording."
+
+
+def test_invalid_experiment_parameters_return_an_error_without_queuing() -> None:
+    with paused_session(TinyClassifier(), _image_step) as session:
+        view = _call(
+            session,
+            "run_experiment",
+            {
+                "kind": "deep_dream",
+                "layer": "conv",
+                "params": {"steps": "five"},
+            },
+        )
+        assert "steps must be a finite number" in view["error"]
+        assert not session.experiment_pending

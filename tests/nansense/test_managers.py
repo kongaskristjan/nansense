@@ -1,10 +1,11 @@
 """Lifecycle components work with explicit dependencies, without a Session."""
 
-from collections.abc import Callable, Iterator
 import threading
+from collections.abc import Callable, Iterator
 
 import torch
 
+from nansense.contracts.experiments import DreamParams
 from nansense.experiments import ExperimentManager, ExperimentRequest, ExperimentResult
 from nansense.probe import ProbeManager
 from nansense.session import BatchSnapshot
@@ -68,7 +69,7 @@ def test_cancellation_after_dequeue_reaches_the_runner() -> None:
         run=run,
         make_clip=lambda request: None,
     )
-    seq = manager.request_experiment(kind="deep_dream", layer="layer", params={})
+    seq = manager.request_experiment(layer="layer", params=DreamParams())
     request = manager.take_pending()
     assert request is not None
     manager.cancel_experiment(seq)

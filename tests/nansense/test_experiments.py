@@ -17,7 +17,6 @@ from torch import Tensor, nn
 import nansense
 import nansense.recording
 from nansense import experiments
-from nansense.recording import RecordingManager
 from nansense.experiments import (
     EXPERIMENT_KINDS,
     ExperimentQueueState,
@@ -26,6 +25,7 @@ from nansense.experiments import (
     _zoom_in,
     available_experiment_kinds,
 )
+from nansense.recording import RecordingManager
 from nansense.session import Session
 from tests.nansense.helpers import paused_session, train_step
 
@@ -429,7 +429,9 @@ def test_deep_dream_publishes_its_starting_noise_untouched() -> None:
         # The same noise `_dream_start` draws for this seq, with nothing done
         # to it: no step, no jitter, no diffusion, no clamp.
         request = experiments.ExperimentRequest(
-            "deep_dream", "conv", _dream_params(start="noise"), seq
+            "conv",
+            experiments.parse_params("deep_dream", _dream_params(start="noise")),
+            seq,
         )
         expected = experiments._dream_start(
             session, request, torch.Generator().manual_seed(seq), 4
@@ -807,7 +809,7 @@ def test_queued_experiments_publish_per_seq_results() -> None:
             kind="deep_dream", layer="conv", params=_dream_params(steps=2)
         )
         seq_b = session.request_experiment(
-            kind="neuron_gradient", layer="conv", params={"channel": 0, "sample": 0}
+            kind="neuron_gradient", layer="conv", params={"channel": 0}
         )
         assert session.wait_for_experiment(timeout=10)
         first = session.experiment_result_for(seq_a)
@@ -890,8 +892,7 @@ def test_available_kinds_offers_everything() -> None:
 
 
 def test_experiment_params_cover_every_kind() -> None:
-    from nansense.experiments import EXPERIMENT_KINDS
-    from nansense.experiments import EXPERIMENT_PARAMS
+    from nansense.experiments import EXPERIMENT_KINDS, EXPERIMENT_PARAMS
 
     assert set(EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
     for kind, specs in EXPERIMENT_PARAMS.items():

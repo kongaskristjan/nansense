@@ -39,6 +39,16 @@ from mcp.server import MCPServer
 from starlette.routing import BaseRoute
 
 from nansense import experiments
+from nansense.contracts.recording import (
+    ExperimentView,
+    HistogramView,
+    MainView,
+    PatchView,
+    RecordedView,
+    WeightPanelConfig,
+    WeightsView,
+    patch_types,
+)
 from nansense.input_config import InputDisplay, InputTransform, MeanStd
 from nansense.mcp_images import (
     bin_samples_image,
@@ -1396,23 +1406,9 @@ def _experiment_params(
     the caller's. The display statistics ride along because the runners need
     them to clamp and denormalize into input space.
     """
-    known = {spec.key for spec in experiments.EXPERIMENT_PARAMS[kind]}
-    params: dict[str, Any] = {
-        spec.key: spec.default for spec in experiments.EXPERIMENT_PARAMS[kind]
-    }
-    params.update(
-        {
-            key: value
-            for key, value in session.experiment_defaults.items()
-            if key in known
-        }
+    params, unknown = experiments.resolve_params(
+        kind, overrides or {}, session.experiment_defaults
     )
-    unknown: list[str] = []
-    for key, value in (overrides or {}).items():
-        if key in known:
-            params[key] = value
-        else:
-            unknown.append(key)
     mean, std = display.stats(input_name)
     params["mean"] = mean
     params["std"] = std
@@ -1490,9 +1486,12 @@ async def _run_experiment(
     # itself) are reported below rather than silently swallowed.
     record = video and kind == "deep_dream" and not session.locked
     running = session.is_running
-    seq = session.request_experiment(
-        kind=kind, layer=layer, params=resolved, video=record
-    )
+    try:
+        seq = session.request_experiment(
+            kind=kind, layer=layer, params=resolved, video=record
+        )
+    except ValueError as error:
+        return {"error": str(error)}
     finished = await asyncio.to_thread(
         _await_experiment, session, seq=seq, timeout=_clamp_timeout(timeout)
     )
@@ -1551,7 +1550,7 @@ def _recorded_view(
     values: str,
     display: InputDisplay,
     input_name: str | None,
-) -> Any:
+) -> RecordedView | dict[str, Any]:
     """The `RecordedView` for one agent-facing view name, or an error dict.
 
     The page equivalents build these from their own widget state; here the
@@ -1574,21 +1573,22 @@ def _recorded_view(
                     "this view records the layers being watched."
                 )
             }
+        options = RenderOptions.from_params(
+            {"render_average": average, "render_values": values}
+        )
         return RecordedView(
             key="main",
-            page="main",
             label=f"Main view ({len(chosen)} layers, sample {sample})",
-            params={
-                "layers": tuple(chosen),
-                "sample_idx": sample,
-                "input_name": input_name or "",
-                "input_mean": mean,
-                "input_std": std,
-                "input_transform": display.transform(input_name),
-                **RenderOptions.from_params(
-                    {"render_average": average, "render_values": values}
-                ).as_params(),
-            },
+            config=MainView(
+                layers=tuple(chosen),
+                sample_idx=sample,
+                input_name=input_name or "",
+                input_mean=mean,
+                input_std=std,
+                input_transform=display.transform(input_name),
+                render_average=options.average,
+                render_values=options.values,
+            ),
         )
     if view == "weights":
         if layer is None:
@@ -1598,14 +1598,11 @@ def _recorded_view(
             return {"error": f"Layer {layer!r} has no parameters to record."}
         return RecordedView(
             key=f"weights:{layer}",
-            page="weights",
             label=f"Weights · {layer}",
-            params={
-                "layer": layer,
-                # `(name, roles, indices)` per panel; empty roles mean the
-                # default axis layout, the same thing the page opens with.
-                "panels": tuple((name, (), ()) for name in parameters),
-            },
+            config=WeightsView(
+                layer=layer,
+                panels=tuple(WeightPanelConfig(name) for name in parameters),
+            ),
         )
     if view in ("histograms", "patches"):
         # These read the watch accumulators, whose browsable universe is the
@@ -1630,27 +1627,22 @@ def _recorded_view(
         if view == "histograms":
             return RecordedView(
                 key="watch_histogram",
-                page="watch_histogram",
                 label=f"Watch · histograms ({resolved_phase})",
-                params={
-                    "layers": tuple(chosen),
-                    "phase": resolved_phase,
-                    "log_x": log_x,
-                    "log_y": log_y,
-                },
+                config=HistogramView(
+                    layers=tuple(chosen), phase=resolved_phase, log_x=log_x, log_y=log_y
+                ),
             )
         return RecordedView(
             key="watch_minmax",
-            page="watch_minmax",
             label=f"Watch · MIN/MAX grids ({resolved_phase})",
-            params={
-                "layers": tuple(chosen),
-                "phase": resolved_phase,
-                "grids": PATCH_TYPES,
-                "heatmap": heatmap,
-                "input_mean": mean,
-                "input_std": std,
-            },
+            config=PatchView(
+                layers=tuple(chosen),
+                phase=resolved_phase,
+                grids=patch_types(PATCH_TYPES),
+                heatmap=heatmap,
+                input_mean=mean,
+                input_std=std,
+            ),
         )
     # "experiment": the page keeps its request alive across updates with an
     # auto experiment so each frame is a fresh rerun of the *same* seq (deep
@@ -1678,22 +1670,24 @@ def _recorded_view(
     resolved, _ = _experiment_params(
         session, kind=kind, overrides=params, display=display, input_name=input_name
     )
-    seq = session.register_auto_experiment(
-        key, kind=kind, layer=layer, params=resolved
-    )
+    try:
+        seq = session.register_auto_experiment(
+            key, kind=kind, layer=layer, params=resolved
+        )
+    except ValueError as error:
+        return {"error": str(error)}
     session.pin_auto_experiment(key)
     return RecordedView(
         key=key,
-        page="experiment",
         label=f"Experiment · {experiments.EXPERIMENT_KINDS[kind]} · {layer}",
-        params={
-            "layer": layer,
-            "seq": seq,
-            "auto_key": key,
-            "input_mean": mean,
-            "input_std": std,
-            "overlay": overlay,
-        },
+        config=ExperimentView(
+            layer=layer,
+            seq=seq,
+            auto_key=key,
+            input_mean=mean,
+            input_std=std,
+            overlay=overlay,
+        ),
     )
 
 
@@ -1779,7 +1773,7 @@ def _snapshot_view(
     values: str,
     display: InputDisplay,
     input_name: str | None,
-) -> Any:
+) -> RecordedView | dict[str, Any]:
     """The `RecordedView` a snapshot freezes, or an error dict.
 
     Every view but "experiment" freezes exactly what `start_recording`
@@ -1826,15 +1820,14 @@ def _snapshot_view(
     kind_label = experiments.EXPERIMENT_KINDS.get(result.kind, result.kind)
     return RecordedView(
         key=f"experiment:{result.layer}",
-        page="experiment",
         label=f"Experiment · {kind_label} · {result.layer}",
-        params={
-            "layer": result.layer,
-            "seq": result.seq,
-            "input_mean": mean,
-            "input_std": std,
-            "overlay": overlay,
-        },
+        config=ExperimentView(
+            layer=result.layer,
+            seq=result.seq,
+            input_mean=mean,
+            input_std=std,
+            overlay=overlay,
+        ),
     )
 
 
@@ -1891,7 +1884,7 @@ def _save_snapshot(
     }
 
 
-def _auto_keys(views: Iterable[Any]) -> list[str]:
+def _auto_keys(views: Iterable[RecordedView]) -> list[str]:
     """The auto-experiment registrations these recorded views are holding open.
 
     An experiment recording pins its auto-rerun so the request survives without
@@ -1902,15 +1895,15 @@ def _auto_keys(views: Iterable[Any]) -> list[str]:
     """
     keys: list[str] = []
     for view in views:
-        auto_key = view.params.get("auto_key")
-        if isinstance(auto_key, str) and auto_key:
+        auto_key = view.auto_key
+        if auto_key:
             keys.append(auto_key)
     return keys
 
 
 def _release_recordings(
     session: Session, *, key: str | None, keep: bool
-) -> tuple[list[Any], tuple[Path, ...]] | dict[str, Any]:
+) -> tuple[list[RecordedView], tuple[Path, ...]] | dict[str, Any]:
     """End (`keep`) or discard the named recordings, releasing what they held.
 
     Shared by `stop_recording` and `discard_recording`, which differ only in

@@ -45,7 +45,7 @@ from __future__ import annotations
 import io
 import math
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import cast
 
 import numpy as np
 import torch
@@ -53,6 +53,7 @@ from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
 from torch.nn import functional as F
 
+from nansense.contracts.recording import ValueMode
 from nansense.input_config import InputTransform
 from nansense.params import bool_param
 from nansense.patches import TypePatches
@@ -117,7 +118,6 @@ def set_strip_format(fmt: str) -> None:
 #: How a strip's values may be transformed before colormapping. `"abs"` and
 #: `"square"` fold the sign away, which is what switches the legend from the
 #: diverging ±max scale to a sequential 0..max one.
-ValueMode = Literal["unchanged", "abs", "square"]
 VALUE_MODES: tuple[ValueMode, ...] = ("unchanged", "abs", "square")
 
 

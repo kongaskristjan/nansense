@@ -15,6 +15,7 @@ from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 
 from nansense import debugger
+from nansense.contracts.recording import HistogramView, PatchView, patch_types
 from nansense.instruments import MetricSeries, MetricsSnapshot
 from nansense.patches import PatchType
 from nansense.recording import RecordedView
@@ -498,27 +499,25 @@ def _build_stats_page(
         if state.view == _VIEW_MINMAX:
             return RecordedView(
                 key="watch_minmax",
-                page="watch_minmax",
                 label=f"Watch · MIN/MAX grids ({phase})",
-                params={
-                    "layers": tuple(watched),
-                    "phase": phase,
-                    "grids": (state.grid_type,),
-                    "heatmap": state.heat_on,
-                    "input_mean": input_mean,
-                    "input_std": input_std,
-                },
+                config=PatchView(
+                    layers=tuple(watched),
+                    phase=phase,
+                    grids=patch_types((state.grid_type,)),
+                    heatmap=state.heat_on,
+                    input_mean=input_mean,
+                    input_std=input_std,
+                ),
             )
         return RecordedView(
             key="watch_histogram",
-            page="watch_histogram",
             label=f"Watch · histograms ({phase})",
-            params={
-                "layers": tuple(watched),
-                "phase": phase,
-                "log_x": state.axis_log_x,
-                "log_y": state.axis_log_y,
-            },
+            config=HistogramView(
+                layers=tuple(watched),
+                phase=phase,
+                log_x=state.axis_log_x,
+                log_y=state.axis_log_y,
+            ),
         )
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):

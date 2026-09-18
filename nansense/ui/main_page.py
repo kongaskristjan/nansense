@@ -16,6 +16,7 @@ from nicegui import ui
 from nicegui.events import GenericEventArguments
 from torch import Tensor
 
+from nansense.contracts.recording import MainView
 from nansense.probe import ProbeResult
 from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session, StatsScope
@@ -269,20 +270,17 @@ def _build_page(
         selected = input_panel.selected_input
         return RecordedView(
             key="main",
-            page="main",
-            label=(
-                f"Main view ({len(watched)} watched layer{plural}, "
-                f"sample {input_panel.sample_idx})"
+            label=f"Main view ({len(watched)} watched layer{plural}, sample {input_panel.sample_idx})",
+            config=MainView(
+                layers=tuple(watched),
+                sample_idx=input_panel.sample_idx,
+                input_name=selected or "",
+                input_mean=resolve_per_input(input_mean, selected),
+                input_std=resolve_per_input(input_std, selected),
+                input_transform=resolve_per_input(input_transform, selected),
+                render_average=input_panel.render_options.average,
+                render_values=input_panel.render_options.values,
             ),
-            params={
-                "layers": tuple(watched),
-                "sample_idx": input_panel.sample_idx,
-                "input_name": selected or "",
-                "input_mean": resolve_per_input(input_mean, selected),
-                "input_std": resolve_per_input(input_std, selected),
-                "input_transform": resolve_per_input(input_transform, selected),
-                **input_panel.render_options.as_params(),
-            },
         )
 
     _page_scaffold()

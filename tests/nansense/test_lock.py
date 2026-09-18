@@ -97,9 +97,12 @@ def test_locked_experiment_params_are_clamped() -> None:
     )
     request = session._experiments._queue[-1]
     assert request.seq == seq
-    assert request.params["steps"] == 300
-    assert request.params["channels"] == 8
-    assert request.params["lr"] == 0.1  # uncapped knobs pass through
+    from nansense.contracts.experiments import DreamParams
+
+    assert isinstance(request.params, DreamParams)
+    assert request.params.steps == 300
+    assert request.params.channels == 8
+    assert request.params.lr == 0.1  # uncapped knobs pass through
 
 
 def test_locked_experiment_queue_is_capped() -> None:

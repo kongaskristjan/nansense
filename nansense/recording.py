@@ -65,14 +65,20 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import av
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from nansense.input_config import InputTransform
-from nansense.params import bool_param, float_tuple, int_param, str_tuple
+from nansense.contracts.recording import (
+    ExperimentView,
+    HistogramView,
+    MainView,
+    PatchView,
+    RecordedView,
+    WeightsView,
+)
 from nansense.schedule import BatchPosition, format_position
 
 if TYPE_CHECKING:
@@ -110,22 +116,6 @@ _X264_CRF: int = 10
 # section gaps, the NaN checkerboard) belongs to `nansense.ui.compose`.
 _FRAME_PAD: int = 10
 _LABEL_COLOR: tuple[int, int, int] = (30, 41, 59)  # slate-800
-
-
-@dataclass(frozen=True)
-class RecordedView:
-    """One view's frozen recording spec.
-
-    `key` is the view's identity (one recording per key at a time), `page`
-    selects the renderer, `label` is the human-readable description shown
-    in the recording dialog, and `params` carries the page state frozen at
-    record start (treated as immutable).
-    """
-
-    key: str
-    page: str  # "main" | "weights" | "watch_histogram" | "watch_minmax" | "experiment"
-    label: str
-    params: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -339,8 +329,8 @@ class ExperimentClip:
         stem = _sanitize(f"experiment_{request.kind}_{request.layer}_seq{request.seq}")
         return cls(
             session.recording.directory / f"{stem}.mp4",
-            mean=float_tuple(request.params.get("mean")),
-            std=float_tuple(request.params.get("std")),
+            mean=request.params.mean,
+            std=request.params.std,
             position=_capture_position(session),
         )
 
@@ -613,15 +603,15 @@ def _render_view_frames(
     lives in `nansense.ui.frames`, shared with the MCP server's image tools so
     a recorded frame and an agent's picture can't drift apart.
     """
-    if view.page == "main":
+    if isinstance(view.config, MainView):
         return {"": _array(_main_frame(view, session))}
-    if view.page == "weights":
+    if isinstance(view.config, WeightsView):
         return {"": _array(_weights_frame(view, session))}
-    if view.page == "watch_histogram":
+    if isinstance(view.config, HistogramView):
         return {"": _array(_histogram_frame(view, session))}
-    if view.page == "watch_minmax":
+    if isinstance(view.config, PatchView):
         return _minmax_frames(view, session)
-    if view.page == "experiment":
+    if isinstance(view.config, ExperimentView):
         return {"": _array(_experiment_frame(view, session))}
     raise ValueError(f"unknown recorded view page {view.page!r}")
 
@@ -634,15 +624,19 @@ def _main_frame(view: RecordedView, session: Session) -> Image.Image | None:
     from nansense.ui.frames import main_frame
     from nansense.ui.render import RenderOptions
 
+    config = view.config
+    assert isinstance(config, MainView)
     return main_frame(
         session,
-        layers=str_tuple(view.params.get("layers")),
-        sample_idx=int_param(view.params, "sample_idx"),
-        input_name=str(view.params.get("input_name") or "") or None,
-        mean=float_tuple(view.params.get("input_mean")),
-        std=float_tuple(view.params.get("input_std")),
-        transform=cast(InputTransform | None, view.params.get("input_transform")),
-        options=RenderOptions.from_params(view.params),
+        layers=config.layers,
+        sample_idx=config.sample_idx,
+        input_name=config.input_name,
+        mean=config.input_mean,
+        std=config.input_std,
+        transform=config.input_transform,
+        options=RenderOptions(
+            average=config.render_average, values=config.render_values
+        ),
     )
 
 
@@ -650,32 +644,16 @@ def _weights_frame(view: RecordedView, session: Session) -> Image.Image | None:
     from nansense.ui.frames import PanelAxes, WeightPanel, weights_frame
     from nansense.ui.render import dims_from_roles
 
-    panels = view.params.get("panels")
-    if not isinstance(panels, (list, tuple)):
-        return None
+    config = view.config
+    assert isinstance(config, WeightsView)
     specs: list[WeightPanel] = []
-    for spec in panels:
-        # Each spec is `(name, roles, index pairs)` — see the weights page's
-        # record-view factory.
-        if not (isinstance(spec, (list, tuple)) and len(spec) == 3):
-            continue
-        x_dim, y_dim, tile_dim = dims_from_roles(
-            [str(role) for role in str_tuple(spec[1])]
-        )
-        fixed: dict[int, int] = {}
-        if isinstance(spec[2], (list, tuple)):
-            for pair in spec[2]:
-                if isinstance(pair, (list, tuple)) and len(pair) == 2:
-                    dim, idx = pair
-                    if isinstance(dim, int) and isinstance(idx, int):
-                        fixed[dim] = idx
+    for panel in config.panels:
+        x_dim, y_dim, tile_dim = dims_from_roles(list(panel.roles))
         specs.append(
             WeightPanel(
-                name=str(spec[0]),
-                # Always explicit: these came from the page's role selects, so
-                # even an all-unassigned triple is a choice the user made.
+                name=panel.name,
                 axes=PanelAxes(x_dim=x_dim, y_dim=y_dim, tile_dim=tile_dim),
-                fixed=fixed,
+                fixed=dict(panel.indices),
             )
         )
     return weights_frame(session, panels=specs)
@@ -684,12 +662,14 @@ def _weights_frame(view: RecordedView, session: Session) -> Image.Image | None:
 def _histogram_frame(view: RecordedView, session: Session) -> Image.Image | None:
     from nansense.ui.frames import histogram_frame
 
+    config = view.config
+    assert isinstance(config, HistogramView)
     return histogram_frame(
         session,
-        layers=str_tuple(view.params.get("layers")),
-        phase=str(view.params.get("phase") or ""),
-        log_x=bool(view.params.get("log_x")),
-        log_y=bool(view.params.get("log_y")),
+        layers=config.layers,
+        phase=config.phase,
+        log_x=config.log_x,
+        log_y=config.log_y,
     )
 
 
@@ -698,14 +678,16 @@ def _minmax_frames(
 ) -> dict[str, np.ndarray | None]:
     from nansense.ui.frames import patch_frames
 
+    config = view.config
+    assert isinstance(config, PatchView)
     frames = patch_frames(
         session,
-        layers=str_tuple(view.params.get("layers")),
-        phase=str(view.params.get("phase") or ""),
-        grids=str_tuple(view.params.get("grids")),
-        heatmap=bool(view.params.get("heatmap")),
-        mean=float_tuple(view.params.get("input_mean")),
-        std=float_tuple(view.params.get("input_std")),
+        layers=config.layers,
+        phase=config.phase,
+        grids=config.grids,
+        heatmap=config.heatmap,
+        mean=config.input_mean,
+        std=config.input_std,
     )
     return {group: _array(image) for group, image in frames.items()}
 
@@ -713,10 +695,12 @@ def _minmax_frames(
 def _experiment_frame(view: RecordedView, session: Session) -> Image.Image | None:
     from nansense.ui.frames import experiment_frame
 
+    config = view.config
+    assert isinstance(config, ExperimentView)
     return experiment_frame(
         session,
-        seq=int_param(view.params, "seq"),
-        mean=float_tuple(view.params.get("input_mean")),
-        std=float_tuple(view.params.get("input_std")),
-        overlay=bool_param(view.params, "overlay", False),
+        seq=config.seq,
+        mean=config.input_mean,
+        std=config.input_std,
+        overlay=config.overlay,
     )

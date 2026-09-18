@@ -8,15 +8,15 @@ from nicegui import ui
 from nicegui.element import Element
 
 from nansense import debugger
+from nansense.contracts.recording import MainView
 from nansense.debugger import DebugError, LayerReport
 from nansense.recording import RecordedView
 from nansense.schedule import Schedule
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.top_bar import (
-    _DEBUG_UNDER_OVER_TIP,
-    _lost_loop_summary,
     _BRAND_NAME,
     _BRAND_TAGLINE,
+    _DEBUG_UNDER_OVER_TIP,
     _REPO_URL,
     _STAR_TOOLTIP,
     _add_settings_button,
@@ -28,6 +28,7 @@ from nansense.ui.top_bar import (
     _debug_banner_summary,
     _debug_pct,
     _logo_data_uri,
+    _lost_loop_summary,
     _summarize_epoch_ranges,
     _time_travel_default_index,
     _under_over_band_lines,
@@ -512,7 +513,7 @@ def test_a_live_run_shows_no_chip_and_keeps_run_clickable() -> None:
 
 
 def _capture_view() -> RecordedView:
-    return RecordedView(key="main", page="main", label="Main view", params={})
+    return RecordedView(key="main", label="Main view", config=MainView())
 
 
 def _capture_buttons(session: Session) -> dict[str, Element]:

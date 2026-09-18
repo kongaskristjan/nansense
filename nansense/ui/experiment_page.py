@@ -12,8 +12,9 @@ from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.elements.mixins.value_element import ValueElement
 from torch import Tensor
 
+from nansense.contracts.experiments import DEFAULT_BATCH
+from nansense.contracts.recording import ExperimentView
 from nansense.experiments import (
-    _DEFAULT_DREAM_BATCH,
     EXPERIMENT_DESCRIPTIONS,
     EXPERIMENT_KINDS,
     EXPERIMENT_PARAMS,
@@ -298,11 +299,16 @@ def _build_experiment_page(
     def run() -> None:
         if _refresh_param_error():  # an empty/non-numeric field — don't run
             return
-        if state.my_seq is not None:  # a re-run replaces this page's request
-            session.cancel_experiment(state.my_seq)
-        state.my_seq = session.register_auto_experiment(
-            page_key, kind=state.kind, layer=state.layer, params=collect_params()
-        )
+        previous_seq = state.my_seq
+        try:
+            state.my_seq = session.register_auto_experiment(
+                page_key, kind=state.kind, layer=state.layer, params=collect_params()
+            )
+        except ValueError as error:
+            error_label.text = str(error)
+            return
+        if previous_seq is not None:
+            session.cancel_experiment(previous_seq)
         state.last_result = None
         error_label.text = ""
 
@@ -321,18 +327,15 @@ def _build_experiment_page(
         kind = state.kind
         return RecordedView(
             key=record_key(),
-            page="experiment",
             label=f"Experiment · {EXPERIMENT_KINDS.get(kind, kind)} · {state.layer}",
-            params={
-                "layer": state.layer,
-                "seq": state.my_seq,
-                "auto_key": page_key,
-                "input_mean": input_mean,
-                "input_std": input_std,
-                # Frozen with the rest of the view: the switch is disabled for
-                # the duration of the recording, so the frames stay one view.
-                "overlay": state.overlay,
-            },
+            config=ExperimentView(
+                layer=state.layer,
+                seq=state.my_seq,
+                auto_key=page_key,
+                input_mean=input_mean,
+                input_std=input_std,
+                overlay=state.overlay,
+            ),
         )
 
     def schedule_run() -> None:
@@ -634,7 +637,7 @@ def _build_experiment_page(
                     default = initial
                     if spec.key == "batch" and not isinstance(default, (int, float)):
                         live = session.input_batch_size
-                        default = min(_DEFAULT_DREAM_BATCH, live) if live else _DEFAULT_DREAM_BATCH
+                        default = min(DEFAULT_BATCH, live) if live else DEFAULT_BATCH
                     maximum: float | None = None
                     if spec.key in ("channel", "channels"):
                         channels = _layer_channel_count(session.snapshot, state.layer)

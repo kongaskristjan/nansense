@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import Literal
 
 import av
 import numpy as np
@@ -13,10 +14,19 @@ from torch import Tensor, nn
 
 import nansense
 import nansense.recording
+from nansense.contracts.recording import (
+    ExperimentView,
+    HistogramView,
+    MainView,
+    PatchView,
+    WeightPanelConfig,
+    WeightsView,
+    patch_types,
+)
 from nansense.recording import (
+    _POSITION_BANNER_HEIGHT,
     RecordedView,
     RecordingManager,
-    _POSITION_BANNER_HEIGHT,
     _fit_frame,
     _main_frame,
     _position_slug,
@@ -73,20 +83,23 @@ def _frame_count(path: Path) -> int:
 
 
 def _main_view(
-    layers: tuple[str, ...] = ("conv",), **params: object
+    layers: tuple[str, ...] = ("conv",),
+    *,
+    render_average: bool = False,
+    render_values: Literal["unchanged", "abs", "square"] = "unchanged",
 ) -> RecordedView:
     return RecordedView(
         key="main",
-        page="main",
         label="Main view",
-        params={
-            "layers": layers,
-            "sample_idx": 0,
-            "input_name": "x",
-            "input_mean": None,
-            "input_std": None,
-            **params,
-        },
+        config=MainView(
+            layers=layers,
+            sample_idx=0,
+            input_name="x",
+            input_mean=None,
+            input_std=None,
+            render_average=render_average,
+            render_values=render_values,
+        ),
     )
 
 
@@ -213,16 +226,15 @@ def test_minmax_records_pixel_and_average_to_separate_files(tmp_path: Path) -> N
     assert manager.start(
         RecordedView(
             key="watch_minmax",
-            page="watch_minmax",
             label="MIN/MAX",
-            params={
-                "layers": ("conv",),
-                "phase": "train",
-                "grids": ("max_pixel", "max_average"),
-                "heatmap": True,
-                "input_mean": None,
-                "input_std": None,
-            },
+            config=PatchView(
+                layers=("conv",),
+                phase="train",
+                grids=patch_types(("max_pixel", "max_average")),
+                heatmap=True,
+                input_mean=None,
+                input_std=None,
+            ),
         )
     )
     session.detach()
@@ -241,14 +253,10 @@ def test_histogram_recording_renders_matplotlib_frames(tmp_path: Path) -> None:
     assert manager.start(
         RecordedView(
             key="watch_histogram",
-            page="watch_histogram",
             label="Histograms",
-            params={
-                "layers": ("conv",),
-                "phase": "train",
-                "log_x": True,
-                "log_y": False,
-            },
+            config=HistogramView(
+                layers=("conv",), phase="train", log_x=True, log_y=False
+            ),
         )
     )
     session.detach()
@@ -263,15 +271,17 @@ def test_weights_recording_includes_optimizer_state(tmp_path: Path) -> None:
     assert manager.start(
         RecordedView(
             key="weights:conv",
-            page="weights",
             label="Weights · conv",
-            params={
-                "layer": "conv",
-                "panels": (
-                    ("conv.weight", ("index", "tile", "y", "x"), ((0, 0),)),
-                    ("conv.bias", ("x",), ()),
+            config=WeightsView(
+                layer="conv",
+                panels=tuple(
+                    WeightPanelConfig.from_values(name, roles, indices)
+                    for name, roles, indices in (
+                        ("conv.weight", ("index", "tile", "y", "x"), ((0, 0),)),
+                        ("conv.bias", ("x",), ()),
+                    )
                 ),
-            },
+            ),
         )
     )
     session.detach()
@@ -294,15 +304,14 @@ def test_experiment_recording_tracks_auto_reruns(tmp_path: Path) -> None:
     assert manager.start(
         RecordedView(
             key="experiment:conv",
-            page="experiment",
             label="Deep dream · conv",
-            params={
-                "layer": "conv",
-                "seq": seq,
-                "auto_key": "page-1",
-                "input_mean": None,
-                "input_std": None,
-            },
+            config=ExperimentView(
+                layer="conv",
+                seq=seq,
+                auto_key="page-1",
+                input_mean=None,
+                input_std=None,
+            ),
         )
     )
     session.detach()
@@ -385,16 +394,15 @@ def test_snapshot_of_minmax_writes_one_png_per_grid_group(tmp_path: Path) -> Non
     paths = manager.snapshot(
         RecordedView(
             key="watch_minmax",
-            page="watch_minmax",
             label="MIN/MAX",
-            params={
-                "layers": ("conv",),
-                "phase": "train",
-                "grids": ("max_pixel", "max_average"),
-                "heatmap": False,
-                "input_mean": None,
-                "input_std": None,
-            },
+            config=PatchView(
+                layers=("conv",),
+                phase="train",
+                grids=patch_types(("max_pixel", "max_average")),
+                heatmap=False,
+                input_mean=None,
+                input_std=None,
+            ),
         ),
         session,
     )
@@ -448,13 +456,16 @@ def test_snapshot_of_a_view_with_nothing_to_draw_writes_no_file(
     assert not list((tmp_path / "rec").glob("*.png"))
 
 
-def test_snapshot_renderer_error_reaches_the_caller(tmp_path: Path) -> None:
+def test_snapshot_renderer_error_reaches_the_caller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Unlike a recording frame (stored, never raised into the training loop),
     a still is a foreground action with a caller to tell."""
     session, _, manager = _make_session(tmp_path, epochs=1, phases={"train": 1})
-    with pytest.raises(ValueError, match="unknown recorded view page"):
+    monkeypatch.setattr(nansense.recording, "_render_view_frames", _failing_renderer)
+    with pytest.raises(ValueError, match="render failed"):
         manager.snapshot(
-            RecordedView(key="broken", page="nonsense", label="broken", params={}),
+            _main_view(),
             session,
         )
 
@@ -578,14 +589,21 @@ def test_end_during_in_flight_render_drops_the_frame(
     assert not list((tmp_path / "rec").glob("*.mp4"))
 
 
-def test_renderer_error_is_stored_not_raised(tmp_path: Path) -> None:
+def test_renderer_error_is_stored_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(nansense.recording, "_render_view_frames", _failing_renderer)
     phases = {"train": 1}
     session, model, manager = _make_session(tmp_path, epochs=1, phases=phases)
-    assert manager.start(
-        RecordedView(key="broken", page="nonsense", label="broken", params={})
-    )
+    assert manager.start(_main_view())
     session.detach()
     _run_epochs(session, model, epochs=1, phases=phases)  # must not raise
     (status,) = manager.statuses()
     assert status.error is not None
     assert status.frames == 0
+
+
+def _failing_renderer(
+    view: RecordedView, session: Session
+) -> dict[str, np.ndarray | None]:
+    raise ValueError("render failed")

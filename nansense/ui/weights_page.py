@@ -9,6 +9,7 @@ from urllib.parse import quote
 from nicegui import ui
 from torch import Tensor
 
+from nansense.contracts.recording import WeightPanelConfig, WeightsView
 from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import (
@@ -23,6 +24,7 @@ from nansense.ui.histograms import _format_stat
 from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
 from nansense.ui.share import _add_share_button
 from nansense.ui.static import _STRIP_MARKER_CSS
+from nansense.ui.theme import CUSTOM, GRADIENTS, OPTIMIZER, WEIGHT
 from nansense.ui.top_bar import (
     _add_error_banner,
     _add_repo_logo,
@@ -34,9 +36,7 @@ from nansense.ui.top_bar import (
     _refresh_button,
     _top_bar_row,
 )
-from nansense.ui.theme import CUSTOM, GRADIENTS, OPTIMIZER, WEIGHT
 from nansense.ui.tour import add_tour, weights_tour_steps
-
 
 _ROLE_LABELS: dict[str, str] = {"x": "X", "y": "Y", "tile": "Tile", "index": "Index"}
 
@@ -131,18 +131,14 @@ def _build_weights_page(session: Session, layer: str) -> None:
             return None
         return RecordedView(
             key=record_key,
-            page="weights",
             label=f"Weights · {layer}",
-            params={
-                "layer": layer,
-                # One (name, roles, indices) spec per panel, frozen at
-                # record start; `indices` travels as item pairs so the
-                # params stay plain immutable-friendly structures.
-                "panels": tuple(
-                    (p.name, tuple(p.roles), tuple(p.indices.items()))
+            config=WeightsView(
+                layer=layer,
+                panels=tuple(
+                    WeightPanelConfig.from_values(p.name, p.roles, p.indices.items())
                     for p in panels
                 ),
-            },
+            ),
         )
 
     with ui.column().classes("w-full h-screen no-wrap gap-0"):
@@ -161,9 +157,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
                     color="yellow-8",
                 ).props(
                     f'dense no-caps size=sm href="{_weight_graphs_href(layer)}"'
-                ).classes("ml-2").tooltip(
-                    "This layer's weight statistics per epoch"
-                )
+                ).classes("ml-2").tooltip("This layer's weight statistics per epoch")
             _add_settings_button(session, record_view).classes("ml-auto")
             _add_tour_button()
             _add_share_button(session)

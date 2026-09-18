@@ -915,7 +915,7 @@ def _add_settings_button(
         # keeps re-running even after the page closes; ending the recording
         # puts it back on the page-heartbeat clock.
         if view.page == "experiment":
-            session.unpin_auto_experiment(str(view.params.get("auto_key", "")))
+            session.unpin_auto_experiment(view.auto_key)
 
     def add_view() -> None:
         view = record_view() if record_view is not None else None
@@ -928,7 +928,7 @@ def _add_settings_button(
             ui.notify("This view is already being recorded", type="warning")
             return
         if view.page == "experiment":
-            session.pin_auto_experiment(str(view.params.get("auto_key", "")))
+            session.pin_auto_experiment(view.auto_key)
         ui.notify(f"Recording into {session.recording.directory}/")
         refresh_recording_lock()
         rebuild()

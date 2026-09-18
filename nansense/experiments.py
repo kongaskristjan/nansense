@@ -45,20 +45,33 @@ they work on *any* captured layer.
 
 from __future__ import annotations
 
-import time
 import threading
+import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from captum import attr as captum_attr
 import torch
+from captum import attr as captum_attr
 from torch import Tensor, nn
 from torch.nn import functional as F
 
 from nansense.capture import _CaptureInterpreter
-from nansense.params import bool_param, float_param, float_tuple, int_param
+from nansense.contracts.experiments import (
+    LOCKED_PARAM_LIMITS,
+    DreamParams,
+    ExperimentKind,
+    ExperimentParams,
+    GradCamParams,
+    NeuronGradientParams,
+    NeuronIGParams,
+    OcclusionParams,
+    default_params,
+    parse_params,
+    resolve_params,
+)
+from nansense.params import float_tuple
 from nansense.probe import isolated_model
 
 if TYPE_CHECKING:
@@ -86,11 +99,6 @@ _MODULE_KINDS = frozenset({"gradcam", "neuron_gradient", "neuron_ig"})
 # ascent.
 _PUBLISH_COUNT: int = 20
 
-# Default count for deep dream channels and the Captum input batch — a cap a
-# layer with fewer channels (or a smaller input batch) shrinks to; it is also
-# the default `EXPERIMENT_PARAMS` shows for both knobs.
-_DEFAULT_DREAM_BATCH: int = 8
-
 
 @dataclass(frozen=True)
 class ExperimentParam:
@@ -105,7 +113,7 @@ class ExperimentParam:
     key: str
     label: str
     kind: str  # "int" | "float" | "bool" | "select"
-    default: object
+    default: object = None
     options: dict[str, str] | None = None
     minimum: float | None = None
     step: float | None = None
@@ -119,7 +127,6 @@ _CHANNEL_PARAM = ExperimentParam(
     "channel",
     "Channel (-1 = whole layer)",
     "int",
-    0,
     minimum=-1,
     tooltip="Which channel of the layer to target",
 )
@@ -127,7 +134,6 @@ _CHANNELS_PARAM = ExperimentParam(
     "channels",
     "Channels",
     "int",
-    _DEFAULT_DREAM_BATCH,
     minimum=1,
     tooltip=("How many of the layer's channels to dream on — one sample each"),
 )
@@ -135,14 +141,12 @@ _MINIMIZE_PARAM = ExperimentParam(
     "minimize",
     "Minimize activations",
     "bool",
-    False,
     tooltip="Synthesize inputs that suppress each channel instead",
 )
 _SAMPLE_PARAM = ExperimentParam(
     "sample",
     "Sample",
     "int",
-    0,
     minimum=0,
     tooltip="Which batch sample every dream starts from",
 )
@@ -150,7 +154,6 @@ _TARGET_PARAM = ExperimentParam(
     "target",
     "Target class (-1 = argmax)",
     "int",
-    -1,
     minimum=-1,
     tooltip="Which class to explain",
 )
@@ -158,7 +161,6 @@ _BATCH_PARAM = ExperimentParam(
     "batch",
     "Inputs",
     "int",
-    _DEFAULT_DREAM_BATCH,
     minimum=1,
     tooltip="How many inputs to run on",
 )
@@ -166,7 +168,6 @@ _START_PARAM = ExperimentParam(
     "start",
     "Start from",
     "select",
-    "noise",
     options={"noise": "Noise", "sample": "Current batch"},
     tooltip="What the synthesized inputs start from",
 )
@@ -174,14 +175,12 @@ _CLAMP_PARAM = ExperimentParam(
     "clamp",
     "Clamp to displayable range",
     "bool",
-    True,
     tooltip="Keep pixels inside the displayable range",
 )
 _DIFFUSION_PARAM = ExperimentParam(
     "diffusion",
     "Diffusion",
     "float",
-    0.05,
     minimum=0,
     step=0.01,
     tooltip="Blur a little each step; damps high-frequency noise",
@@ -190,7 +189,6 @@ _JITTER_PARAM = ExperimentParam(
     "jitter",
     "Jitter (px)",
     "int",
-    2,
     minimum=0,
     tooltip="Random shift each step; reduces pixel-grid artifacts",
 )
@@ -198,7 +196,6 @@ _ZOOM_PARAM = ExperimentParam(
     "zoom",
     "Zoom multiplier per step",
     "float",
-    1.0,
     minimum=1,
     step=0.01,
     tooltip="Zoom into the centre a little each step (1 = no zoom)",
@@ -213,7 +210,6 @@ _ALL_STEPS_PARAM = ExperimentParam(
     "all_steps",
     "Publish every step",
     "bool",
-    False,
     tooltip="Stream one result per step instead of ~20 evenly spaced ones",
 )
 
@@ -227,9 +223,9 @@ EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
         _CHANNELS_PARAM,
         _START_PARAM,
         _SAMPLE_PARAM,
-        ExperimentParam("steps", "Steps", "int", 300, minimum=1),
+        ExperimentParam("steps", "Steps", "int", minimum=1),
         _ALL_STEPS_PARAM,
-        ExperimentParam("lr", "Learning rate", "float", 0.05, minimum=0, step=0.01),
+        ExperimentParam("lr", "Learning rate", "float", minimum=0, step=0.01),
         _DIFFUSION_PARAM,
         _JITTER_PARAM,
         _ZOOM_PARAM,
@@ -242,7 +238,7 @@ EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
     "neuron_ig": [
         _CHANNEL_PARAM,
         _BATCH_PARAM,
-        ExperimentParam("ig_steps", "Integration steps", "int", 32, minimum=2),
+        ExperimentParam("ig_steps", "Integration steps", "int", minimum=2),
     ],
     "occlusion": [
         _CHANNEL_PARAM,
@@ -251,13 +247,19 @@ EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
             "window",
             "Window (px)",
             "int",
-            4,
             minimum=1,
             tooltip="Side length of the occluding patch",
         ),
-        ExperimentParam("stride", "Stride (px)", "int", 2, minimum=1),
+        ExperimentParam("stride", "Stride (px)", "int", minimum=1),
     ],
 }
+
+
+for _kind, _specs in EXPERIMENT_PARAMS.items():
+    _defaults = default_params(_kind)
+    EXPERIMENT_PARAMS[_kind] = [
+        replace(spec, default=_defaults[spec.key]) for spec in _specs
+    ]
 
 
 def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
@@ -268,9 +270,10 @@ def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
     `ExperimentParam.default`.
     """
     values: dict[str, object] = {}
-    for specs in EXPERIMENT_PARAMS.values():
+    for kind, specs in EXPERIMENT_PARAMS.items():
+        resolved, _ = resolve_params(kind, {}, overrides)
         for spec in specs:
-            values.setdefault(spec.key, overrides.get(spec.key, spec.default))
+            values.setdefault(spec.key, resolved[spec.key])
     return values
 
 
@@ -338,23 +341,16 @@ def layer_available(session: Session, layer: str, kind: str) -> bool:
 
 @dataclass(frozen=True)
 class ExperimentRequest:
-    """One armed experiment: what to run, on which layer, with what knobs.
+    """A queued run with validated, immutable parameters for exactly one kind."""
 
-    `params` values come straight from the UI form (numbers, bools, strings)
-    plus the display normalization stats (`mean` / `std` tuples or `None`),
-    which the clamp option and result rendering both need.
-    """
-
-    kind: str
     layer: str
-    params: dict[str, object]
+    params: ExperimentParams
     seq: int
-    # Record the run's published progress to an MP4 (`ExperimentClip`). Not a
-    # knob of the experiment — the run is identical either way — but of how
-    # its progress is delivered, which is why it is a field here rather than
-    # an `EXPERIMENT_PARAMS` entry: the page streams the steps live and needs
-    # nothing, while an MCP client only ever sees the result it polled.
     video: bool = False
+
+    @property
+    def kind(self) -> ExperimentKind:
+        return self.params.kind
 
 
 @dataclass(frozen=True)
@@ -438,23 +434,8 @@ _EXPERIMENT_TIME_LIMIT: float = 90.0
 # a time — so request parameters are clamped to these ceilings and the queue
 # depth is capped. Values are chosen so the heaviest allowed request stays in
 # the seconds range on the demo-scale models a locked session hosts.
-_LOCKED_PARAM_LIMITS: dict[str, int] = {
-    "steps": 300,  # deep-dream ascent steps
-    "channels": 8,  # deep-dream channels (one sample each)
-    "batch": 8,  # Captum input batch
-    "ig_steps": 64,  # integrated-gradients interpolation steps
-}
+_LOCKED_PARAM_LIMITS = LOCKED_PARAM_LIMITS
 _LOCKED_MAX_QUEUE: int = 8
-
-
-def _locked_params(params: dict[str, object]) -> dict[str, object]:
-    """`params` with every capped numeric knob clamped to its ceiling."""
-    out = dict(params)
-    for key, limit in _LOCKED_PARAM_LIMITS.items():
-        value = out.get(key)
-        if isinstance(value, (int, float)):
-            out[key] = min(int(value), limit)
-    return out
 
 
 # How long an auto-experiment registration survives without a heartbeat
@@ -535,7 +516,8 @@ def _captum_input(
         return _error(request, "no input available yet — run at least one batch first")
     if base.ndim != 4:
         return _error(request, "experiments need an image input [B, C, H, W]")
-    batch = max(1, int_param(request.params, "batch", _DEFAULT_DREAM_BATCH))
+    assert not isinstance(request.params, DreamParams)
+    batch = request.params.batch
     count = min(batch, int(base.shape[0]))
     return base[:count].detach().clone().float()
 
@@ -560,8 +542,9 @@ def _dream_start(
     if base.ndim < 2:
         return _error(request, "deep dream needs a batched input [B, ...]")
     base = base.detach().float()
-    if str(request.params.get("start", "noise")) != "noise":
-        sample = int_param(request.params, "sample", 0)
+    assert isinstance(request.params, DreamParams)
+    if request.params.start != "noise":
+        sample = request.params.sample
         sample = max(0, min(sample, int(base.shape[0]) - 1))
         chosen = base[sample : sample + 1]
         return chosen.repeat(n, *([1] * (base.ndim - 1)))
@@ -681,18 +664,19 @@ def _run_deep_dream(
     happened to yet.
     """
     p = request.params
-    steps = max(1, int_param(p, "steps", 300))
-    lr = float_param(p, "lr", 0.05)
-    diffusion = min(1.0, max(0.0, float_param(p, "diffusion", 0.05)))
-    jitter = max(0, int_param(p, "jitter", 2))
-    zoom = max(1.0, float_param(p, "zoom", 1.0))
-    n_channels = max(1, int_param(p, "channels", _DEFAULT_DREAM_BATCH))
-    clamp = bool_param(p, "clamp", True)
+    assert isinstance(p, DreamParams)
+    steps = p.steps
+    lr = p.lr
+    diffusion = p.diffusion
+    jitter = p.jitter
+    zoom = p.zoom
+    n_channels = p.channels
+    clamp = p.clamp
     # Minimize descends the same objective instead of ascending it, so the step
     # direction simply flips sign (the reported objective stays the signed
     # channel mean, which then falls over the run).
-    direction = -1.0 if bool_param(p, "minimize", False) else 1.0
-    from_sample = str(p.get("start", "noise")) != "noise"
+    direction = -1.0 if p.minimize else 1.0
+    from_sample = p.start != "noise"
 
     rng = torch.Generator().manual_seed(request.seq)
     x0 = _dream_start(session, request, rng, n_channels)
@@ -700,10 +684,8 @@ def _run_deep_dream(
         yield x0
         return
     spatial = x0.ndim == 4  # the regularizers below act on image axes only
-    lo, hi = _value_bounds(int(x0.shape[1]), p.get("mean"), p.get("std"))
-    publish_every = (
-        1 if bool_param(p, "all_steps", False) else max(1, steps // _PUBLISH_COUNT)
-    )
+    lo, hi = _value_bounds(int(x0.shape[1]), p.mean, p.std)
+    publish_every = 1 if p.all_steps else max(1, steps // _PUBLISH_COUNT)
     reference: Tensor | None = None
 
     def partial(
@@ -786,15 +768,12 @@ def _run_deep_dream(
     yield partial(x, step_done, objective_value, done=True)
 
 
-def _resolve_target(
-    model: nn.Module, x: Tensor, params: dict[str, object]
-) -> int | list[int]:
+def _resolve_target(model: nn.Module, x: Tensor, target: int) -> int | list[int]:
     """The Grad-CAM target class (-1 means each sample's own argmax).
 
     An explicit class applies to the whole batch; the argmax default resolves
     per sample (a length-`batch` list), since the batch may span predictions.
     """
-    target = int_param(params, "target", -1)
     if target >= 0:
         return target
     with torch.no_grad():
@@ -874,34 +853,32 @@ def _run_captum(
         return
 
     def attribute(x: Tensor) -> Tensor:
-        kind = request.kind
-        if kind == "gradcam":
+        if isinstance(p, GradCamParams):
             assert module is not None  # checked above
-            target = _resolve_target(session.model, x, p)
+            target = _resolve_target(session.model, x, p.target)
             out = captum_attr.LayerGradCam(session.model, module).attribute(
                 x, target=target
             )
-        elif kind == "neuron_gradient":
+        elif isinstance(p, NeuronGradientParams):
             assert module is not None  # checked above
             out = captum_attr.NeuronGradient(session.model, module).attribute(
-                x, neuron_selector=_neuron_selector(int_param(p, "channel", 0))
+                x, neuron_selector=_neuron_selector(p.channel)
             )
-        elif kind == "neuron_ig":
+        elif isinstance(p, NeuronIGParams):
             assert module is not None  # checked above
             out = captum_attr.NeuronIntegratedGradients(
                 session.model, module
             ).attribute(
                 x,
-                neuron_selector=_neuron_selector(int_param(p, "channel", 0)),
-                n_steps=max(2, int_param(p, "ig_steps", 32)),
+                neuron_selector=_neuron_selector(p.channel),
+                n_steps=p.ig_steps,
             )
         else:  # occlusion, retargeted to the selected layer-channel
+            assert isinstance(p, OcclusionParams)
             channels = int(x.shape[1])
-            window = max(1, int_param(p, "window", 4))
-            stride = max(1, int_param(p, "stride", 2))
-            target_model = _LayerChannelModel(
-                session, request.layer, int_param(p, "channel", 0)
-            )
+            window = p.window
+            stride = p.stride
+            target_model = _LayerChannelModel(session, request.layer, p.channel)
             out = captum_attr.Occlusion(target_model).attribute(
                 x,
                 target=0,
@@ -1016,23 +993,16 @@ class ExperimentManager:
     def request_experiment(
         self,
         *,
-        kind: str,
         layer: str,
-        params: dict[str, object],
+        params: ExperimentParams,
         video: bool = False,
     ) -> int:
         """Implementation of `Session.request_experiment`."""
-        if kind not in EXPERIMENT_KINDS:
-            raise ValueError(
-                f"unknown experiment kind {kind!r}; "
-                f"expected one of {list(EXPERIMENT_KINDS)}"
-            )
         with self._cv:
             self._seq += 1
             request = ExperimentRequest(
-                kind=kind,
                 layer=layer,
-                params=(_locked_params(params) if self._locked() else dict(params)),
+                params=params,
                 seq=self._seq,
                 # A locked demo shares one training thread between anonymous
                 # visitors and caps every heavy knob for it; writing a video file
@@ -1086,14 +1056,9 @@ class ExperimentManager:
             return ExperimentQueueState("absent")
 
     def register_auto_experiment(
-        self, key: str, *, kind: str, layer: str, params: dict[str, object]
+        self, key: str, *, layer: str, params: ExperimentParams
     ) -> int:
         """Implementation of `Session.register_auto_experiment`."""
-        if kind not in EXPERIMENT_KINDS:
-            raise ValueError(
-                f"unknown experiment kind {kind!r}; "
-                f"expected one of {list(EXPERIMENT_KINDS)}"
-            )
         with self._cv:
             # A re-registration (e.g. auto-run on a parameter change) supersedes
             # this key's previous request: drop the old one if it is still queued
@@ -1107,9 +1072,8 @@ class ExperimentManager:
                 self._queue = deque(r for r in self._queue if r.seq != prev.request.seq)
             self._seq += 1
             request = ExperimentRequest(
-                kind=kind,
                 layer=layer,
-                params=(_locked_params(params) if self._locked() else dict(params)),
+                params=params,
                 seq=self._seq,
             )
             self._auto[key] = _AutoExperiment(

@@ -931,6 +931,12 @@ critical section, so cancellation cannot lose a request between those steps. Res
 (`experiment_result`), so concurrent tabs each poll their own run without
 overwriting each other.
 
+`contracts/experiments.py` defines immutable parameter variants for each
+experiment. Session validates public dictionary inputs before changing queue
+or registration state; runners consume typed fields. UI and MCP defaults
+share the same resolution function and typed defaults. Invalid values raise
+`ValueError` at the Python boundary and become visible errors in UI/MCP.
+
 **Cancellation.** The runner checks a `should_abort()` predicate between
 steps; it fires on `cancel_experiment(seq)` for the running seq (no seq
 cancels everything; a queued seq is just dropped), once the run outlives
@@ -1119,8 +1125,10 @@ the per-session `RecordingManager`; the UI's settings dialog starts a
 `ViewRecorder` from a `RecordedView` — the view's identity key (`"main"`,
 `"weights:<layer>"`, `"watch_histogram"`, `"watch_minmax"`,
 `"experiment:<layer>"`; one recording per key), its renderer page, and the
-page parameters frozen at record start (watched layers, sample index,
-phase, axis toggles, weight-axis layouts, the experiment seq). While a
+a typed configuration frozen at record start (watched layers, sample index,
+phase, axis toggles, weight-axis layouts, the experiment seq). The configuration
+variants in `contracts/recording.py` determine the renderer page; renderers read
+typed fields rather than interpreting dictionaries. While a
 view records, the matching page controls are disabled each tick (e.g.
 `InputPanel.set_frozen`), unwatch actions are refused for the watch-page
 views (their frames render from the accumulators that `unwatch` drops),
@@ -1533,9 +1541,9 @@ Render conventions worth knowing before editing `render.py`:
   are **per browser connection**, owned by `InputPanel` like `sample_idx` and
   never touching the `Session` — which is what keeps them usable in a locked
   playground, where pin and forward mode are refused. They ride in the render
-  cache key (`RenderOptions.cache_key`) and, via `as_params` / `from_params`,
-  in a recorded view's params and the MCP `render_layer` / `start_recording` /
-  `save_snapshot` arguments.
+  cache key (`RenderOptions.cache_key`) and the typed `MainView` recording
+  configuration. MCP parses the equivalent `render_layer` / `start_recording` /
+  `save_snapshot` arguments at its boundary.
 - `render_strip` handles `[C,H,W]`, `[F]`, and 2D token shapes
   (`[tokens, dim]`, unflattened onto the input patch grid when `input_hw` is
   threaded in, assuming row-major ViT token order); 4D-and-beyond per-sample
