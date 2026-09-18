@@ -230,32 +230,35 @@ def stats_howto_steps(layer_slug: str | None) -> list[TourStep]:
 
     Played on the main view (`?tour=stats-howto`), never auto-started or
     offered by the `?` button, and skipped on locked sessions, which can't
-    watch, toggle or step. Three pointed steps — the layer's diagram node
-    (the layer the visitor came from), the stats toggle, the step controls
-    — then the trade-off, which has nothing to point at.
+    watch, toggle or step. Four pointed steps — the layer's diagram node
+    (the layer the visitor came from), the stats toggle, the step controls,
+    the open card's Stats button that leads back — then the trade-off,
+    which has nothing to point at.
     """
     node = _mermaid_node_selector(layer_slug) if layer_slug else "g.node"
     return [
         TourStep(
-            "First, the layer has to be watched: click its node in the "
-            "diagram and its card opens in the middle pane. Stats are only "
-            "ever kept for watched layers.",
+            "Watch the layer: click its node in the diagram to open its card.",
             (node,),
         ),
         TourStep(
-            "Then turn stats collection on with this button. Red and crossed "
-            "out means off; green means every shown layer is collecting.",
+            "Turn stats collection on here. Red and crossed out is off, "
+            "green is collecting.",
             ('[data-tour="stats-toggle"]',),
         ),
         TourStep(
-            "Now let training run — step at least one batch. Every batch "
-            "from here on adds to the running statistics.",
+            "Step at least one batch. Every batch adds to the running "
+            "statistics.",
             ('[data-tour="step-controls"]',),
         ),
         TourStep(
-            "One thing to know: collecting stats usually slows training down "
-            "a lot. Keep it off while you are not looking at them, and watch "
-            "only the layers you care about.",
+            "Then open Stats on the card to see them.",
+            (_card_anchor("stats"),),
+            ensure_card=True,
+        ),
+        TourStep(
+            "Collecting stats slows training down a lot, so keep it off "
+            "when you are not looking.",
             (),
         ),
     ]

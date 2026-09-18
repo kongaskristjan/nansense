@@ -148,23 +148,28 @@ def test_stats_howto_points_at_watching_collecting_and_stepping(
     layer_slug: str | None,
 ) -> None:
     """The stats page's SHOW ME HOW: a diagram node (the layer the visitor
-    came from), the stats toggle, the step controls — then the trade-off,
-    which has nothing to ring. Longer than the page tours, since the visitor
-    asked for an explanation, but still a bubble."""
+    came from), the stats toggle, the step controls, the card's Stats button
+    back to the stats view — then the trade-off, which has nothing to ring."""
     steps = stats_howto_steps(layer_slug)
-    assert len(steps) == 4
-    node, toggle, run, tradeoff = steps
+    assert len(steps) == 5
+    node, toggle, run, back, tradeoff = steps
     assert node.selectors == (
         (f'g.node[id*="-flowchart-{layer_slug}-"]',) if layer_slug else ("g.node",)
     )
-    assert _anchor_names([toggle, run]) == ["stats-toggle", "step-controls"]
+    assert _anchor_names([toggle, run, back]) == [
+        "stats-toggle",
+        "step-controls",
+        "stats",
+    ]
+    # The Stats button lives on a card, so the step scopes to the open one.
+    assert [s.ensure_card for s in steps] == [False, False, False, True, False]
     assert tradeoff.selectors == ()
     source = _ui_source()
     for name in _anchor_names(steps):
         assert f'data-tour="{name}"' in source, name
     for step in steps:
-        assert step.text.endswith(".") and len(step.text) <= 220
-        assert not (step.ensure_card or step.ensure_input or step.host_anchor)
+        assert step.text.endswith(".") and len(step.text) <= 100
+        assert not (step.ensure_input or step.host_anchor)
     assert "slow" in tradeoff.text
 
 

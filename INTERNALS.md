@@ -1466,7 +1466,8 @@ the reader landed seconds ago (`test_tour.py` enforces both); a page can
 also hold named *extra* tours (`extras`), started by name through
 `nansenseStartTour(name)` and never marked seen — the only one is the
 stats how-to (`stats_howto_steps`: watch a layer, turn the stats toggle
-on, step, and the slow-down trade-off as a fourth, arrow-less step),
+on, step, open the card's Stats button, and the slow-down trade-off as a
+fifth, arrow-less step),
 reached solely from the stats page's SHOW ME HOW button, an anchor to
 `/?layer=…&tour=stats-howto` that the main page turns into
 `auto_start_extra` (unlocked sessions only; the driver strips the
