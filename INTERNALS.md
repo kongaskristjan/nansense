@@ -1924,6 +1924,13 @@ cost a bug:
   and releasing the `auto_key`s those views pinned are identical either way,
   and a discard that skipped the release would leave the experiment rerunning
   for the rest of the training run.
+- An empty per-epoch trend has three causes that look identical and need three
+  different calls: the layer is outside the collecting scope (`watch_layers`),
+  the scope is `"none"` (`set_stats_scope`), or nothing has folded in since it
+  was turned on (`step` / `run`). `stats_gap_hint` decides which, and
+  `stats_history_view` and `histogram_image` share it — otherwise the
+  histogram's answer would be a blank pair of axes, which reads as a layer
+  whose values all sit in one bin.
 
 **The attribution overlay** (`experiment_frame(overlay=…)`) is the page's
 "Overlay on input" switch, reached by `render_experiment` and by an

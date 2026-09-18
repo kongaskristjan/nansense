@@ -32,7 +32,7 @@ import torch
 
 from nansense import debugger, experiments, instruments
 from nansense.schedule import BatchPosition, Schedule, format_position
-from nansense.session import Session, lost_loop_reason
+from nansense.session import Session, StatsScope, lost_loop_reason
 from nansense.watch import (
     TensorStatsSnapshot,
     bin_midpoint,
@@ -474,6 +474,38 @@ def _history_point(
     return point
 
 
+def stats_gap_hint(session: Session, layers: Iterable[str]) -> str:
+    """Why `layers` have no running statistics, and the call that fixes it.
+
+    Three causes produce the same empty series — the layers sit outside the
+    collecting scope, collection is off, or nothing has been folded in yet —
+    and each is a different tool away, so the reason is named rather than left
+    to be guessed.
+    """
+    names = list(layers)
+    subject = repr(names[0]) if len(names) == 1 else str(names)
+    fixes: list[str] = []
+    if session.stats_scope is not StatsScope.ALL:
+        unwatched = [name for name in names if name not in session.watched_layers]
+        if unwatched:
+            fixes.append(f"call watch_layers({unwatched!r})")
+    if not session.stats_collecting:
+        fixes.append(
+            "turn collection on with set_stats_scope('watched') (it is 'none', "
+            "which collects nothing; 'all' covers every layer)"
+        )
+    if not fixes:
+        return (
+            f"Statistics are being collected for {subject}, but no batch has "
+            "folded into them yet — advance training with step or run."
+        )
+    return (
+        f"Nothing is collecting statistics for {subject}: "
+        + " and ".join(fixes)
+        + "."
+    )
+
+
 def stats_history_view(
     session: Session, *, layer: str, phase: str | None = None
 ) -> dict[str, Any]:
@@ -499,12 +531,7 @@ def stats_history_view(
         return {
             "layer": layer,
             "history": {},
-            "hint": (
-                f"No statistics collected for {layer!r} yet. Call "
-                f"watch_layers(['{layer}']) and set_stats_scope('watched') (or "
-                "set_stats_scope('all')) and let training advance at least one "
-                "batch."
-            ),
+            "hint": stats_gap_hint(session, [layer]),
         }
     phases = [phase] if phase is not None else available
     unknown_phase = [name for name in phases if name not in available]

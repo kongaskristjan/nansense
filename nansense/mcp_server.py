@@ -473,11 +473,11 @@ def build_server(
 
         Activations and gradients, one subplot each, over the signed-log bins.
         Shape is the point: a gradient histogram collapsing toward zero, a
-        bimodal activation, a spike in the overflow bin. Covers watched layers
-        only, and only while collection is on — call `watch_layers` and
-        `set_stats_scope("watched")` first. `log_x` spreads the bins evenly by
-        magnitude, `log_y` reveals sparse tails. Defaults to the newest phase
-        with data.
+        bimodal activation, a spike in the overflow bin. Covers only the layers
+        the current stats scope collects (as `get_stats_history` does), and
+        names what is missing when they collect nothing. `log_x` spreads the
+        bins evenly by magnitude, `log_y` reveals sparse tails. Defaults to the
+        newest phase with data.
 
         `channel` narrows every subplot to one channel (the page's "Per
         channel" switch) — the way to tell one collapsed channel from a layer

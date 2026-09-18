@@ -52,7 +52,7 @@ Ask in plain language — "why has my loss stopped falling?" — and the agent w
 | `get_metrics` | Custom scalar metrics the training script registered with `watch_metric` |
 | `get_settings`, `set_update_frequency`, `set_watch_performance` | The settings dialog |
 
-Statistics come from two places, and the distinction matters when you read the agent's reasoning. `get_layer_stats` reads the last captured batch and covers **any** layer. `get_stats_history` reads the running accumulators, which only cover **watched** layers and only while collection is on (it is off by default) — so the agent watches a layer, turns collection on with `set_stats_scope`, lets a few epochs run, and then asks for the trend.
+Statistics come from two places, and the distinction matters when you read the agent's reasoning. `get_layer_stats` reads the last captured batch and covers **any** layer. `get_stats_history` reads the running accumulators, which only cover **watched** layers and only while collection is on (it is off by default) — so the agent watches a layer, turns collection on with `set_stats_scope`, lets a few epochs run, and then asks for the trend. Ask too early and the tool names which of the three is missing rather than returning an empty series.
 
 ## What the agent can see
 

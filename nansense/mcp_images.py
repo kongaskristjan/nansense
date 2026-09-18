@@ -37,7 +37,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from nansense.input_config import InputDisplay
-from nansense.mcp_views import _num, default_phase, phases_with_data, position_view
+from nansense.mcp_views import (
+    _num,
+    default_phase,
+    phases_with_data,
+    position_view,
+    stats_gap_hint,
+)
 from nansense.patches import PATCH_TYPES
 from nansense.session import Session
 
@@ -355,8 +361,9 @@ def histogram_image(
 ) -> RenderedImage:
     """The stats page's histograms: value distributions per layer and phase.
 
-    Reads the running accumulators, so it only covers watched layers — the same
-    restriction `get_stats_history` has, and the same fix (`watch_layers`).
+    Reads the running accumulators, so it only covers the layers the current
+    stats scope collects — the same restriction `get_stats_history` has, and
+    the same diagnosis (`stats_gap_hint`) when there is nothing to draw.
     """
     from nansense.ui.frames import histogram_frame
 
@@ -365,13 +372,21 @@ def histogram_image(
     without_stats = [name for name in resolved if not session.stats_phases(name)]
     collected = [name for name in resolved if name not in without_stats]
     if not collected:
+        # A histogram of nothing is an empty pair of axes, indistinguishable
+        # from a layer whose values all sit in one bin — so say why instead.
+        if not resolved:
+            reason = (
+                f"Unknown layers: {unknown} — call get_architecture for the "
+                "valid names."
+            )
+        else:
+            reason = stats_gap_hint(session, resolved)
+            if unknown:
+                reason += f" Unknown layers, skipped: {unknown}."
         return RenderedImage(
             None,
-            f"No running statistics for {list(layers)}. Histograms come from the "
-            "watch accumulators: call watch_layers and set_stats_scope('watched') "
-            "(or set_stats_scope('all')) and let training advance at least one "
-            "batch."
-            + (f" Unknown layers: {unknown}." if unknown else ""),
+            f"No histogram for {list(layers)}: it is drawn from the running "
+            f"statistics. {reason}",
         )
     # Without a phase, the one training is actually in — across *all* the
     # requested layers, not just the first, and not whichever sorts last.

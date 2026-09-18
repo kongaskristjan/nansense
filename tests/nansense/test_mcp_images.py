@@ -292,13 +292,34 @@ def test_rendering_before_the_first_capture_explains_itself() -> None:
     assert "pause()" in rendered.note and "refresh()" in rendered.note
 
 
-def test_histograms_of_an_uncollected_layer_say_how_to_collect() -> None:
-    """Histograms come from the watch accumulators, so an unwatched layer has
-    nothing — the fix (watch it) belongs in the answer."""
+@pytest.mark.parametrize(
+    ("watched", "scope", "expected"),
+    [
+        (False, "watched", "watch_layers(['fc1'])"),
+        (True, "none", "set_stats_scope('watched')"),
+        (True, "watched", "step or run"),
+    ],
+)
+def test_histograms_of_an_uncollected_layer_name_the_reason(
+    watched: bool, scope: str, expected: str
+) -> None:
+    """A histogram with no data is an empty pair of axes, which reads as a
+    layer whose values are all in one bin — so the reason replaces it."""
     with paused_session(TinyNet()) as session:
+        if watched:
+            assert session.watch("fc1")
+        session.set_stats_scope(scope)
         rendered = histogram_image(session, layers=["fc1"])
         assert rendered.png is None
-        assert "watch_layers" in rendered.note
+        assert expected in rendered.note
+
+
+def test_histograms_of_an_unknown_layer_point_at_the_architecture() -> None:
+    """A misspelled name is not a collection problem, so it gets its own fix."""
+    with paused_session(TinyNet()) as session:
+        rendered = histogram_image(session, layers=["ghost"])
+        assert rendered.png is None
+        assert "get_architecture" in rendered.note
 
 
 def test_histogram_channel_narrows_the_picture_and_names_itself() -> None:

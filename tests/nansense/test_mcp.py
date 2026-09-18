@@ -301,11 +301,26 @@ def test_layer_stats_carry_the_channel_through_to_both_streams() -> None:
         assert "histogram_format" in view
 
 
-def test_stats_history_points_at_watching_when_nothing_is_collected() -> None:
+@pytest.mark.parametrize(
+    ("watched", "scope", "expected"),
+    [
+        (False, "watched", "watch_layers(['fc1'])"),
+        (True, "none", "set_stats_scope('watched')"),
+        (True, "watched", "step or run"),
+    ],
+)
+def test_stats_history_names_the_reason_nothing_is_collected(
+    watched: bool, scope: str, expected: str
+) -> None:
+    """All three causes look alike — an empty series — and each needs a
+    different tool, so the hint has to say which one."""
     with paused_session(TinyNet()) as session:
+        if watched:
+            assert session.watch("fc1")
+        session.set_stats_scope(scope)
         view = stats_history_view(session, layer="fc1")
         assert view["history"] == {}
-        assert "watch_layers" in view["hint"]
+        assert expected in view["hint"]
 
 
 def test_stats_history_returns_per_epoch_series_for_a_watched_layer() -> None:
