@@ -2525,6 +2525,8 @@ request logging stays out of the training console.</p>
 <code>serve()</code> unconditionally and pay nothing when the UI is turned off —
 and likewise on the non-zero ranks of a distributed run, where the UI
 lives on rank 0.</p>
+<p>Web dependencies and server-specific noise filters load only when an
+enabled leader session is served.</p>
 <p>NiceGUI is mounted onto a bare FastAPI app via <code>ui.run_with</code>; the app is
 then served by uvicorn from a non-main thread, with signal handlers
 disabled so uvicorn doesn't try to wire SIGINT/SIGTERM from a thread

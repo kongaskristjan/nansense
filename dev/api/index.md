@@ -65,6 +65,8 @@ Start the NiceGUI app on a background thread and return that thread.
 
 Returns `None` without starting anything when `session` is disabled (`nansense.start(..., enabled=False)`), so a training script can call `serve()` unconditionally and pay nothing when the UI is turned off — and likewise on the non-zero ranks of a distributed run, where the UI lives on rank 0.
 
+Web dependencies and server-specific noise filters load only when an enabled leader session is served.
+
 NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is then served by uvicorn from a non-main thread, with signal handlers disabled so uvicorn doesn't try to wire SIGINT/SIGTERM from a thread that isn't the main one.
 
 Once the server thread is launched, a daemon thread waits for the port to bind and then prints the UI address inside a box (so it stands out in the training log) and, unless `open_browser` is `False`, opens it in a focused browser tab. If a concurrent session already holds the port the bind fails, so the banner and the browser tab are both suppressed — only uvicorn's own `address already in use` error is shown. On a headless machine the bind still succeeds, so the banner prints and the browser open is a harmless no-op.
