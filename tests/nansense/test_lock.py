@@ -95,7 +95,7 @@ def test_locked_experiment_params_are_clamped() -> None:
         layer="fc1",
         params={"steps": 100_000, "channels": 500, "lr": 0.1},
     )
-    request = session._experiment_queue[-1]
+    request = session._experiments._queue[-1]
     assert request.seq == seq
     assert request.params["steps"] == 300
     assert request.params["channels"] == 8
@@ -107,7 +107,7 @@ def test_locked_experiment_queue_is_capped() -> None:
     for _ in range(_LOCKED_MAX_QUEUE):
         session.request_experiment(kind="deep_dream", layer="fc1", params={})
     seq = session.request_experiment(kind="deep_dream", layer="fc1", params={})
-    assert len(session._experiment_queue) == _LOCKED_MAX_QUEUE
+    assert len(session._experiments._queue) == _LOCKED_MAX_QUEUE
     result = session.experiment_result_for(seq)
     assert result is not None and result.error is not None
     assert "queue is full" in result.error

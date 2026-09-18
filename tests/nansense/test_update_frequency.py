@@ -207,13 +207,13 @@ def test_auto_experiment_expires_without_heartbeat() -> None:
 
     # Simulate the page going away: expire the registration, then update.
     with session._cv:
-        session._auto_experiments["page-1"].expires_at = 0.0
+        session._experiments._auto["page-1"].expires_at = 0.0
     with session.batch(phase="train", epoch=1):
         model.zero_grad(set_to_none=True)
         model(torch.randn(2, 4)).sum().backward()
     assert session.experiment_result_for(seq) is first  # no rerun happened
     with session._cv:
-        assert "page-1" not in session._auto_experiments
+        assert "page-1" not in session._experiments._auto
 
 
 def test_pinned_auto_experiment_survives_expiry_check() -> None:

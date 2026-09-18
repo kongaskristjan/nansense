@@ -14,11 +14,7 @@ import nansense
 from nansense.capture import _CaptureInterpreter
 from nansense.probe import (
     _MAX_PROBE_CLIENTS,
-    _shared_base_caps,
     apply_perturbations,
-    gc_probe_clients,
-    request_probe_locked,
-    run_probe_guarded,
 )
 from nansense.session import Session
 from nansense.ui.render import probe_act_tensor
@@ -465,10 +461,10 @@ def test_failing_probe_publishes_error_not_crash() -> None:
 
         # Sabotage the pinned input with an incompatible shape; the next probe
         # must fail gracefully into `probe_error` instead of killing the worker.
-        session._pinned_inputs = {"x": torch.randn(2, 3, 9, 9)}  # type: ignore[reportPrivateUsage]
+        session._probes._pinned_inputs = {"x": torch.randn(2, 3, 9, 9)}  # type: ignore[reportPrivateUsage]
         count = session.probe_count
         with session._cv:  # type: ignore[reportPrivateUsage]
-            request_probe_locked(session)
+            session._probes.request_probe_locked()
         assert session.wait_for_probe(after_count=count, timeout=5)
         assert session.probe_error is not None
         # The worker is still paused and responsive.
@@ -557,11 +553,11 @@ def test_failing_probe_publishes_error_when_still_current(
     for the UI (the original behaviour)."""
     session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
 
-    def fail(_s: Session) -> None:
+    def fail() -> None:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("nansense.probe._run_probe", fail)
-    run_probe_guarded(session)
+    monkeypatch.setattr(session._probes, "_run_probe", fail)
+    session._probes.run_probe_guarded()
     assert session.probe_error is not None and "boom" in session.probe_error
 
 
@@ -574,13 +570,13 @@ def test_failing_probe_does_not_publish_a_superseded_error(
     unconditionally, stranding an error the new config never cleared."""
     session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
 
-    def bump_then_fail(s: Session) -> None:
-        with s._cv:
-            s._probe_version += 1  # a newer request supersedes this run
+    def bump_then_fail() -> None:
+        with session._cv:
+            session._probes.request_probe_locked()
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("nansense.probe._run_probe", bump_then_fail)
-    run_probe_guarded(session)
+    monkeypatch.setattr(session._probes, "_run_probe", bump_then_fail)
+    session._probes.run_probe_guarded()
     assert session.probe_error is None
 
 
@@ -718,11 +714,11 @@ def test_shared_base_cache_keys_on_base_identity() -> None:
     """
     with paused_session(BnDropNet(), _bn_drop_step) as session:
         bases = session._snapshot_inputs()
-        first = _shared_base_caps(session, bases, "eval")
-        assert _shared_base_caps(session, bases, "eval") is first  # cache hit
-        assert _shared_base_caps(session, bases, "train") is not first  # mode differs
+        first = session._probes._shared_base_caps(bases, "eval")
+        assert session._probes._shared_base_caps(bases, "eval") is first  # cache hit
+        assert session._probes._shared_base_caps(bases, "train") is not first  # mode differs
         replacement = {name: t.clone() for name, t in bases.items()}
-        assert _shared_base_caps(session, replacement, "eval") is not first
+        assert session._probes._shared_base_caps(replacement, "eval") is not first
 
 
 def test_pinned_client_probe_recomputes_baseline_after_training() -> None:
@@ -767,9 +763,9 @@ def test_probe_clients_capped_lru() -> None:
     session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
     for i in range(_MAX_PROBE_CLIENTS + 3):
         session.register_probe_client(f"c{i}")
-    assert len(session._probe_clients) == _MAX_PROBE_CLIENTS
-    assert "c0" not in session._probe_clients  # oldest evicted
-    assert f"c{_MAX_PROBE_CLIENTS + 2}" in session._probe_clients  # newest kept
+    assert len(session._probes._clients) == _MAX_PROBE_CLIENTS
+    assert "c0" not in session._probes._clients  # oldest evicted
+    assert f"c{_MAX_PROBE_CLIENTS + 2}" in session._probes._clients  # newest kept
 
 
 def test_probe_clients_reaped_after_ttl() -> None:
@@ -777,10 +773,10 @@ def test_probe_clients_reaped_after_ttl() -> None:
     session = nansense.start(BnDropNet(), epochs=1, phases={"train": 1})
     session.register_probe_client("stale")
     session.register_probe_client("fresh")
-    session._probe_clients["stale"].expires_at = time.monotonic() - 1.0
-    gc_probe_clients(session)
-    assert "stale" not in session._probe_clients
-    assert "fresh" in session._probe_clients
+    session._probes._clients["stale"].expires_at = time.monotonic() - 1.0
+    session._probes.gc_probe_clients()
+    assert "stale" not in session._probes._clients
+    assert "fresh" in session._probes._clients
 
 
 def test_unregister_probe_client_drops_state() -> None:

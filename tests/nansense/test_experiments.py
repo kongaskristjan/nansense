@@ -90,14 +90,14 @@ def test_pause_loop_marks_experiment_running_before_running_it(
     called = threading.Event()
     running_at_entry: list[int | None] = []
 
-    def spy(session: Session, request: object) -> None:
+    def spy(request: object) -> None:
         # Record what the pause loop already set, then return without running
         # (and without clearing it): we only care about the dequeue invariant.
-        running_at_entry.append(session._experiment_running)  # type: ignore[attr-defined]
+        running_at_entry.append(session._experiments._running)  # type: ignore[attr-defined]
         called.set()
 
     with _paused_session() as (session, _):
-        monkeypatch.setattr(experiments_mod, "run_experiment_guarded", spy)
+        monkeypatch.setattr(session._experiments, "run_experiment_guarded", spy)
         seq = session.request_experiment(
             kind="deep_dream", layer="conv", params=_dream_params()
         )
@@ -309,14 +309,14 @@ def test_final_result_publishes_after_isolation_unwinds(
     with _paused_session() as (session, model):
         expected = [m.training for m in model.modules()]
         flags_at_publish: list[list[bool]] = []
-        publish = experiments._publish_experiment
+        publish = session._experiments._publish_experiment
 
-        def spy(sess: Session, result: ExperimentResult) -> None:
+        def spy(result: ExperimentResult) -> None:
             if result.done:
                 flags_at_publish.append([m.training for m in model.modules()])
-            publish(sess, result)
+            publish(result)
 
-        with mock.patch.object(experiments, "_publish_experiment", spy):
+        with mock.patch.object(session._experiments, "_publish_experiment", spy):
             session.request_experiment(kind=kind, layer="conv", params=params)
             assert session.wait_for_experiment(timeout=15)
         assert session.experiment_result is not None
@@ -383,13 +383,13 @@ def _published_results(
 ) -> tuple[int, list[experiments.ExperimentResult]]:
     """One deep-dream run's `seq` and every result it published, in order."""
     results: list[experiments.ExperimentResult] = []
-    original = experiments._publish_experiment
+    original = session._experiments._publish_experiment
 
-    def spy(target: Session, result: experiments.ExperimentResult) -> None:
+    def spy(result: experiments.ExperimentResult) -> None:
         results.append(result)
-        original(target, result)
+        original(result)
 
-    with mock.patch.object(experiments, "_publish_experiment", spy):
+    with mock.patch.object(session._experiments, "_publish_experiment", spy):
         seq = session.request_experiment(
             kind="deep_dream", layer="conv", params=_dream_params(**params)
         )
@@ -614,7 +614,7 @@ def test_a_locked_session_records_no_experiment_videos() -> None:
     seq = session.request_experiment(
         kind="deep_dream", layer="conv", params={}, video=True
     )
-    queued = [r for r in session._experiment_queue if r.seq == seq]
+    queued = [r for r in session._experiments._queue if r.seq == seq]
     assert queued and queued[0].video is False
 
 
@@ -717,7 +717,7 @@ def test_register_auto_experiment_supersedes_queued_request() -> None:
     second = session.register_auto_experiment(
         "page", kind="deep_dream", layer="conv", params={}
     )
-    queued = [r.seq for r in session._experiment_queue]
+    queued = [r.seq for r in session._experiments._queue]
     assert queued == [second] and first not in queued
 
 
@@ -745,8 +745,8 @@ def test_experiment_queue_state_counts_the_running_request() -> None:
     running = session.request_experiment(kind="deep_dream", layer="conv", params={})
     queued = session.request_experiment(kind="deep_dream", layer="conv", params={})
     # Mimic the pause loop picking the first request up.
-    session._experiment_queue.popleft()
-    session._experiment_running = running
+    session._experiments._queue.popleft()
+    session._experiments._running = running
     assert session.experiment_queue_state(running) == ExperimentQueueState("running", 0)
     assert session.experiment_queue_state(queued) == ExperimentQueueState("queued", 1)
 
@@ -764,15 +764,15 @@ def test_auto_experiments_awaiting_their_turn_stay_queued_and_cancellable() -> N
     ]
     seen: list[tuple[str, ...]] = []
 
-    def observe(_session: Session, request: object) -> None:
+    def observe(request: object) -> None:
         # Stands in for the run itself: records how every request reads at
         # the moment this one starts.
         seen.append(tuple(session.experiment_queue_state(s).stage for s in seqs))
         if len(seen) == 1:
             session.cancel_experiment(seqs[2])  # while it waits its turn
 
-    with mock.patch.object(experiments, "run_experiment_guarded", observe):
-        experiments.run_auto_experiments(session)
+    with mock.patch.object(session._experiments, "run_experiment_guarded", observe):
+        session._experiments.run_auto_experiments()
 
     # The two that hadn't started yet read as queued, not as gone.
     assert seen[0] == ("running", "queued", "queued")

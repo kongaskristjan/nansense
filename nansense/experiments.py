@@ -46,7 +46,8 @@ they work on *any* captured layer.
 from __future__ import annotations
 
 import time
-from collections import deque
+import threading
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
@@ -128,9 +129,7 @@ _CHANNELS_PARAM = ExperimentParam(
     "int",
     _DEFAULT_DREAM_BATCH,
     minimum=1,
-    tooltip=(
-        "How many of the layer's channels to dream on — one sample each"
-    ),
+    tooltip=("How many of the layer's channels to dream on — one sample each"),
 )
 _MINIMIZE_PARAM = ExperimentParam(
     "minimize",
@@ -260,6 +259,7 @@ EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
     ],
 }
 
+
 def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
     """Every kind's per-key defaults, with session overrides applied.
 
@@ -272,8 +272,6 @@ def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
         for spec in specs:
             values.setdefault(spec.key, overrides.get(spec.key, spec.default))
     return values
-
-
 
 
 # Per kind: (one-line summary, full description). The page shows the first
@@ -458,6 +456,7 @@ def _locked_params(params: dict[str, object]) -> dict[str, object]:
             out[key] = min(int(value), limit)
     return out
 
+
 # How long an auto-experiment registration survives without a heartbeat
 # (`touch_auto_experiment`). UI pages tick every ~0.2 s, so anything beyond
 # a few seconds means the page is gone.
@@ -477,259 +476,6 @@ class _AutoExperiment:
 
     request: ExperimentRequest
     expires_at: float | None
-
-
-def request_experiment(
-    session: Session,
-    *,
-    kind: str,
-    layer: str,
-    params: dict[str, object],
-    video: bool = False,
-) -> int:
-    """Implementation of `Session.request_experiment`."""
-    if kind not in EXPERIMENT_KINDS:
-        raise ValueError(
-            f"unknown experiment kind {kind!r}; "
-            f"expected one of {list(EXPERIMENT_KINDS)}"
-        )
-    with session._cv:
-        session._experiment_seq += 1
-        request = ExperimentRequest(
-            kind=kind,
-            layer=layer,
-            params=(
-                _locked_params(params) if session._locked else dict(params)
-            ),
-            seq=session._experiment_seq,
-            # A locked demo shares one training thread between anonymous
-            # visitors and caps every heavy knob for it; writing a video file
-            # per request is exactly the kind of unbounded work that cap is
-            # there to prevent, so recording is off there.
-            video=video and not session._locked,
-        )
-        if session._locked and len(session._experiment_queue) >= _LOCKED_MAX_QUEUE:
-            # Shared-demo backstop: publish a queue-full error for this seq
-            # (the requesting page polls it like any result) instead of
-            # letting one visitor pile up unbounded work. `_cv` is an RLock,
-            # so publishing under the held lock is fine.
-            _publish_experiment(
-                session,
-                _error(
-                    request,
-                    "the experiment queue is full — try again in a moment",
-                ),
-            )
-            return request.seq
-        session._experiment_queue.append(request)
-        session._cv.notify_all()
-        return session._experiment_seq
-
-
-def cancel_experiment(session: Session, seq: int | None = None) -> None:
-    """Implementation of `Session.cancel_experiment`."""
-    with session._cv:
-        if seq is None:
-            session._experiment_queue.clear()
-            if session._experiment_running is not None:
-                session._experiment_cancelled.add(session._experiment_running)
-        else:
-            queued = [r for r in session._experiment_queue if r.seq != seq]
-            if len(queued) != len(session._experiment_queue):
-                session._experiment_queue = deque(queued)
-            elif session._experiment_running == seq:
-                session._experiment_cancelled.add(seq)
-        session._cv.notify_all()
-
-
-def experiment_queue_state(session: Session, seq: int) -> ExperimentQueueState:
-    """Implementation of `Session.experiment_queue_state`."""
-    with session._cv:
-        running = session._experiment_running
-        if running == seq:
-            return ExperimentQueueState("running")
-        for position, request in enumerate(session._experiment_queue):
-            if request.seq == seq:
-                # A run already in flight is one more wait in front of it.
-                return ExperimentQueueState(
-                    "queued", position + (1 if running is not None else 0)
-                )
-        return ExperimentQueueState("absent")
-
-
-def register_auto_experiment(
-    session: Session, key: str, *, kind: str, layer: str, params: dict[str, object]
-) -> int:
-    """Implementation of `Session.register_auto_experiment`."""
-    if kind not in EXPERIMENT_KINDS:
-        raise ValueError(
-            f"unknown experiment kind {kind!r}; "
-            f"expected one of {list(EXPERIMENT_KINDS)}"
-        )
-    with session._cv:
-        # A re-registration (e.g. auto-run on a parameter change) supersedes
-        # this key's previous request: drop the old one if it is still queued
-        # so a burst of edits never floods the pause loop with stale runs —
-        # only the latest queued request for the key ever executes. A request
-        # already mid-flight stays running (it cannot be un-run), but the
-        # superseding one is queued behind it, so the view still ends on the
-        # up-to-date parameters.
-        prev = session._auto_experiments.get(key)
-        if prev is not None:
-            session._experiment_queue = deque(
-                r for r in session._experiment_queue if r.seq != prev.request.seq
-            )
-        session._experiment_seq += 1
-        request = ExperimentRequest(
-            kind=kind,
-            layer=layer,
-            params=(
-                _locked_params(params) if session._locked else dict(params)
-            ),
-            seq=session._experiment_seq,
-        )
-        session._auto_experiments[key] = _AutoExperiment(
-            request=request,
-            expires_at=time.monotonic() + _AUTO_EXPERIMENT_TTL,
-        )
-        session._experiment_queue.append(request)
-        session._cv.notify_all()
-        return request.seq
-
-
-def touch_auto_experiment(session: Session, key: str) -> None:
-    """Implementation of `Session.touch_auto_experiment`."""
-    with session._cv:
-        entry = session._auto_experiments.get(key)
-        if entry is not None and entry.expires_at is not None:
-            entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
-
-
-def pin_auto_experiment(session: Session, key: str) -> bool:
-    """Implementation of `Session.pin_auto_experiment`."""
-    with session._cv:
-        entry = session._auto_experiments.get(key)
-        if entry is None:
-            return False
-        entry.expires_at = None
-        return True
-
-
-def unpin_auto_experiment(session: Session, key: str) -> None:
-    """Implementation of `Session.unpin_auto_experiment`."""
-    with session._cv:
-        entry = session._auto_experiments.get(key)
-        if entry is not None and entry.expires_at is None:
-            entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
-
-
-def unregister_auto_experiment(session: Session, key: str) -> None:
-    """Implementation of `Session.unregister_auto_experiment`."""
-    with session._cv:
-        session._auto_experiments.pop(key, None)
-
-
-def run_auto_experiments(session: Session) -> None:
-    """Re-run every live auto experiment (training thread, post-publish).
-
-    Runs at every snapshot publish — frequency updates and mode
-    captures alike — so open experiment pages and recordings track the
-    evolving weights. Expired registrations (no page heartbeat, not
-    pinned by a recording) are dropped first. A registration whose
-    initial request is still queued is taken over here: the queued
-    duplicate is dropped so the request runs exactly once per update.
-
-    The batch's requests then go back on the queue in the order they run,
-    ahead of anything the pause loop still holds (this publish path owns
-    the training thread until the last of them finishes), and each is
-    popped as it starts. So a request waiting its turn keeps reading as
-    queued to `experiment_queue_state` instead of vanishing for the
-    duration, and `cancel_experiment` on it still bites.
-    """
-    now = time.monotonic()
-    with session._cv:
-        for key in [
-            k
-            for k, e in session._auto_experiments.items()
-            if e.expires_at is not None and e.expires_at < now
-        ]:
-            del session._auto_experiments[key]
-        requests = [e.request for e in session._auto_experiments.values()]
-        seqs = {r.seq for r in requests}
-        if seqs:
-            session._experiment_queue = deque(
-                requests + [r for r in session._experiment_queue if r.seq not in seqs]
-            )
-    for request in requests:
-        with session._cv:
-            # Pop and mark running under one lock, exactly as the pause loop
-            # hands a request over: a cancel landing in between would
-            # otherwise find the seq neither queued nor running and be a
-            # silent no-op, letting a cancelled experiment run. A request
-            # already gone from the queue *was* cancelled while it waited
-            # its turn, so it is skipped rather than run.
-            queued = deque(
-                r for r in session._experiment_queue if r.seq != request.seq
-            )
-            if len(queued) == len(session._experiment_queue):
-                continue
-            session._experiment_queue = queued
-            session._experiment_running = request.seq
-        run_experiment_guarded(session, request)
-
-
-def run_experiment_guarded(session: Session, request: ExperimentRequest) -> None:
-    """Drive one experiment to completion on the training thread.
-
-    Streams every yielded progress result through `_publish_experiment`.
-    The abort predicate stops the run on `cancel_experiment` (for this
-    seq), on the `_EXPERIMENT_TIME_LIMIT` wall-clock deadline expiring,
-    and on anything that ends the pause — resume commands, a pending
-    time-travel jump, `close()` — so the pause loop regains control
-    promptly; queued requests from other clients wait their turn
-    instead of aborting the run. A failing experiment publishes an
-    error result instead of killing the training thread.
-
-    A `video` request additionally draws every one of those results into an
-    `ExperimentClip` as it goes, and the *final* result carries the finished
-    file's path — so whoever is polling learns about the video from the same
-    result that tells them the run is over, with nothing left to encode.
-    """
-    with session._cv:
-        resume_seen = session._resume_token
-        session._experiment_running = request.seq
-    deadline = time.monotonic() + _EXPERIMENT_TIME_LIMIT
-
-    def should_abort() -> bool:
-        if time.monotonic() >= deadline:
-            return True
-        with session._cv:
-            return (
-                request.seq in session._experiment_cancelled
-                or session._closed
-                or session._pending_jump is not None
-                or session._resume_token != resume_seen
-            )
-
-    clip = _experiment_clip(session, request)
-    try:
-        for partial in run(session, request, should_abort):
-            if clip is not None:
-                clip.append(partial)
-                if partial.done:
-                    partial = _with_video(partial, clip)
-            _publish_experiment(session, partial)
-    except Exception as e:  # noqa: BLE001 — surfaced via the result
-        failure = _error(request, f"{type(e).__name__}: {e}")
-        _publish_experiment(
-            session, failure if clip is None else _with_video(failure, clip)
-        )
-    finally:
-        if clip is not None:
-            clip.finish()  # a no-op once `_with_video` has closed it
-        with session._cv:
-            session._experiment_running = None
-            session._experiment_cancelled.discard(request.seq)
 
 
 def _experiment_clip(
@@ -761,16 +507,6 @@ def _with_video(result: ExperimentResult, clip: ExperimentClip) -> ExperimentRes
     )
 
 
-def _publish_experiment(session: Session, result: ExperimentResult) -> None:
-    with session._cv:
-        session._experiment_results[result.seq] = result
-        session._experiment_results.move_to_end(result.seq)
-        while len(session._experiment_results) > _EXPERIMENT_RESULTS_KEPT:
-            session._experiment_results.popitem(last=False)
-        session._experiment_result = result
-        session._cv.notify_all()
-
-
 # --- Experiment-kind implementations ---------------------------------------
 
 
@@ -796,9 +532,7 @@ def _captum_input(
     """
     base = session._snapshot_input()
     if base is None:
-        return _error(
-            request, "no input available yet — run at least one batch first"
-        )
+        return _error(request, "no input available yet — run at least one batch first")
     if base.ndim != 4:
         return _error(request, "experiments need an image input [B, C, H, W]")
     batch = max(1, int_param(request.params, "batch", _DEFAULT_DREAM_BATCH))
@@ -822,9 +556,7 @@ def _dream_start(
     """
     base = session._snapshot_input()
     if base is None:
-        return _error(
-            request, "no input available yet — run at least one batch first"
-        )
+        return _error(request, "no input available yet — run at least one batch first")
     if base.ndim < 2:
         return _error(request, "deep dream needs a batched input [B, ...]")
     base = base.detach().float()
@@ -837,9 +569,7 @@ def _dream_start(
     return float(base.mean()) + float(base.std()) * noise
 
 
-def _value_bounds(
-    channels: int, mean: object, std: object
-) -> tuple[Tensor, Tensor]:
+def _value_bounds(channels: int, mean: object, std: object) -> tuple[Tensor, Tensor]:
     """Per-channel input-space bounds of the displayable pixel range.
 
     The UI denormalizes with `x * std + mean` and clamps to `[0, 1]`, so the
@@ -971,8 +701,8 @@ def _run_deep_dream(
         return
     spatial = x0.ndim == 4  # the regularizers below act on image axes only
     lo, hi = _value_bounds(int(x0.shape[1]), p.get("mean"), p.get("std"))
-    publish_every = 1 if bool_param(p, "all_steps", False) else max(
-        1, steps // _PUBLISH_COUNT
+    publish_every = (
+        1 if bool_param(p, "all_steps", False) else max(1, steps // _PUBLISH_COUNT)
     )
     reference: Tensor | None = None
 
@@ -1196,3 +926,333 @@ def _run_captum(
         attribution=attribution.detach().cpu().float(),
         reference=x0,
     )
+
+
+class ExperimentManager:
+    """Own experiment queues, cancellation, auto registrations, and result eviction."""
+
+    def __init__(
+        self,
+        cv: threading.Condition,
+        *,
+        locked: Callable[[], bool],
+        control_state: Callable[[], tuple[int, bool, bool]],
+        run: Callable[
+            [ExperimentRequest, Callable[[], bool]], Iterator[ExperimentResult]
+        ],
+        make_clip: Callable[[ExperimentRequest], ExperimentClip | None],
+    ) -> None:
+        self._cv = cv
+        self._locked = locked
+        self._control_state = control_state
+        self._run = run
+        self._make_clip = make_clip
+        self._queue: deque[ExperimentRequest] = deque()
+        self._seq = 0
+        self._results: OrderedDict[int, ExperimentResult] = OrderedDict()
+        self._result: ExperimentResult | None = None
+        self._cancelled: set[int] = set()
+        self._running: int | None = None
+        self._auto: dict[str, _AutoExperiment] = {}
+        self._auto_run = True
+        self._defaults: dict[str, object] = {}
+
+    @property
+    def result(self) -> ExperimentResult | None:
+        return self._result
+
+    def result_for(self, seq: int) -> ExperimentResult | None:
+        with self._cv:
+            return self._results.get(seq)
+
+    @property
+    def pending(self) -> bool:
+        with self._cv:
+            return bool(self._queue)
+
+    def take_pending(self) -> ExperimentRequest | None:
+        """Dequeue and mark running together so cancellation cannot miss a request."""
+        with self._cv:
+            if not self._queue:
+                return None
+            request = self._queue.popleft()
+            self._running = request.seq
+            return request
+
+    def wait(self, *, timeout: float | None) -> bool:
+        with self._cv:
+            return self._cv.wait_for(
+                lambda: (
+                    (
+                        self._result is not None
+                        and self._result.done
+                        and self._result.seq == self._seq
+                    )
+                    or self._control_state()[1]
+                ),
+                timeout=timeout,
+            )
+
+    @property
+    def auto_run(self) -> bool:
+        with self._cv:
+            return self._auto_run
+
+    def set_auto_run(self, enabled: bool) -> None:
+        with self._cv:
+            self._auto_run = bool(enabled)
+            self._cv.notify_all()
+
+    @property
+    def defaults(self) -> dict[str, object]:
+        with self._cv:
+            return dict(self._defaults)
+
+    def set_defaults(self, defaults: dict[str, object]) -> None:
+        with self._cv:
+            self._defaults.update(defaults)
+            self._cv.notify_all()
+
+    def request_experiment(
+        self,
+        *,
+        kind: str,
+        layer: str,
+        params: dict[str, object],
+        video: bool = False,
+    ) -> int:
+        """Implementation of `Session.request_experiment`."""
+        if kind not in EXPERIMENT_KINDS:
+            raise ValueError(
+                f"unknown experiment kind {kind!r}; "
+                f"expected one of {list(EXPERIMENT_KINDS)}"
+            )
+        with self._cv:
+            self._seq += 1
+            request = ExperimentRequest(
+                kind=kind,
+                layer=layer,
+                params=(_locked_params(params) if self._locked() else dict(params)),
+                seq=self._seq,
+                # A locked demo shares one training thread between anonymous
+                # visitors and caps every heavy knob for it; writing a video file
+                # per request is exactly the kind of unbounded work that cap is
+                # there to prevent, so recording is off there.
+                video=video and not self._locked(),
+            )
+            if self._locked() and len(self._queue) >= _LOCKED_MAX_QUEUE:
+                # Shared-demo backstop: publish a queue-full error for this seq
+                # (the requesting page polls it like any result) instead of
+                # letting one visitor pile up unbounded work. `_cv` is an RLock,
+                # so publishing under the held lock is fine.
+                self._publish_experiment(
+                    _error(
+                        request,
+                        "the experiment queue is full — try again in a moment",
+                    ),
+                )
+                return request.seq
+            self._queue.append(request)
+            self._cv.notify_all()
+            return self._seq
+
+    def cancel_experiment(self, seq: int | None = None) -> None:
+        """Implementation of `Session.cancel_experiment`."""
+        with self._cv:
+            if seq is None:
+                self._queue.clear()
+                if self._running is not None:
+                    self._cancelled.add(self._running)
+            else:
+                queued = [r for r in self._queue if r.seq != seq]
+                if len(queued) != len(self._queue):
+                    self._queue = deque(queued)
+                elif self._running == seq:
+                    self._cancelled.add(seq)
+            self._cv.notify_all()
+
+    def experiment_queue_state(self, seq: int) -> ExperimentQueueState:
+        """Implementation of `Session.experiment_queue_state`."""
+        with self._cv:
+            running = self._running
+            if running == seq:
+                return ExperimentQueueState("running")
+            for position, request in enumerate(self._queue):
+                if request.seq == seq:
+                    # A run already in flight is one more wait in front of it.
+                    return ExperimentQueueState(
+                        "queued", position + (1 if running is not None else 0)
+                    )
+            return ExperimentQueueState("absent")
+
+    def register_auto_experiment(
+        self, key: str, *, kind: str, layer: str, params: dict[str, object]
+    ) -> int:
+        """Implementation of `Session.register_auto_experiment`."""
+        if kind not in EXPERIMENT_KINDS:
+            raise ValueError(
+                f"unknown experiment kind {kind!r}; "
+                f"expected one of {list(EXPERIMENT_KINDS)}"
+            )
+        with self._cv:
+            # A re-registration (e.g. auto-run on a parameter change) supersedes
+            # this key's previous request: drop the old one if it is still queued
+            # so a burst of edits never floods the pause loop with stale runs —
+            # only the latest queued request for the key ever executes. A request
+            # already mid-flight stays running (it cannot be un-run), but the
+            # superseding one is queued behind it, so the view still ends on the
+            # up-to-date parameters.
+            prev = self._auto.get(key)
+            if prev is not None:
+                self._queue = deque(r for r in self._queue if r.seq != prev.request.seq)
+            self._seq += 1
+            request = ExperimentRequest(
+                kind=kind,
+                layer=layer,
+                params=(_locked_params(params) if self._locked() else dict(params)),
+                seq=self._seq,
+            )
+            self._auto[key] = _AutoExperiment(
+                request=request,
+                expires_at=time.monotonic() + _AUTO_EXPERIMENT_TTL,
+            )
+            self._queue.append(request)
+            self._cv.notify_all()
+            return request.seq
+
+    def touch_auto_experiment(self, key: str) -> None:
+        """Implementation of `Session.touch_auto_experiment`."""
+        with self._cv:
+            entry = self._auto.get(key)
+            if entry is not None and entry.expires_at is not None:
+                entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+
+    def pin_auto_experiment(self, key: str) -> bool:
+        """Implementation of `Session.pin_auto_experiment`."""
+        with self._cv:
+            entry = self._auto.get(key)
+            if entry is None:
+                return False
+            entry.expires_at = None
+            return True
+
+    def unpin_auto_experiment(self, key: str) -> None:
+        """Implementation of `Session.unpin_auto_experiment`."""
+        with self._cv:
+            entry = self._auto.get(key)
+            if entry is not None and entry.expires_at is None:
+                entry.expires_at = time.monotonic() + _AUTO_EXPERIMENT_TTL
+
+    def unregister_auto_experiment(self, key: str) -> None:
+        """Implementation of `Session.unregister_auto_experiment`."""
+        with self._cv:
+            self._auto.pop(key, None)
+
+    def run_auto_experiments(self) -> None:
+        """Re-run every live auto experiment (training thread, post-publish).
+
+        Runs at every snapshot publish — frequency updates and mode
+        captures alike — so open experiment pages and recordings track the
+        evolving weights. Expired registrations (no page heartbeat, not
+        pinned by a recording) are dropped first. A registration whose
+        initial request is still queued is taken over here: the queued
+        duplicate is dropped so the request runs exactly once per update.
+
+        The batch's requests then go back on the queue in the order they run,
+        ahead of anything the pause loop still holds (this publish path owns
+        the training thread until the last of them finishes), and each is
+        popped as it starts. So a request waiting its turn keeps reading as
+        queued to `experiment_queue_state` instead of vanishing for the
+        duration, and `cancel_experiment` on it still bites.
+        """
+        now = time.monotonic()
+        with self._cv:
+            for key in [
+                k
+                for k, e in self._auto.items()
+                if e.expires_at is not None and e.expires_at < now
+            ]:
+                del self._auto[key]
+            requests = [e.request for e in self._auto.values()]
+            seqs = {r.seq for r in requests}
+            if seqs:
+                self._queue = deque(
+                    requests + [r for r in self._queue if r.seq not in seqs]
+                )
+        for request in requests:
+            with self._cv:
+                # Pop and mark running under one lock, exactly as the pause loop
+                # hands a request over: a cancel landing in between would
+                # otherwise find the seq neither queued nor running and be a
+                # silent no-op, letting a cancelled experiment run. A request
+                # already gone from the queue *was* cancelled while it waited
+                # its turn, so it is skipped rather than run.
+                queued = deque(r for r in self._queue if r.seq != request.seq)
+                if len(queued) == len(self._queue):
+                    continue
+                self._queue = queued
+                self._running = request.seq
+            self.run_experiment_guarded(request)
+
+    def run_experiment_guarded(self, request: ExperimentRequest) -> None:
+        """Drive one experiment to completion on the training thread.
+
+        Streams every yielded progress result through `_publish_experiment`.
+        The abort predicate stops the run on `cancel_experiment` (for this
+        seq), on the `_EXPERIMENT_TIME_LIMIT` wall-clock deadline expiring,
+        and on anything that ends the pause — resume commands, a pending
+        time-travel jump, `close()` — so the pause loop regains control
+        promptly; queued requests from other clients wait their turn
+        instead of aborting the run. A failing experiment publishes an
+        error result instead of killing the training thread.
+
+        A `video` request additionally draws every one of those results into an
+        `ExperimentClip` as it goes, and the *final* result carries the finished
+        file's path — so whoever is polling learns about the video from the same
+        result that tells them the run is over, with nothing left to encode.
+        """
+        with self._cv:
+            resume_seen, _, _ = self._control_state()
+            self._running = request.seq
+        deadline = time.monotonic() + _EXPERIMENT_TIME_LIMIT
+
+        def should_abort() -> bool:
+            if time.monotonic() >= deadline:
+                return True
+            with self._cv:
+                resume, closed, jumping = self._control_state()
+                return (
+                    request.seq in self._cancelled
+                    or closed
+                    or jumping
+                    or resume != resume_seen
+                )
+
+        clip = self._make_clip(request)
+        try:
+            for partial in self._run(request, should_abort):
+                if clip is not None:
+                    clip.append(partial)
+                    if partial.done:
+                        partial = _with_video(partial, clip)
+                self._publish_experiment(partial)
+        except Exception as e:  # noqa: BLE001 — surfaced via the result
+            failure = _error(request, f"{type(e).__name__}: {e}")
+            self._publish_experiment(
+                failure if clip is None else _with_video(failure, clip)
+            )
+        finally:
+            if clip is not None:
+                clip.finish()  # a no-op once `_with_video` has closed it
+            with self._cv:
+                self._running = None
+                self._cancelled.discard(request.seq)
+
+    def _publish_experiment(self, result: ExperimentResult) -> None:
+        with self._cv:
+            self._results[result.seq] = result
+            self._results.move_to_end(result.seq)
+            while len(self._results) > _EXPERIMENT_RESULTS_KEPT:
+                self._results.popitem(last=False)
+            self._result = result
+            self._cv.notify_all()

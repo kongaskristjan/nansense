@@ -36,7 +36,6 @@ import contextlib
 import sys
 import threading
 import warnings
-from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -69,7 +68,6 @@ from nansense.experiments import (
     ExperimentQueueState,
     ExperimentRequest,
     ExperimentResult,
-    _AutoExperiment,
 )
 from nansense.instruments import (
     InstrumentManager,
@@ -78,7 +76,7 @@ from nansense.instruments import (
     MetricsSnapshot,
     WeightContext,
 )
-from nansense.probe import PerturbationMap, ProbeResult, _ProbeClient
+from nansense.probe import PerturbationMap, ProbeResult
 from nansense.restore import (
     DEFAULT_CACHE_DIR,
     TimeTravelError,
@@ -436,42 +434,18 @@ class Session:
         # match, so no initial `configure` flush is needed.
         self._watch_performance = WatchPerformance()
         self._patch_layers: frozenset[str] | None = None
-        # Probe state (see nansense.probe). Config fields are mutated by the
-        # UI thread under `_cv`; `_probe_result` is published by the training
-        # thread (also under `_cv`, so a stale in-flight run can be detected
-        # via `_probe_version` and dropped instead of overwriting newer
-        # config's result).
-        self._pinned_inputs: dict[str, Tensor] | None = None
-        self._pinned_position: BatchPosition | None = None
-        self._perturbations: PerturbationMap = {}
-        self._probe_mode: str = "unchanged"
-        self._probe_request = False
-        self._probe_version = 0
-        self._probe_count = 0
-        self._probe_result: ProbeResult | None = None
-        self._probe_error: str | None = None
-        # Per-client perturbation state for locked (shared demo) sessions: each
-        # browser connection perturbs its own copy without touching what other
-        # visitors see (see `nansense.probe._ProbeClient`). Keyed by a
-        # per-connection key, LRU-capped, and reaped on a heartbeat TTL. The
-        # base activations every client diffs against are computed once and
-        # cached in `_shared_base_cache` (the frozen input never changes while
-        # locked), so a client stores only its own perturbed forward.
-        self._probe_clients: OrderedDict[str, _ProbeClient] = OrderedDict()
-        self._shared_base_cache: (
-            tuple[dict[str, Tensor], str, dict[str, Tensor]] | None
-        ) = None
-        # Experiment state (see nansense.experiments): requests queue up and
-        # the pause loop drains them in order, so concurrent clients (browser
-        # tabs) don't supersede each other. Results are kept per request seq
-        # (bounded; each client polls its own via `experiment_result_for`)
-        # alongside the latest one; cancellation is per seq too.
-        self._experiment_queue: deque[ExperimentRequest] = deque()
-        self._experiment_seq = 0
-        self._experiment_results: OrderedDict[int, ExperimentResult] = OrderedDict()
-        self._experiment_result: ExperimentResult | None = None
-        self._experiment_cancelled: set[int] = set()
-        self._experiment_running: int | None = None
+        self._probes = probe.ProbeManager(
+            self._cv, enabled=enabled, input_names=tuple(self._input_names),
+            snapshot=lambda: self.snapshot,
+            forward=lambda inputs, mode: probe._probe_forward(self, inputs, mode=mode),
+            closed=lambda: self.closed,
+        )
+        self._experiments = experiments.ExperimentManager(
+            self._cv, locked=lambda: self.locked,
+            control_state=self._experiment_control_state,
+            run=lambda request, abort: experiments.run(self, request, abort),
+            make_clip=lambda request: experiments._experiment_clip(self, request),
+        )
         # Visualization update frequency (see `UpdateFrequency`): mutated by
         # the UI under `_cv`; `_freq_counter` (batch unit) and `_freq_epoch`
         # (epoch unit, the last epoch the detector saw) are touched by the
@@ -479,17 +453,6 @@ class Session:
         self._update_frequency = UpdateFrequency()
         self._freq_counter = 0
         self._freq_epoch: int | None = None
-        # Experiments re-run on every update, keyed by the registering
-        # client (a UI page or a recording). Mutated under `_cv`.
-        self._auto_experiments: dict[str, _AutoExperiment] = {}
-        # Session-wide "auto-run experiments" preference (shared across tabs):
-        # when set, experiment pages re-run on every parameter change instead
-        # of waiting for a manual Run (the init run self-starts either way).
-        # Default on.
-        self._auto_run_experiments = True
-        # Per-key overrides for the experiment form's default parameter
-        # values (see `set_experiment_defaults`). Mutated under `_cv`.
-        self._experiment_defaults: dict[str, object] = {}
         # Per-view video recording (see `nansense.recording`); created
         # lazily on first UI access so headless sessions never import the
         # rendering stack.
@@ -1114,12 +1077,12 @@ class Session:
         Same lock-free read contract as `snapshot`: an atomic reference to a
         frozen dataclass of CPU tensors, safe to hold from any thread.
         """
-        return self._probe_result
+        return self._probes.result
 
     @property
     def probe_error(self) -> str | None:
         """Why the last probe run failed, or `None` when it succeeded."""
-        return self._probe_error
+        return self._probes.error
 
     def probe_result_for(self, client: str | None = None) -> ProbeResult | None:
         """This connection's probe result, or the shared one when `client` is None.
@@ -1129,37 +1092,30 @@ class Session:
         private result (locked shared-demo perturbation). The UI reads through
         this uniformly, passing its key when locked and `None` otherwise.
         """
-        if client is None:
-            return self._probe_result
-        return probe.client_probe_result(self, client)
+        return self._probes.result if client is None else self._probes.client_probe_result(client)
 
     def probe_error_for(self, client: str | None = None) -> str | None:
         """This connection's probe error, or the shared one when `client` is None."""
-        if client is None:
-            return self._probe_error
-        return probe.client_probe_error(self, client)
+        return self._probes.error if client is None else self._probes.client_probe_error(client)
 
     @property
     def probe_count(self) -> int:
         """Monotonic count of completed probe runs (including failed ones)."""
-        with self._cv:
-            return self._probe_count
+        return self._probes.count
 
     @property
     def probe_mode(self) -> str:
         """Train/eval handling for probe forwards: "unchanged", "eval", or "train"."""
-        with self._cv:
-            return self._probe_mode
+        return self._probes.mode
 
     @property
     def is_pinned(self) -> bool:
-        with self._cv:
-            return self._pinned_inputs is not None
+        return self._probes.is_pinned
 
     @property
     def pinned_position(self) -> BatchPosition | None:
         """Where the pinned input was captured, or `None` when not pinned."""
-        return self._pinned_position
+        return self._probes.pinned_position
 
     def pin_current_batch(self) -> bool:
         """Pin the last captured batch's input as the probe input.
@@ -1178,7 +1134,7 @@ class Session:
         """
         if self._locked:
             return False
-        return probe.pin_current_batch(self)
+        return self._probes.pin_current_batch()
 
     def unpin_batch(self) -> None:
         """Drop the pinned input (and the probe result, absent perturbations).
@@ -1187,19 +1143,18 @@ class Session:
         """
         if self._locked:
             return
-        probe.unpin_batch(self)
+        self._probes.unpin_batch()
 
     @property
     def perturbations(self) -> PerturbationMap:
         """Copy of the active perturbations: (input, sample, index) -> values."""
-        with self._cv:
-            return dict(self._perturbations)
+        return self._probes.perturbations
 
     def perturbations_for(self, client: str | None = None) -> PerturbationMap:
         """This connection's perturbations, or the shared ones when `client` is None."""
         if client is None:
             return self.perturbations
-        return probe.client_perturbations(self, client)
+        return self._probes.client_perturbations(client)
 
     def register_probe_client(self, key: str) -> None:
         """Register a per-connection perturbation container (locked sessions).
@@ -1212,15 +1167,15 @@ class Session:
         """
         if not self._enabled:
             return
-        probe.register_probe_client(self, key)
+        self._probes.register_probe_client(key)
 
     def touch_probe_client(self, key: str) -> None:
         """Heartbeat `key`'s perturbation container so it isn't reaped."""
-        probe.touch_probe_client(self, key)
+        self._probes.touch_probe_client(key)
 
     def unregister_probe_client(self, key: str) -> None:
         """Drop `key`'s perturbation container (its perturbations and result)."""
-        probe.unregister_probe_client(self, key)
+        self._probes.unregister_probe_client(key)
 
     def add_perturbation(
         self,
@@ -1249,9 +1204,7 @@ class Session:
         edits their own copy without changing what others see.
         """
         if client is not None:
-            probe.add_perturbation_for(
-                self,
-                client,
+            self._probes.add_perturbation_for(client,
                 input_name=input_name,
                 sample=sample,
                 index=index,
@@ -1260,8 +1213,7 @@ class Session:
             return
         if self._locked:
             return
-        probe.add_perturbation(
-            self, input_name=input_name, sample=sample, index=index, values=values
+        self._probes.add_perturbation(input_name=input_name, sample=sample, index=index, values=values
         )
 
     def clear_perturbations(self, *, client: str | None = None) -> None:
@@ -1271,11 +1223,11 @@ class Session:
         connection's private perturbations instead (allowed while locked).
         """
         if client is not None:
-            probe.clear_perturbations_for(self, client)
+            self._probes.clear_perturbations_for(client)
             return
         if self._locked:
             return
-        probe.clear_perturbations(self)
+        self._probes.clear_perturbations()
 
     def set_probe_mode(self, mode: str) -> None:
         """Set train/eval handling for probe forwards.
@@ -1296,7 +1248,7 @@ class Session:
         """
         if self._locked:
             return
-        probe.set_probe_mode(self, mode)
+        self._probes.set_probe_mode(mode)
 
     def wait_for_probe(
         self,
@@ -1313,27 +1265,14 @@ class Session:
         per-connection `client` key waits on that client's private run count
         instead of the shared one.
         """
-        with self._cv:
-            if client is None:
-                return self._cv.wait_for(
-                    lambda: self._probe_count > after_count or self._closed,
-                    timeout=timeout,
-                )
-            return self._cv.wait_for(
-                lambda: (
-                    (c := self._probe_clients.get(client)) is not None
-                    and c.count > after_count
-                )
-                or self._closed,
-                timeout=timeout,
-            )
+        return self._probes.wait(after_count=after_count, timeout=timeout, client=client)
 
     @property
     def experiment_result(self) -> ExperimentResult | None:
         """The latest experiment progress/outcome (lock-free read, like
         `snapshot`): a frozen dataclass of CPU tensors, or `None` before the
         first run."""
-        return self._experiment_result
+        return self._experiments.result
 
     def experiment_result_for(self, seq: int) -> ExperimentResult | None:
         """The latest progress/outcome of one request, by its seq.
@@ -1344,14 +1283,12 @@ class Session:
         result has been evicted (only the `_EXPERIMENT_RESULTS_KEPT` most
         recently updated seqs are retained).
         """
-        with self._cv:
-            return self._experiment_results.get(seq)
+        return self._experiments.result_for(seq)
 
     @property
     def experiment_pending(self) -> bool:
         """Whether any request is queued but not yet picked up."""
-        with self._cv:
-            return bool(self._experiment_queue)
+        return self._experiments.pending
 
     def experiment_queue_state(self, seq: int) -> ExperimentQueueState:
         """Where request `seq` sits while `experiment_result_for` is empty.
@@ -1362,7 +1299,7 @@ class Session:
         `"running"`, `"queued"` (with how many requests are `ahead`), or
         `"absent"`. Front-ends use it to say which, instead of guessing.
         """
-        return experiments.experiment_queue_state(self, seq)
+        return self._experiments.experiment_queue_state(seq)
 
     def request_experiment(
         self, *, kind: str, layer: str, params: dict[str, object], video: bool = False
@@ -1381,8 +1318,7 @@ class Session:
         `all_steps` param to record every step rather than every ~15th).
         Ignored on a locked session.
         """
-        return experiments.request_experiment(
-            self, kind=kind, layer=layer, params=params, video=video
+        return self._experiments.request_experiment(kind=kind, layer=layer, params=params, video=video
         )
 
     def cancel_experiment(self, seq: int | None = None) -> None:
@@ -1392,7 +1328,7 @@ class Session:
         at its next abort check and stops. Other clients' requests are
         untouched when a seq is given.
         """
-        experiments.cancel_experiment(self, seq)
+        self._experiments.cancel_experiment(seq)
 
     def wait_for_experiment(self, *, timeout: float | None = None) -> bool:
         """Block until the latest request publishes its final result.
@@ -1400,16 +1336,7 @@ class Session:
         The experiment counterpart of `wait_until_paused` / `wait_for_probe`,
         used by tests to synchronize without polling.
         """
-        with self._cv:
-            return self._cv.wait_for(
-                lambda: (
-                    self._experiment_result is not None
-                    and self._experiment_result.done
-                    and self._experiment_result.seq == self._experiment_seq
-                )
-                or self._closed,
-                timeout=timeout,
-            )
+        return self._experiments.wait(timeout=timeout)
 
     @property
     def update_frequency(self) -> UpdateFrequency:
@@ -1461,19 +1388,15 @@ class Session:
         still runs once on init but re-runs only on a manual Run. Default
         `True`.
         """
-        with self._cv:
-            return self._auto_run_experiments
+        return self._experiments.auto_run
 
     def set_auto_run_experiments(self, enabled: bool) -> None:
         """Set the shared auto-run-experiments preference (see the getter).
 
         No-op on a locked session.
         """
-        if self._locked:
-            return
-        with self._cv:
-            self._auto_run_experiments = bool(enabled)
-            self._cv.notify_all()
+        if not self._locked:
+            self._experiments.set_auto_run(enabled)
 
     @property
     def experiment_defaults(self) -> dict[str, object]:
@@ -1484,8 +1407,7 @@ class Session:
         defaults, and the user can still change them freely (up to any locked
         ceiling). Empty unless `set_experiment_defaults` was called.
         """
-        with self._cv:
-            return dict(self._experiment_defaults)
+        return self._experiments.defaults
 
     def set_experiment_defaults(self, **defaults: object) -> None:
         """Override the experiment form's default parameter values.
@@ -1495,11 +1417,8 @@ class Session:
         are already open. Arm before `lock`: like the other global settings,
         this is a no-op on a locked session.
         """
-        if self._locked:
-            return
-        with self._cv:
-            self._experiment_defaults.update(defaults)
-            self._cv.notify_all()
+        if not self._locked:
+            self._experiments.set_defaults(defaults)
 
     @property
     def debug_settings(self) -> DebugSettings:
@@ -1698,27 +1617,26 @@ class Session:
         recording (`pin_auto_experiment`). Re-registering a key replaces its
         request. Returns the request's seq.
         """
-        return experiments.register_auto_experiment(
-            self, key, kind=kind, layer=layer, params=params
+        return self._experiments.register_auto_experiment(key, kind=kind, layer=layer, params=params
         )
 
     def touch_auto_experiment(self, key: str) -> None:
         """Heartbeat: keep `key`'s auto experiment alive (no-op when pinned)."""
-        experiments.touch_auto_experiment(self, key)
+        self._experiments.touch_auto_experiment(key)
 
     def pin_auto_experiment(self, key: str) -> bool:
         """Keep `key`'s auto experiment alive indefinitely (recordings).
 
         Returns `False` when no such registration exists."""
-        return experiments.pin_auto_experiment(self, key)
+        return self._experiments.pin_auto_experiment(key)
 
     def unpin_auto_experiment(self, key: str) -> None:
         """Put `key`'s auto experiment back on the heartbeat clock."""
-        experiments.unpin_auto_experiment(self, key)
+        self._experiments.unpin_auto_experiment(key)
 
     def unregister_auto_experiment(self, key: str) -> None:
         """Drop `key`'s auto experiment (already-published results remain)."""
-        experiments.unregister_auto_experiment(self, key)
+        self._experiments.unregister_auto_experiment(key)
 
     def current_weights(self) -> dict[str, Tensor]:
         """CPU clones of the model's parameters, read live at call time.
@@ -2690,7 +2608,7 @@ class Session:
         forget the abandoned timeline's buckets — they're additive, so the
         re-run samples must start from empty ones.
         """
-        self._shared_base_cache = None
+        self._probes.invalidate_base()
         with self._cv:
             self._schedule.rewind_to_epoch(epoch)
             # Restart the update cadence so post-jump frames fire on a clean
@@ -2713,6 +2631,11 @@ class Session:
         # Note the jump on the console too (covers both the plain-loop and
         # Lightning restorers, which funnel through here).
         console_print(f"NaNsense: time-traveled to the start of epoch {epoch}.")
+
+    def _experiment_control_state(self) -> tuple[int, bool, bool]:
+        """Run-control generation and terminal flags used to interrupt experiments."""
+        with self._cv:
+            return self._resume_token, self._closed, self._pending_jump is not None
 
     def _wait_for_proceed(self) -> None:
         # A pending time-travel jump also ends the wait: its request already
@@ -2742,9 +2665,8 @@ class Session:
                     lambda: self._resume_token != seen
                     or self._closed
                     or self._pending_jump is not None
-                    or self._probe_request
-                    or any(c.request for c in self._probe_clients.values())
-                    or bool(self._experiment_queue),
+                    or self._probes.pending
+                    or self._experiments.pending,
                     timeout=grace,
                 )
                 if not resumed:
@@ -2764,24 +2686,8 @@ class Session:
                 client_probes: list[str] = []
                 experiment: ExperimentRequest | None = None
                 if not done:
-                    run_probe = self._probe_request
-                    self._probe_request = False
-                    # Per-client perturbation probes (locked shared demos) drain
-                    # here too, one at a time on this thread alongside the shared
-                    # probe and experiments; each client's request flag is
-                    # cleared under the lock so a concurrent re-arm re-runs it.
-                    client_probes = probe.pending_probe_client_keys_locked(self)
-                    for client_key in client_probes:
-                        self._probe_clients[client_key].request = False
-                    if self._experiment_queue:
-                        experiment = self._experiment_queue.popleft()
-                        # Mark it running while still holding the lock and
-                        # atomically with the dequeue: otherwise a
-                        # `cancel_experiment(seq)` landing between here and
-                        # `run_experiment_guarded` acquiring the lock would
-                        # find the seq neither queued nor running and be a
-                        # silent no-op, letting a cancelled experiment run.
-                        self._experiment_running = experiment.seq
+                    run_probe, client_probes = self._probes.take_pending()
+                    experiment = self._experiments.take_pending()
             if not resumed:
                 # The detach above already satisfied `done`; warn outside the
                 # lock and return so the batch proceeds.
@@ -2793,15 +2699,15 @@ class Session:
                 # stay queued for the next pause.
                 return
             if run_probe:
-                probe.run_probe_guarded(self)
+                self._probes.run_probe_guarded()
             for client_key in client_probes:
-                probe.run_client_probe_guarded(self, client_key)
+                self._probes.run_client_probe_guarded(client_key)
             if experiment is not None:
-                experiments.run_experiment_guarded(self, experiment)
+                self._experiments.run_experiment_guarded(experiment)
             # Reap per-client containers whose page heartbeat lapsed. A parked
             # demo has no snapshot publishes to hang the sweep off, so it runs
             # here on pause-loop activity; the LRU cap bounds memory otherwise.
-            probe.gc_probe_clients(self)
+            self._probes.gc_probe_clients()
 
     def _snapshot_input(self) -> Tensor | None:
         """The last snapshot's primary input tensor (the first model input).
@@ -2883,7 +2789,7 @@ class _BatchContext:
             return self
         # Pinned input identity survives weight, buffer, and mode changes.
         # Share probe baselines only until the training thread advances again.
-        self._session._shared_base_cache = None
+        self._session._probes.invalidate_base()
         # Whose thread is driving, and a clean slate for `_batch_error`: an
         # error only describes the loop's *last* batch, so a batch that starts
         # at all clears whatever the previous one raised and was caught.
@@ -3034,11 +2940,11 @@ class _BatchContext:
                                 self._freeze_path,
                                 batch_item=self._item,
                             )
-                        probe.maybe_run_probe_at_capture(self._session)
+                        self._session._probes.maybe_run_probe_at_capture()
                         # Auto experiments re-run on every publish, so a pause
                         # shows fresh results and a free-running frequency
                         # update keeps open pages / recordings current.
-                        experiments.run_auto_experiments(self._session)
+                        self._session._experiments.run_auto_experiments()
                     if self._freq_update:
                         self._session._record_frames()
                     if self._captured or force:

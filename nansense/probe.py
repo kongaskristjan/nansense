@@ -19,18 +19,18 @@ requests arriving while training is paused — inside the pause loop in
 are restored, gradients are never produced (`torch.no_grad`), and the RNG is
 forked so time-travel replays stay deterministic.
 
-The probe config lives on the `Session` (`_pinned_input`, `_perturbations`,
-`_probe_mode`, the version/request/count fields, all under `Session._cv`);
-this module implements every transition of that state — the pin /
-perturbation / mode setters behind the public `Session` methods — plus the
-probe runs themselves. `isolated_model` is the isolation contract shared
+`ProbeManager` owns configuration, client lifetimes, and request/result state
+under the condition shared with Session. Its injected forward callback runs
+on the training thread. `isolated_model` is the isolation contract shared
 with `nansense.experiments`.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+import threading
+from collections import OrderedDict
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -41,7 +41,8 @@ from torch import Tensor
 from nansense.capture import fork_rng, model_device
 
 if TYPE_CHECKING:
-    from nansense.session import Session
+    from nansense.session import BatchSnapshot, Session
+    from nansense.schedule import BatchPosition
 
 PROBE_MODES: tuple[str, ...] = ("unchanged", "eval", "train")
 
@@ -276,205 +277,6 @@ def _write_perturbation(
     return True
 
 
-def pin_current_batch(session: Session) -> bool:
-    """Implementation of `Session.pin_current_batch`."""
-    if not session._enabled:
-        return False
-    snap = session._snapshot
-    if snap is None:
-        return False
-    pinned = session._snapshot_inputs()
-    if not pinned:
-        return False
-    with session._cv:
-        session._pinned_inputs = pinned
-        session._pinned_position = snap.position
-        request_probe_locked(session)
-    return True
-
-
-def unpin_batch(session: Session) -> None:
-    """Implementation of `Session.unpin_batch`."""
-    with session._cv:
-        if session._pinned_inputs is None:
-            return
-        session._pinned_inputs = None
-        session._pinned_position = None
-        if _probe_active_locked(session):
-            # Perturbations or an "eval"/"train" mode keep probing, now
-            # against the snapshot input.
-            request_probe_locked(session)
-            return
-        _clear_probe_result_locked(session)
-
-
-def add_perturbation(
-    session: Session,
-    *,
-    input_name: str,
-    sample: int,
-    index: tuple[int, ...],
-    values: tuple[float, ...],
-) -> None:
-    """Implementation of `Session.add_perturbation`."""
-    if not session._enabled:
-        return
-    with session._cv:
-        session._perturbations[(input_name, sample, tuple(index))] = tuple(values)
-        request_probe_locked(session)
-
-
-def clear_perturbations(session: Session) -> None:
-    """Implementation of `Session.clear_perturbations`."""
-    with session._cv:
-        if not session._perturbations:
-            return
-        session._perturbations.clear()
-        if _probe_active_locked(session):
-            # A pin or an "eval"/"train" mode keeps probing without the
-            # cleared perturbations.
-            request_probe_locked(session)
-            return
-        _clear_probe_result_locked(session)
-
-
-def set_probe_mode(session: Session, mode: str) -> None:
-    """Implementation of `Session.set_probe_mode`."""
-    if mode not in PROBE_MODES:
-        raise ValueError(
-            f"unknown probe mode {mode!r}; expected one of {PROBE_MODES}"
-        )
-    with session._cv:
-        if mode == session._probe_mode:
-            return
-        session._probe_mode = mode
-        if _probe_active_locked(session):
-            # Selecting "eval"/"train" (or changing mode while pinned /
-            # perturbed) re-runs the probe under the new mode.
-            request_probe_locked(session)
-        else:
-            # Back to "unchanged" with nothing else probing: drop the stale
-            # eval/train result so the UI reverts to the live snapshot.
-            _clear_probe_result_locked(session)
-
-
-def _clear_probe_result_locked(session: Session) -> None:
-    """Deactivate probing and drop the published result (caller holds `_cv`)."""
-    session._probe_version += 1
-    session._probe_request = False
-    session._probe_result = None
-    session._probe_error = None
-    session._cv.notify_all()
-
-
-def _probe_active_locked(session: Session) -> bool:
-    """Whether probe runs should happen at all (caller holds `_cv`).
-
-    A pinned batch or any perturbation activates probing, and so does a
-    non-"unchanged" forward mode on its own: "eval"/"train" re-run the model
-    on the current snapshot's batch so the UI shows that batch's activations
-    under the chosen mode — no pin required. "unchanged" only probes when a
-    pin or perturbation gives it something to re-run.
-    """
-    return (
-        session._pinned_inputs is not None
-        or bool(session._perturbations)
-        or session._probe_mode != "unchanged"
-    )
-
-
-def request_probe_locked(session: Session) -> None:
-    """Arm a probe run and wake a paused training thread (caller holds `_cv`)."""
-    session._probe_version += 1
-    session._probe_request = True
-    session._cv.notify_all()
-
-
-def maybe_run_probe_at_capture(session: Session) -> None:
-    """Run a probe right after a capture published its snapshot.
-
-    Called by `_BatchContext.__exit__` before the pause, so every pause
-    shows a probe result consistent with the just-captured weights. Any
-    UI request armed in the meantime is consumed here — the run below
-    uses the current config either way.
-    """
-    with session._cv:
-        session._probe_request = False
-        active = _probe_active_locked(session)
-    if active:
-        run_probe_guarded(session)
-
-
-def run_probe_guarded(session: Session) -> None:
-    # A failing probe (bad input, OOM, model quirk) must not kill the
-    # training thread or wedge the pause loop; the error is published
-    # for the UI to display instead.
-    with session._cv:
-        version = session._probe_version
-    try:
-        _run_probe(session)
-    except Exception as e:  # noqa: BLE001 — surfaced via probe_error
-        with session._cv:
-            # Mirror the success path's staleness guard: a config change
-            # mid-run (re-pin, mode flip, un-pin) bumps the version and arms
-            # its own probe, so a superseded run must not leave a stuck error
-            # behind that newer config — especially when the new config makes
-            # probing inactive and nothing else clears it.
-            if session._probe_version != version:
-                return
-            session._probe_error = f"{type(e).__name__}: {e}"
-            session._probe_count += 1
-            session._cv.notify_all()
-
-
-def _run_probe(session: Session) -> None:
-    """One probe run: isolated forwards on the base (and perturbed) inputs.
-
-    Training-thread only. Reads the probe config under `_cv`, runs the
-    forwards without the lock, and publishes the result only if the
-    config is still current — a config change mid-run (re-pin, mode flip,
-    new perturbation) wins and its own request re-runs the probe. The
-    base inputs are the pinned batch, or the snapshot's inputs when only
-    perturbations are active; a perturbed forward re-runs the *whole* model
-    with the edited input(s) substituted, so multi-input models work.
-    """
-    with session._cv:
-        version = session._probe_version
-        pinned = session._pinned_inputs
-        mode = session._probe_mode
-        perturbations = dict(session._perturbations)
-    if pinned is None and not perturbations and mode == "unchanged":
-        return
-    bases = pinned if pinned is not None else session._snapshot_inputs()
-    if not bases:
-        return
-    perturbed = apply_perturbations(bases, perturbations)
-    base_caps = _probe_forward(session, bases, mode=mode)
-    samples = perturbed_samples(perturbations)
-    pert_caps = (
-        _select_samples(
-            _probe_forward(session, perturbed, mode=mode), samples, _batch_size(bases)
-        )
-        if perturbed is not None
-        else None
-    )
-    result = ProbeResult(
-        inputs=bases,
-        activations=base_caps,
-        mode=mode,
-        perturbed_inputs=perturbed,
-        perturbed_activations=pert_caps,
-        perturbed_samples=samples,
-    )
-    with session._cv:
-        if session._probe_version != version:
-            return
-        session._probe_result = result
-        session._probe_error = None
-        session._probe_count += 1
-        session._cv.notify_all()
-
-
 @contextmanager
 def isolated_model(session: Session, mode: str) -> Iterator[torch.device]:
     """Run model inference without mutating training state.
@@ -500,9 +302,7 @@ def isolated_model(session: Session, mode: str) -> Iterator[torch.device]:
     """
     device = model_device(session.model)
     saved_flags = [(m, m.training) for m in session.model.modules()]
-    saved_buffers = [
-        (b, b.detach().clone()) for _, b in session.model.named_buffers()
-    ]
+    saved_buffers = [(b, b.detach().clone()) for _, b in session.model.named_buffers()]
     try:
         if mode == "eval":
             session.model.eval()
@@ -532,170 +332,6 @@ def _probe_forward(
         return session._capture_forward([t.to(device) for t in ordered])
 
 
-# --- Per-client perturbation state (locked / shared demo sessions) ---------
-#
-# The shared setters above refuse to run on a locked session because they
-# mutate state every visitor sees. These `*_for(key)` entry points give each
-# connection its own perturbation set and probe result instead, so perturbation
-# works in a shared demo without one visitor's clicks leaking into another's
-# view. They run on the same pause-loop / training thread as the shared probe
-# (the model is only touched there); the base input and forward mode stay
-# shared, and the base activations are computed once and reused by every
-# client (see `_shared_base_caps`).
-
-
-def _client_locked(session: Session, key: str) -> _ProbeClient:
-    """Get or create `key`'s container and mark it most-recently used (`_cv`)."""
-    client = session._probe_clients.get(key)
-    if client is None:
-        client = _ProbeClient()
-        session._probe_clients[key] = client
-    session._probe_clients.move_to_end(key)
-    return client
-
-
-def _evict_probe_clients_locked(session: Session) -> None:
-    """Drop the least-recently-used containers past the cap (caller holds `_cv`)."""
-    while len(session._probe_clients) > _MAX_PROBE_CLIENTS:
-        session._probe_clients.popitem(last=False)
-
-
-def register_probe_client(session: Session, key: str) -> None:
-    """Implementation of `Session.register_probe_client`."""
-    with session._cv:
-        client = _client_locked(session, key)
-        client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
-        _evict_probe_clients_locked(session)
-
-
-def touch_probe_client(session: Session, key: str) -> None:
-    """Implementation of `Session.touch_probe_client` (heartbeat)."""
-    with session._cv:
-        client = session._probe_clients.get(key)
-        if client is not None:
-            client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
-            session._probe_clients.move_to_end(key)
-
-
-def unregister_probe_client(session: Session, key: str) -> None:
-    """Implementation of `Session.unregister_probe_client`."""
-    with session._cv:
-        session._probe_clients.pop(key, None)
-
-
-def gc_probe_clients(session: Session) -> None:
-    """Reap containers whose heartbeat lapsed (training thread, pause loop).
-
-    The per-client counterpart of `experiments.run_auto_experiments`' expiry
-    sweep: a closed tab stops heartbeating and its container is dropped once
-    `expires_at` passes. Called on pause-loop activity — a parked demo has no
-    snapshot publishes to hang the sweep off, and the LRU cap bounds memory
-    even when the loop is idle.
-    """
-    now = time.monotonic()
-    with session._cv:
-        expired = [
-            key
-            for key, client in session._probe_clients.items()
-            if client.expires_at is not None and client.expires_at < now
-        ]
-        for key in expired:
-            del session._probe_clients[key]
-
-
-def add_perturbation_for(
-    session: Session,
-    key: str,
-    *,
-    input_name: str,
-    sample: int,
-    index: tuple[int, ...],
-    values: tuple[float, ...],
-) -> None:
-    """Add a perturbation to `key`'s private set and arm its probe re-run."""
-    if not session._enabled:
-        return
-    with session._cv:
-        client = _client_locked(session, key)
-        client.perturbations[(input_name, sample, tuple(index))] = tuple(values)
-        client.request = True
-        client.version += 1
-        client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
-        _evict_probe_clients_locked(session)
-        session._cv.notify_all()
-
-
-def clear_perturbations_for(session: Session, key: str) -> None:
-    """Drop `key`'s perturbations and its probe result (nothing left to show)."""
-    with session._cv:
-        client = session._probe_clients.get(key)
-        if client is None or not client.perturbations:
-            return
-        client.perturbations.clear()
-        client.version += 1
-        client.request = False
-        client.result = None
-        client.error = None
-        session._cv.notify_all()
-
-
-def client_probe_result(session: Session, key: str) -> ProbeResult | None:
-    """The latest probe result for `key`, or `None`."""
-    with session._cv:
-        client = session._probe_clients.get(key)
-        return client.result if client is not None else None
-
-
-def client_probe_error(session: Session, key: str) -> str | None:
-    """Why `key`'s last probe failed, or `None`."""
-    with session._cv:
-        client = session._probe_clients.get(key)
-        return client.error if client is not None else None
-
-
-def client_perturbations(session: Session, key: str) -> PerturbationMap:
-    """Copy of `key`'s active perturbations."""
-    with session._cv:
-        client = session._probe_clients.get(key)
-        return dict(client.perturbations) if client is not None else {}
-
-
-def pending_probe_client_keys_locked(session: Session) -> list[str]:
-    """Keys of clients with an armed probe re-run (caller holds `_cv`)."""
-    return [k for k, c in session._probe_clients.items() if c.request]
-
-
-def _shared_base_caps(
-    session: Session, bases: dict[str, Tensor], mode: str
-) -> dict[str, Tensor]:
-    """Base activations for the frozen input under `mode`, computed once.
-
-    Every client's perturbed probe diffs against the *same* unperturbed base,
-    which in a locked demo never changes — so this caches the single base
-    forward and hands the same capture dict to each client. Batch entry and
-    time-travel restoration clear the cache even when inputs remain pinned;
-    a new input or mode also recomputes it. Runs on the training thread
-    only, serialized with every other probe, so no two clients race to fill
-    the cache.
-
-    The cache holds the base tensors it was built from and validates by
-    identity. Keying on `id()` alone would be a correctness bug: CPython
-    reuses an address once the old object is freed, so a fresh snapshot
-    landing where its predecessor sat would match a stale entry and every
-    client would silently diff against the wrong base. Holding the references
-    makes the comparison meaningful — and costs only the model's inputs, not
-    the snapshot they came from.
-    """
-    cached = session._shared_base_cache
-    if cached is not None:
-        cached_bases, cached_mode, caps = cached
-        if cached_mode == mode and _same_bases(cached_bases, bases):
-            return caps
-    caps = _probe_forward(session, bases, mode=mode)
-    session._shared_base_cache = (dict(bases), mode, caps)
-    return caps
-
-
 def _same_bases(cached: dict[str, Tensor], bases: dict[str, Tensor]) -> bool:
     """Whether both mappings name the same input tensor objects."""
     return cached.keys() == bases.keys() and all(
@@ -703,76 +339,516 @@ def _same_bases(cached: dict[str, Tensor], bases: dict[str, Tensor]) -> bool:
     )
 
 
-def run_client_probe_guarded(session: Session, key: str) -> None:
-    """Run `key`'s perturbed probe, publishing an error instead of crashing."""
-    with session._cv:
-        client = session._probe_clients.get(key)
-        if client is None:
-            return
-        version = client.version
-    try:
-        _run_client_probe(session, key, version)
-    except Exception as e:  # noqa: BLE001 — surfaced via the client's error
-        with session._cv:
-            client = session._probe_clients.get(key)
-            if client is None or client.version != version:
-                return
-            client.error = f"{type(e).__name__}: {e}"
-            client.count += 1
-            session._cv.notify_all()
+class ProbeManager:
+    """Own probe configuration, client lifetimes, requests, and published results.
 
-
-def _run_client_probe(session: Session, key: str, version: int) -> None:
-    """One client's probe: the shared base plus this client's perturbed forward.
-
-    Reads the client's edits and the shared base/mode under `_cv`, runs the
-    forwards without the lock, and publishes only if the client's edits haven't
-    changed since (its `version` still matches). With no perturbations left the
-    result is dropped so the view reverts to the shared snapshot.
+    The shared condition coordinates with Session's pause loop. Forward work
+    runs outside it, on the training thread, through the supplied callback.
     """
-    with session._cv:
-        client = session._probe_clients.get(key)
-        if client is None:
-            return
-        perturbations = dict(client.perturbations)
-        mode = session._probe_mode
-        pinned = session._pinned_inputs
-    if not perturbations:
-        with session._cv:
-            client = session._probe_clients.get(key)
-            if client is None or client.version != version:
+
+    def __init__(
+        self,
+        cv: threading.Condition,
+        *,
+        enabled: bool,
+        input_names: tuple[str, ...],
+        snapshot: Callable[[], BatchSnapshot | None],
+        forward: Callable[[dict[str, Tensor], str], dict[str, Tensor]],
+        closed: Callable[[], bool],
+    ) -> None:
+        self._cv = cv
+        self._enabled = enabled
+        self._input_names = input_names
+        self._snapshot = snapshot
+        self._forward = forward
+        self._closed = closed
+        self._pinned_inputs: dict[str, Tensor] | None = None
+        self._pinned_position: BatchPosition | None = None
+        self._perturbations: PerturbationMap = {}
+        self._mode = "unchanged"
+        self._request = False
+        self._version = 0
+        self._count = 0
+        self._result: ProbeResult | None = None
+        self._error: str | None = None
+        self._clients: OrderedDict[str, _ProbeClient] = OrderedDict()
+        self._shared_base_cache: (
+            tuple[dict[str, Tensor], str, dict[str, Tensor]] | None
+        ) = None
+
+    def invalidate_base(self) -> None:
+        """Training-thread boundary: weights, buffers, or mode may have changed."""
+        self._shared_base_cache = None
+
+    def _snapshot_inputs(self) -> dict[str, Tensor]:
+        snap = self._snapshot()
+        return (
+            {}
+            if snap is None
+            else {
+                name: snap.activations[name]
+                for name in self._input_names
+                if name in snap.activations
+            }
+        )
+
+    @property
+    def result(self) -> ProbeResult | None:
+        return self._result
+
+    @property
+    def error(self) -> str | None:
+        return self._error
+
+    @property
+    def count(self) -> int:
+        with self._cv:
+            return self._count
+
+    @property
+    def mode(self) -> str:
+        with self._cv:
+            return self._mode
+
+    @property
+    def is_pinned(self) -> bool:
+        with self._cv:
+            return self._pinned_inputs is not None
+
+    @property
+    def pinned_position(self) -> BatchPosition | None:
+        return self._pinned_position
+
+    @property
+    def perturbations(self) -> PerturbationMap:
+        with self._cv:
+            return dict(self._perturbations)
+
+    @property
+    def pending(self) -> bool:
+        with self._cv:
+            return self._request or any(c.request for c in self._clients.values())
+
+    def take_pending(self) -> tuple[bool, list[str]]:
+        """Consume pending flags atomically; execute their work outside the lock."""
+        with self._cv:
+            shared = self._request
+            self._request = False
+            clients = self.pending_probe_client_keys_locked()
+            for key in clients:
+                self._clients[key].request = False
+            return shared, clients
+
+    def wait(
+        self, *, after_count: int, timeout: float | None, client: str | None
+    ) -> bool:
+        def completed() -> bool:
+            if client is None:
+                return self._count > after_count
+            entry = self._clients.get(client)
+            return entry is not None and entry.count > after_count
+
+        with self._cv:
+            return self._cv.wait_for(
+                lambda: completed() or self._closed(), timeout=timeout
+            )
+
+    def pin_current_batch(self) -> bool:
+        """Implementation of `Session.pin_current_batch`."""
+        if not self._enabled:
+            return False
+        snap = self._snapshot()
+        if snap is None:
+            return False
+        pinned = {
+            name: snap.activations[name]
+            for name in self._input_names
+            if name in snap.activations
+        }
+        if not pinned:
+            return False
+        with self._cv:
+            self._pinned_inputs = pinned
+            self._pinned_position = snap.position
+            self.request_probe_locked()
+        return True
+
+    def unpin_batch(self) -> None:
+        """Implementation of `Session.unpin_batch`."""
+        with self._cv:
+            if self._pinned_inputs is None:
                 return
+            self._pinned_inputs = None
+            self._pinned_position = None
+            if self._probe_active_locked():
+                # Perturbations or an "eval"/"train" mode keep probing, now
+                # against the snapshot input.
+                self.request_probe_locked()
+                return
+            self._clear_probe_result_locked()
+
+    def add_perturbation(
+        self,
+        *,
+        input_name: str,
+        sample: int,
+        index: tuple[int, ...],
+        values: tuple[float, ...],
+    ) -> None:
+        """Implementation of `Session.add_perturbation`."""
+        if not self._enabled:
+            return
+        with self._cv:
+            self._perturbations[(input_name, sample, tuple(index))] = tuple(values)
+            self.request_probe_locked()
+
+    def clear_perturbations(self) -> None:
+        """Implementation of `Session.clear_perturbations`."""
+        with self._cv:
+            if not self._perturbations:
+                return
+            self._perturbations.clear()
+            if self._probe_active_locked():
+                # A pin or an "eval"/"train" mode keeps probing without the
+                # cleared perturbations.
+                self.request_probe_locked()
+                return
+            self._clear_probe_result_locked()
+
+    def set_probe_mode(self, mode: str) -> None:
+        """Implementation of `Session.set_probe_mode`."""
+        if mode not in PROBE_MODES:
+            raise ValueError(
+                f"unknown probe mode {mode!r}; expected one of {PROBE_MODES}"
+            )
+        with self._cv:
+            if mode == self._mode:
+                return
+            self._mode = mode
+            if self._probe_active_locked():
+                # Selecting "eval"/"train" (or changing mode while pinned /
+                # perturbed) re-runs the probe under the new mode.
+                self.request_probe_locked()
+            else:
+                # Back to "unchanged" with nothing else probing: drop the stale
+                # eval/train result so the UI reverts to the live snapshot.
+                self._clear_probe_result_locked()
+
+    def _clear_probe_result_locked(self) -> None:
+        """Deactivate probing and drop the published result (caller holds `_cv`)."""
+        self._version += 1
+        self._request = False
+        self._result = None
+        self._error = None
+        self._cv.notify_all()
+
+    def _probe_active_locked(self) -> bool:
+        """Whether probe runs should happen at all (caller holds `_cv`).
+
+        A pinned batch or any perturbation activates probing, and so does a
+        non-"unchanged" forward mode on its own: "eval"/"train" re-run the model
+        on the current snapshot's batch so the UI shows that batch's activations
+        under the chosen mode — no pin required. "unchanged" only probes when a
+        pin or perturbation gives it something to re-run.
+        """
+        return (
+            self._pinned_inputs is not None
+            or bool(self._perturbations)
+            or self._mode != "unchanged"
+        )
+
+    def request_probe_locked(self) -> None:
+        """Arm a probe run and wake a paused training thread (caller holds `_cv`)."""
+        self._version += 1
+        self._request = True
+        self._cv.notify_all()
+
+    def maybe_run_probe_at_capture(self) -> None:
+        """Run a probe right after a capture published its snapshot.
+
+        Called by `_BatchContext.__exit__` before the pause, so every pause
+        shows a probe result consistent with the just-captured weights. Any
+        UI request armed in the meantime is consumed here — the run below
+        uses the current config either way.
+        """
+        with self._cv:
+            self._request = False
+            active = self._probe_active_locked()
+        if active:
+            self.run_probe_guarded()
+
+    def run_probe_guarded(self) -> None:
+        # A failing probe (bad input, OOM, model quirk) must not kill the
+        # training thread or wedge the pause loop; the error is published
+        # for the UI to display instead.
+        with self._cv:
+            version = self._version
+        try:
+            self._run_probe()
+        except Exception as e:  # noqa: BLE001 — surfaced via probe_error
+            with self._cv:
+                # Mirror the success path's staleness guard: a config change
+                # mid-run (re-pin, mode flip, un-pin) bumps the version and arms
+                # its own probe, so a superseded run must not leave a stuck error
+                # behind that newer config — especially when the new config makes
+                # probing inactive and nothing else clears it.
+                if self._version != version:
+                    return
+                self._error = f"{type(e).__name__}: {e}"
+                self._count += 1
+                self._cv.notify_all()
+
+    def _run_probe(self) -> None:
+        """One probe run: isolated forwards on the base (and perturbed) inputs.
+
+        Training-thread only. Reads the probe config under `_cv`, runs the
+        forwards without the lock, and publishes the result only if the
+        config is still current — a config change mid-run (re-pin, mode flip,
+        new perturbation) wins and its own request re-runs the probe. The
+        base inputs are the pinned batch, or the snapshot's inputs when only
+        perturbations are active; a perturbed forward re-runs the *whole* model
+        with the edited input(s) substituted, so multi-input models work.
+        """
+        with self._cv:
+            version = self._version
+            pinned = self._pinned_inputs
+            mode = self._mode
+            perturbations = dict(self._perturbations)
+        if pinned is None and not perturbations and mode == "unchanged":
+            return
+        bases = pinned if pinned is not None else self._snapshot_inputs()
+        if not bases:
+            return
+        perturbed = apply_perturbations(bases, perturbations)
+        base_caps = self._forward(bases, mode)
+        samples = perturbed_samples(perturbations)
+        pert_caps = (
+            _select_samples(self._forward(perturbed, mode), samples, _batch_size(bases))
+            if perturbed is not None
+            else None
+        )
+        result = ProbeResult(
+            inputs=bases,
+            activations=base_caps,
+            mode=mode,
+            perturbed_inputs=perturbed,
+            perturbed_activations=pert_caps,
+            perturbed_samples=samples,
+        )
+        with self._cv:
+            if self._version != version:
+                return
+            self._result = result
+            self._error = None
+            self._count += 1
+            self._cv.notify_all()
+
+    def _client_locked(self, key: str) -> _ProbeClient:
+        """Get or create `key`'s container and mark it most-recently used (`_cv`)."""
+        client = self._clients.get(key)
+        if client is None:
+            client = _ProbeClient()
+            self._clients[key] = client
+        self._clients.move_to_end(key)
+        return client
+
+    def _evict_probe_clients_locked(self) -> None:
+        """Drop the least-recently-used containers past the cap (caller holds `_cv`)."""
+        while len(self._clients) > _MAX_PROBE_CLIENTS:
+            self._clients.popitem(last=False)
+
+    def register_probe_client(self, key: str) -> None:
+        """Implementation of `Session.register_probe_client`."""
+        with self._cv:
+            client = self._client_locked(key)
+            client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
+            self._evict_probe_clients_locked()
+
+    def touch_probe_client(self, key: str) -> None:
+        """Implementation of `Session.touch_probe_client` (heartbeat)."""
+        with self._cv:
+            client = self._clients.get(key)
+            if client is not None:
+                client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
+                self._clients.move_to_end(key)
+
+    def unregister_probe_client(self, key: str) -> None:
+        """Implementation of `Session.unregister_probe_client`."""
+        with self._cv:
+            self._clients.pop(key, None)
+
+    def gc_probe_clients(self) -> None:
+        """Reap containers whose heartbeat lapsed (training thread, pause loop).
+
+        The per-client counterpart of `experiments.run_auto_experiments`' expiry
+        sweep: a closed tab stops heartbeating and its container is dropped once
+        `expires_at` passes. Called on pause-loop activity — a parked demo has no
+        snapshot publishes to hang the sweep off, and the LRU cap bounds memory
+        even when the loop is idle.
+        """
+        now = time.monotonic()
+        with self._cv:
+            expired = [
+                key
+                for key, client in self._clients.items()
+                if client.expires_at is not None and client.expires_at < now
+            ]
+            for key in expired:
+                del self._clients[key]
+
+    def add_perturbation_for(
+        self,
+        key: str,
+        *,
+        input_name: str,
+        sample: int,
+        index: tuple[int, ...],
+        values: tuple[float, ...],
+    ) -> None:
+        """Add a perturbation to `key`'s private set and arm its probe re-run."""
+        if not self._enabled:
+            return
+        with self._cv:
+            client = self._client_locked(key)
+            client.perturbations[(input_name, sample, tuple(index))] = tuple(values)
+            client.request = True
+            client.version += 1
+            client.expires_at = time.monotonic() + _PROBE_CLIENT_TTL
+            self._evict_probe_clients_locked()
+            self._cv.notify_all()
+
+    def clear_perturbations_for(self, key: str) -> None:
+        """Drop `key`'s perturbations and its probe result (nothing left to show)."""
+        with self._cv:
+            client = self._clients.get(key)
+            if client is None or not client.perturbations:
+                return
+            client.perturbations.clear()
+            client.version += 1
+            client.request = False
             client.result = None
             client.error = None
-            client.count += 1
-            session._cv.notify_all()
-        return
-    bases = pinned if pinned is not None else session._snapshot_inputs()
-    if not bases:
-        return
-    perturbed = apply_perturbations(bases, perturbations)
-    base_caps = _shared_base_caps(session, bases, mode)
-    samples = perturbed_samples(perturbations)
-    pert_caps = (
-        _select_samples(
-            _probe_forward(session, perturbed, mode=mode), samples, _batch_size(bases)
-        )
-        if perturbed is not None
-        else None
-    )
-    result = ProbeResult(
-        inputs=bases,
-        activations=base_caps,
-        mode=mode,
-        perturbed_inputs=perturbed,
-        perturbed_activations=pert_caps,
-        perturbed_samples=samples,
-    )
-    with session._cv:
-        client = session._probe_clients.get(key)
-        if client is None or client.version != version:
+            self._cv.notify_all()
+
+    def client_probe_result(self, key: str) -> ProbeResult | None:
+        """The latest probe result for `key`, or `None`."""
+        with self._cv:
+            client = self._clients.get(key)
+            return client.result if client is not None else None
+
+    def client_probe_error(self, key: str) -> str | None:
+        """Why `key`'s last probe failed, or `None`."""
+        with self._cv:
+            client = self._clients.get(key)
+            return client.error if client is not None else None
+
+    def client_perturbations(self, key: str) -> PerturbationMap:
+        """Copy of `key`'s active perturbations."""
+        with self._cv:
+            client = self._clients.get(key)
+            return dict(client.perturbations) if client is not None else {}
+
+    def pending_probe_client_keys_locked(self) -> list[str]:
+        """Keys of clients with an armed probe re-run (caller holds `_cv`)."""
+        return [k for k, c in self._clients.items() if c.request]
+
+    def _shared_base_caps(
+        self, bases: dict[str, Tensor], mode: str
+    ) -> dict[str, Tensor]:
+        """Base activations for the frozen input under `mode`, computed once.
+
+        Every client's perturbed probe diffs against the *same* unperturbed base,
+        which in a locked demo never changes — so this caches the single base
+        forward and hands the same capture dict to each client. Batch entry and
+        time-travel restoration clear the cache even when inputs remain pinned;
+        a new input or mode also recomputes it. Runs on the training thread
+        only, serialized with every other probe, so no two clients race to fill
+        the cache.
+
+        The cache holds the base tensors it was built from and validates by
+        identity. Keying on `id()` alone would be a correctness bug: CPython
+        reuses an address once the old object is freed, so a fresh snapshot
+        landing where its predecessor sat would match a stale entry and every
+        client would silently diff against the wrong base. Holding the references
+        makes the comparison meaningful — and costs only the model's inputs, not
+        the snapshot they came from.
+        """
+        cached = self._shared_base_cache
+        if cached is not None:
+            cached_bases, cached_mode, caps = cached
+            if cached_mode == mode and _same_bases(cached_bases, bases):
+                return caps
+        caps = self._forward(bases, mode)
+        self._shared_base_cache = (dict(bases), mode, caps)
+        return caps
+
+    def run_client_probe_guarded(self, key: str) -> None:
+        """Run `key`'s perturbed probe, publishing an error instead of crashing."""
+        with self._cv:
+            client = self._clients.get(key)
+            if client is None:
+                return
+            version = client.version
+        try:
+            self._run_client_probe(key, version)
+        except Exception as e:  # noqa: BLE001 — surfaced via the client's error
+            with self._cv:
+                client = self._clients.get(key)
+                if client is None or client.version != version:
+                    return
+                client.error = f"{type(e).__name__}: {e}"
+                client.count += 1
+                self._cv.notify_all()
+
+    def _run_client_probe(self, key: str, version: int) -> None:
+        """One client's probe: the shared base plus this client's perturbed forward.
+
+        Reads the client's edits and the shared base/mode under `_cv`, runs the
+        forwards without the lock, and publishes only if the client's edits haven't
+        changed since (its `version` still matches). With no perturbations left the
+        result is dropped so the view reverts to the shared snapshot.
+        """
+        with self._cv:
+            client = self._clients.get(key)
+            if client is None:
+                return
+            perturbations = dict(client.perturbations)
+            mode = self._mode
+            pinned = self._pinned_inputs
+        if not perturbations:
+            with self._cv:
+                client = self._clients.get(key)
+                if client is None or client.version != version:
+                    return
+                client.result = None
+                client.error = None
+                client.count += 1
+                self._cv.notify_all()
             return
-        client.result = result
-        client.error = None
-        client.count += 1
-        session._cv.notify_all()
+        bases = pinned if pinned is not None else self._snapshot_inputs()
+        if not bases:
+            return
+        perturbed = apply_perturbations(bases, perturbations)
+        base_caps = self._shared_base_caps(bases, mode)
+        samples = perturbed_samples(perturbations)
+        pert_caps = (
+            _select_samples(self._forward(perturbed, mode), samples, _batch_size(bases))
+            if perturbed is not None
+            else None
+        )
+        result = ProbeResult(
+            inputs=bases,
+            activations=base_caps,
+            mode=mode,
+            perturbed_inputs=perturbed,
+            perturbed_activations=pert_caps,
+            perturbed_samples=samples,
+        )
+        with self._cv:
+            client = self._clients.get(key)
+            if client is None or client.version != version:
+                return
+            client.result = result
+            client.error = None
+            client.count += 1
+            self._cv.notify_all()

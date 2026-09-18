@@ -687,9 +687,9 @@ def test_an_experiment_recording_keeps_its_request_rerunning(tmp_path: Path) -> 
         assert started["started"] == "experiment:conv"
         # `expires_at is None` is what pins it: no heartbeat can expire it
         # while the recording holds the view.
-        assert session._auto_experiments["experiment:conv"].expires_at is None
+        assert session._experiments._auto["experiment:conv"].expires_at is None
         _call(session, "stop_recording", {"key": "experiment:conv"})
-        assert "experiment:conv" not in session._auto_experiments
+        assert "experiment:conv" not in session._experiments._auto
 
 
 def test_saving_a_snapshot_writes_one_png_and_records_nothing(tmp_path: Path) -> None:
@@ -737,7 +737,7 @@ def test_an_experiment_snapshot_saves_a_result_without_pinning_a_rerun(
         view = _call(session, "save_snapshot", {"view": "experiment"})
         assert view["view"] == "experiment:conv"
         assert Path(view["files"][0]).exists()
-        assert session._auto_experiments == {}
+        assert session._experiments._auto == {}
 
 
 def test_an_experiment_snapshot_without_a_result_says_what_to_run(
@@ -821,9 +821,9 @@ def test_discarding_an_experiment_recording_releases_its_request(
                 "params": {"channels": 1, "steps": 2},
             },
         )
-        assert session._auto_experiments["experiment:conv"].expires_at is None
+        assert session._experiments._auto["experiment:conv"].expires_at is None
         _call(session, "discard_recording", {"key": "experiment:conv"})
-        assert "experiment:conv" not in session._auto_experiments
+        assert "experiment:conv" not in session._experiments._auto
 
 
 def test_recordings_view_of_an_idle_session_explains_the_frame_source() -> None:
@@ -1097,7 +1097,7 @@ def test_a_failed_probe_is_not_reported_as_never_set_up() -> None:
     from nansense.mcp_views import probe_view
 
     with paused_session(TinyClassifier(), _image_step) as session:
-        session._probe_error = "boom"
+        session._probes._error = "boom"
         view = probe_view(session)
         assert "last probe failed" in view["hint"]
 
@@ -1155,7 +1155,7 @@ def test_a_duplicate_experiment_recording_leaves_the_live_one_alone(
         again = _call(session, "start_recording", request)
         assert "already recording" in again["error"]
         # The live recording's seq still owns the registration.
-        assert session._auto_experiments["experiment:conv"].request.seq == (
+        assert session._experiments._auto["experiment:conv"].request.seq == (
             recorded.params["seq"]
         )
         _call(session, "stop_recording", {"key": "experiment:conv"})
@@ -1185,7 +1185,7 @@ def test_stopping_releases_the_auto_experiment_by_its_own_key(
             )
         )
         _call(session, "stop_recording", {"key": "experiment:conv"})
-        assert auto_key not in session._auto_experiments
+        assert auto_key not in session._experiments._auto
 
 
 def test_stopping_nothing_does_not_claim_a_recording_existed() -> None:

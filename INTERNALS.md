@@ -816,9 +816,12 @@ name); from then on each capture re-runs the whole model on them right after
 all inputs (positional or keyword, ordered by `input_names`) is what makes
 multi-input models work; the UI's input pane picks which input to view.
 Probes are forward-only: no gradients.
-The probe config lives on the `Session` (under `_cv`), but every state
-transition and the runs themselves are module functions in
-`nansense.probe` that the thin `Session` methods delegate to.
+`ProbeManager` owns pinned inputs, perturbations, request versions, client
+lifetimes, the shared baseline cache, and published results. Session delegates
+its public probe API to the manager. The manager receives the shared `_cv`, a
+snapshot reader, an isolated-forward callback, and a closed-state reader; it
+does not access Session fields. `take_pending()` consumes request flags under
+the condition, and forwards execute outside it on the training thread.
 
 **Execution stays on the training thread.** The model is never touched from
 the UI thread (the invariant the snapshot path already relies on). Probes
@@ -828,7 +831,7 @@ run at two points:
    `_wait_for_proceed` — so every pause shows a probe consistent with the
    just-captured weights.
 2. Inside `_wait_for_proceed`'s wait loop. UI requests (`pin_current_batch`,
-   `set_probe_mode`) arm `_probe_request` under `_cv` and notify; the paused
+   `set_probe_mode`) arm the manager request flag under `_cv` and notify; the paused
    training thread wakes, runs the probe *outside* the lock (so UI reads
    stay responsive), and re-enters the wait — the same "armed request
    consumed at a safe point" pattern as `_pending_jump`, generalized to
@@ -897,10 +900,10 @@ to `"unchanged"` with nothing pinned or perturbed clears the result so the
 UI reverts to the live snapshot.
 
 **Publishing and races.** Probe config (pinned input, mode, perturbations)
-is mutated by the UI thread under `_cv`, bumping `_probe_version`.
+is mutated by the UI thread under `_cv`, bumping the manager version.
 `_run_probe` snapshots the config under the lock, computes without it, then
 publishes under the lock only if the version is unchanged — a config change
-mid-run wins and its own request re-runs the probe. `_probe_count` is the
+mid-run wins and its own request re-runs the probe. The manager completion count is the
 monotonic completion counter (`wait_for_probe` mirrors `wait_until_paused`
 for tests and the UI). A probe that raises publishes `probe_error` instead
 of killing the training thread (`run_probe_guarded`); deactivating the
@@ -917,10 +920,12 @@ seq); the pause loop in `_wait_for_proceed` drains the queue in order and
 calls `experiments.run(...)`, a generator yielding `ExperimentResult`
 progress snapshots that are published one by one (`_publish_experiment`)
 — that's what streams the evolving deep-dream image to the page. The
-queue state lives on the `Session`, but the plumbing — `request_experiment`
-/ `cancel_experiment`, the auto-experiment registry, and the guarded
-runner (`run_experiment_guarded`) — are module functions in
-`nansense.experiments` behind thin `Session` delegators. Results are kept per seq in a bounded map (the
+`ExperimentManager` owns the queue, cancellation flags, auto registrations,
+preferences, and result retention. It receives the shared condition plus
+callbacks for running an experiment, creating a clip, reading lock status,
+and reading Session's run-control generation/terminal flags. Session never
+edits its queue: `take_pending()` dequeues and marks a request running in one
+critical section, so cancellation cannot lose a request between those steps. Results are kept per seq in a bounded map (the
 `_EXPERIMENT_RESULTS_KEPT` most recently updated seqs;
 `experiment_result_for(seq)`) plus a latest-result slot
 (`experiment_result`), so concurrent tabs each poll their own run without
