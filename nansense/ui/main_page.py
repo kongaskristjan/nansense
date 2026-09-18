@@ -8,7 +8,6 @@ import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
 from urllib.parse import quote
 
 import torch
@@ -17,6 +16,7 @@ from nicegui.events import GenericEventArguments
 from torch import Tensor
 
 from nansense.contracts.recording import MainView
+from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.probe import ProbeResult
 from nansense.recording import RecordedView
 from nansense.session import BatchSnapshot, Session, StatsScope
@@ -31,9 +31,10 @@ from nansense.ui.common import (
     _strip_html,
     _strip_marker,
 )
+from nansense.ui.components.layer_menu import LayerMenu
+from nansense.ui.controllers.main import MainController
 from nansense.ui.graph import slug_map
 from nansense.ui.input_panel import InputPanel
-from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.ui.render import (
     DEFAULT_RENDER_OPTIONS,
     RenderOptions,
@@ -50,6 +51,7 @@ from nansense.ui.static import (
     _ARCHITECTURE_CLICK_JS,
     _STRIP_MARKER_CSS,
 )
+from nansense.ui.theme import ACTIVATIONS, CUSTOM_TENSOR, GRADIENTS
 from nansense.ui.top_bar import (
     _add_error_banner,
     _add_repo_logo,
@@ -60,29 +62,7 @@ from nansense.ui.top_bar import (
     _refresh_button,
     _top_bar_row,
 )
-from nansense.ui.theme import ACTIVATIONS, CUSTOM_TENSOR, GRADIENTS
 from nansense.ui.tour import add_tour, main_tour_steps
-
-
-@dataclass
-class _PageState:
-    last_snapshot: BatchSnapshot | None = None
-    last_probe: ProbeResult | None = None
-    dirty: bool = False
-    rendering: bool = False
-    # The shown set this connection last reflected in its DOM (card
-    # visibility, amber classes, chip). The tick compares it against the
-    # current shown set so changes made elsewhere (another tab, in the
-    # coupled scope) propagate here too.
-    last_watched: frozenset[str] = frozenset()
-    # This connection's own shown cards, used in the decoupled stats scopes
-    # (`none` / `all`) where showing a card must not touch the session's
-    # global watched set — so tabs are independent. Seeded from the watched
-    # set when a decoupled scope is entered.
-    shown: set[str] = field(default_factory=set)
-    # The stats scope last seen by the tick, to detect scope switches.
-    last_scope: StatsScope | None = None
-
 
 # Shared pool for strip rendering. Per-layer renders are independent and the
 # heavy parts (torch interpolate, numpy colormap, PIL PNG encode) release the
@@ -167,23 +147,6 @@ def _layer_info_script(layer_info: dict[str, str], slugs: dict[str, str]) -> str
     return f"<script>window.nansenseLayerInfo = {payload};</script>"
 
 
-def _seed_shown(
-    watched: frozenset[str], focus_layer: str, layer_names: list[str]
-) -> set[str]:
-    """A new tab's decoupled shown set: the deep link, or the watched seed.
-
-    `focus_layer` is the `?layer=` query param — the locked playground's
-    subpages put the layer they show into their Back button's href, so
-    returning to the main page shows exactly the card the visitor came
-    from (not the default seed alongside it, which would read as two
-    unrelated cards). Without a deep link — or with an unknown name — the
-    watched seed is shown as usual.
-    """
-    if focus_layer in layer_names:
-        return {focus_layer}
-    return set(watched)
-
-
 def _pick_tour_layer(
     layer_names: list[str],
     shown: frozenset[str],
@@ -218,493 +181,307 @@ def _build_page(
     input_transform: InputTransform | dict[str, InputTransform] | None,
     render_cache: _RenderCache,
 ) -> None:
-    # The primary input drives the token grid (its H×W); the user can view any
-    # input in the pane via the dropdown, with its own resolved display config.
-    input_name = input_names[0] if input_names else None
-    state = _PageState()
-
-    def decoupled() -> bool:
-        """Whether card visibility is per-tab (stats scopes `none` / `all`).
-
-        In the `watched` scope, visible ≡ watched — the global, cross-tab set
-        whose members collect stats. In the other scopes the watched set does
-        not drive collection, so clicks only touch this connection's `shown`
-        set and tabs are independent.
-        """
-        return session.stats_scope is not StatsScope.WATCHED
-
-    def shown_layers() -> frozenset[str]:
-        """The layers whose cards this connection currently shows."""
-        return frozenset(state.shown) if decoupled() else session.watched_layers
-
-    state.last_scope = session.stats_scope
-    if decoupled():
-        # Only the locked playground emits `?layer=` links (the subpages'
-        # Back buttons); elsewhere the param is ignored so a stray deep link
-        # can't change what an unlocked session shows.
-        state.shown = _seed_shown(
-            session.watched_layers,
-            focus_layer if session.locked else "",
-            layer_names,
-        )
-    state.last_watched = shown_layers()
-    layer_views: dict[str, _LayerView] = {}
-    # One collision-free slug per layer, shared with the Mermaid diagram
-    # (`graph.build_mermaid` keys node ids by the same `slug_map`). Using it
-    # for the cards' `data-layer`, the click→toggle lookup, and the
-    # JS watch/scroll calls keeps the diagram and the cards in lockstep even
-    # when two distinct layer names would alias to the same bare slug
-    # (e.g. `fc.1` and `fc_1`).
-    slugs = slug_map(layer_names)
-
-    def record_view() -> RecordedView | None:
-        # `input_panel` is created further down; the dialog only calls this
-        # after the page is fully built.
-        if session.snapshot is None and session.probe_result is None:
-            return None
-        shown = shown_layers()
-        watched = [n for n in layer_names if n in shown]
-        plural = "" if len(watched) == 1 else "s"
-        # Record exactly the input the pane is showing, with its resolved
-        # display config (a same-process dict, so the transform travels too).
-        selected = input_panel.selected_input
-        return RecordedView(
-            key="main",
-            label=f"Main view ({len(watched)} watched layer{plural}, sample {input_panel.sample_idx})",
-            config=MainView(
-                layers=tuple(watched),
-                sample_idx=input_panel.sample_idx,
-                input_name=selected or "",
-                input_mean=resolve_per_input(input_mean, selected),
-                input_std=resolve_per_input(input_std, selected),
-                input_transform=resolve_per_input(input_transform, selected),
-                render_average=input_panel.render_options.average,
-                render_values=input_panel.render_options.values,
-            ),
-        )
-
-    _page_scaffold()
-    _install_panel_resize()
-    ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
-    ui.add_head_html(_STRIP_MARKER_CSS)
-    ui.add_body_html(_ARCHITECTURE_CLICK_JS)
-    ui.add_body_html(_layer_info_script(session.layer_info, slugs))
-
-    # The tour opens on one layer: the one this tab is already showing, so
-    # its first arrow lands on the card the visitor is looking at rather than
-    # opening a second, unrelated one. It stays the card steps' preference
-    # and their fallback — they auto-show it only when no card is open at all
-    # — but a visitor who opens another layer keeps it (`tour.py`).
-    # Auto-starts only on locked (playground) sessions — local runs reach it
-    # via the `?` button.
-    layer_weights = session.layer_weights
-    tour_layer = _pick_tour_layer(layer_names, shown_layers(), layer_weights)
-    tour_slug = slugs[tour_layer] if tour_layer is not None else None
-    add_tour(
-        "main",
-        main_tour_steps(tour_slug, locked=session.locked),
-        locked=session.locked,
-        auto_watch_slug=tour_slug,
+    _MainPage(
+        session,
+        mermaid_src,
+        layer_names,
+        focus_layer=focus_layer,
+        input_names=input_names,
+        input_mean=input_mean,
+        input_std=input_std,
+        input_transform=input_transform,
+        render_cache=render_cache,
     )
 
-    step_until_custom = _build_step_until_custom_dialog(session)
 
-    def watch_all() -> None:
-        if decoupled():
-            state.shown = set(layer_names)
-        else:
-            for name in layer_names:
-                session.watch(name)
-        sync_watch_ui()
+class _MainPage:
+    """Bind the main controller to widgets and per-client rendering."""
 
-    def clear_all() -> None:
-        if decoupled():
-            state.shown.clear()
-        else:
-            if _refuse_unwatch_while_recording(session):
-                return
-            for name in list(session.watched_layers):
-                session.unwatch(name)
-        sync_watch_ui()
+    def __init__(
+        self,
+        session: Session,
+        mermaid_src: str,
+        layer_names: list[str],
+        *,
+        focus_layer: str,
+        input_names: list[str],
+        input_mean: MeanStd | dict[str, MeanStd] | None,
+        input_std: MeanStd | dict[str, MeanStd] | None,
+        input_transform: InputTransform | dict[str, InputTransform] | None,
+        render_cache: _RenderCache,
+    ) -> None:
+        self.session = session
+        self.mermaid_src = mermaid_src
+        self.layer_names = layer_names
+        self.focus_layer = focus_layer
+        self.input_names = input_names
+        self.input_mean = input_mean
+        self.input_std = input_std
+        self.input_transform = input_transform
+        self.render_cache = render_cache
+        self.input_name = input_names[0] if input_names else None
+        self.controller = MainController(session, layer_names, focus_layer)
+        self.state = self.controller.state
+        self.state.last_watched = self.shown_layers()
+        self.layer_views: dict[str, _LayerView] = {}
+        self.slugs = slug_map(layer_names)
+        self.slug_to_name = {slug: name for name, slug in self.slugs.items()}
+        self.layer_weights = session.layer_weights
+        self._install_page()
+        self._build_dialogs()
+        with ui.column().classes("w-full h-screen no-wrap gap-0"):
+            self._build_header()
+            _add_error_banner(session)
+            self._build_body()
+        self._connect_events()
+        ui.timer(0.2, self.tick)
 
-    # Showing everything turns the lazy-rendering optimization off again:
-    # every card renders on every pause (and in the `watched` scope, stats
-    # accumulate for every layer on every batch). Worth an explicit
-    # confirmation.
-    watch_all_dialog = ui.dialog()
-    with watch_all_dialog, ui.card().classes("max-w-md"):
-        ui.label("Show every layer?").classes("text-lg font-medium")
-        ui.label(
-            "This can slow down large models and use a lot of browser memory."
-        ).classes("text-sm text-slate-600")
-        with ui.row().classes("w-full justify-end gap-2"):
-            ui.button("Cancel", on_click=watch_all_dialog.close).props("flat")
-            ui.button(
-                "Show all",
-                color="red",
-                on_click=lambda: (watch_all(), watch_all_dialog.close()),
-            )
+    def _install_page(self) -> None:
+        _page_scaffold()
+        _install_panel_resize()
+        ui.add_head_html(_ARCHITECTURE_CLICK_CSS)
+        ui.add_head_html(_STRIP_MARKER_CSS)
+        ui.add_body_html(_ARCHITECTURE_CLICK_JS)
+        ui.add_body_html(_layer_info_script(self.session.layer_info, self.slugs))
 
-    with ui.column().classes("w-full h-screen no-wrap gap-0"):
-        with _top_bar_row():
-            architecture_toggle = ui.button(
-                icon="account_tree", color="slate-500"
-            ).props("dense size=md").tooltip("Toggle architecture pane")
-            _refresh_button(session)
-            _add_step_controls(session, step_until_custom)
-            watch_chip = ui.button(
-                color="slate-100",
-            ).classes(
-                "ml-auto text-amber-700 font-mono"
-            ).props("dense size=md no-caps")
-            stats_icon: ui.icon
-            watch_count_label: ui.label
-            watch_list_container: ui.element
-            with watch_chip:
-                # The menu opens bottom-right of the chip, so a default
-                # (below-anchored) tooltip would cover its first item — anchor
-                # the tooltip to the chip's left instead.
-                ui.tooltip("Shown layers").props(
-                    'anchor="center left" self="center right"'
+        # The tour opens on one layer: the one this tab is already showing, so
+        # its first arrow lands on the card the visitor is looking at rather than
+        # opening a second, unrelated one. It stays the card steps' preference
+        # and their fallback — they auto-show it only when no card is open at all
+        # — but a visitor who opens another layer keeps it (`tour.py`).
+        # Auto-starts only on locked (playground) sessions — local runs reach it
+        # via the `?` button.
+        tour_layer = _pick_tour_layer(
+            self.layer_names, self.shown_layers(), self.layer_weights
+        )
+        tour_slug = self.slugs[tour_layer] if tour_layer is not None else None
+        add_tour(
+            "main",
+            main_tour_steps(tour_slug, locked=self.session.locked),
+            locked=self.session.locked,
+            auto_watch_slug=tour_slug,
+        )
+
+    def _build_dialogs(self) -> None:
+        self.step_until_custom = _build_step_until_custom_dialog(self.session)
+
+        # Showing everything turns the lazy-rendering optimization off again:
+        # every card renders on every pause (and in the `watched` scope, stats
+        # accumulate for every layer on every batch). Worth an explicit
+        # confirmation.
+        self.watch_all_dialog = ui.dialog()
+        with self.watch_all_dialog, ui.card().classes("max-w-md"):
+            ui.label("Show every layer?").classes("text-lg font-medium")
+            ui.label(
+                "This can slow down large models and use a lot of browser memory."
+            ).classes("text-sm text-slate-600")
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=self.watch_all_dialog.close).props("flat")
+                ui.button(
+                    "Show all",
+                    color="red",
+                    on_click=lambda: (self.watch_all(), self.watch_all_dialog.close()),
                 )
-                # Icon and count are built as button children (rather than the
-                # button's `icon=` / text) so the eye icon carries its own colour
-                # independently of the amber count. `sync_stats_icon` swaps it
-                # between `visibility` (green, collecting) and `visibility_off`
-                # (red, paused) — the slashed eye of the per-card Unwatch button.
-                stats_icon = ui.icon("visibility").classes("text-base")
-                watch_count_label = ui.label(
-                    str(len(state.last_watched))
-                ).classes("ml-1")
-                with ui.menu().props("anchor='bottom right' self='top right'"):
-                    # Plain block container, NOT a flex column: Firefox fails to
-                    # position/size a QMenu whose content root is a flex column,
-                    # so the menu opens collapsed (height 0) and looks like it
-                    # never opened. See quasarframework/quasar#16167. Block-level
-                    # children stack vertically anyway.
-                    with ui.element("div").classes("min-w-64"):
-                        ui.menu_item(
-                            "Show all layers",
-                            on_click=watch_all_dialog.open,
-                        ).classes("text-sm").tooltip(
-                            "Show every layer's card"
-                        )
-                        ui.menu_item(
-                            "Hide all layers",
-                            on_click=lambda: clear_all(),
-                        ).classes("text-sm").tooltip(
-                            "Hide every card and drop the collected stats"
-                        )
-                        # A locked session pins the stats scope, so the
-                        # pause toggle would be a silent no-op — hide it.
-                        if not session.locked:
-                            ui.menu_item(
-                                "Toggle collecting stats",
-                                on_click=lambda: toggle_stats(),
-                                auto_close=False,
-                            ).classes("text-sm").tooltip(
-                                "Pause or resume stats collection; what is "
-                                "already collected is kept"
-                            )
-                        ui.separator()
-                        # "Current-batch stats" submenu: every layer (watched
-                        # or not), each routing to that layer's stats view —
-                        # the current-batch phase is what makes unwatched
-                        # layers viewable there. The nested menu's content root
-                        # is a block div, so the Firefox QMenu caveat above
-                        # doesn't apply.
-                        with ui.menu_item(
-                            "Current-batch stats", auto_close=False
-                        ).classes("text-sm"):
-                            # Anchored left like the chip's own tooltip: the
-                            # layer list opens to the right, and a default
-                            # (below-anchored) tooltip would overlap it.
-                            ui.tooltip("Open a layer's stats page").props(
-                                "anchor='center left' self='center right'"
-                            )
-                            with ui.item_section().props("side"):
-                                ui.icon("chevron_right")
-                            with ui.menu().props(
-                                "anchor='top end' self='top start'"
-                            ):
-                                with ui.element("div").classes(
-                                    "min-w-56 max-h-96 overflow-auto"
-                                ):
-                                    for name in layer_names:
-                                        ui.menu_item(name).props(
-                                            f'href="/stats?layer={quote(name)}"'
-                                        ).classes("font-mono text-sm")
-                        ui.separator()
-                        watch_list_container = ui.element("div").classes("py-1")
-            _add_settings_button(session, record_view)
-            input_toggle = ui.button(
-                icon="image", color="slate-500"
-            ).props("dense size=md").tooltip(
-                "Show or hide the input panel"
+
+    def _build_header(self) -> None:
+        with _top_bar_row():
+            self.architecture_toggle = (
+                ui.button(icon="account_tree", color="slate-500")
+                .props("dense size=md")
+                .tooltip("Toggle architecture pane")
+            )
+            _refresh_button(self.session)
+            _add_step_controls(self.session, self.step_until_custom)
+            self.layer_menu = LayerMenu(
+                self.layer_names,
+                self.state.last_watched,
+                locked=self.session.locked,
+                show_all=self.watch_all_dialog.open,
+                clear_all=self.clear_all,
+                toggle_stats=lambda: self.toggle_stats(),
+            )
+            _add_settings_button(self.session, self.record_view)
+            self.input_toggle = (
+                ui.button(icon="image", color="slate-500")
+                .props("dense size=md")
+                .tooltip("Show or hide the input panel")
             )
             _add_tour_button()
-            _add_share_button(session)
+            _add_share_button(self.session)
             _add_repo_logo()
 
-        _add_error_banner(session)
-
-        # The collection state last drawn into the icon, so the 200 ms tick only
-        # touches the DOM when it actually flips (and never re-adds a tooltip —
-        # an earlier per-tick `.tooltip()` here stacked dozens of them).
-        stats_shown: bool | None = None
-
-        def sync_stats_icon() -> None:
-            """Reflect the collection state in the top-bar eye icon.
-
-            `visibility` in green while collecting, the slashed `visibility_off`
-            in red while paused (the per-card Unwatch button's glyph). Called on
-            init, on toggle, and on the 200 ms tick so a toggle in one tab shows
-            in every other — but it rewrites the icon only when the state flips.
-            """
-            nonlocal stats_shown
-            collecting = session.stats_collecting
-            if collecting == stats_shown:
-                return
-            stats_shown = collecting
-            stats_icon.set_name("visibility" if collecting else "visibility_off")
-            stats_icon.classes(
-                remove="text-green-600 text-red-600",
-                add="text-green-600" if collecting else "text-red-600",
-            )
-
-        def toggle_stats() -> None:
-            session.toggle_stats_collecting()
-            sync_stats_icon()
-
-        def refresh_chip() -> None:
-            shown = shown_layers()
-            watch_count_label.text = str(len(shown))
-            watch_list_container.clear()
-            with watch_list_container:
-                if not shown:
-                    ui.label("No layers selected").classes(
-                        "px-3 py-2 text-slate-500 text-sm italic"
-                    )
-                    return
-                # Section header: each entry below opens the stats view
-                # focused on that layer.
-                ui.label("Open statistics").classes(
-                    "px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider "
-                    "text-slate-400 select-none"
-                )
-                for layer in layer_names:
-                    if layer not in shown:
-                        continue
-                    # A real anchor (href) instead of a JS navigate: the
-                    # browser natively opens middle/ctrl clicks in a new tab
-                    # and plain clicks in the current one.
-                    ui.menu_item(layer).props(
-                        f'href="/stats?layer={quote(layer)}"'
-                    ).classes("font-mono text-sm")
-
-        def sync_watch_ui() -> None:
-            """Reflect the shown set in this connection's DOM.
-
-            In the `watched` scope, visible is synonymous with watched (the
-            global set); in the decoupled scopes it is this tab's own `shown`
-            set. Either way: cards for newly shown layers appear (and get
-            rendered on the next tick via the dirty flag), hidden ones
-            disappear, the diagram's amber classes follow, and the chip menu /
-            empty-pane hint refresh. Diffing against `state.last_watched`
-            keeps the JS push proportional to the change, not the model size.
-            """
-            shown = shown_layers()
-            added = shown - state.last_watched
-            removed = state.last_watched - shown
-            state.last_watched = shown
-            for name in added | removed:
-                view = layer_views.get(name)
-                if view is not None:
-                    view.set_visible(name in shown)
-            if added or removed:
-                changes = "; ".join(
-                    f"window.nansenseSetWatched({json.dumps(slugs[n])}, "
-                    f"{'true' if n in shown else 'false'})"
-                    for n in added | removed
-                )
-                ui.run_javascript(changes)
-                state.dirty = True
-            empty_hint.set_visibility(not shown)
-            refresh_chip()
-
-        def toggle_layer(name: str) -> None:
-            if decoupled():
-                # Per-tab visibility only — the session is never touched, so
-                # other tabs (and the collected stats) are unaffected.
-                if name in state.shown:
-                    state.shown.discard(name)
-                elif name in layer_names:
-                    state.shown.add(name)
-                else:
-                    return
-            # Any name in `session.layer_names` is watchable (modules, fx
-            # intermediates, graph inputs); False means an unknown name.
-            elif name in session.watched_layers:
-                if _refuse_unwatch_while_recording(session):
-                    return
-                session.unwatch(name)
-            elif not session.watch(name):
-                return
-            sync_watch_ui()
-            if name in shown_layers():
-                ui.run_javascript(
-                    f"window.nansenseScrollToCard({json.dumps(slugs[name])})"
-                )
-
+    def _build_body(self) -> None:
         with ui.row().classes("w-full no-wrap gap-0 grow min-h-0"):
-            architecture_pane = ui.column().classes(
-                "w-1/4 shrink-0 h-full overflow-auto p-2 "
-                "border-r-2 border-slate-300 bg-slate-50"
-            ).props(_resizable_pane_props("main-architecture"))
-            architecture_handle = _resize_handle("main-architecture", "left")
-            with architecture_pane:
-                ui.mermaid(mermaid_src).classes("w-full")
+            self.architecture_pane = (
+                ui.column()
+                .classes(
+                    "w-1/4 shrink-0 h-full overflow-auto p-2 "
+                    "border-r-2 border-slate-300 bg-slate-50"
+                )
+                .props(_resizable_pane_props("main-architecture"))
+            )
+            self.architecture_handle = _resize_handle("main-architecture", "left")
+            with self.architecture_pane:
+                ui.mermaid(self.mermaid_src).classes("w-full")
             with ui.column().classes(
                 "grow min-w-0 h-full overflow-auto p-3 bg-slate-200 gap-3"
             ):
-                empty_hint = _notice_banner(
+                self.empty_hint = _notice_banner(
                     "Select a layer in the architecture to inspect it.",
                     icon="touch_app",
                 )
-                empty_hint.set_visibility(not state.last_watched)
+                self.empty_hint.set_visibility(not self.state.last_watched)
                 # Every card is built once (cheap: header + empty strips) but
                 # only watched ones are visible — and only visible cards get
                 # strip data, so hidden layers cost neither render time nor
                 # websocket bytes.
-                for name in layer_names:
-                    layer_views[name] = _LayerView(
+                for name in self.layer_names:
+                    self.layer_views[name] = _LayerView(
                         name,
-                        slug=slugs[name],
-                        visible=name in state.last_watched,
-                        decoupled=decoupled(),
-                        weights=layer_weights.get(name, []),
-                        on_toggle_watch=toggle_layer,
+                        slug=self.slugs[name],
+                        visible=name in self.state.last_watched,
+                        decoupled=self.decoupled(),
+                        weights=self.layer_weights.get(name, []),
+                        on_toggle_watch=self.toggle_layer,
                     )
-            input_handle = _resize_handle("main-input", "right")
-            input_pane = ui.column().classes(
-                f"{_INPUT_PANE_WIDTH} shrink-0 h-full overflow-auto p-3 "
-                "border-l-2 border-slate-300 bg-slate-50 items-center"
-            ).props(_resizable_pane_props("main-input"))
-            with input_pane:
-
-                def mark_dirty() -> None:
-                    state.dirty = True
-
-                input_panel = InputPanel(
-                    session=session,
-                    input_names=input_names,
-                    input_mean=input_mean,
-                    input_std=input_std,
-                    input_transform=input_transform,
-                    on_change=mark_dirty,
+            self.input_handle = _resize_handle("main-input", "right")
+            self.input_pane = (
+                ui.column()
+                .classes(
+                    f"{_INPUT_PANE_WIDTH} shrink-0 h-full overflow-auto p-3 "
+                    "border-l-2 border-slate-300 bg-slate-50 items-center"
+                )
+                .props(_resizable_pane_props("main-input"))
+            )
+            with self.input_pane:
+                self.input_panel = InputPanel(
+                    session=self.session,
+                    input_names=self.input_names,
+                    input_mean=self.input_mean,
+                    input_std=self.input_std,
+                    input_transform=self.input_transform,
+                    on_change=self.mark_dirty,
                 )
 
-        def toggle_architecture() -> None:
-            visible = not architecture_pane.visible
-            architecture_pane.set_visibility(visible)
-            architecture_handle.set_visibility(visible)
+    def _connect_events(self) -> None:
+        # Diagram clicks arrive as custom events carrying the node's slug; map
+        # it back to the layer name and toggle. Unknown slugs (e.g. a node
+        # whose label isn't a captured layer) are ignored. Inverting `slugs`
+        # (rather than rebuilding via the bare `slug`) keeps this in step with
+        # the diagram's disambiguated node ids.
 
-        def show_input() -> None:
-            # Show-only half of `toggle_input`, for the tour's sample step:
-            # re-showing an already-visible pane is a no-op.
-            input_pane.set_visibility(True)
-            input_handle.set_visibility(True)
+        ui.on("nansense_toggle_layer", self.on_diagram_toggle)
+        ui.on("nansense_tour_show_layer", self.on_tour_show_layer)
+        # The tour's sample step re-opens the input pane the top bar's image
+        # button may have hidden (a no-op when it is already visible).
+        ui.on("nansense_tour_show_input", self.show_input)
 
-        def toggle_input() -> None:
-            visible = not input_pane.visible
-            input_pane.set_visibility(visible)
-            input_handle.set_visibility(visible)
+        # Populate the chip menu and, if anything is already watched, push the
+        # set into JS so the MutationObserver applies the amber treatment to
+        # mermaid nodes once Mermaid finishes rendering them client-side.
+        self.refresh_chip()
+        self.sync_stats_icon()
+        initial_watched = list(self.state.last_watched)
+        if initial_watched:
+            slugs_js = json.dumps([self.slugs[n] for n in initial_watched])
+            ui.timer(
+                0.0,
+                lambda: ui.run_javascript(
+                    f"({slugs_js}).forEach(s => window.nansenseSetWatched(s, true))"
+                ),
+                once=True,
+            )
+        # A locked `?layer=` deep link (a subpage's Back button) lands on the
+        # card it names, not the top of the list.
+        if self.session.locked and self.focus_layer in self.layer_names:
+            scroll_js = f"window.nansenseScrollToCard({json.dumps(self.slugs[self.focus_layer])})"
+            ui.timer(0.0, lambda: ui.run_javascript(scroll_js), once=True)
+        self.architecture_toggle.on_click(self.toggle_architecture)
+        self.input_toggle.on_click(self.toggle_input)
 
-        architecture_toggle.on_click(toggle_architecture)
-        input_toggle.on_click(toggle_input)
+    def decoupled(self) -> bool:
+        return self.controller.decoupled
 
-    # Diagram clicks arrive as custom events carrying the node's slug; map
-    # it back to the layer name and toggle. Unknown slugs (e.g. a node
-    # whose label isn't a captured layer) are ignored. Inverting `slugs`
-    # (rather than rebuilding via the bare `slug`) keeps this in step with
-    # the diagram's disambiguated node ids.
-    slug_to_name = {s: n for n, s in slugs.items()}
+    def shown_layers(self) -> frozenset[str]:
+        return self.controller.shown_layers
 
-    def on_diagram_toggle(e: GenericEventArguments) -> None:
-        name = slug_to_name.get(e.args)
+    def record_view(self) -> RecordedView | None:
+        if self.session.snapshot is None and self.session.probe_result is None:
+            return None
+        shown = self.shown_layers()
+        watched = [n for n in self.layer_names if n in shown]
+        plural = "" if len(watched) == 1 else "s"
+        # Record exactly the input the pane is showing, with its resolved
+        # display config (a same-process dict, so the transform travels too).
+        selected = self.input_panel.selected_input
+        return RecordedView(
+            key="main",
+            label=f"Main view ({len(watched)} watched layer{plural}, sample {self.input_panel.sample_idx})",
+            config=MainView(
+                layers=tuple(watched),
+                sample_idx=self.input_panel.sample_idx,
+                input_name=selected or "",
+                input_mean=resolve_per_input(self.input_mean, selected),
+                input_std=resolve_per_input(self.input_std, selected),
+                input_transform=resolve_per_input(self.input_transform, selected),
+                render_average=self.input_panel.render_options.average,
+                render_values=self.input_panel.render_options.values,
+            ),
+        )
+
+    def watch_all(self) -> None:
+        self.controller.show_all()
+        self.sync_watch_ui()
+
+    def clear_all(self) -> None:
+        if not self.controller.decoupled and _refuse_unwatch_while_recording(
+            self.session
+        ):
+            return
+        self.controller.clear()
+        self.sync_watch_ui()
+
+    def on_diagram_toggle(self, e: GenericEventArguments) -> None:
+        name = self.slug_to_name.get(e.args)
         if name is not None:
-            toggle_layer(name)
+            self.toggle_layer(name)
 
-    def on_tour_show_layer(e: GenericEventArguments) -> None:
+    def on_tour_show_layer(self, e: GenericEventArguments) -> None:
         # The tour's card-needing steps must never hide a card the visitor
         # already opened, so unlike a diagram click this is show-only;
         # `toggle_layer` still does the showing, keeping the watch/sync/
         # scroll logic in one place for both the decoupled and coupled
         # visibility flavors.
-        name = slug_to_name.get(e.args)
-        if name is not None and name not in shown_layers():
-            toggle_layer(name)
+        name = self.slug_to_name.get(e.args)
+        if name is not None and name not in self.shown_layers():
+            self.toggle_layer(name)
 
-    ui.on("nansense_toggle_layer", on_diagram_toggle)
-    ui.on("nansense_tour_show_layer", on_tour_show_layer)
-    # The tour's sample step re-opens the input pane the top bar's image
-    # button may have hidden (a no-op when it is already visible).
-    ui.on("nansense_tour_show_input", show_input)
-
-    # Populate the chip menu and, if anything is already watched, push the
-    # set into JS so the MutationObserver applies the amber treatment to
-    # mermaid nodes once Mermaid finishes rendering them client-side.
-    refresh_chip()
-    sync_stats_icon()
-    initial_watched = list(state.last_watched)
-    if initial_watched:
-        slugs_js = json.dumps([slugs[n] for n in initial_watched])
-        ui.timer(
-            0.0,
-            lambda: ui.run_javascript(
-                f"({slugs_js}).forEach(s => window.nansenseSetWatched(s, true))"
-            ),
-            once=True,
-        )
-    # A locked `?layer=` deep link (a subpage's Back button) lands on the
-    # card it names, not the top of the list.
-    if session.locked and focus_layer in layer_names:
-        scroll_js = (
-            f"window.nansenseScrollToCard({json.dumps(slugs[focus_layer])})"
-        )
-        ui.timer(0.0, lambda: ui.run_javascript(scroll_js), once=True)
-
-    async def tick() -> None:
-        input_panel.refresh_status()
+    async def tick(self) -> None:
+        self.input_panel.refresh_status()
         # While the main view records, its render parameters (sample, pin,
         # perturbations, probe mode) are frozen: the recording renders with
         # the live probe state, so the input controls must not change it.
-        input_panel.set_frozen(session.recording.is_recording("main"))
+        self.input_panel.set_frozen(self.session.recording.is_recording("main"))
         # A stats-scope switch (from the settings gear, possibly in another
         # tab) re-bases the shown set: entering a decoupled scope seeds this
         # tab's own set from the global watched set, returning to `watched`
         # re-syncs to it. Switching between the decoupled scopes (the stats
         # pause toggle) keeps the tab's cards as they are.
-        scope = session.stats_scope
-        if scope is not state.last_scope:
-            if scope is not StatsScope.WATCHED and (
-                state.last_scope is StatsScope.WATCHED
-            ):
-                state.shown = set(session.watched_layers)
-            state.last_scope = scope
-            for view in layer_views.values():
+        scope = self.session.stats_scope
+        if self.controller.reconcile_scope():
+            for view in self.layer_views.values():
                 view.set_decoupled(scope is not StatsScope.WATCHED)
-            sync_watch_ui()
+            self.sync_watch_ui()
         # Shown-set changes made elsewhere (another tab or the stats page, in
         # the coupled scope) propagate here: sync flips card visibility and
         # marks the frame dirty so newly visible cards render from the
         # current snapshot.
-        elif shown_layers() != state.last_watched:
-            sync_watch_ui()
+        elif self.shown_layers() != self.state.last_watched:
+            self.sync_watch_ui()
         # Stats-collection state can change from another tab too; keep the
         # icon's colour/strike in sync (cheap class writes, no-op when stable).
-        sync_stats_icon()
-        snap = session.snapshot
+        self.sync_stats_icon()
+        snap = self.session.snapshot
         # With a probe result present (a batch is pinned, an eval/train forward
         # mode is selected, or — per connection in a locked demo — this visitor
         # perturbed a pixel), the page renders the probe instead of the
@@ -712,16 +489,16 @@ def _build_page(
         # travel, while eval/train shows the current batch under that mode.
         # `client_key` is None on an unlocked session, so this is the shared
         # probe result there.
-        probe = session.probe_result_for(input_panel.client_key)
+        probe = self.session.probe_result_for(self.input_panel.client_key)
         if snap is None and probe is None:
             return
-        input_panel.sync_spinner_max(_display_batch_size(snap, probe))
-        if state.rendering:
+        self.input_panel.sync_spinner_max(_display_batch_size(snap, probe))
+        if self.state.rendering:
             return
         if (
-            snap is not state.last_snapshot
-            or probe is not state.last_probe
-            or state.dirty
+            snap is not self.state.last_snapshot
+            or probe is not self.state.last_probe
+            or self.state.dirty
         ):
             # Mark this source/dirty as consumed up front so a clean render
             # doesn't re-fire. Every layer's render is isolated
@@ -732,43 +509,45 @@ def _build_page(
             # source stays marked as seen (so the timer doesn't busy-crash on
             # it every 200 ms), and the next published snapshot/probe — a new
             # object — renders cleanly, so the page recovers on its own.
-            state.last_snapshot = snap
-            state.last_probe = probe
-            state.dirty = False
-            state.rendering = True
+            self.state.last_snapshot = snap
+            self.state.last_probe = probe
+            self.state.dirty = False
+            self.state.rendering = True
             try:
-                sample_idx = input_panel.sample_idx
+                sample_idx = self.input_panel.sample_idx
                 # Resolve the display config for whichever input the pane shows
                 # (a per-input dict collapses to this one input's values).
-                selected = input_panel.selected_input
-                sel_mean = resolve_per_input(input_mean, selected)
-                sel_std = resolve_per_input(input_std, selected)
-                sel_transform = resolve_per_input(input_transform, selected)
+                selected = self.input_panel.selected_input
+                sel_mean = resolve_per_input(self.input_mean, selected)
+                sel_std = resolve_per_input(self.input_std, selected)
+                sel_transform = resolve_per_input(self.input_transform, selected)
                 # Only the visible (= watched) layers render; hidden cards
                 # keep whatever stale content they had, which is invisible
                 # and re-rendered (cache-assisted) when they reappear.
-                visible_names = [n for n in layer_names if n in state.last_watched]
+                visible_names = [
+                    n for n in self.layer_names if n in self.state.last_watched
+                ]
                 rendered, input_src = await asyncio.to_thread(
                     _compute_frame,
                     visible_names,
                     snap,
                     probe,
                     sample_idx,
-                    compare=input_panel.compare,
-                    options=input_panel.render_options,
-                    input_name=input_name,
+                    compare=self.input_panel.compare,
+                    options=self.input_panel.render_options,
+                    input_name=self.input_name,
                     selected_input=selected,
                     input_mean=sel_mean,
                     input_std=sel_std,
                     input_transform=sel_transform,
-                    cache=render_cache,
+                    cache=self.render_cache,
                 )
             finally:
-                state.rendering = False
-            _apply_all(layer_views, rendered)
-            input_panel.set_image(input_src)
+                self.state.rendering = False
+            _apply_all(self.layer_views, rendered)
+            self.input_panel.set_image(input_src)
             selected_tensor = _selected_input_tensor(snap, probe, selected)
-            input_panel.set_input_warning(
+            self.input_panel.set_input_warning(
                 input_blank_warning(
                     selected_tensor,
                     sample_idx,
@@ -778,11 +557,83 @@ def _build_page(
                     transform=sel_transform,
                 )
             )
-            input_panel.set_input_legend(
+            self.input_panel.set_input_legend(
                 _input_img_src(render_input_legend(selected_tensor, sample_idx))
             )
 
-    ui.timer(0.2, tick)
+    def sync_stats_icon(self) -> None:
+        self.layer_menu.sync_collecting(self.session.stats_collecting)
+
+    def toggle_stats(self) -> None:
+        self.session.toggle_stats_collecting()
+        self.sync_stats_icon()
+
+    def refresh_chip(self) -> None:
+        self.layer_menu.update(self.shown_layers())
+
+    def sync_watch_ui(self) -> None:
+        """Reflect the shown set in this connection's DOM.
+
+        In the `watched` scope, visible is synonymous with watched (the
+        global set); in the decoupled scopes it is this tab's own `shown`
+        set. Either way: cards for newly shown layers appear (and get
+        rendered on the next tick via the dirty flag), hidden ones
+        disappear, the diagram's amber classes follow, and the chip menu /
+        empty-pane hint refresh. Diffing against `state.last_watched`
+        keeps the JS push proportional to the change, not the model size.
+        """
+        shown = self.shown_layers()
+        added = shown - self.state.last_watched
+        removed = self.state.last_watched - shown
+        self.state.last_watched = shown
+        for name in added | removed:
+            view = self.layer_views.get(name)
+            if view is not None:
+                view.set_visible(name in shown)
+        if added or removed:
+            changes = "; ".join(
+                f"window.nansenseSetWatched({json.dumps(self.slugs[n])}, "
+                f"{'true' if n in shown else 'false'})"
+                for n in added | removed
+            )
+            ui.run_javascript(changes)
+            self.state.dirty = True
+        self.empty_hint.set_visibility(not shown)
+        self.refresh_chip()
+
+    def toggle_layer(self, name: str) -> None:
+        if (
+            not self.controller.decoupled
+            and name in self.session.watched_layers
+            and _refuse_unwatch_while_recording(self.session)
+        ):
+            return
+        if not self.controller.toggle(name):
+            return
+        self.sync_watch_ui()
+        if name in self.shown_layers():
+            ui.run_javascript(
+                f"window.nansenseScrollToCard({json.dumps(self.slugs[name])})"
+            )
+
+    def toggle_architecture(self) -> None:
+        visible = not self.architecture_pane.visible
+        self.architecture_pane.set_visibility(visible)
+        self.architecture_handle.set_visibility(visible)
+
+    def show_input(self) -> None:
+        # Show-only half of `toggle_input`, for the tour's sample step:
+        # re-showing an already-visible pane is a no-op.
+        self.input_pane.set_visibility(True)
+        self.input_handle.set_visibility(True)
+
+    def toggle_input(self) -> None:
+        visible = not self.input_pane.visible
+        self.input_pane.set_visibility(visible)
+        self.input_handle.set_visibility(visible)
+
+    def mark_dirty(self) -> None:
+        self.state.dirty = True
 
 
 def _snapshot_batch_size(snap: BatchSnapshot) -> int | None:
@@ -823,8 +674,7 @@ def _display_batch_size(
 # Shown in place of the GRADIENTS strip while a probe result is displayed:
 # probes are forward-only, so there are no activation gradients to render.
 _PROBE_NO_GRADIENTS_HTML: str = (
-    '<div class="text-xs text-slate-400 italic py-1">'
-    "no gradients on probe runs</div>"
+    '<div class="text-xs text-slate-400 italic py-1">no gradients on probe runs</div>'
 )
 
 # One layer card's rendered content: the activation and gradient strips plus

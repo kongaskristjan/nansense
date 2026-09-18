@@ -11,44 +11,46 @@ from nansense import debugger
 from nansense.debugger import DebugError, LayerReport
 from nansense.patches import PATCH_TYPES, PatchAccumulator, PatchType
 from nansense.session import BatchSnapshot, StatsScope
-from nansense.ui.histograms import _make_histogram_figure, phase_color
-from nansense.ui.stats_page import (
+from nansense.ui.controllers.stats import (
     _ALL_LAYERS_MAX,
-    _HOVER_EVENT,
     _LAYER_ALL,
     _PATCH_TYPE_LABELS,
     _PHASE_CURRENT_BATCH,
     _PHASE_CURRENT_BATCH_LABEL,
-    _PLOTLY_CONFIG,
-    _RefreshGate,
+    _VIEW_GRAPHS,
     _VIEW_HISTOGRAM,
     _VIEW_MINMAX,
-    _VIEW_GRAPHS,
+    _grid_type_options,
+    _initial_phase,
+    _layer_select_options,
+    _phase_select_options,
+    _reconcile_grid_type,
+    _reconcile_selected_layer,
+    _reconcile_selected_phase,
+    _RefreshGate,
+    _selectable_layers,
+    _tour_restore_view,
+    _visible_layers,
+    _watched_in_order,
+)
+from nansense.ui.histograms import _make_histogram_figure, phase_color
+from nansense.ui.stats_page import (
+    _HOVER_EVENT,
+    _PLOTLY_CONFIG,
     _apply_watch_param,
     _bin_samples_html,
     _deep_dream_href,
     _figure_payload,
     _filter_phase,
-    _grid_type_options,
     _hover_attach_js,
-    _initial_phase,
-    _layer_select_options,
     _no_stats_message,
     _patch_grids_html,
     _patch_grids_signature,
     _phase_heading,
-    _phase_select_options,
-    _reconcile_grid_type,
-    _reconcile_selected_layer,
-    _reconcile_selected_phase,
     _refresh_now,
     _reveal_samples_js,
-    _selectable_layers,
     _should_show_bands,
     _stats_table_content,
-    _tour_restore_view,
-    _visible_layers,
-    _watched_in_order,
 )
 from nansense.watch import ZERO_BIN, LayerStatsSnapshot, bin_index
 from tests.nansense.helpers import (

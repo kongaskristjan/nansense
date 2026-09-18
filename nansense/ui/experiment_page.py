@@ -2,54 +2,35 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
 from urllib.parse import quote
-from uuid import uuid4
 
 from nicegui import ui
-from nicegui.elements.mixins.disableable_element import DisableableElement
-from nicegui.elements.mixins.value_element import ValueElement
-from torch import Tensor
 
-from nansense.contracts.experiments import DEFAULT_BATCH
 from nansense.contracts.recording import ExperimentView
 from nansense.experiments import (
     EXPERIMENT_DESCRIPTIONS,
     EXPERIMENT_KINDS,
-    EXPERIMENT_PARAMS,
-    ExperimentParam,
     ExperimentQueueState,
     ExperimentResult,
     available_experiment_kinds,
-    default_param_values,
     layer_available,
 )
 from nansense.recording import RecordedView
-from nansense.session import BatchSnapshot, Session
+from nansense.session import Session
 from nansense.ui.common import (
-    _b64_img_src,
     _defer_value_write,
     _install_panel_resize,
-    _label_bar_html,
     _page_scaffold,
     _resizable_pane_props,
     _resize_handle,
     _set_controls_enabled,
     _StatusChip,
     _StatusPill,
-    _strip_html,
     _weights_placeholder,
 )
-from nansense.ui.render import (
-    INPUT_IMAGE_SIZE,
-    StripRender,
-    attribution_vmax,
-    render_attribution_overlay,
-    render_image,
-    render_strip,
-    tensor_hw,
-)
+from nansense.ui.components.experiment_form import ExperimentForm
+from nansense.ui.components.experiment_results import ExperimentResults
+from nansense.ui.controllers.experiment import ExperimentController
 from nansense.ui.share import _add_share_button
 from nansense.ui.static import _STRIP_MARKER_CSS
 from nansense.ui.top_bar import (
@@ -63,19 +44,7 @@ from nansense.ui.top_bar import (
     _build_step_until_custom_dialog,
     _top_bar_row,
 )
-from nansense.ui.theme import caption_color
 from nansense.ui.tour import add_tour, experiment_tour_steps
-
-
-def _coerce_number(spec: ExperimentParam, *candidates: object) -> int | float:
-    """The first numeric `candidate` cast to the spec's type. A cleared number
-    field reads back from NiceGUI as None, so callers pass the widget value, the
-    persisted value and finally the always-numeric default — the cast then can
-    never see a None."""
-    for candidate in candidates:
-        if isinstance(candidate, (int, float)):
-            return int(candidate) if spec.kind == "int" else float(candidate)
-    raise AssertionError(f"no numeric value for {spec.key!r}")  # default is numeric
 
 
 def _experiment_status(result: ExperimentResult) -> str:
@@ -90,49 +59,6 @@ def _experiment_status(result: ExperimentResult) -> str:
     if result.objective is not None:
         text += f" · objective {result.objective:.4g}"
     return text
-
-
-def _experiment_img_html(image: bytes | None) -> str:
-    """Input-space experiment image, CSS-upscaled like the input pane."""
-    if image is None:
-        return '<div class="text-xs text-slate-400 italic">not renderable</div>'
-    return (
-        f'<img src="{_b64_img_src(image)}" '
-        f'style="width:{INPUT_IMAGE_SIZE}px; image-rendering:pixelated; '
-        'display:block; max-width:none;" />'
-    )
-
-
-def _layer_channel_count(snap: BatchSnapshot | None, layer: str) -> int | None:
-    """Channel count of `layer`'s last captured activation (None if unknown)."""
-    act = snap.activations.get(layer) if snap is not None else None
-    if act is None or act.ndim < 2:
-        return None
-    return int(act.shape[1])
-
-
-@dataclass
-class _ExperimentPageState:
-    """Mutable page state shared by the form, Run/Cancel, and tick closures."""
-
-    kind: str = "deep_dream"
-    layer: str = ""
-    # Parameter values persisted across kind switches (point 1): keyed by
-    # param key, so a shared key keeps its value when the experiment changes.
-    values: dict[str, object] = field(default_factory=dict)
-    # Render Captum attributions blended over the input instead of beside it.
-    overlay: bool = False
-    # This page's own request; `None` until the first run.
-    my_seq: int | None = None
-    last_result: ExperimentResult | None = None
-    # A run is needed (init, or a parameter / layer change). The tick coalesces
-    # these and (re)registers at most once per tick, so a burst of edits never
-    # floods the backend.
-    dirty: bool = True
-    # Last enable/disable flags pushed to the client (push only on change).
-    frozen: bool | None = None
-    run_enabled: bool | None = None
-    cancel_enabled: bool | None = None
 
 
 def _minmax_stats_href(layer: str) -> str:
@@ -228,628 +154,339 @@ def _build_experiment_page(
     input_mean: tuple[float, ...] | None,
     input_std: tuple[float, ...] | None,
 ) -> None:
-    """Per-layer experiments: deep dream and selected Captum attributions.
+    _ExperimentPage(session, layer, input_mean=input_mean, input_std=input_std)
 
-    The top bar carries the shared stepping controls — experiments execute on
-    the paused training thread, so the user can pause right from this page.
-    The left pane holds the experiment-kind dropdown, Run / Cancel, the
-    selected kind's parameter form (headed by a layer selector and rebuilt on
-    every dropdown change), a Captum overlay toggle, and a description of the
-    chosen experiment. The right pane streams this page's *own* results
-    (`experiment_result_for`, so concurrent tabs never overwrite each other)
-    as one card per sample with captioned cells: the input image beside its
-    deep-dream result, or the attribution map beside its input (the map first),
-    or — when overlay is on — the attribution blended over the input (the
-    MIN/MAX heat-overlay scheme). Attribution maps and overlays are sized to
-    the input image they sit next to.
-    """
-    _page_scaffold("Experiment")
-    _install_panel_resize()
-    ui.add_head_html(_STRIP_MARKER_CSS)
 
-    input_set = set(session.input_names)
-    selectable_layers = [n for n in session.layer_names if n not in input_set]
-    if not selectable_layers:
-        with ui.column().classes("w-full h-screen no-wrap gap-0"):
-            with _top_bar_row():
-                _back_button()
-                _add_repo_logo().classes("ml-auto")
-            _weights_placeholder("No layers available to experiment on.")
-        return
-    initial_layer = layer if layer in selectable_layers else selectable_layers[0]
-    add_tour(
-        "experiment", experiment_tour_steps(locked=session.locked),
-        locked=session.locked,
-    )
+class _ExperimentPage:
+    """NiceGUI adapter: builds components and synchronizes them with its controller."""
 
-    step_until_custom = _build_step_until_custom_dialog(session)
-    widgets: dict[str, ui.element] = {}
-    state = _ExperimentPageState(layer=initial_layer)
-    # Seed persisted values with every kind's defaults (session overrides
-    # first) so a freshly-shown widget always has a value, even for a key
-    # the user hasn't touched.
-    state.values.update(default_param_values(session.experiment_defaults))
-
-    # This page's auto-experiment registration: a run registers the request so
-    # it also re-runs on every visualization update (same seq → same seeded
-    # noise); the page's tick heartbeats it and it expires when the page
-    # closes, unless a recording pins it. The record key follows the *current*
-    # layer so a recording captures the layer being viewed.
-    page_key = f"experiment-page-{uuid4().hex}"
-
-    def record_key() -> str:
-        return f"experiment:{state.layer}"
-
-    def collect_params() -> dict[str, object]:
-        params: dict[str, object] = {"mean": input_mean, "std": input_std}
-        for spec in EXPERIMENT_PARAMS[state.kind]:
-            value: object = getattr(widgets.get(spec.key), "value", None)
-            if spec.kind in ("int", "float"):
-                # `run` blocks the call while a numeric field is empty; the
-                # persisted value / numeric-default fallbacks guard the rest.
-                params[spec.key] = _coerce_number(
-                    spec, value, state.values.get(spec.key), spec.default
-                )
-            elif spec.kind == "bool":
-                params[spec.key] = bool(value)
-            else:
-                params[spec.key] = str(value if value is not None else spec.default)
-        return params
-
-    def run() -> None:
-        if _refresh_param_error():  # an empty/non-numeric field — don't run
+    def __init__(
+        self,
+        session: Session,
+        layer: str,
+        *,
+        input_mean: tuple[float, ...] | None,
+        input_std: tuple[float, ...] | None,
+    ) -> None:
+        self.input_mean = input_mean
+        self.input_std = input_std
+        self.session = session
+        _page_scaffold("Experiment")
+        _install_panel_resize()
+        ui.add_head_html(_STRIP_MARKER_CSS)
+        input_set = set(self.session.input_names)
+        self.selectable_layers = [
+            n for n in self.session.layer_names if n not in input_set
+        ]
+        if not self.selectable_layers:
+            with ui.column().classes("w-full h-screen no-wrap gap-0"):
+                with _top_bar_row():
+                    _back_button()
+                    _add_repo_logo().classes("ml-auto")
+                _weights_placeholder("No layers available to experiment on.")
             return
-        previous_seq = state.my_seq
+        initial_layer = (
+            layer if layer in self.selectable_layers else self.selectable_layers[0]
+        )
+        add_tour(
+            "experiment",
+            experiment_tour_steps(locked=self.session.locked),
+            locked=self.session.locked,
+        )
+        self.step_until_custom = _build_step_until_custom_dialog(self.session)
+        self.controller = ExperimentController(
+            self.session, self.selectable_layers, initial_layer
+        )
+        self.state = self.controller.state
+        self._build_layout()
+        # NiceGUI regenerates options on update; preserve our disabled-layer flags.
+        setattr(self.layer_select, "_update_options", self._patched_update_options)
+        self.refresh_layer_options()
+        self.form.rebuild_params()
+        self.update_description()
+        ui.timer(0.2, self.tick)
+
+    def record_key(self) -> str:
+        return self.controller.record_key
+
+    def run(self) -> None:
+        if self.form.validate():
+            return
         try:
-            state.my_seq = session.register_auto_experiment(
-                page_key, kind=state.kind, layer=state.layer, params=collect_params()
-            )
+            self.controller.run(self.form.collect_params())
         except ValueError as error:
-            error_label.text = str(error)
+            self.error_label.text = str(error)
             return
-        if previous_seq is not None:
-            session.cancel_experiment(previous_seq)
-        state.last_result = None
-        error_label.text = ""
+        self.error_label.text = ""
 
-    def cancel() -> None:
-        if state.my_seq is None:
-            return
-        session.cancel_experiment(state.my_seq)
-        # Stop the auto reruns too — unless a recording pinned the request
-        # (Cancel is disabled while recorded, but another tab may differ).
-        if not session.recording.is_recording(record_key()):
-            session.unregister_auto_experiment(page_key)
+    def cancel(self) -> None:
+        self.controller.cancel()
 
-    def record_view() -> RecordedView | None:
-        if state.my_seq is None:
-            return None  # nothing to record until an experiment has run
-        kind = state.kind
+    def record_view(self) -> RecordedView | None:
+        if self.state.my_seq is None:
+            return None
+        kind = self.state.kind
         return RecordedView(
-            key=record_key(),
-            label=f"Experiment · {EXPERIMENT_KINDS.get(kind, kind)} · {state.layer}",
+            key=self.record_key(),
+            label=f"Experiment · {EXPERIMENT_KINDS.get(kind, kind)} · {self.state.layer}",
             config=ExperimentView(
-                layer=state.layer,
-                seq=state.my_seq,
-                auto_key=page_key,
-                input_mean=input_mean,
-                input_std=input_std,
-                overlay=state.overlay,
+                layer=self.state.layer,
+                seq=self.state.my_seq,
+                auto_key=self.controller.key,
+                input_mean=self.input_mean,
+                input_std=self.input_std,
+                overlay=self.state.overlay,
             ),
         )
 
-    def schedule_run() -> None:
-        state.dirty = True
+    def schedule_run(self) -> None:
+        self.controller.schedule()
 
-    def on_kind_change(e: object) -> None:
+    def on_kind_change(self, e: object) -> None:
         value = getattr(e, "value", None)
         if value is None:
             return
-        state.kind = str(value)
-        refresh_layer_options()
-        # Moving to a kind the current layer can't run keeps the form valid by
-        # hopping to the first layer that can (point 2).
-        if not layer_available(session, state.layer, state.kind):
-            available = next(
-                (n for n in selectable_layers if layer_available(session, n, state.kind)),
-                None,
-            )
-            if available is not None:
-                old_layer = state.layer
-                state.layer = available
-                _defer_value_write(lambda: layer_select.set_value(available))
-                # The hop would otherwise be silent — the user may not notice
-                # they're now experimenting on a different layer.
-                ui.notify(
-                    f"{EXPERIMENT_KINDS[state.kind]} can't run on {old_layer} "
-                    f"— switched to {available}",
-                    type="info",
-                )
-        rebuild_params()
-        update_description()
-        overlay_switch.set_visibility(state.kind != "deep_dream")
-        compare_button.set_visibility(state.kind == "deep_dream")
-        sync_compare_href()
-        sync_back_href()
-        schedule_run()
-
-    def on_layer_change(e: object) -> None:
-        value = getattr(e, "value", None)
-        if value is None:
-            return
-        if not layer_available(session, str(value), state.kind):
-            # A disabled option shouldn't be selectable, but guard anyway.
-            _defer_value_write(lambda: layer_select.set_value(state.layer))
+        switched = self.controller.select_kind(str(value))
+        self.refresh_layer_options()
+        if switched is not None:
+            old_layer, available = switched
+            _defer_value_write(lambda: self.layer_select.set_value(available))
             ui.notify(
-                f"{EXPERIMENT_KINDS[state.kind]} can't run on {value}",
+                f"{EXPERIMENT_KINDS[self.state.kind]} can't run on {old_layer} — switched to {available}",
+                type="info",
+            )
+        self.form.rebuild_params()
+        self.update_description()
+        self.overlay_switch.set_visibility(self.state.kind != "deep_dream")
+        self.compare_button.set_visibility(self.state.kind == "deep_dream")
+        self.sync_compare_href()
+        self.sync_back_href()
+        self.schedule_run()
+
+    def on_layer_change(self, e: object) -> None:
+        value = getattr(e, "value", None)
+        if value is None:
+            return
+        if not self.controller.select_layer(str(value)):
+            _defer_value_write(lambda: self.layer_select.set_value(self.state.layer))
+            ui.notify(
+                f"{EXPERIMENT_KINDS[self.state.kind]} can't run on {value}",
                 type="warning",
             )
             return
-        state.layer = str(value)
-        sync_compare_href()
-        sync_back_href()
-        clip_channel()
-        schedule_run()
+        self.sync_compare_href()
+        self.sync_back_href()
+        self.form.clip_channel()
+        self.schedule_run()
 
-    def on_overlay_change(e: object) -> None:
-        # A pure display toggle: re-render the current result, no backend re-run.
-        state.overlay = bool(getattr(e, "value", False))
-        if state.last_result is not None and state.last_result.error is None:
-            render_result(state.last_result)
+    def on_overlay_change(self, e: object) -> None:
+        self.state.overlay = bool(getattr(e, "value", False))
+        if self.state.last_result is not None and self.state.last_result.error is None:
+            self.results.render(self.state.last_result, overlay=self.state.overlay)
 
-    def sync_compare_href() -> None:
-        # Keep the compare link on the current layer. An `href` (not an
-        # `on_click` navigate) renders the button as a real anchor, so
-        # middle-click / ctrl-click open the stats view in a new tab.
-        compare_button.props(f'href="{_minmax_stats_href(state.layer)}"')
+    def sync_compare_href(self) -> None:
+        self.compare_button.props(f'href="{_minmax_stats_href(self.state.layer)}"')
 
-    def sync_back_href() -> None:
-        # Locked playground only: Back carries the selected layer so the
-        # main page opens with its card shown.
-        if session.locked:
-            back_button.props(f'href="{_back_href(state.layer)}"')
+    def sync_back_href(self) -> None:
+        if self.session.locked:
+            self.back_button.props(f'href="{_back_href(self.state.layer)}"')
 
-    with ui.column().classes("w-full h-screen no-wrap gap-0"):
-        with _top_bar_row():
-            back_button = _back_button(
-                state.layer if session.locked else None
-            )
-            _add_step_controls(session, step_until_custom)
-            _add_settings_button(session, record_view).classes("ml-auto")
-            _add_tour_button()
-            _add_share_button(session)
-            _add_repo_logo()
-
-        _add_error_banner(session)
-
-        with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
-            with ui.column().classes(
-                "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
-                "border-r-2 border-slate-300 bg-slate-50"
-            ).props(_resizable_pane_props("experiment-controls")):
-                ui.label("Experiment").classes("font-mono text-base font-bold")
-                ui.separator()
-                # `data-tour` marks the tour's arrow targets: the two
-                # selectors, plus the Run / Cancel row below
-                # (`tour.experiment_tour_steps`).
-                kind_select = ui.select(
-                    available_experiment_kinds(),
-                    label="Experiment",
-                    value=state.kind,
-                    on_change=on_kind_change,
-                ).props('dense outlined data-tour="kind"').classes("w-full")
-                with kind_select:
-                    kind_tooltip = ui.tooltip("")
-                # `data-tour="run"` rings the whole Run / Cancel pair on the
-                # locked playground's tour (`tour.experiment_tour_steps`),
-                # where experiments only start on a manual Run.
-                with ui.row().classes("w-full no-wrap gap-2").props(
-                    'data-tour="run"'
-                ):
-                    run_button = (
-                        ui.button("Run", icon="science", on_click=run, color="yellow-8")
-                        .props("dense size=md")
-                        .classes("grow")
-                        .tooltip(_run_tooltip(session.locked))
-                    )
-                    cancel_button = (
-                        ui.button("Cancel", on_click=cancel, color="slate-500")
-                        .props("dense size=md")
-                        .classes("grow")
-                        .tooltip("Abort experiment")
-                    )
-                ui.separator()
-                ui.label("Parameters").classes("font-mono text-sm")
-                # The layer selector is the first configurable parameter
-                # (point 2); it lives above the rebuilt-per-kind form so a
-                # kind change never clears it. Unavailable layers are grayed
-                # out via a `disable` flag on each option.
-                layer_select = (
-                    ui.select(
-                        selectable_layers,
-                        value=state.layer,
-                        label="Layer",
-                        on_change=on_layer_change,
-                    )
-                    .props(
-                        "dense outlined options-dense option-disable=disable "
-                        'data-tour="layer"'
-                    )
-                    .classes("w-full")
-                )
-                params_pane = ui.column().classes("w-full gap-2 p-0")
-                # Flags an empty / non-numeric number field (which would
-                # otherwise read back as None and crash the run).
-                param_error_label = ui.label("").classes(
-                    "text-xs text-red-600 whitespace-normal leading-snug"
-                )
-                overlay_switch = (
-                    ui.switch("Overlay on input", value=state.overlay, on_change=on_overlay_change)
-                    .props("dense")
-                    .tooltip(
-                        "Blend each map over its input instead of side by side"
-                    )
-                )
-                overlay_switch.set_visibility(state.kind != "deep_dream")
-                ui.space()
-                # Deep-dream only: jump to the same layer's MIN/MAX stats — the
-                # real-input extremes that complement the synthesized dreams
-                # (point 3). Sits just above the kind description.
-                compare_button = (
-                    ui.button(
-                        "Compare with MIN/MAX",
-                        icon="bar_chart",
-                        color="teal",
-                    )
-                    .props(
-                        f'dense no-caps size=sm href="{_minmax_stats_href(state.layer)}"'
-                    )
-                    .classes("w-full")
-                    .tooltip("Open this layer's MIN/MAX stats")
-                )
-                compare_button.set_visibility(state.kind == "deep_dream")
-                description_label = ui.label("").classes(
-                    "text-xs text-slate-600 whitespace-normal leading-snug "
-                    "border-t border-slate-300 pt-2 mt-1"
-                )
-            _resize_handle("experiment-controls", "left")
-            with ui.column().classes(
-                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
-            ):
-                status_pill = _StatusPill(
-                    _idle_chip(session.auto_run_experiments, session.locked)
-                )
-                error_label = ui.label("").classes("text-sm text-red-600")
-                results_col = ui.column().classes("gap-2 w-full")
-
-    def _layer_options_with_disable() -> list[dict[str, object]]:
+    def _layer_options_with_disable(self) -> list[dict[str, object]]:
         return [
             {
                 "value": index,
                 "label": name,
-                "disable": not layer_available(session, name, state.kind),
+                "disable": not layer_available(self.session, name, self.state.kind),
             }
-            for index, name in enumerate(selectable_layers)
+            for index, name in enumerate(self.selectable_layers)
         ]
 
-    def _patched_update_options() -> None:
-        # NiceGUI's ChoiceElement.update regenerates `_props['options']` as
-        # plain `{value, label}` dicts on every refresh, dropping a `disable`
-        # flag. Reassigning the whole list here (rather than mutating it in
-        # place) routes through Props change-tracking, so Quasar's
-        # `option-disable` reliably grays the unavailable layers (point 2).
-        before = layer_select.value
-        layer_select._props["options"] = _layer_options_with_disable()
-        layer_select._props[layer_select.VALUE_PROP] = (
-            layer_select._value_to_model_value(before)
+    def _patched_update_options(self) -> None:
+        before = self.layer_select.value
+        self.layer_select._props["options"] = self._layer_options_with_disable()
+        self.layer_select._props[self.layer_select.VALUE_PROP] = (
+            self.layer_select._value_to_model_value(before)
         )
         if not isinstance(before, list):
-            layer_select.value = before if before in layer_select._values else None
-
-    # Swap in the disable-aware option generator (ChoiceElement.update calls
-    # the instance's `_update_options`); setattr keeps the static checker calm
-    # about shadowing a method.
-    setattr(layer_select, "_update_options", _patched_update_options)
-
-    def refresh_layer_options() -> None:
-        """Re-gray the layer options for the current kind (point 2)."""
-        layer_select.update()
-
-    def _clip_number(key: str, maximum: int) -> None:
-        """Pin a number widget's max, clipping its value when the layer shrank."""
-        widget = widgets.get(key)
-        if not isinstance(widget, ui.number):
-            return
-        widget.max = maximum
-        current = widget.value
-        if isinstance(current, (int, float)) and current > maximum:
-            state.values[key] = maximum
-            _defer_value_write(lambda: widget.set_value(maximum))
-
-    def clip_channel() -> None:
-        """Pin the targeting widgets to the layer's channel count, clipping a
-        value the new layer can no longer reach (point 2): deep dream's
-        Channels is a count of the first N (max = channels), Captum's Channel
-        is a single index (max = channels − 1)."""
-        channels = _layer_channel_count(session.snapshot, state.layer)
-        if channels is None:
-            return
-        _clip_number("channels", channels)
-        _clip_number("channel", channels - 1)
-
-    def _sync_sample_visibility() -> None:
-        """Show deep dream's Sample knob only when starting from the current
-        batch — noise has no input to pick (point 2)."""
-        sample_widget = widgets.get("sample")
-        start_widget = widgets.get("start")
-        if sample_widget is None or start_widget is None:
-            return
-        sample_widget.set_visibility(getattr(start_widget, "value", None) == "sample")
-
-    def _invalid_number_fields() -> list[str]:
-        """Labels of numeric params whose widget holds no usable number — an
-        empty or non-numeric field reads back from NiceGUI as None."""
-        invalid: list[str] = []
-        for spec in EXPERIMENT_PARAMS[state.kind]:
-            if spec.kind not in ("int", "float"):
-                continue
-            value = getattr(widgets.get(spec.key), "value", None)
-            if not isinstance(value, (int, float)):
-                invalid.append(spec.label)
-        return invalid
-
-    def _refresh_param_error() -> list[str]:
-        """Sync the red hint with the current fields; return the invalid ones."""
-        invalid = _invalid_number_fields()
-        param_error_label.text = (
-            "Enter a number for: " + ", ".join(invalid) if invalid else ""
-        )
-        return invalid
-
-    def _on_param_change(key: str, widget: ui.element) -> None:
-        value = getattr(widget, "value", None)
-        # A cleared / non-numeric number field reads back as None; keep the last
-        # good value rather than persisting it — `run` reports it as a red hint.
-        if not (isinstance(widget, ui.number) and not isinstance(value, (int, float))):
-            state.values[key] = value
-            if key == "start":
-                _sync_sample_visibility()
-        _refresh_param_error()
-        schedule_run()
-
-    def rebuild_params() -> None:
-        widgets.clear()
-        params_pane.clear()
-        with params_pane:
-            for spec in EXPERIMENT_PARAMS[state.kind]:
-                initial = state.values.get(spec.key, spec.default)
-                if spec.kind == "bool":
-                    widget: ValueElement = ui.switch(
-                        spec.label, value=bool(initial)
-                    ).props("dense")
-                elif spec.kind == "select":
-                    widget = (
-                        ui.select(spec.options or {}, label=spec.label, value=initial)
-                        .props("dense outlined")
-                        .classes("w-full")
-                    )
-                else:
-                    default = initial
-                    if spec.key == "batch" and not isinstance(default, (int, float)):
-                        live = session.input_batch_size
-                        default = min(DEFAULT_BATCH, live) if live else DEFAULT_BATCH
-                    maximum: float | None = None
-                    if spec.key in ("channel", "channels"):
-                        channels = _layer_channel_count(session.snapshot, state.layer)
-                        if channels is not None:
-                            # Channel is a single index; Channels is a count.
-                            maximum = channels - 1 if spec.key == "channel" else channels
-                    elif spec.key == "sample":
-                        live = session.input_batch_size
-                        if live:
-                            maximum = live - 1
-                    default_number = default if isinstance(default, (int, float)) else 0
-                    widget = (
-                        ui.number(
-                            label=spec.label,
-                            value=default_number,
-                            min=spec.minimum,
-                            max=maximum,
-                            step=1 if spec.kind == "int" else spec.step,
-                            format="%d" if spec.kind == "int" else None,
-                        )
-                        .props("dense outlined")
-                        .classes("w-full")
-                    )
-                if spec.tooltip:
-                    widget.tooltip(spec.tooltip)
-                widget.on_value_change(
-                    lambda _e, k=spec.key, w=widget: _on_param_change(k, w)
-                )
-                widgets[spec.key] = widget
-        _sync_sample_visibility()
-        if state.frozen:
-            _set_controls_enabled(_param_controls(), False)
-
-    def _param_controls() -> list[DisableableElement]:
-        controls = [w for w in widgets.values() if isinstance(w, DisableableElement)]
-        if isinstance(layer_select, DisableableElement):
-            controls.append(layer_select)
-        return controls
-
-    def update_description() -> None:
-        short, long = EXPERIMENT_DESCRIPTIONS.get(state.kind, ("", ""))
-        description_label.text = long
-        kind_tooltip.set_text(short)
-
-    def _image_widget(tensor: Tensor | None, sample_idx: int) -> None:
-        ui.html(
-            _experiment_img_html(
-                render_image(tensor, sample_idx, mean=input_mean, std=input_std)
+            self.layer_select.value = (
+                before if before in self.layer_select._values else None
             )
+
+    def refresh_layer_options(self) -> None:
+        """Re-gray the layer options for the current kind."""
+        self.layer_select.update()
+
+    def update_description(self) -> None:
+        short, long = EXPERIMENT_DESCRIPTIONS.get(self.state.kind, ("", ""))
+        self.description_label.text = long
+        self.kind_tooltip.set_text(short)
+
+    def update_controls(self, *, running: bool) -> None:
+        run_ok = (
+            not self.state.frozen
+            and (not self.session.auto_run_experiments)
+            and (not running)
         )
+        cancel_ok = not self.state.frozen and running
+        if run_ok != self.state.run_enabled:
+            self.state.run_enabled = run_ok
+            self.run_button.set_enabled(run_ok)
+        if cancel_ok != self.state.cancel_enabled:
+            self.state.cancel_enabled = cancel_ok
+            self.cancel_button.set_enabled(cancel_ok)
 
-    def _strip_widget(strip: StripRender | None) -> None:
-        with ui.element("div").classes("max-w-full overflow-x-auto"):
-            ui.html(_strip_html(strip, show_labels=True))
-
-    def _captioned_cells(cells: list[tuple[str, Callable[[], None]]]) -> None:
-        """A horizontal, scrollable row of captioned cells (caption over body),
-        consistent with the watch / weights cards. Captions are filled color
-        bars matching the main view's markers: input green, attribution/overlay
-        purple, deep-dream channels slate (`theme.caption_color`)."""
-        with ui.row().classes("items-start gap-4 no-wrap w-full overflow-x-auto"):
-            for caption, build in cells:
-                with ui.column().classes("items-center gap-1 shrink-0"):
-                    ui.html(
-                        _label_bar_html(
-                            caption.upper(), color=caption_color(caption)
-                        )
-                    ).classes("w-full")
-                    build()
-
-    def _sample_card(idx: int, cells: list[tuple[str, Callable[[], None]]]) -> None:
-        """One Captum result card per sample: a label over a row of captioned
-        cells."""
-        with ui.card().classes("w-full p-3 gap-2"):
-            ui.label(f"Sample {idx}").classes(
-                "font-mono text-sm font-bold text-slate-600"
-            )
-            _captioned_cells(cells)
-
-    def render_result(result: ExperimentResult) -> None:
-        """Deep dream renders one card holding a single horizontal row — the
-        starting input (only when dreaming from the current batch) followed by
-        one dreamed image per channel (points 1–3). Captum keeps one card per
-        sample: the attribution map beside its input (the map first, point 1),
-        or — with overlay on — the attribution blended over the input.
-        Attribution maps and overlays are sized to match the input (point 2)."""
-        results_col.clear()
-        with results_col:
-            if result.image is not None:
-                _render_image_row(result.reference, result.image)
-            elif result.attribution is not None:
-                _render_attribution_cards(result)
-
-    def _render_image_row(reference: Tensor | None, image: Tensor) -> None:
-        # One card, one horizontal row: the shared input (current-batch start
-        # only) then one dreamed image per channel (points 2, 3).
-        cells: list[tuple[str, Callable[[], None]]] = []
-        if reference is not None:
-            cells.append(("input", lambda: _image_widget(reference, 0)))
-        for i in range(int(image.shape[0])):
-            cells.append((f"channel {i}", lambda i=i: _image_widget(image, i)))
-        with ui.card().classes("w-full p-3 gap-2"):
-            _captioned_cells(cells)
-
-    def _render_attribution_cards(result: ExperimentResult) -> None:
-        attribution = result.attribution
-        reference = result.reference
-        assert attribution is not None
-        attr = attribution  # narrowed; safe to index inside the cell closures
-        n = int(attr.shape[0])
-        if state.overlay and reference is not None:
-            ref = reference  # narrowed for the closures below
-            vmax = attribution_vmax(attr)
-            for i in range(n):
-                _sample_card(
-                    i,
-                    [
-                        (
-                            "overlay",
-                            lambda i=i: _strip_widget(
-                                render_attribution_overlay(
-                                    ref[i],
-                                    attr[i],
-                                    mean=input_mean,
-                                    std=input_std,
-                                    vmax=vmax,
-                                    tile_px=INPUT_IMAGE_SIZE,
-                                )
-                            ),
-                        )
-                    ],
-                )
-            return
-        input_hw = tensor_hw(reference)
-        for i in range(n):
-            # Attribution map first, input second (point 1).
-            cells: list[tuple[str, Callable[[], None]]] = [
-                (
-                    "attribution",
-                    lambda i=i: _strip_widget(
-                        render_strip(
-                            attr, i, input_hw=input_hw, tile_px=INPUT_IMAGE_SIZE
-                        )
-                    ),
-                )
-            ]
-            if reference is not None:
-                cells.append(("input", lambda i=i: _image_widget(reference, i)))
-            _sample_card(i, cells)
-
-    def update_controls(*, running: bool) -> None:
-        run_ok = not state.frozen and not session.auto_run_experiments and not running
-        cancel_ok = not state.frozen and running
-        if run_ok != state.run_enabled:
-            state.run_enabled = run_ok
-            run_button.set_enabled(run_ok)
-        if cancel_ok != state.cancel_enabled:
-            state.cancel_enabled = cancel_ok
-            cancel_button.set_enabled(cancel_ok)
-
-    def tick() -> None:
-        # Keep this page's auto experiment alive while the page is open.
-        session.touch_auto_experiment(page_key)
-        # While this experiment records, its request must stay as-is: a re-run
-        # would replace the recorded seq and parameter edits would lie.
-        frozen = session.recording.is_recording(record_key())
-        if frozen != state.frozen:
-            state.frozen = frozen
+    def tick(self) -> None:
+        frozen = self.controller.heartbeat()
+        if frozen != self.state.frozen:
+            self.state.frozen = frozen
             _set_controls_enabled(
-                [kind_select, overlay_switch, *_param_controls()], not frozen
+                [
+                    self.kind_select,
+                    self.layer_select,
+                    self.overlay_switch,
+                    *self.form.controls(),
+                ],
+                not frozen,
             )
-
-        result = session.experiment_result_for(state.my_seq) if state.my_seq else None
-        running = state.my_seq is not None and not (result is not None and result.done)
-        update_controls(running=running)
-
-        # Auto-run: register (or re-register on change) without a manual Run.
-        # Even with auto-run off, the page's *first* experiment self-starts
-        # (`my_seq` stays None until one runs) so the page opens onto a
-        # result; only the re-runs wait for a manual Run then.
-        if (
-            (session.auto_run_experiments or state.my_seq is None)
-            and state.dirty
-            and not frozen
-        ):
-            state.dirty = False
-            run()
-
-        if state.my_seq is None:
+        result = (
+            self.session.experiment_result_for(self.state.my_seq)
+            if self.state.my_seq
+            else None
+        )
+        running = self.state.my_seq is not None and (
+            not (result is not None and result.done)
+        )
+        self.update_controls(running=running)
+        if self.controller.consume_auto_run(frozen):
+            self.run()
+        if self.state.my_seq is None:
             return
         if result is None:
-            # Nothing published yet: the queue says whether that means
-            # running now, waiting in line, or waiting for the training
-            # thread to come round.
-            if state.last_result is None:
-                status_pill.show(
+            if self.state.last_result is None:
+                self.status_pill.show(
                     _pending_chip(
-                        state.kind,
-                        session.experiment_queue_state(state.my_seq),
-                        training_running=session.is_running,
-                        locked=session.locked,
+                        self.state.kind,
+                        self.session.experiment_queue_state(self.state.my_seq),
+                        training_running=self.session.is_running,
+                        locked=self.session.locked,
                     )
                 )
             return
-        status_pill.show(_result_chip(result))
-        error_label.text = result.error or ""
-        if result is not state.last_result:
-            state.last_result = result
+        self.status_pill.show(_result_chip(result))
+        self.error_label.text = result.error or ""
+        if result is not self.state.last_result:
+            self.state.last_result = result
             if result.error is None:
-                render_result(result)
+                self.results.render(result, overlay=self.state.overlay)
 
-    refresh_layer_options()
-    rebuild_params()
-    update_description()
-    ui.timer(0.2, tick)
+    def _build_header(self) -> None:
+        with _top_bar_row():
+            self.back_button = _back_button(
+                self.state.layer if self.session.locked else None
+            )
+            _add_step_controls(self.session, self.step_until_custom)
+            _add_settings_button(self.session, self.record_view).classes("ml-auto")
+            _add_tour_button()
+            _add_share_button(self.session)
+            _add_repo_logo()
+
+    def _build_content(self) -> None:
+        with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
+            self._build_controls()
+            _resize_handle("experiment-controls", "left")
+            with ui.column().classes(
+                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
+            ):
+                self.status_pill = _StatusPill(
+                    _idle_chip(self.session.auto_run_experiments, self.session.locked)
+                )
+                self.error_label = ui.label("").classes("text-sm text-red-600")
+                self.results = ExperimentResults(self.input_mean, self.input_std)
+
+    def _build_controls(self) -> None:
+        with (
+            ui.column()
+            .classes(
+                "w-80 shrink-0 h-full overflow-auto p-4 gap-2 border-r-2 border-slate-300 bg-slate-50"
+            )
+            .props(_resizable_pane_props("experiment-controls"))
+        ):
+            ui.label("Experiment").classes("font-mono text-base font-bold")
+            ui.separator()
+            self.kind_select = (
+                ui.select(
+                    available_experiment_kinds(),
+                    label="Experiment",
+                    value=self.state.kind,
+                    on_change=self.on_kind_change,
+                )
+                .props('dense outlined data-tour="kind"')
+                .classes("w-full")
+            )
+            with self.kind_select:
+                self.kind_tooltip = ui.tooltip("")
+            with ui.row().classes("w-full no-wrap gap-2").props('data-tour="run"'):
+                self.run_button = (
+                    ui.button(
+                        "Run", icon="science", on_click=self.run, color="yellow-8"
+                    )
+                    .props("dense size=md")
+                    .classes("grow")
+                    .tooltip(_run_tooltip(self.session.locked))
+                )
+                self.cancel_button = (
+                    ui.button("Cancel", on_click=self.cancel, color="slate-500")
+                    .props("dense size=md")
+                    .classes("grow")
+                    .tooltip("Abort experiment")
+                )
+            ui.separator()
+            ui.label("Parameters").classes("font-mono text-sm")
+            self.layer_select = (
+                ui.select(
+                    self.selectable_layers,
+                    value=self.state.layer,
+                    label="Layer",
+                    on_change=self.on_layer_change,
+                )
+                .props(
+                    'dense outlined options-dense option-disable=disable data-tour="layer"'
+                )
+                .classes("w-full")
+            )
+            self.form = ExperimentForm(
+                self.session,
+                self.state,
+                self.schedule_run,
+                self.input_mean,
+                self.input_std,
+            )
+            self.overlay_switch = (
+                ui.switch(
+                    "Overlay on input",
+                    value=self.state.overlay,
+                    on_change=self.on_overlay_change,
+                )
+                .props("dense")
+                .tooltip("Blend each map over its input instead of side by side")
+            )
+            self.overlay_switch.set_visibility(self.state.kind != "deep_dream")
+            ui.space()
+            self.compare_button = (
+                ui.button("Compare with MIN/MAX", icon="bar_chart", color="teal")
+                .props(
+                    f'dense no-caps size=sm href="{_minmax_stats_href(self.state.layer)}"'
+                )
+                .classes("w-full")
+                .tooltip("Open this layer's MIN/MAX stats")
+            )
+            self.compare_button.set_visibility(self.state.kind == "deep_dream")
+            self.description_label = ui.label("").classes(
+                "text-xs text-slate-600 whitespace-normal leading-snug border-t border-slate-300 pt-2 mt-1"
+            )
+
+    def _build_layout(self) -> None:
+        with ui.column().classes("w-full h-screen no-wrap gap-0"):
+            self._build_header()
+            _add_error_banner(self.session)
+            self._build_content()

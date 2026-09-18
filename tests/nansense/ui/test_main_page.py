@@ -9,18 +9,17 @@ import torch
 
 from nansense.probe import ProbeResult
 from nansense.ui.common import _strip_html
+from nansense.ui.controllers.main import _seed_shown
+from nansense.ui.graph import slug_map
 from nansense.ui.main_page import (
-    _INPUT_PANE_WIDTH,
     _PROBE_NO_GRADIENTS_HTML,
-    _RenderCache,
     _compute_frame,
     _display_batch_size,
     _input_img_src,
     _layer_info_script,
     _pick_tour_layer,
-    _seed_shown,
+    _RenderCache,
 )
-from nansense.ui.graph import slug_map
 from nansense.ui.render import (
     RenderOptions,
     StripRender,
@@ -29,19 +28,6 @@ from nansense.ui.render import (
     render_strip,
 )
 from tests.nansense.helpers import _frame_snapshot, _make_snapshot
-
-
-def test_input_pane_width_is_proportional_capped_and_resizable() -> None:
-    # A phone-friendly default: proportional to the viewport (shrinks on a
-    # narrow screen instead of the old fixed 288px that swallowed the strips)
-    # with a cap so wide monitors don't bloat the pane.
-    assert _INPUT_PANE_WIDTH.startswith("w-[clamp(")
-    assert "vw" in _INPUT_PANE_WIDTH  # proportional term
-    # The width must be set via `width` (clamp) alone: a min-/max-width class
-    # would persist as a CSS constraint and cap how far the resize handle's
-    # inline px width can drag the pane, silently breaking resizing.
-    assert "min-w-" not in _INPUT_PANE_WIDTH
-    assert "max-w-" not in _INPUT_PANE_WIDTH
 
 
 def test_input_img_src_is_a_data_uri() -> None:

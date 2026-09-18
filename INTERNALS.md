@@ -10,7 +10,7 @@ A NaNsense session lives across two threads:
 
 - **Training thread.** The user's training loop. Forward / backward / step
   run here, and `with session.batch(phase=..., epoch=...)` is entered here.
-- **UI thread.** Driven by NiceGUI (not yet implemented). Reads session
+- **UI thread.** Driven by NiceGUI. Reads session
   state, calls control methods (`stop`, `step_batch`, …, `detach`, `close`).
 
 Synchronization is a single `threading.Condition` (`Session._cv`) protecting:
@@ -1412,15 +1412,30 @@ DataLoader shuffling exact. (Lightning's sanity check runs under
 
 ## UI layer
 
+Page controllers in `ui/controllers/` own per-tab selection, experiment
+lifecycle, and statistics reconciliation without constructing NiceGUI elements.
+Components in `ui/components/` own cohesive widget groups and receive explicit
+state and callbacks. Page modules compose those components and adapt session
+updates to rendering. Settings sections own their controls and handlers; each
+loads session values under a guard so opening the dialog cannot apply a
+partially loaded combination. Recording I/O remains off the event loop.
+
 `nansense.ui` is a thin NiceGUI app that reads `Session.snapshot` (plus
 `probe_result`, watch, and debug state) and drives the session through its
 control methods. It never touches tensors except to render them, and never
 touches the model — that invariant belongs to the training thread.
 
-One module per page plus shared support: `app.py` (`serve` + page routes),
+The `nansense.ui` package is a lazy boundary: importing the library or using
+a disabled/nonleader session does not load NiceGUI, the server, or MCP.
+Standalone graph/render exports load only their own modules. `serve` loads
+the application and installs server-specific logging/warning filters; importing
+`app.py` alone does not install them. Captum loads only for an attribution run.
+
+One module per page plus shared support: `app.py` (server + page routes),
 `main_page.py`, `stats_page.py`, `weights_page.py`, `experiment_page.py`,
-`top_bar.py` (the shared top-bar/step controls and the time-travel,
-settings/recording, and step-until dialogs), `share.py` (the Share dialog:
+`top_bar.py` (the shared top-bar/step controls and the time-travel and
+step-until dialogs), `settings/` (the settings dialog and its independent
+collection, performance, frequency, error-check, and recording sections), `share.py` (the Share dialog:
 the playground / video / library targets, and the previews the first two
 carry — a live frame of the page the playground link opens, zoomed out so
 the desktop-first app fits, and a player for the demo video; the frame is

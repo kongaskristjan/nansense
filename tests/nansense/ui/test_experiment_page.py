@@ -22,7 +22,7 @@ def test_coerce_number_skips_non_numeric_candidates(
     kind: str, candidates: tuple[object, ...], expected: float
 ) -> None:
     from nansense.experiments import ExperimentParam
-    from nansense.ui.experiment_page import _coerce_number
+    from nansense.ui.components.experiment_form import _coerce_number
 
     spec = ExperimentParam("k", "K", kind, 0)
     result = _coerce_number(spec, *candidates)
@@ -32,7 +32,7 @@ def test_coerce_number_skips_non_numeric_candidates(
 
 def test_coerce_number_requires_a_numeric_candidate() -> None:
     from nansense.experiments import ExperimentParam
-    from nansense.ui.experiment_page import _coerce_number
+    from nansense.ui.components.experiment_form import _coerce_number
 
     spec = ExperimentParam("k", "K", "int", 0)
     with pytest.raises(AssertionError):
@@ -40,7 +40,7 @@ def test_coerce_number_requires_a_numeric_candidate() -> None:
 
 
 def test_layer_channel_count_reads_snapshot_activation() -> None:
-    from nansense.ui.experiment_page import _layer_channel_count
+    from nansense.ui.components.experiment_form import _layer_channel_count
 
     snap = _frame_snapshot()
     snap.activations["vec"] = torch.rand(5)  # channel-less activation

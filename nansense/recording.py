@@ -63,6 +63,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -445,6 +446,17 @@ def _unique_path(directory: Path, stem: str) -> Path:
         path = directory / f"{stem}-{n}.png"
         n += 1
     return path
+
+
+def release_recording_experiments(
+    session: Session, views: Iterable[RecordedView], *, unregister: bool = False
+) -> None:
+    """Release registrations only after their last active recording is gone."""
+    active_keys = {status.view.auto_key for status in session.recording.statuses()}
+    for auto_key in {view.auto_key for view in views} - active_keys - {""}:
+        session.unpin_auto_experiment(auto_key)
+        if unregister:
+            session.unregister_auto_experiment(auto_key)
 
 
 class RecordingManager:

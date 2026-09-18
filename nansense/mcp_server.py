@@ -1884,23 +1884,6 @@ def _save_snapshot(
     }
 
 
-def _auto_keys(views: Iterable[RecordedView]) -> list[str]:
-    """The auto-experiment registrations these recorded views are holding open.
-
-    An experiment recording pins its auto-rerun so the request survives without
-    a page heartbeat, and the registration is keyed by the view's own
-    `auto_key` — which is *not* the recording key. A browser-started recording
-    uses a per-page uuid there, so unpinning by recording key would silently
-    leave it pinned and re-running for the rest of the training run.
-    """
-    keys: list[str] = []
-    for view in views:
-        auto_key = view.auto_key
-        if auto_key:
-            keys.append(auto_key)
-    return keys
-
-
 def _release_recordings(
     session: Session, *, key: str | None, keep: bool
 ) -> tuple[list[RecordedView], tuple[Path, ...]] | dict[str, Any]:
@@ -1928,18 +1911,28 @@ def _release_recordings(
                 "error": f"Nothing was recording under {key!r}.",
                 "hint": "list_recordings has the active keys.",
             }
-    # Discarding writes nothing, so there are no paths to report either way.
-    paths: tuple[Path, ...] = ()
-    if keep:
-        paths = manager.end_all() if key is None else manager.end(key)
-    elif key is None:
-        manager.delete_all()
-    else:
-        manager.delete(key)
-    for auto_key in _auto_keys(views):
-        session.unpin_auto_experiment(auto_key)
-        session.unregister_auto_experiment(auto_key)
-    return views, paths
+    from nansense.recording import release_recording_experiments
+
+    paths: list[Path] = []
+    errors: list[str] = []
+    try:
+        for view in views:
+            try:
+                if keep:
+                    paths.extend(manager.end(view.key))
+                else:
+                    manager.delete(view.key)
+            except Exception as error:  # noqa: BLE001 — report file errors to caller
+                errors.append(f"{view.key}: {type(error).__name__}: {error}")
+    finally:
+        release_recording_experiments(session, views, unregister=True)
+    if errors:
+        return {
+            "error": "; ".join(errors),
+            "stopped" if keep else "discarded": [view.key for view in views],
+            "files": [str(path) for path in paths],
+        }
+    return views, tuple(paths)
 
 
 def _discard_recording(session: Session, *, key: str | None) -> dict[str, Any]:

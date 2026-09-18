@@ -6,12 +6,11 @@ import asyncio
 import html
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from urllib.parse import quote
 
 import plotly.graph_objects as go
 from nicegui import ui
-from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.events import GenericEventArguments, ValueChangeEventArguments
 
 from nansense import debugger
@@ -26,15 +25,31 @@ from nansense.ui.common import (
     _column_header_bar,
     _defer_value_write,
     _install_panel_resize,
-    _row_label_bar_html,
     _notice_banner,
     _page_scaffold,
     _refuse_unwatch_while_recording,
-    _resizable_pane_props,
     _resize_handle,
+    _row_label_bar_html,
     _set_controls_enabled,
     _StatusChip,
     _StatusPill,
+)
+from nansense.ui.components.stats_sidebar import StatsActions, StatsSidebar
+from nansense.ui.controllers.stats import (
+    _LAYER_ALL,
+    _PATCH_TYPE_LABELS,
+    _PHASE_CURRENT_BATCH,
+    _VIEW_GRAPHS,
+    _VIEW_HISTOGRAM,
+    _VIEW_MINMAX,
+    StatsController,
+    _initial_phase,
+    _reconcile_selected_phase,
+    _selectable_layers,
+    _tour_restore_view,
+    _visible_layers,
+    _watched_in_order,
+    _WatchPageState,
 )
 from nansense.ui.epoch_stats import (
     epoch_axis_dtick,
@@ -50,18 +65,18 @@ from nansense.ui.histograms import (
     _axis_ranges,
     _format_stat,
     _hover_customdata,
-    kind_stats,
     _linear_bar_x,
     _make_histogram_figure,
     _min_positive_height,
-    overflow_marks,
-    phase_color,
     _phase_hists,
     _phases_with_data,
     _retained_y_range,
     _stats_table_html,
     _x_range_linear_to_log,
     _x_range_log_to_linear,
+    kind_stats,
+    overflow_marks,
+    phase_color,
     trace_heights,
     use_density,
 )
@@ -93,120 +108,8 @@ from nansense.watch import (
     narrow_to_channel,
 )
 
-
 # The View dropdown's three entries; also the values `_WatchPageState.view`
 # takes. HISTOGRAM is the default.
-_VIEW_HISTOGRAM: str = "HISTOGRAM"
-_VIEW_MINMAX: str = "MIN/MAX"
-_VIEW_GRAPHS: str = "GRAPHS"
-
-
-@dataclass
-class _WatchPageState:
-    """Mutable page state shared by the sidebar controls and layer panels."""
-
-    # Whether the value (x) and probability (y) axes use a log-based scale.
-    # Both default off — linear axes showing probability density (see
-    # `use_density`); the sidebar checkboxes flip them and re-render every
-    # plot immediately.
-    axis_log_x: bool = False
-    axis_log_y: bool = False
-    # When set, a Log x / Log y / phase change keeps the current axis ranges
-    # (re-expressed for the new scale) instead of auto-fitting to the data —
-    # see `_HistPlot`. Lives with the histogram-view controls.
-    retain_axes: bool = False
-    # Whether to mark the dtype-aware subnormal/overflow band edges on each
-    # histogram (the "Show subnormal/overflow" checkbox). Seeded on by
-    # `_should_show_bands` when the page opens with an active subnormal/overflow
-    # issue, regardless of how the page was reached.
-    show_bands: bool = False
-    # Which of the three views every card shows (a `_VIEW_*` value).
-    view: str = _VIEW_HISTOGRAM
-    # MIN/MAX view state: which grid is shown (a radio group defaulting to
-    # "Max pixel"; the average entries are offered only while their
-    # collection is on — see `_grid_type_options`) and whether the
-    # activation heatmap is blended over the patches.
-    grid_type: PatchType = "max_pixel"
-    heat_on: bool = False
-    # Every card shows one phase at a time, picked by a header dropdown
-    # shared by both views; defaults to the phase training is currently in
-    # when it has collected stats, else "Current batch" (`_initial_phase`).
-    selected_phase: str = ""
-    # Which watched layer's cards to render: a layer name, or `_LAYER_ALL`
-    # for every watched layer at once. Defaults (via reconciliation) to the
-    # first watched layer so the page stays fast with many layers watched.
-    selected_layer: str = ""
-    # One-shot scroll target from the `?scroll=` query param ("weights"
-    # scrolls to the GRAPHS card's Weights section once it first renders);
-    # cleared after the scroll fires.
-    pending_scroll: str = ""
-    # Tour view-restore bookkeeping (`_tour_start` / `_tour_end` in
-    # `_build_stats_page`): the view showing when the current tour run
-    # started, whether the visitor picked a view themselves during that run
-    # (their choice then wins over the restore), and a one-shot marker
-    # telling `set_mode` the pending View write is the tour's, not the
-    # visitor's.
-    tour_saved_view: str | None = None
-    tour_user_set_view: bool = False
-    tour_view_write: bool = False
-    # Single-flight refresh flags (see `refresh` in `_build_stats_page`).
-    refresh_running: bool = False
-    refresh_dirty: bool = False
-    # Last frozen flags pushed to the client, so the per-tick sync only
-    # sends enable/disable when something actually changed.
-    frozen_hist: bool | None = None
-    frozen_minmax: bool | None = None
-    # The sidebar's watched-layer count label, assigned during page build.
-    count_label: ui.label = field(init=False)
-
-
-@dataclass
-class _RefreshGate:
-    """Decides when the periodic tick re-renders the page's data.
-
-    The page follows the visualization update cadence (the settings'
-    "Update frequency"): a tick passes only once the session has published
-    a new snapshot — at the configured frequency, on a capture/pause, or on
-    a one-shot UI Refresh — never merely because the running watch
-    aggregates advanced another batch. Watched-set and phase-list changes
-    (e.g. from the main page in another tab) also pass, so the sidebar and
-    cards stay in sync while training runs between updates or sits paused.
-    So does a flip of the average-patches Performance setting: it flushes
-    every aggregate bucket and decides which grid types the MIN/MAX radio
-    offers, both of which the page must re-render. Starting or stopping
-    training passes too: a card with nothing to show says something
-    different while batches advance (`_COLLECTING_CHIP`) than while they
-    don't (`_no_stats_message`), and the next publish can be an epoch away.
-    The sidebar controls and the "Refresh now" button (`_refresh_now`) call
-    `refresh` directly, bypassing the gate.
-    """
-
-    last_snapshot: BatchSnapshot | None = None
-    last_stats_layers: frozenset[str] = frozenset()
-    last_phases: tuple[str, ...] = ()
-    last_average_patches: bool | None = None
-    last_running: bool | None = None
-
-    def should_refresh(self, session: Session) -> bool:
-        """Consume the session's current state; True if it changed."""
-        snapshot = session.snapshot
-        stats_layers = session.stats_layers
-        phases = tuple(session.schedule.phase_order)
-        average_patches = session.watch_performance.average_patches
-        running = session.is_running
-        changed = (
-            snapshot is not self.last_snapshot
-            or stats_layers != self.last_stats_layers
-            or phases != self.last_phases
-            or average_patches != self.last_average_patches
-            or running != self.last_running
-        )
-        self.last_snapshot = snapshot
-        self.last_stats_layers = stats_layers
-        self.last_phases = phases
-        self.last_average_patches = average_patches
-        self.last_running = running
-        return changed
 
 
 async def _refresh_now(
@@ -259,23 +162,6 @@ def _apply_watch_param(session: Session, layer: str, watch: str) -> None:
         session.watch(layer)
 
 
-def _tour_restore_view(
-    saved: str | None, user_set_view: bool, current: str
-) -> str | None:
-    """The view to switch back to when a tour run ends, or `None`.
-
-    Dismissing the tour — Skip, Done, or Escape — should land the visitor
-    back on the view they started from, since the view-bound steps cycled
-    the page through every view on their behalf. No restore when nothing
-    was saved (no run started), when the run never left the saved view, or
-    when the visitor picked a view themselves mid-run — an explicit choice
-    the tour must not undo.
-    """
-    if saved is None or user_set_view or saved == current:
-        return None
-    return saved
-
-
 def _build_stats_page(
     session: Session,
     layer_names: list[str],
@@ -287,226 +173,162 @@ def _build_stats_page(
     input_mean: tuple[float, ...] | None = None,
     input_std: tuple[float, ...] | None = None,
 ) -> None:
-    """The deep-dive page for watched layers.
+    _StatsPage(
+        session,
+        layer_names,
+        selected_layer,
+        view=view,
+        scroll=scroll,
+        watch=watch,
+        input_mean=input_mean,
+        input_std=input_std,
+    )
 
-    The top bar carries the shared stepping controls, like the main page.
-    Left-sidebar dropdowns switch every layer card between three views, pick
-    which phase (train / val / …) the cards show, and pick which watched
-    layer to render — one named layer (the default, which keeps the page
-    fast when many layers are watched) or, while fewer than `_ALL_LAYERS_MAX`
-    are watched, every watched layer at once.
 
-    The Phase dropdown's last entry, "Current batch", is special: it shows
-    stats computed directly from the last captured `BatchSnapshot` rather than
-    the running watch aggregates, so it works for *any* layer whether or not
-    it is watched — and the Layer dropdown then offers every layer, not just
-    the watched ones. The page opens on the phase training is currently in
-    when that phase already holds collected stats (for the linked layer, if
-    the URL named one); otherwise on "Current batch", which needs no watched
-    aggregates, so a freshly opened Stats view always has something to show
-    (see `_initial_phase`). The view and phase apply across views, one at a
-    time:
+class _StatsPage:
+    """NiceGUI adapter: builds components and synchronizes them with its controller."""
 
-    - HISTOGRAM (the default) — a merged activations/gradients stats table,
-      then one plotly figure per tensor kind for the selected phase's latest
-      epoch, with the "Log x" / "Log y" axis checkboxes and a per-histogram
-      "Per channel" switch.
-    - MIN/MAX — the extreme-activation patch grids
-      (channels across, per-channel top samples down), one per patch
-      type, picked one at a time by a radio group (defaulting to "Max
-      pixel"), plus a heatmap checkbox
-      that blends the stored activation maps over the patches.
-    - GRAPHS — the phase's whole epoch series: per tensor kind,
-      mean/std/median/min/max (and, for activations, dead channels)
-      against epoch, stats toggled through the plotly legend (only the
-      mean starts enabled). This view has no "Current batch" (a single
-      batch has no epoch series): `sync_phase_select` drops the entry and
-      swaps such a selection for the first schedule phase.
-    Each control group is only visible while its view is selected. A
-    `ui.timer` re-renders the visible view in place at the visualization
-    update cadence: `_RefreshGate` passes a tick only once a new snapshot
-    was published (the settings' "Update frequency" — per epoch by default —
-    or a pause, a step, a one-shot Refresh), so the page updates in step
-    with the main view instead of tracking the running aggregates live.
-    Layers can also be unwatched directly from the card header here, which
-    drops the corresponding accumulator entry — the change is reflected on
-    the main page on next navigation.
-    """
-    _page_scaffold("Stats")
-    _install_panel_resize()
-    add_tour("stats", stats_tour_steps(), locked=session.locked)
-    # A `?watch=1` link starts collecting the seeded layer before anything
-    # renders, so the reconciliation below sees it as watched.
-    _apply_watch_param(session, selected_layer, watch)
+    def __init__(
+        self,
+        session: Session,
+        layer_names: list[str],
+        selected_layer: str = "",
+        *,
+        view: str = "",
+        scroll: str = "",
+        watch: str = "",
+        input_mean: tuple[float, ...] | None = None,
+        input_std: tuple[float, ...] | None = None,
+    ) -> None:
+        self.input_mean = input_mean
+        self.input_std = input_std
+        self.layer_names = layer_names
+        self.session = session
+        _page_scaffold("Stats")
+        _install_panel_resize()
+        add_tour("stats", stats_tour_steps(), locked=self.session.locked)
+        _apply_watch_param(self.session, selected_layer, watch)
+        self.layer_panels: dict[str, _WatchLayerPanel] = {}
+        self.hover_registry: dict[int, _HistPlot] = {}
+        self.body_container: ui.column
+        self.phase_names = self.session.schedule.phase_order
+        ui.on(_HOVER_EVENT, self._dispatch_hover)
+        requested_view = view.strip().lower()
+        initial_view = {"minmax": _VIEW_MINMAX, "graphs": _VIEW_GRAPHS}.get(
+            requested_view, _VIEW_HISTOGRAM
+        )
+        self.state = _WatchPageState(
+            selected_phase=_initial_phase(self.session, selected_layer),
+            view=initial_view,
+            selected_layer=selected_layer,
+            pending_scroll=scroll.strip().lower(),
+            show_bands=_should_show_bands(self.session.debug_error),
+        )
+        self.state.selected_phase = _reconcile_selected_phase(
+            self.state.selected_phase, self.state.view, list(self.phase_names)
+        )
+        self.controller = StatsController(self.session, self.layer_names, self.state)
+        self.step_until_custom = _build_step_until_custom_dialog(self.session)
+        self._build_layout()
+        ui.on("nansense_tour_set_view", self._tour_set_view)
+        ui.on("nansense_tour_start", self._tour_start)
+        ui.on("nansense_tour_end", self._tour_end)
+        self.rebuild_cards()
+        self.controller.gate.should_refresh(self.session)
+        ui.timer(0.0, self.refresh, once=True)
+        ui.timer(0.2, self.tick)
 
-    layer_panels: dict[str, _WatchLayerPanel] = {}
-    # element id -> the histogram plot to forward that element's hovers to.
-    # Repopulated on every `rebuild_cards`, so a single page-level `ui.on`
-    # replaces the per-element handlers that used to leak on rebuild.
-    hover_registry: dict[int, _HistPlot] = {}
-    body_container: ui.column
-    phase_names = session.schedule.phase_order
-
-    async def _dispatch_hover(e: GenericEventArguments) -> None:
-        view = hover_registry.get(int(e.args.get("id", -1)))
+    async def _dispatch_hover(self, e: GenericEventArguments) -> None:
+        view = self.hover_registry.get(int(e.args.get("id", -1)))
         if view is not None:
             await view._on_hover(e)
 
-    ui.on(_HOVER_EVENT, _dispatch_hover)
-    # A `?view=` link opens straight on that view — "minmax" from the
-    # experiment page's "Compare with MIN/MAX", "graphs" from the weights
-    # page's per-layer jump — instead of the histograms.
-    requested_view = view.strip().lower()
-    initial_view = {
-        "minmax": _VIEW_MINMAX,
-        "graphs": _VIEW_GRAPHS,
-    }.get(requested_view, _VIEW_HISTOGRAM)
-    state = _WatchPageState(
-        # Open on the phase training is currently in when its aggregates
-        # already hold stats; else "Current batch", which reads the last
-        # captured snapshot directly, so the page shows data immediately for
-        # any layer without waiting for watch aggregates to fill.
-        selected_phase=_initial_phase(session, selected_layer),
-        view=initial_view,
-        # Seed the layer picked by the caller (e.g. a `?layer=` link from the
-        # main page's watch menu). Reconciliation drops it back to the first
-        # watched layer if it isn't currently watched.
-        selected_layer=selected_layer,
-        # A `?scroll=weights` link (the weights page's jump) scrolls to the
-        # GRAPHS card's Weights section once it first renders.
-        pending_scroll=scroll.strip().lower(),
-        # Pre-check the under/overflow band whenever the page opens with an
-        # active under/overflow issue, regardless of how it was reached.
-        show_bands=_should_show_bands(session.debug_error),
-    )
-    # A graphs deep-link can open with "Current batch" seeded (nothing
-    # collected for the running phase yet) but has no such entry in its
-    # Phase dropdown — resolve to a real phase before the dropdown is built
-    # rather than flashing an empty selection until the first refresh
-    # reconciles it.
-    state.selected_phase = _reconcile_selected_phase(
-        state.selected_phase, state.view, list(phase_names)
-    )
+    async def set_axis_log_x(self, value: bool) -> None:
+        self.state.axis_log_x = value
+        await self.refresh()
 
-    async def set_axis_log_x(value: bool) -> None:
-        state.axis_log_x = value
-        await refresh()
+    async def set_axis_log_y(self, value: bool) -> None:
+        self.state.axis_log_y = value
+        await self.refresh()
 
-    async def set_axis_log_y(value: bool) -> None:
-        state.axis_log_y = value
-        await refresh()
+    async def set_retain_axes(self, value: bool) -> None:
+        self.state.retain_axes = value
+        await self.refresh()
 
-    async def set_retain_axes(value: bool) -> None:
-        # Just flips the flag; the refresh leaves a frozen view untouched and
-        # re-fits on un-check (so the axes snap back to the data immediately).
-        state.retain_axes = value
-        await refresh()
+    async def set_show_bands(self, value: bool) -> None:
+        self.state.show_bands = value
+        await self.refresh()
 
-    async def set_show_bands(value: bool) -> None:
-        # Toggles the dtype-aware subnormal/overflow band lines on every
-        # histogram; each plot rebuilds to add/remove its layout shapes.
-        state.show_bands = value
-        await refresh()
+    async def set_mode(self, value: object) -> None:
+        self.controller.select_view(str(value))
+        self.sync_phase_select()
+        self.sidebar.hist_controls.set_visibility(self.state.view == _VIEW_HISTOGRAM)
+        self.sidebar.minmax_controls.set_visibility(self.state.view == _VIEW_MINMAX)
+        self.sidebar.compare_deep_dream.set_visibility(self.state.view == _VIEW_MINMAX)
+        await self.refresh()
 
-    async def set_mode(value: object) -> None:
-        # Tour-driven View writes (`_tour_set_view`, `_tour_end`) announce
-        # themselves via the one-shot marker; any other write is the
-        # visitor's own choice and cancels the end-of-tour view restore.
-        if state.tour_view_write:
-            state.tour_view_write = False
-        else:
-            state.tour_user_set_view = True
-        state.view = str(value)
-        # The Phase dropdown's options depend on the view (the stats view
-        # has no "Current batch"); reconcile before anything re-renders.
-        sync_phase_select()
-        hist_controls.set_visibility(state.view == _VIEW_HISTOGRAM)
-        minmax_controls.set_visibility(state.view == _VIEW_MINMAX)
-        compare_deep_dream.set_visibility(state.view == _VIEW_MINMAX)
-        await refresh()
-
-    async def set_phase(value: object) -> None:
+    async def set_phase(self, value: object) -> None:
         new = str(value)
-        # Programmatic value writes from `sync_phase_select` re-enter here;
-        # bailing when nothing changed avoids a redundant refresh pass.
-        if new == state.selected_phase:
+        if new == self.state.selected_phase:
             return
-        state.selected_phase = new
-        await refresh()
+        self.state.selected_phase = new
+        await self.refresh()
 
-    async def set_layer(value: object) -> None:
+    async def set_layer(self, value: object) -> None:
         new = str(value) if value is not None else ""
-        # Programmatic value writes from `sync_layer_select` re-enter here;
-        # bailing when nothing changed avoids a redundant refresh pass.
-        if new == state.selected_layer:
+        if new == self.state.selected_layer:
             return
-        state.selected_layer = new
-        await refresh()
+        self.state.selected_layer = new
+        await self.refresh()
 
-    async def set_grid(ptype: PatchType) -> None:
-        # Programmatic value writes from `sync_grid_type_select` re-enter
-        # here; bailing when nothing changed avoids a redundant refresh pass.
-        if ptype == state.grid_type:
+    async def set_grid(self, ptype: PatchType) -> None:
+        if ptype == self.state.grid_type:
             return
-        state.grid_type = ptype
-        await refresh()
+        self.state.grid_type = ptype
+        await self.refresh()
 
-    async def set_heat(value: bool) -> None:
-        state.heat_on = value
-        await refresh()
+    async def set_heat(self, value: bool) -> None:
+        self.state.heat_on = value
+        await self.refresh()
 
-    def sync_compare_href() -> None:
-        # Keep the compare link on the currently shown layer. An `href` (not
-        # an `on_click` navigate) renders the button as a real anchor, so
-        # middle-click / ctrl-click open the experiment in a new tab. The
-        # props write is a no-op unless the target actually changed.
+    def sync_compare_href(self) -> None:
         href = _deep_dream_href(
-            state.selected_phase,
-            layer_names,
-            session.stats_layers,
-            state.selected_layer,
+            self.state.selected_phase,
+            self.layer_names,
+            self.session.stats_layers,
+            self.state.selected_layer,
         )
-        compare_deep_dream.props(f'href="{href}"')
+        self.sidebar.compare_deep_dream.props(f'href="{href}"')
 
-    def sync_back_href() -> None:
-        # Locked playground only: Back carries the selected layer so the
-        # main page opens with its card shown ("All watched layers" and an
-        # empty selection carry none — plain "/"). The props write is a
-        # no-op unless the target actually changed.
-        if not session.locked:
+    def sync_back_href(self) -> None:
+        if not self.session.locked:
             return
-        target = "" if state.selected_layer == _LAYER_ALL else state.selected_layer
-        back_button.props(f'href="{_back_href(target)}"')
+        target = (
+            "" if self.state.selected_layer == _LAYER_ALL else self.state.selected_layer
+        )
+        self.back_button.props(f'href="{_back_href(target)}"')
 
-    step_until_custom = _build_step_until_custom_dialog(session)
-
-    def record_view() -> RecordedView | None:
-        # The recorder renders from the running watch accumulators, which the
-        # "Current batch" view doesn't use — so that view isn't recordable.
-        # Neither is the epoch-stats view: it draws the whole epoch series,
-        # not a per-step frame.
-        if state.selected_phase == _PHASE_CURRENT_BATCH:
+    def record_view(self) -> RecordedView | None:
+        if self.state.selected_phase == _PHASE_CURRENT_BATCH:
             return None
-        if state.view == _VIEW_GRAPHS:
+        if self.state.view == _VIEW_GRAPHS:
             return None
-        # Record exactly the cards on screen — the selected layer, or every
-        # stats-carrying layer while "all" is showing.
-        ordered = _watched_in_order(layer_names, session.stats_layers)
-        watched = _visible_layers(state.selected_layer, ordered)
+        ordered = _watched_in_order(self.layer_names, self.session.stats_layers)
+        watched = _visible_layers(self.state.selected_layer, ordered)
         if not watched:
             return None
-        phase = state.selected_phase
-        if state.view == _VIEW_MINMAX:
+        phase = self.state.selected_phase
+        if self.state.view == _VIEW_MINMAX:
             return RecordedView(
                 key="watch_minmax",
                 label=f"Watch · MIN/MAX grids ({phase})",
                 config=PatchView(
                     layers=tuple(watched),
                     phase=phase,
-                    grids=patch_types((state.grid_type,)),
-                    heatmap=state.heat_on,
-                    input_mean=input_mean,
-                    input_std=input_std,
+                    grids=patch_types((self.state.grid_type,)),
+                    heatmap=self.state.heat_on,
+                    input_mean=self.input_mean,
+                    input_std=self.input_std,
                 ),
             )
         return RecordedView(
@@ -515,175 +337,12 @@ def _build_stats_page(
             config=HistogramView(
                 layers=tuple(watched),
                 phase=phase,
-                log_x=state.axis_log_x,
-                log_y=state.axis_log_y,
+                log_x=self.state.axis_log_x,
+                log_y=self.state.axis_log_y,
             ),
         )
 
-    with ui.column().classes("w-full h-screen no-wrap gap-0"):
-        with _top_bar_row():
-            back_button = _back_button(
-                state.selected_layer if session.locked else None
-            )
-            _add_step_controls(session, step_until_custom)
-            _add_settings_button(session, record_view).classes("ml-auto")
-            ui.button(
-                icon="refresh",
-                on_click=lambda: _refresh_now(session, refresh),
-                color="slate-500",
-            ).props("dense size=md flat").tooltip(
-                "Refresh now, and from the next training batch"
-            )
-            _add_tour_button()
-            _add_share_button(session)
-            _add_repo_logo()
-
-        _add_error_banner(session)
-
-        with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
-            with ui.column().classes(
-                "w-80 shrink-0 h-full overflow-auto p-4 gap-2 "
-                "border-r-2 border-slate-300 bg-slate-50"
-            ).props(_resizable_pane_props("watch-controls")):
-                with ui.row().classes("items-baseline gap-2 no-wrap"):
-                    ui.label("Stats").classes("font-mono text-base font-bold")
-                    state.count_label = ui.label("").classes(
-                        "text-sm text-slate-500"
-                    )
-                ui.separator()
-                # `data-tour` marks the three dropdowns as the tour's arrow
-                # targets (`tour.stats_tour_steps`).
-                view_select = ui.select(
-                    [_VIEW_HISTOGRAM, _VIEW_MINMAX, _VIEW_GRAPHS],
-                    label="View",
-                    value=state.view,
-                    on_change=lambda e: set_mode(e.value),
-                ).props('dense outlined options-dense data-tour="view"').classes(
-                    "w-full text-sm"
-                ).tooltip("What each layer card shows")
-                # Phases, then "Current batch" as the last entry (dropped in
-                # the epoch-stats view — see `sync_phase_select`). A scoped
-                # `option` slot draws a divider above it (Quasar has no native
-                # per-option separator) while keeping default selection via
-                # `itemProps`.
-                phase_select = ui.select(
-                    _phase_select_options(state.view, phase_names),
-                    label="Phase",
-                    value=state.selected_phase,
-                    on_change=lambda e: set_phase(e.value),
-                ).props('dense outlined options-dense data-tour="phase"').classes(
-                    "w-full text-sm"
-                ).tooltip("Which phase the cards show")
-                # The divider keys off the label, not the value: NiceGUI sets
-                # each option's `value` to its integer index, so only the label
-                # carries our sentinel text.
-                phase_select.add_slot(
-                    "option",
-                    "<q-separator v-if=\"props.opt.label === "
-                    f"'{_PHASE_CURRENT_BATCH_LABEL}'\" />"
-                    '<q-item v-bind="props.itemProps">'
-                    "<q-item-section><q-item-label>"
-                    "{{ props.opt.label }}"
-                    "</q-item-label></q-item-section></q-item>",
-                )
-                layer_select = ui.select(
-                    {},
-                    label="Layer",
-                    on_change=lambda e: set_layer(e.value),
-                ).props('dense outlined options-dense data-tour="layer"').classes(
-                    "w-full text-sm"
-                ).tooltip(
-                    "Which layer's cards to show — one keeps the page fast"
-                )
-                hist_boxes: list[ui.checkbox] = []
-                minmax_boxes: list[DisableableElement] = []
-                with ui.column().classes("w-full gap-1") as hist_controls:
-                    hist_boxes.append(
-                        ui.checkbox(
-                            "Log x",
-                            value=state.axis_log_x,
-                            on_change=lambda e: set_axis_log_x(bool(e.value)),
-                        ).props("dense").classes("text-sm").tooltip(
-                            "Log scale on the value axis"
-                        )
-                    )
-                    hist_boxes.append(
-                        ui.checkbox(
-                            "Log y",
-                            value=state.axis_log_y,
-                            on_change=lambda e: set_axis_log_y(bool(e.value)),
-                        ).props("dense").classes("text-sm").tooltip(
-                            "Log scale on the probability axis"
-                        )
-                    )
-                    hist_boxes.append(
-                        ui.checkbox(
-                            "Retain axes",
-                            value=state.retain_axes,
-                            on_change=lambda e: set_retain_axes(bool(e.value)),
-                        ).props("dense").classes("text-sm").tooltip(
-                            "Keep the current axis ranges instead of "
-                            "auto-fitting to the data"
-                        )
-                    )
-                    hist_boxes.append(
-                        ui.checkbox(
-                            "Show subnormal/overflow",
-                            value=state.show_bands,
-                            on_change=lambda e: set_show_bands(bool(e.value)),
-                        ).props("dense").classes("text-sm").tooltip(
-                            "Mark the subnormal and overflow magnitude bands"
-                        )
-                    )
-                with ui.column().classes("w-full gap-1") as minmax_controls:
-                    grid_radio = (
-                        ui.radio(
-                            _grid_type_options(
-                                session.watch_performance.average_patches
-                            ),
-                            value=state.grid_type,
-                            on_change=lambda e: set_grid(e.value),
-                        ).props("dense").classes("text-sm").tooltip(
-                            "Which extreme-activation patch grid to show"
-                        )
-                    )
-                    minmax_boxes.append(grid_radio)
-                    minmax_boxes.append(
-                        ui.checkbox(
-                            "Enable heatmap",
-                            value=state.heat_on,
-                            on_change=lambda e: set_heat(bool(e.value)),
-                        ).props("dense").classes("text-sm").tooltip(
-                            "Blend each channel's activation strength over "
-                            "the patches"
-                        )
-                    )
-                hist_controls.set_visibility(state.view == _VIEW_HISTOGRAM)
-                minmax_controls.set_visibility(state.view == _VIEW_MINMAX)
-                # Pinned to the very bottom of the sidebar (below a flexible
-                # spacer): jump to the same layer's Deep Dream experiment, the
-                # synthesized counterpart to these real-input extremes (point 3).
-                # Shown only in the MIN/MAX view, like the controls above.
-                ui.space()
-                compare_deep_dream = (
-                    ui.button(
-                        "Compare with Deep Dream",
-                        icon="science",
-                        color="yellow-8",
-                    )
-                    .props("dense no-caps size=sm")
-                    .classes("w-full")
-                    .tooltip("Open this layer's Deep Dream experiment")
-                )
-                compare_deep_dream.set_visibility(state.view == _VIEW_MINMAX)
-                sync_compare_href()
-
-            _resize_handle("watch-controls", "left")
-            body_container = ui.column().classes(
-                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
-            )
-
-    def _tour_set_view(e: GenericEventArguments) -> None:
+    def _tour_set_view(self, e: GenericEventArguments) -> None:
         """Switch to the view a tour step describes (`TourStep.ensure_view`).
 
         Emitted by the tour driver whenever a view-bound step is shown; the
@@ -692,39 +351,35 @@ def _build_stats_page(
         driver re-emits on every re-show.
         """
         view = str(e.args)
-        if view != state.view and view in (
+        if view != self.state.view and view in (
             _VIEW_HISTOGRAM,
             _VIEW_MINMAX,
             _VIEW_GRAPHS,
         ):
-            state.tour_view_write = True
-            view_select.set_value(view)
+            self.state.tour_view_write = True
+            self.sidebar.view_select.set_value(view)
 
-    def _tour_start(_: GenericEventArguments) -> None:
+    def _tour_start(self, _: GenericEventArguments) -> None:
         """Snapshot the view a fresh tour run starts from.
 
         The run's view-bound steps switch the page around on the visitor's
         behalf (`_tour_set_view`); dismissing the tour puts this view back
         (`_tour_end`) unless the visitor picked one themselves meanwhile.
         """
-        state.tour_saved_view = state.view
-        state.tour_user_set_view = False
+        self.state.tour_saved_view = self.state.view
+        self.state.tour_user_set_view = False
 
-    def _tour_end(_: GenericEventArguments) -> None:
+    def _tour_end(self, _: GenericEventArguments) -> None:
         """Restore the pre-tour view when the ended run switched it away."""
         restore = _tour_restore_view(
-            state.tour_saved_view, state.tour_user_set_view, state.view
+            self.state.tour_saved_view, self.state.tour_user_set_view, self.state.view
         )
-        state.tour_saved_view = None
+        self.state.tour_saved_view = None
         if restore is not None:
-            state.tour_view_write = True
-            view_select.set_value(restore)
+            self.state.tour_view_write = True
+            self.sidebar.view_select.set_value(restore)
 
-    ui.on("nansense_tour_set_view", _tour_set_view)
-    ui.on("nansense_tour_start", _tour_start)
-    ui.on("nansense_tour_end", _tour_end)
-
-    def sync_phase_select() -> None:
+    def sync_phase_select(self) -> None:
         """Refresh the Phase dropdown's options/value for the current view.
 
         The epoch-stats view has no "Current batch" entry (a single batch
@@ -734,17 +389,15 @@ def _build_stats_page(
         appear without reopening the page. Pushes to the widget only on an
         actual change (a no-op write would re-enter `set_phase`).
         """
-        names = list(session.schedule.phase_order)
-        state.selected_phase = _reconcile_selected_phase(
-            state.selected_phase, state.view, names
-        )
-        options = _phase_select_options(state.view, names)
-        if phase_select.options != options:
-            phase_select.set_options(options, value=state.selected_phase)
-        elif phase_select.value != state.selected_phase:
-            phase_select.set_value(state.selected_phase)
+        options = self.controller.phase_options()
+        if self.sidebar.phase_select.options != options:
+            self.sidebar.phase_select.set_options(
+                options, value=self.state.selected_phase
+            )
+        elif self.sidebar.phase_select.value != self.state.selected_phase:
+            self.sidebar.phase_select.set_value(self.state.selected_phase)
 
-    def sync_grid_type_select() -> None:
+    def sync_grid_type_select(self) -> None:
         """Refresh the MIN/MAX radio's options for the Performance setting.
 
         The average-extreme galleries are collected only while their
@@ -755,14 +408,13 @@ def _build_stats_page(
         the widget only on an actual change (a no-op write would re-enter
         `set_grid`).
         """
-        options = _grid_type_options(session.watch_performance.average_patches)
-        state.grid_type = _reconcile_grid_type(state.grid_type, options)
-        if grid_radio.options != options:
-            grid_radio.set_options(options, value=state.grid_type)
-        elif grid_radio.value != state.grid_type:
-            grid_radio.set_value(state.grid_type)
+        options = self.controller.grid_options()
+        if self.sidebar.grid_radio.options != options:
+            self.sidebar.grid_radio.set_options(options, value=self.state.grid_type)
+        elif self.sidebar.grid_radio.value != self.state.grid_type:
+            self.sidebar.grid_radio.set_value(self.state.grid_type)
 
-    def sync_layer_select() -> None:
+    def sync_layer_select(self) -> None:
         """Refresh the layer dropdown's options/value from the stats layers.
 
         Reconciles the selection (drops "all" once too many layers carry
@@ -771,158 +423,162 @@ def _build_stats_page(
         write would re-enter `set_layer`), and disables the dropdown when no
         layer carries stats. Cheap enough to call every refresh tick.
         """
-        ordered = _selectable_layers(
-            state.selected_phase, layer_names, session.stats_layers
-        )
-        state.selected_layer = _reconcile_selected_layer(
-            state.selected_layer, ordered
-        )
-        options = _layer_select_options(ordered)
-        if layer_select.options != options:
-            layer_select.set_options(options, value=state.selected_layer)
-        elif layer_select.value != state.selected_layer:
-            layer_select.set_value(state.selected_layer)
-        _set_controls_enabled([layer_select], bool(ordered))
+        options = self.controller.layer_options()
+        if self.sidebar.layer_select.options != options:
+            self.sidebar.layer_select.set_options(
+                options, value=self.state.selected_layer
+            )
+        elif self.sidebar.layer_select.value != self.state.selected_layer:
+            self.sidebar.layer_select.set_value(self.state.selected_layer)
+        _set_controls_enabled([self.sidebar.layer_select], bool(options))
 
-    def rebuild_cards() -> None:
-        sync_layer_select()
-        layer_panels.clear()
-        # Drop the previous cards' hover routes; the rebuilt plots re-register
-        # below. Without this the registry (and the dead plots it points at)
-        # would grow on every rebuild.
-        hover_registry.clear()
-        body_container.clear()
+    def rebuild_cards(self) -> None:
+        self.sync_layer_select()
+        self.layer_panels.clear()
+        self.hover_registry.clear()
+        self.body_container.clear()
         ordered = _selectable_layers(
-            state.selected_phase, layer_names, session.stats_layers
+            self.state.selected_phase, self.layer_names, self.session.stats_layers
         )
-        with body_container:
+        with self.body_container:
             if not ordered:
                 with ui.column().classes("items-center gap-2 py-12 w-full"):
                     ui.icon("visibility_off", size="lg").classes("text-slate-400")
                     ui.label("No layers selected.").classes("text-slate-600")
                     ui.label(
-                        "Go back and click the eye icon on a layer card "
-                        "to start watching."
+                        "Go back and click the eye icon on a layer card to start watching."
                     ).classes("text-slate-500 text-sm")
                 return
-            for name in _visible_layers(state.selected_layer, ordered):
-                layer_panels[name] = _WatchLayerPanel(
+            for name in _visible_layers(self.state.selected_layer, ordered):
+                self.layer_panels[name] = _WatchLayerPanel(
                     name=name,
-                    session=session,
-                    on_unwatched=rebuild_cards,
-                    state=state,
-                    hover_registry=hover_registry,
-                    input_mean=input_mean,
-                    input_std=input_std,
+                    session=self.session,
+                    on_unwatched=self.rebuild_cards,
+                    state=self.state,
+                    hover_registry=self.hover_registry,
+                    input_mean=self.input_mean,
+                    input_std=self.input_std,
                 )
 
-    # Single-flight refresh: snapshotting and grid rendering run in a worker
-    # thread so the event loop keeps serving websocket traffic (a blocked
-    # loop starves keepalive pings and kills the connection). A toggle that
-    # lands while a pass is in flight just marks it dirty — rapid Heatmap
-    # clicks coalesce into one follow-up pass instead of queueing a full
-    # re-render per click.
-    async def refresh() -> None:
-        if state.refresh_running:
-            state.refresh_dirty = True
-            return
-        state.refresh_running = True
-        try:
-            while True:
-                state.refresh_dirty = False
-                stats_layers = session.stats_layers
-                n = len(stats_layers)
-                state.count_label.text = (
-                    f"{n} layer{'' if n == 1 else 's'}"
-                )
-                sync_phase_select()
-                sync_layer_select()
-                sync_grid_type_select()
-                sync_compare_href()
-                sync_back_href()
-                ordered = _selectable_layers(
-                    state.selected_phase, layer_names, stats_layers
-                )
-                desired = _visible_layers(state.selected_layer, ordered)
-                if list(layer_panels) != desired:
-                    rebuild_cards()
-                panels = dict(layer_panels)
-                minmax = state.view == _VIEW_MINMAX
-                graphs = state.view == _VIEW_GRAPHS
-                current_batch = state.selected_phase == _PHASE_CURRENT_BATCH
+    async def refresh_pass(self) -> None:
+        stats_layers = self.session.stats_layers
+        n = len(stats_layers)
+        self.sidebar.count_label.text = f"{n} layer{('' if n == 1 else 's')}"
+        self.sync_phase_select()
+        self.sync_layer_select()
+        self.sync_grid_type_select()
+        self.sync_compare_href()
+        self.sync_back_href()
+        ordered = _selectable_layers(
+            self.state.selected_phase, self.layer_names, stats_layers
+        )
+        desired = _visible_layers(self.state.selected_layer, ordered)
+        if list(self.layer_panels) != desired:
+            self.rebuild_cards()
+        panels = dict(self.layer_panels)
+        minmax = self.state.view == _VIEW_MINMAX
+        graphs = self.state.view == _VIEW_GRAPHS
+        current_batch = self.state.selected_phase == _PHASE_CURRENT_BATCH
 
-                def compute(
-                    panels: dict[str, _WatchLayerPanel] = panels,
-                    minmax: bool = minmax,
-                    graphs: bool = graphs,
-                    current_batch: bool = current_batch,
-                ) -> tuple[
-                    WatchSnapshot,
-                    dict[str, tuple[tuple[object, ...], str] | None],
-                    MetricsSnapshot | None,
-                ]:
-                    # "Current batch" computes stats from the last snapshot for
-                    # exactly the visible layers; a phase reads the running
-                    # watch aggregates. Either way the patch GPU→CPU work is
-                    # only paid when the MIN/MAX view will consume it, and the
-                    # custom-metric copy only when the GRAPHS view shows it
-                    # (Current batch never does — a batch has no epoch series).
-                    metrics: MetricsSnapshot | None = None
-                    if current_batch:
-                        snap = session.current_batch_stats(
-                            layers=list(panels), include_patches=minmax
-                        )
-                    else:
-                        snap = session.watch_snapshot(include_patches=minmax)
-                        if graphs:
-                            metrics = session.watch_metrics_snapshot(
-                                layers=list(panels)
-                            )
-                    grids: dict[str, tuple[tuple[object, ...], str] | None] = {}
-                    if minmax:
-                        for name, panel in panels.items():
-                            grids[name] = panel.prepare_grids(snap)
-                    return snap, grids, metrics
-
-                snap, grids, metrics = await asyncio.to_thread(compute)
+        def compute(
+            panels: dict[str, _WatchLayerPanel] = panels,
+            minmax: bool = minmax,
+            graphs: bool = graphs,
+            current_batch: bool = current_batch,
+        ) -> tuple[
+            WatchSnapshot,
+            dict[str, tuple[tuple[object, ...], str] | None],
+            MetricsSnapshot | None,
+        ]:
+            metrics: MetricsSnapshot | None = None
+            if current_batch:
+                snap = self.session.current_batch_stats(
+                    layers=list(panels), include_patches=minmax
+                )
+            else:
+                snap = self.session.watch_snapshot(include_patches=minmax)
+                if graphs:
+                    metrics = self.session.watch_metrics_snapshot(layers=list(panels))
+            grids: dict[str, tuple[tuple[object, ...], str] | None] = {}
+            if minmax:
                 for name, panel in panels.items():
-                    if layer_panels.get(name) is panel:  # not rebuilt meanwhile
-                        panel.update(snap, grids.get(name), metrics)
-                if not state.refresh_dirty:
-                    return
-        finally:
-            state.refresh_running = False
+                    grids[name] = panel.prepare_grids(snap)
+            return (snap, grids, metrics)
 
-    def sync_frozen() -> None:
-        hist = session.recording.is_recording("watch_histogram")
-        minmax = session.recording.is_recording("watch_minmax")
-        if hist != state.frozen_hist or minmax != state.frozen_minmax:
-            state.frozen_hist = hist
-            state.frozen_minmax = minmax
-            # Phase and layer apply to both views and define the recorded
-            # frame set, so either recording locks them.
+        snap, grids, metrics = await asyncio.to_thread(compute)
+        for name, panel in panels.items():
+            # A control change may have rebuilt cards while the worker rendered.
+            if self.layer_panels.get(name) is panel:
+                panel.update(snap, grids.get(name), metrics)
+
+    async def refresh(self) -> None:
+        await self.controller.refresh(self.refresh_pass)
+
+    def sync_frozen(self) -> None:
+        hist = self.session.recording.is_recording("watch_histogram")
+        minmax = self.session.recording.is_recording("watch_minmax")
+        if hist != self.state.frozen_hist or minmax != self.state.frozen_minmax:
+            self.state.frozen_hist = hist
+            self.state.frozen_minmax = minmax
             _set_controls_enabled(
-                [phase_select, layer_select], not (hist or minmax)
+                [self.sidebar.phase_select, self.sidebar.layer_select],
+                not (hist or minmax),
             )
-            _set_controls_enabled(hist_boxes, not hist)
-            _set_controls_enabled(minmax_boxes, not minmax)
+            _set_controls_enabled(self.sidebar.hist_boxes, not hist)
+            _set_controls_enabled(self.sidebar.minmax_boxes, not minmax)
 
-    # Build the initial cards (or the empty-state notice) up front so the
-    # body isn't blank until the first refresh tick lands.
-    rebuild_cards()
-    # Seed the gate with the current session state: the once-timer below
-    # renders exactly that state, so the first periodic tick must not pass
-    # for it again.
-    gate = _RefreshGate()
-    gate.should_refresh(session)
+    async def tick(self) -> None:
+        self.sync_frozen()
+        if self.controller.gate.should_refresh(self.session):
+            await self.refresh()
 
-    async def tick() -> None:
-        sync_frozen()
-        if gate.should_refresh(session):
-            await refresh()
+    def _build_header(self) -> None:
+        with _top_bar_row():
+            self.back_button = _back_button(
+                self.state.selected_layer if self.session.locked else None
+            )
+            _add_step_controls(self.session, self.step_until_custom)
+            _add_settings_button(self.session, self.record_view).classes("ml-auto")
+            ui.button(
+                icon="refresh",
+                on_click=lambda: _refresh_now(self.session, self.refresh),
+                color="slate-500",
+            ).props("dense size=md flat").tooltip(
+                "Refresh now, and from the next training batch"
+            )
+            _add_tour_button()
+            _add_share_button(self.session)
+            _add_repo_logo()
 
-    ui.timer(0.0, refresh, once=True)
-    ui.timer(0.2, tick)
+    def _build_content(self) -> None:
+        with ui.row().classes("w-full grow min-h-0 no-wrap gap-0"):
+            self.sidebar = StatsSidebar(
+                self.state,
+                list(self.phase_names),
+                self.session.watch_performance.average_patches,
+                StatsActions(
+                    self.set_mode,
+                    self.set_phase,
+                    self.set_layer,
+                    self.set_axis_log_x,
+                    self.set_axis_log_y,
+                    self.set_retain_axes,
+                    self.set_show_bands,
+                    self.set_grid,
+                    self.set_heat,
+                ),
+            )
+            self.sync_compare_href()
+            _resize_handle("watch-controls", "left")
+            self.body_container = ui.column().classes(
+                "grow min-w-0 h-full overflow-auto p-4 gap-3 bg-slate-200"
+            )
+
+    def _build_layout(self) -> None:
+        with ui.column().classes("w-full h-screen no-wrap gap-0"):
+            self._build_header()
+            _add_error_banner(self.session)
+            self._build_content()
 
 
 def _plotly_restyle(
@@ -1962,8 +1618,6 @@ def _filter_phase(
 # which shows the last captured batch's stats for any layer instead of a
 # phase's running aggregate. The value is a plain-but-unlikely string (not a
 # control char) so it can be compared in the option slot's Vue template.
-_PHASE_CURRENT_BATCH: str = "::current-batch::"
-_PHASE_CURRENT_BATCH_LABEL: str = "Current batch"
 
 
 def _phase_heading(phase: str, epoch: int, *, current_batch: bool) -> str:
@@ -2004,149 +1658,11 @@ def _stats_table_content(
     return _stats_table_html(per_phase, headings=headings)
 
 
-def _phase_select_options(view: str, phase_names: list[str]) -> dict[str, str]:
-    """The Phase dropdown's value→label map for the current view.
-
-    The schedule's phases always; the "Current batch" entry only where the
-    view can render it — the epoch-stats view plots per-epoch aggregates,
-    which a single batch doesn't have.
-    """
-    options = {p: p for p in phase_names}
-    if view != _VIEW_GRAPHS:
-        options[_PHASE_CURRENT_BATCH] = _PHASE_CURRENT_BATCH_LABEL
-    return options
-
-
-def _reconcile_selected_phase(
-    selected: str, view: str, phase_names: list[str]
-) -> str:
-    """A valid Phase selection for the current view.
-
-    The epoch-stats view swaps "Current batch" (or any stale selection) for
-    the first schedule phase, its epoch-aggregating counterpart ("" while
-    no phase has been declared or observed yet). The other views fall back
-    to "Current batch", which always has something to show.
-    """
-    if view == _VIEW_GRAPHS:
-        if selected in phase_names:
-            return selected
-        return phase_names[0] if phase_names else ""
-    if selected == _PHASE_CURRENT_BATCH or selected in phase_names:
-        return selected
-    return _PHASE_CURRENT_BATCH
-
-
-def _initial_phase(session: Session, layer: str) -> str:
-    """The Phase selection the page opens on.
-
-    The phase training is currently in — the live batch position's, falling
-    back to the published snapshot's — when the running aggregates already
-    hold stats for it. `layer` (the `?layer=` deep link, "" when the URL
-    named none) scopes that check: a Stats link on an unwatched layer must
-    land on "Current batch", the only selection whose Layer dropdown offers
-    that layer, rather than bounce to a phase that would swap the layer out.
-    Before any batch, or while the phase has nothing collected, "Current
-    batch" — it always has something to show.
-    """
-    position = session.live_position
-    if position is None:
-        snapshot = session.snapshot
-        position = snapshot.position if snapshot is not None else None
-    if position is not None and position.phase in session.stats_phases(
-        layer or None
-    ):
-        return position.phase
-    return _PHASE_CURRENT_BATCH
-
-
 # Layer dropdown: the sentinel value of the "all watched layers" entry (a NUL
 # prefix keeps it distinct from any real layer name) and its display label.
-_LAYER_ALL: str = "\x00all"
-_ALL_LAYERS_LABEL: str = "All watched layers"
 # Rendering every watched layer's cards at once is what makes the page slow,
 # so the "all" entry is only offered while fewer than this many layers are
 # watched; at or above it a single layer must be picked.
-_ALL_LAYERS_MAX: int = 10
-
-
-def _watched_in_order(
-    layer_names: list[str], stats_layers: frozenset[str]
-) -> list[str]:
-    """The stats-carrying layers in the page's stable graph order.
-
-    `stats_layers` is an unordered set (`Session.stats_layers` — the watched
-    set in the `watched` scope, every layer in `all`, the frozen buckets in
-    `none`), so order comes from `layer_names` (the architecture order the
-    cards have always rendered in).
-    """
-    return [n for n in layer_names if n in stats_layers]
-
-
-def _selectable_layers(
-    selected_phase: str, layer_names: list[str], stats_layers: frozenset[str]
-) -> list[str]:
-    """The layers the Layer dropdown offers for the current phase selection.
-
-    "Current batch" stats come from the snapshot, which covers every layer, so
-    any layer is selectable there; a real phase only has running stats for
-    the layers in `Session.stats_layers`. Either way the order is the stable
-    graph order.
-    """
-    if selected_phase == _PHASE_CURRENT_BATCH:
-        return list(layer_names)
-    return _watched_in_order(layer_names, stats_layers)
-
-
-def _all_layers_available(watched_count: int) -> bool:
-    """Whether the "all watched layers" entry is offered for this count.
-
-    Gated below `_ALL_LAYERS_MAX` because rendering every card at once is the
-    slow path the layer dropdown exists to avoid.
-    """
-    return 0 < watched_count < _ALL_LAYERS_MAX
-
-
-def _layer_select_options(ordered: list[str]) -> dict[str, str]:
-    """The layer dropdown's value→label map for the watched layers.
-
-    Each watched layer maps to itself; the "all" entry is prepended only
-    while few enough layers are watched (see `_all_layers_available`).
-    """
-    options: dict[str, str] = {}
-    if _all_layers_available(len(ordered)):
-        options[_LAYER_ALL] = _ALL_LAYERS_LABEL
-    for name in ordered:
-        options[name] = name
-    return options
-
-
-def _reconcile_selected_layer(selected: str, ordered: list[str]) -> str:
-    """A valid dropdown selection given the watched layers.
-
-    Keeps `selected` when it's still offered ("all" while few enough layers
-    are watched, or a still-watched layer); otherwise falls back to the first
-    watched layer — never "all", which the spec reserves for an explicit pick
-    so the default shows a single fast card. Returns "" when nothing is
-    watched.
-    """
-    if selected == _LAYER_ALL and _all_layers_available(len(ordered)):
-        return selected
-    if selected in ordered:
-        return selected
-    return ordered[0] if ordered else ""
-
-
-def _visible_layers(selected: str, ordered: list[str]) -> list[str]:
-    """The watched layers whose cards should be rendered for `selected`.
-
-    "all" (while available) → every watched layer; a layer name → just that
-    layer; anything else (stale or empty) → the first watched layer, if any.
-    """
-    if selected == _LAYER_ALL and _all_layers_available(len(ordered)):
-        return ordered
-    if selected in ordered:
-        return [selected]
-    return ordered[:1]
 
 
 def _deep_dream_href(
@@ -2166,40 +1682,9 @@ def _deep_dream_href(
     return f"/experiment?layer={quote(target)}"
 
 
-_PATCH_TYPE_LABELS: dict[PatchType, str] = {
-    "max_pixel": "Max pixel",
-    "min_pixel": "Min pixel",
-    "max_average": "Max average",
-    "min_average": "Min average",
-}
-
 # The MIN/MAX radio entries gated behind the average-patches Performance
 # setting (`WatchPerformance.average_patches`, off by default).
-_AVERAGE_PATCH_TYPES: frozenset[PatchType] = frozenset(
-    {"max_average", "min_average"}
-)
 
-
-def _grid_type_options(average_patches: bool) -> dict[PatchType, str]:
-    """The MIN/MAX radio's value→label map for the Performance setting.
-
-    The average-extreme entries are offered only while their collection is
-    on: a setting change flushes every aggregate bucket
-    (`WatchAccumulator.configure`) and the "Current batch" stats follow the
-    live setting too, so while it's off those grids are nowhere to be had.
-    """
-    return {
-        ptype: label
-        for ptype, label in _PATCH_TYPE_LABELS.items()
-        if average_patches or ptype not in _AVERAGE_PATCH_TYPES
-    }
-
-
-def _reconcile_grid_type(
-    selected: PatchType, options: dict[PatchType, str]
-) -> PatchType:
-    """A valid radio selection: `selected` while offered, else the default."""
-    return selected if selected in options else "max_pixel"
 
 _NO_PATCHES_HTML: str = (
     '<div class="text-xs text-slate-400 italic py-1">no patches gathered '
