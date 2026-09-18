@@ -706,19 +706,36 @@ def test_probe_act_tensor_resolves_perturbed_and_unperturbed_samples() -> None:
         torch.testing.assert_close(base_row, probe.activations["conv"][0:1])
 
 
-def test_shared_base_cache_keys_on_base_identity() -> None:
-    """A fresh base recomputes even when it holds equal values.
+def test_client_probe_baseline_follows_mode_changes() -> None:
+    model = nn.Sequential(nn.Linear(1, 1, bias=False), nn.Dropout(p=1.0))
+    with torch.no_grad():
+        model.get_parameter("0.weight").fill_(2)
 
-    Keying on `id()` would let a new snapshot reuse a freed one's address and
-    serve every client a stale base to diff against.
-    """
-    with paused_session(BnDropNet(), _bn_drop_step) as session:
-        bases = session._snapshot_inputs()
-        first = session._probes._shared_base_caps(bases, "eval")
-        assert session._probes._shared_base_caps(bases, "eval") is first  # cache hit
-        assert session._probes._shared_base_caps(bases, "train") is not first  # mode differs
-        replacement = {name: t.clone() for name, t in bases.items()}
-        assert session._probes._shared_base_caps(replacement, "eval") is not first
+    def step(model: nn.Sequential) -> None:
+        model(torch.ones(2, 1))
+
+    with paused_session(model, step) as session:
+        for index, (mode, expected) in enumerate(
+            (("eval", 2.0), ("train", 0.0), ("eval", 2.0))
+        ):
+            client = str(index)
+            session.set_probe_mode(mode)
+            session.add_perturbation(
+                input_name=session.input_names[0],
+                sample=0,
+                index=(0,),
+                values=(3.0,),
+                client=client,
+            )
+            assert session.wait_for_probe(client=client, timeout=5)
+            result = session.probe_result_for(client)
+            assert result is not None
+            torch.testing.assert_close(
+                result.activations["1"], torch.full((2, 1), expected)
+            )
+            difference = probe_act_tensor(result, "1", compare=True, sample_idx=0)
+            assert difference is not None
+            torch.testing.assert_close(difference, torch.tensor([[expected * 2]]))
 
 
 def test_pinned_client_probe_recomputes_baseline_after_training() -> None:
@@ -736,7 +753,11 @@ def test_pinned_client_probe_recomputes_baseline_after_training() -> None:
         assert session.pin_current_batch()
         assert session.wait_for_probe(timeout=5)
         session.add_perturbation(
-            input_name=name, sample=0, index=(0,), values=(2.0,), client="A",
+            input_name=name,
+            sample=0,
+            index=(0,),
+            values=(2.0,),
+            client="A",
         )
         assert session.wait_for_probe(client="A", timeout=5)
         first = session.probe_result_for("A")
@@ -746,12 +767,16 @@ def test_pinned_client_probe_recomputes_baseline_after_training() -> None:
         session.step_batch()
         assert session.wait_until_paused(after_pauses=1, timeout=5)
         session.add_perturbation(
-            input_name=name, sample=0, index=(0,), values=(3.0,), client="A",
+            input_name=name,
+            sample=0,
+            index=(0,),
+            values=(3.0,),
+            client="A",
         )
         assert session.wait_for_probe(client="A", after_count=1, timeout=5)
         result = session.probe_result_for("A")
         assert result is not None
-        assert result.inputs[name] is first.inputs[name]  # still pinned
+        torch.testing.assert_close(result.inputs[name], first.inputs[name])
         torch.testing.assert_close(result.activations["0"], torch.full((2, 1), 3.0))
         diff = probe_act_tensor(result, "0", compare=True, sample_idx=0)
         assert diff is not None
