@@ -61,6 +61,16 @@ from nansense.mcp_images import (
     patches_image,
     weights_image,
 )
+from nansense.mcp_view_specs import (
+    ExperimentKind,
+    ExperimentSnapshotSpec,
+    HistogramsViewSpec,
+    LayersViewSpec,
+    PatchesViewSpec,
+    RecordingViewSpec,
+    SnapshotViewSpec,
+    WeightsViewSpec,
+)
 from nansense.mcp_views import (
     architecture_view,
     debug_view,
@@ -1078,9 +1088,7 @@ def build_server(
 
     @server.tool()
     async def run_experiment(
-        kind: Literal[
-            "deep_dream", "gradcam", "neuron_gradient", "neuron_ig", "occlusion"
-        ],
+        kind: ExperimentKind,
         layer: str,
         params: dict[str, Any] | None = None,
         timeout_seconds: float = 120.0,
@@ -1161,21 +1169,7 @@ def build_server(
         return recordings_view(session)
 
     @server.tool()
-    async def start_recording(
-        view: Literal["layers", "weights", "histograms", "patches", "experiment"],
-        layers: list[str] | None = None,
-        layer: str | None = None,
-        phase: str | None = None,
-        sample: int = 0,
-        heatmap: bool = False,
-        log_x: bool = False,
-        log_y: bool = False,
-        kind: str | None = None,
-        params: dict[str, Any] | None = None,
-        overlay: bool = False,
-        average: bool = False,
-        values: Literal["unchanged", "abs", "square"] = "unchanged",
-    ) -> dict[str, Any]:
+    async def start_recording(view: RecordingViewSpec) -> dict[str, Any]:
         """Record a view to MP4, one frame per visualization update.
 
         The way to show a human *change over time* rather than a single
@@ -1184,14 +1178,10 @@ def build_server(
         `stop_recording` for the file path.
 
         Frames come from visualization updates, so `set_update_frequency` is
-        the frame rate and a paused run records nothing. Each view takes its
-        own arguments: `layers` for "layers"/"histograms"/"patches", `layer`
-        for "weights"/"experiment", `phase` for "histograms"/"patches", and
-        `kind` + `params` for "experiment" (which registers its own
-        continuously re-running experiment, as the page does, plus `overlay`
-        to blend its attribution over the input in every frame). `average` and
-        `values` are the "layers" render options `render_layer` documents, held
-        fixed for every frame.
+        the frame rate and a paused run records nothing. `view` is one of the
+        typed view specifications, each carrying only the arguments its own
+        page takes — the "experiment" one registers a continuously re-running
+        experiment, as the page does, so every frame is a fresh run of it.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -1199,19 +1189,7 @@ def build_server(
         return await asyncio.to_thread(
             _start_recording,
             session,
-            view=view,
-            layers=layers,
-            layer=layer,
-            phase=phase,
-            sample=sample,
-            heatmap=heatmap,
-            log_x=log_x,
-            log_y=log_y,
-            kind=kind,
-            params=params,
-            overlay=overlay,
-            average=average,
-            values=values,
+            view,
             display=display,
             input_name=primary_input,
         )
@@ -1223,20 +1201,7 @@ def build_server(
         return await asyncio.to_thread(_stop_recording, session, key=key)
 
     @server.tool()
-    async def save_snapshot(
-        view: Literal["layers", "weights", "histograms", "patches", "experiment"],
-        layers: list[str] | None = None,
-        layer: str | None = None,
-        phase: str | None = None,
-        sample: int = 0,
-        heatmap: bool = False,
-        log_x: bool = False,
-        log_y: bool = False,
-        seq: int | None = None,
-        overlay: bool = False,
-        average: bool = False,
-        values: Literal["unchanged", "abs", "square"] = "unchanged",
-    ) -> dict[str, Any]:
+    async def save_snapshot(view: SnapshotViewSpec) -> dict[str, Any]:
         """Save one still of a view as a PNG file and return its path.
 
         A recording of length one — the same view, the same frame, written
@@ -1246,11 +1211,9 @@ def build_server(
         the picture to *you* instead, and are what to use when you are the
         one looking.
 
-        Views take the same arguments as `start_recording` — including
-        `overlay` for an attribution and the "layers" render options `average`
-        / `values` — except "experiment", which saves an already-published
-        result: `seq` picks it (default: the newest), rather than registering
-        a rerunning request the way a recording must.
+        `view` takes the same specifications as `start_recording` except for
+        "experiment", which saves an already-published result picked by `seq`
+        rather than registering a rerunning request the way a recording must.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
@@ -1258,18 +1221,7 @@ def build_server(
         return await asyncio.to_thread(
             _save_snapshot,
             session,
-            view=view,
-            layers=layers,
-            layer=layer,
-            phase=phase,
-            sample=sample,
-            heatmap=heatmap,
-            log_x=log_x,
-            log_y=log_y,
-            seq=seq,
-            overlay=overlay,
-            average=average,
-            values=values,
+            view,
             display=display,
             input_name=primary_input,
         )
@@ -1558,38 +1510,26 @@ async def _run_experiment(
 
 def _recorded_view(
     session: Session,
+    spec: RecordingViewSpec,
     *,
-    view: str,
-    layers: Sequence[str] | None,
-    layer: str | None,
-    phase: str | None,
-    sample: int,
-    heatmap: bool,
-    log_x: bool,
-    log_y: bool,
-    kind: str | None,
-    params: dict[str, Any] | None,
-    overlay: bool,
-    average: bool,
-    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> RecordedView | dict[str, Any]:
-    """The `RecordedView` for one agent-facing view name, or an error dict.
+    """The `RecordedView` one view specification asks for, or an error dict.
 
     The page equivalents build these from their own widget state; here the
-    arguments come from the tool call, but the `params` payloads must match
+    fields come from the tool call, but the `params` payloads must match
     exactly — `nansense.recording` unpacks them by key.
     """
     from nansense.recording import RecordedView
     from nansense.ui.render import RenderOptions
 
     mean, std = display.stats(input_name)
-    if view == "layers":
+    if isinstance(spec, LayersViewSpec):
         # The main page records the cards on screen, i.e. the watched layers —
         # *not* every layer with statistics, which under stats scope "all" is
         # the whole model and would compose a frame thousands of pixels tall.
-        chosen = _ordered(session, layers if layers else session.watched_layers)
+        chosen = _ordered(session, spec.layers or session.watched_layers)
         if not chosen:
             return {
                 "error": (
@@ -1598,14 +1538,14 @@ def _recorded_view(
                 )
             }
         options = RenderOptions.from_params(
-            {"render_average": average, "render_values": values}
+            {"render_average": spec.average, "render_values": spec.values}
         )
         return RecordedView(
             key="main",
-            label=f"Main view ({len(chosen)} layers, sample {sample})",
+            label=f"Main view ({len(chosen)} layers, sample {spec.sample})",
             config=MainView(
                 layers=tuple(chosen),
-                sample_idx=sample,
+                sample_idx=spec.sample,
                 input_name=input_name or "",
                 input_mean=mean,
                 input_std=std,
@@ -1614,25 +1554,23 @@ def _recorded_view(
                 render_values=options.values,
             ),
         )
-    if view == "weights":
-        if layer is None:
-            return {"error": "Give `layer` — a weights recording covers one layer."}
-        parameters = session.layer_weights.get(layer, [])
+    if isinstance(spec, WeightsViewSpec):
+        parameters = session.layer_weights.get(spec.layer, [])
         if not parameters:
-            return {"error": f"Layer {layer!r} has no parameters to record."}
+            return {"error": f"Layer {spec.layer!r} has no parameters to record."}
         return RecordedView(
-            key=f"weights:{layer}",
-            label=f"Weights · {layer}",
+            key=f"weights:{spec.layer}",
+            label=f"Weights · {spec.layer}",
             config=WeightsView(
-                layer=layer,
+                layer=spec.layer,
                 panels=tuple(WeightPanelConfig(name) for name in parameters),
             ),
         )
-    if view in ("histograms", "patches"):
+    if isinstance(spec, HistogramsViewSpec | PatchesViewSpec):
         # These read the watch accumulators, whose browsable universe is the
         # `/stats` page's own: collecting layers plus any whose buckets are
         # still retained.
-        chosen = _ordered(session, layers if layers else session.stats_layers)
+        chosen = _ordered(session, spec.layers or session.stats_layers)
         if not chosen:
             return {
                 "error": (
@@ -1640,7 +1578,7 @@ def _recorded_view(
                     "accumulators, so watch some layers first."
                 )
             }
-        resolved_phase = phase or _newest_phase(session, chosen)
+        resolved_phase = spec.phase or _newest_phase(session, chosen)
         if resolved_phase is None:
             return {
                 "error": (
@@ -1648,12 +1586,15 @@ def _recorded_view(
                     "advance at least one batch after watching."
                 )
             }
-        if view == "histograms":
+        if isinstance(spec, HistogramsViewSpec):
             return RecordedView(
                 key="watch_histogram",
                 label=f"Watch · histograms ({resolved_phase})",
                 config=HistogramView(
-                    layers=tuple(chosen), phase=resolved_phase, log_x=log_x, log_y=log_y
+                    layers=tuple(chosen),
+                    phase=resolved_phase,
+                    log_x=spec.log_x,
+                    log_y=spec.log_y,
                 ),
             )
         return RecordedView(
@@ -1663,7 +1604,7 @@ def _recorded_view(
                 layers=tuple(chosen),
                 phase=resolved_phase,
                 grids=patch_types(PATCH_TYPES),
-                heatmap=heatmap,
+                heatmap=spec.heatmap,
                 input_mean=mean,
                 input_std=std,
             ),
@@ -1671,16 +1612,11 @@ def _recorded_view(
     # "experiment": the page keeps its request alive across updates with an
     # auto experiment so each frame is a fresh rerun of the *same* seq (deep
     # dream then redraws the same seeded noise); do the same here.
-    if layer is None or kind is None:
-        return {"error": "Give `kind` and `layer` for an experiment recording."}
-    if kind not in experiments.EXPERIMENT_KINDS:
+    if not experiments.layer_available(session, spec.layer, spec.kind):
         return {
-            "error": f"Unknown experiment kind {kind!r}.",
-            "known_kinds": sorted(experiments.EXPERIMENT_KINDS),
+            "error": f"{spec.kind} cannot run on {spec.layer!r}; see list_experiments."
         }
-    if not experiments.layer_available(session, layer, kind):
-        return {"error": f"{kind} cannot run on {layer!r}; see list_experiments."}
-    key = f"experiment:{layer}"
+    key = f"experiment:{spec.layer}"
     # Registering replaces any entry under `key` with a *new* seq, and the
     # recording already running holds the old one in its frozen params. So
     # check for the duplicate here, before mutating: letting `_start_recording`
@@ -1692,25 +1628,29 @@ def _recorded_view(
             "hint": "One recording per view; stop_recording ends it.",
         }
     resolved, _ = _experiment_params(
-        session, kind=kind, overrides=params, display=display, input_name=input_name
+        session,
+        kind=spec.kind,
+        overrides=spec.params,
+        display=display,
+        input_name=input_name,
     )
     try:
         seq = session.register_auto_experiment(
-            key, kind=kind, layer=layer, params=resolved
+            key, kind=spec.kind, layer=spec.layer, params=resolved
         )
     except ValueError as error:
         return {"error": str(error)}
     session.pin_auto_experiment(key)
     return RecordedView(
         key=key,
-        label=f"Experiment · {experiments.EXPERIMENT_KINDS[kind]} · {layer}",
+        label=f"Experiment · {experiments.EXPERIMENT_KINDS[spec.kind]} · {spec.layer}",
         config=ExperimentView(
-            layer=layer,
+            layer=spec.layer,
             seq=seq,
             auto_key=key,
             input_mean=mean,
             input_std=std,
-            overlay=overlay,
+            overlay=spec.overlay,
         ),
     )
 
@@ -1733,41 +1673,12 @@ def _newest_phase(session: Session, layers: Sequence[str]) -> str | None:
 
 def _start_recording(
     session: Session,
+    spec: RecordingViewSpec,
     *,
-    view: str,
-    layers: Sequence[str] | None,
-    layer: str | None,
-    phase: str | None,
-    sample: int,
-    heatmap: bool,
-    log_x: bool,
-    log_y: bool,
-    kind: str | None,
-    params: dict[str, Any] | None,
-    overlay: bool,
-    average: bool,
-    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> dict[str, Any]:
-    recorded = _recorded_view(
-        session,
-        view=view,
-        layers=layers,
-        layer=layer,
-        phase=phase,
-        sample=sample,
-        heatmap=heatmap,
-        log_x=log_x,
-        log_y=log_y,
-        kind=kind,
-        params=params,
-        overlay=overlay,
-        average=average,
-        values=values,
-        display=display,
-        input_name=input_name,
-    )
+    recorded = _recorded_view(session, spec, display=display, input_name=input_name)
     if isinstance(recorded, dict):
         return recorded
     if not session.recording.start(recorded):
@@ -1782,19 +1693,8 @@ def _start_recording(
 
 def _snapshot_view(
     session: Session,
+    spec: SnapshotViewSpec,
     *,
-    view: str,
-    layers: Sequence[str] | None,
-    layer: str | None,
-    phase: str | None,
-    sample: int,
-    heatmap: bool,
-    log_x: bool,
-    log_y: bool,
-    seq: int | None,
-    overlay: bool,
-    average: bool,
-    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> RecordedView | dict[str, Any]:
@@ -1810,33 +1710,18 @@ def _snapshot_view(
     """
     from nansense.recording import RecordedView
 
-    if view != "experiment":
-        return _recorded_view(
-            session,
-            view=view,
-            layers=layers,
-            layer=layer,
-            phase=phase,
-            sample=sample,
-            heatmap=heatmap,
-            log_x=log_x,
-            log_y=log_y,
-            kind=None,
-            params=None,
-            overlay=overlay,
-            average=average,
-            values=values,
-            display=display,
-            input_name=input_name,
-        )
+    if not isinstance(spec, ExperimentSnapshotSpec):
+        return _recorded_view(session, spec, display=display, input_name=input_name)
     result = (
-        session.experiment_result if seq is None else session.experiment_result_for(seq)
+        session.experiment_result
+        if spec.seq is None
+        else session.experiment_result_for(spec.seq)
     )
     if result is None:
         return {
             "error": (
                 "No experiment result to save"
-                + ("." if seq is None else f" for seq {seq}.")
+                + ("." if spec.seq is None else f" for seq {spec.seq}.")
             ),
             "hint": "run_experiment publishes one; its seq names it here.",
         }
@@ -1850,46 +1735,19 @@ def _snapshot_view(
             seq=result.seq,
             input_mean=mean,
             input_std=std,
-            overlay=overlay,
+            overlay=spec.overlay,
         ),
     )
 
 
 def _save_snapshot(
     session: Session,
+    spec: SnapshotViewSpec,
     *,
-    view: str,
-    layers: Sequence[str] | None,
-    layer: str | None,
-    phase: str | None,
-    sample: int,
-    heatmap: bool,
-    log_x: bool,
-    log_y: bool,
-    seq: int | None,
-    overlay: bool,
-    average: bool,
-    values: str,
     display: InputDisplay,
     input_name: str | None,
 ) -> dict[str, Any]:
-    frozen = _snapshot_view(
-        session,
-        view=view,
-        layers=layers,
-        layer=layer,
-        phase=phase,
-        sample=sample,
-        heatmap=heatmap,
-        log_x=log_x,
-        log_y=log_y,
-        seq=seq,
-        overlay=overlay,
-        average=average,
-        values=values,
-        display=display,
-        input_name=input_name,
-    )
+    frozen = _snapshot_view(session, spec, display=display, input_name=input_name)
     if isinstance(frozen, dict):
         return frozen
     paths = session.recording.snapshot(frozen, session)

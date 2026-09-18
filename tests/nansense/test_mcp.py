@@ -25,6 +25,7 @@ from mcp.client import Client
 from mcp.types import TextContent
 
 import nansense
+from nansense import experiments
 from nansense.debugger import DebugError, LayerReport
 from nansense.mcp_server import build_mount, build_server
 from nansense.mcp_views import (
@@ -393,6 +394,80 @@ def test_every_tool_is_registered_with_a_description() -> None:
             } <= names
             # The descriptions are the agent's only documentation.
             assert all(tool.description for tool in tools)
+
+    _run(go())
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "experiment_fields", "absent"),
+    [
+        ("start_recording", {"layer", "kind", "params", "overlay"}, "seq"),
+        ("save_snapshot", {"seq", "overlay"}, "kind"),
+    ],
+)
+def test_the_view_argument_publishes_one_variant_per_view(
+    tool_name: str, experiment_fields: set[str], absent: str
+) -> None:
+    """The recording tools take a union discriminated on `view`, so the schema
+    itself says which arguments belong to which view — the flat keyword bag it
+    replaced could only say so in prose."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+
+    async def go() -> None:
+        async with Client(build_server(session, mermaid="graph TD")) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            schema = tools[tool_name].input_schema
+            view = schema["properties"]["view"]
+            assert view["discriminator"]["propertyName"] == "view"
+            # `$ref`s into `$defs`, one per variant, keyed by the view name.
+            variants = {
+                name: schema["$defs"][ref.rsplit("/", 1)[-1]]
+                for name, ref in view["discriminator"]["mapping"].items()
+            }
+            assert set(variants) == {
+                "layers",
+                "weights",
+                "histograms",
+                "patches",
+                "experiment",
+            }
+            assert {option["$ref"] for option in view["oneOf"]} == set(
+                view["discriminator"]["mapping"].values()
+            )
+            layers = variants["layers"]["properties"]
+            assert {"layers", "sample", "average", "values"} <= set(layers)
+            assert layers["values"]["enum"] == ["unchanged", "abs", "square"]
+            assert variants["weights"]["required"] == ["layer"]
+            experiment = variants["experiment"]["properties"]
+            assert set(experiment) == {"view"} | experiment_fields
+            assert absent not in experiment
+            # Every field carries its own one-line description for the agent.
+            assert all(
+                "description" in field
+                for variant in variants.values()
+                for name, field in variant["properties"].items()
+                if name != "view"
+            )
+
+    _run(go())
+
+
+def test_a_recording_experiment_variant_pins_the_experiment_kinds() -> None:
+    """`start_recording`'s `kind` is the same enum `run_experiment` takes."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+
+    async def go() -> None:
+        async with Client(build_server(session, mermaid="graph TD")) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            schema = tools["start_recording"].input_schema
+            mapping = schema["properties"]["view"]["discriminator"]["mapping"]
+            variant = schema["$defs"][mapping["experiment"].rsplit("/", 1)[-1]]
+            kinds = variant["properties"]["kind"]["enum"]
+            assert (
+                kinds
+                == tools["run_experiment"].input_schema["properties"]["kind"]["enum"]
+            )
+            assert set(kinds) == set(experiments.EXPERIMENT_KINDS)
 
     _run(go())
 

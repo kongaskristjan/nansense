@@ -82,8 +82,8 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
 | `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions — `run_experiment(video=True)` records a dream's whole ascent to MP4 |
 | `set_auto_run_experiments` | Stop open experiment pages re-running on the thread you need |
-| `start_recording`, `stop_recording`, `discard_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update |
-| `save_snapshot` | Save one still of a view as a PNG file to hand a human |
+| `start_recording`, `stop_recording`, `discard_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update — `view` is a typed per-view specification |
+| `save_snapshot` | Save one still of a view as a PNG file to hand a human, from the same typed `view` |
 
 **Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks(interval_batches=1)` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.
 
@@ -96,6 +96,8 @@ Experiment parameters are validated before queuing or replacing a recording’s 
 **Record deep dream as a video.** `render_experiment` returns the final image. Use `run_experiment(..., video=True)` when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass `params: {"all_steps": true}` to keep every step.
 
 **Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. `save_snapshot` is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the `render_*` tools return the picture to *you*.
+
+Both take one `view` argument: an object whose own `view` field names the page — `layers`, `weights`, `histograms`, `patches` or `experiment` — alongside only the arguments that page takes, so `{"view": {"view": "layers", "layers": ["conv1"], "average": true}}` records the main view while `{"view": {"view": "weights", "layer": "conv1"}}` records one layer's kernels. The tool schema carries a variant per view with its fields and defaults, so there is nothing to guess. The `experiment` variant differs between the two: a recording registers a re-running request (`layer`, `kind`, `params`) so each frame is fresh, while a snapshot draws a result already published (`seq`, default the newest).
 
 ## A worked example
 

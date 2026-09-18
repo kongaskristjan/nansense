@@ -611,6 +611,21 @@ def test_auto_run_experiments_can_be_turned_off() -> None:
         assert session.auto_run_experiments is False
 
 
+def _layers_view(layers: list[str]) -> dict[str, Any]:
+    """The typed main-view spec `start_recording` / `save_snapshot` take."""
+    return {"view": "layers", "layers": layers}
+
+
+def _dream_view() -> dict[str, Any]:
+    """A cheap deep-dream recording spec."""
+    return {
+        "view": "experiment",
+        "layer": "conv",
+        "kind": "deep_dream",
+        "params": {"channels": 1, "steps": 2},
+    }
+
+
 # --- recordings -------------------------------------------------------
 
 
@@ -619,7 +634,7 @@ def test_starting_and_stopping_a_layer_recording(tmp_path: Path) -> None:
 
     with paused_session(TinyClassifier(), _image_step) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        started = _call(session, "start_recording", {"view": "layers", "layers": ["conv"]})
+        started = _call(session, "start_recording", {"view": _layers_view(["conv"])})
         assert started["started"] == "main"
         assert [r["key"] for r in started["recordings"]] == ["main"]
         # One frame, driven the way the training thread drives them.
@@ -635,8 +650,8 @@ def test_a_second_recording_of_one_view_is_refused(tmp_path: Path) -> None:
 
     with paused_session(TinyClassifier(), _image_step) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        _call(session, "start_recording", {"view": "layers", "layers": ["conv"]})
-        again = _call(session, "start_recording", {"view": "layers", "layers": ["conv"]})
+        _call(session, "start_recording", {"view": _layers_view(["conv"])})
+        again = _call(session, "start_recording", {"view": _layers_view(["conv"])})
         assert "already recording" in again["error"]
         session.recording.delete_all()
 
@@ -650,7 +665,7 @@ def test_recording_a_view_with_no_data_is_refused_with_the_reason(
 
     with paused_session(TinyNet()) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        view = _call(session, "start_recording", {"view": "histograms"})
+        view = _call(session, "start_recording", {"view": {"view": "histograms"}})
         assert "watch some layers first" in view["error"]
 
 
@@ -659,8 +674,11 @@ def test_weights_recording_needs_a_layer_with_parameters(tmp_path: Path) -> None
 
     with paused_session(TinyNet()) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        assert "Give `layer`" in _call(session, "start_recording", {"view": "weights"})["error"]
-        view = _call(session, "start_recording", {"view": "weights", "layer": "relu"})
+        view = _call(
+            session,
+            "start_recording",
+            {"view": {"view": "weights", "layer": "relu"}},
+        )
         assert "no parameters" in view["error"]
 
 
@@ -683,12 +701,7 @@ def test_an_experiment_recording_keeps_its_request_rerunning(tmp_path: Path) -> 
         started = _call(
             session,
             "start_recording",
-            {
-                "view": "experiment",
-                "layer": "conv",
-                "kind": "deep_dream",
-                "params": {"channels": 1, "steps": 2},
-            },
+            {"view": _dream_view()},
         )
         assert started["started"] == "experiment:conv"
         # `expires_at is None` is what pins it: no heartbeat can expire it
@@ -705,7 +718,7 @@ def test_saving_a_snapshot_writes_one_png_and_records_nothing(tmp_path: Path) ->
 
     with paused_session(TinyClassifier(), _image_step) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        view = _call(session, "save_snapshot", {"view": "layers", "layers": ["conv"]})
+        view = _call(session, "save_snapshot", {"view": _layers_view(["conv"])})
         assert view["view"] == "main"
         (file,) = view["files"]
         assert Path(file).exists() and file.endswith(".png")
@@ -717,7 +730,7 @@ def test_a_snapshot_of_a_view_with_no_data_says_so(tmp_path: Path) -> None:
 
     with paused_session(TinyNet()) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        view = _call(session, "save_snapshot", {"view": "histograms"})
+        view = _call(session, "save_snapshot", {"view": {"view": "histograms"}})
         assert "watch some layers first" in view["error"]
 
 
@@ -740,7 +753,7 @@ def test_an_experiment_snapshot_saves_a_result_without_pinning_a_rerun(
                 "timeout_seconds": 60.0,
             },
         )
-        view = _call(session, "save_snapshot", {"view": "experiment"})
+        view = _call(session, "save_snapshot", {"view": {"view": "experiment"}})
         assert view["view"] == "experiment:conv"
         assert Path(view["files"][0]).exists()
         assert session._experiments._auto == {}
@@ -753,7 +766,9 @@ def test_an_experiment_snapshot_without_a_result_says_what_to_run(
 
     with paused_session(TinyClassifier(), _image_step) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        view = _call(session, "save_snapshot", {"view": "experiment", "seq": 7})
+        view = _call(
+            session, "save_snapshot", {"view": {"view": "experiment", "seq": 7}}
+        )
         assert "No experiment result to save for seq 7" in view["error"]
         assert "run_experiment" in view["hint"]
 
@@ -775,9 +790,11 @@ def test_an_experiment_snapshot_can_overlay_its_attribution(tmp_path: Path) -> N
                 "timeout_seconds": 60.0,
             },
         )
-        plain = _call(session, "save_snapshot", {"view": "experiment"})
+        plain = _call(session, "save_snapshot", {"view": {"view": "experiment"}})
         blended = _call(
-            session, "save_snapshot", {"view": "experiment", "overlay": True}
+            session,
+            "save_snapshot",
+            {"view": {"view": "experiment", "overlay": True}},
         )
         first, second = Path(plain["files"][0]), Path(blended["files"][0])
         assert first.exists() and second.exists()
@@ -791,7 +808,7 @@ def test_discarding_a_recording_writes_no_file(tmp_path: Path) -> None:
 
     with paused_session(TinyClassifier(), _image_step) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        _call(session, "start_recording", {"view": "layers", "layers": ["conv"]})
+        _call(session, "start_recording", {"view": _layers_view(["conv"])})
         session.recording.capture_frames(session)
         discarded = _call(session, "discard_recording", {"key": "main"})
         assert discarded["discarded"] == ["main"]
@@ -820,12 +837,7 @@ def test_discarding_an_experiment_recording_releases_its_request(
         _call(
             session,
             "start_recording",
-            {
-                "view": "experiment",
-                "layer": "conv",
-                "kind": "deep_dream",
-                "params": {"channels": 1, "steps": 2},
-            },
+            {"view": _dream_view()},
         )
         assert session._experiments._auto["experiment:conv"].expires_at is None
         _call(session, "discard_recording", {"key": "experiment:conv"})
@@ -1121,7 +1133,7 @@ def test_recording_the_layers_view_defaults_to_the_watched_ones() -> None:
         session._recording_manager = RecordingManager(directory=Path("/tmp"))
         session.set_stats_scope("all")
         session.watch("fc2")
-        started = _call(session, "start_recording", {"view": "layers"})
+        started = _call(session, "start_recording", {"view": {"view": "layers"}})
         assert started["started"] == "main"
         recorded = session.recording.statuses()[0].view
         assert isinstance(recorded.config, MainView)
@@ -1137,7 +1149,7 @@ def test_recorded_layers_keep_the_models_own_order() -> None:
     with paused_session(TinyNet()) as session:
         session._recording_manager = RecordingManager(directory=Path("/tmp"))
         started = _call(
-            session, "start_recording", {"view": "layers", "layers": ["fc2", "fc1"]}
+            session, "start_recording", {"view": _layers_view(["fc2", "fc1"])}
         )
         assert started["started"] == "main"
         recorded = session.recording.statuses()[0].view
@@ -1156,12 +1168,7 @@ def test_a_duplicate_experiment_recording_leaves_the_live_one_alone(
 
     with paused_session(TinyClassifier(), _image_step) as session:
         session._recording_manager = RecordingManager(directory=tmp_path)
-        request = {
-            "view": "experiment",
-            "layer": "conv",
-            "kind": "deep_dream",
-            "params": {"channels": 1, "steps": 2},
-        }
+        request = {"view": _dream_view()}
         _call(session, "start_recording", request)
         recorded = session.recording.statuses()[0].view
         again = _call(session, "start_recording", request)

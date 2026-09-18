@@ -1231,7 +1231,10 @@ never delays the `count` / `statuses` polls the event loop makes.
 `save_snapshot` shares `_recorded_view` for every page but the
 experiment: a recording registers a rerunning request so each frame is
 fresh, which a one-shot still has no use for, so `_snapshot_view` draws
-an already-published `seq` and registers nothing to leak.
+an already-published `seq` and registers nothing to leak. That is also
+the one place the two tools' typed view specifications diverge
+(`nansense.mcp_view_specs`): `ExperimentRecordingSpec` carries `layer` /
+`kind` / `params`, `ExperimentSnapshotSpec` carries `seq`.
 
 ## Time travel (`nansense.restore`)
 
@@ -1568,8 +1571,9 @@ Render conventions worth knowing before editing `render.py`:
   never touching the `Session` — which is what keeps them usable in a locked
   playground, where pin and forward mode are refused. They ride in the render
   cache key (`RenderOptions.cache_key`) and the typed `MainView` recording
-  configuration. MCP parses the equivalent `render_layer` / `start_recording` /
-  `save_snapshot` arguments at its boundary.
+  configuration. MCP parses the equivalent `render_layer` arguments, and the
+  `LayersViewSpec` that `start_recording` / `save_snapshot` take, at its
+  boundary.
 - `render_strip` handles `[C,H,W]`, `[F]`, and 2D token shapes
   (`[tokens, dim]`, unflattened onto the input patch grid when `input_hw` is
   threaded in, assuming row-major ViT token order); 4D-and-beyond per-sample
@@ -1808,7 +1812,7 @@ one-shot publish flag (see *On-demand refresh*), and the page's existing timer
 renders the resulting snapshot — so there is no separate live-read path to keep
 consistent with `_publish_snapshot`.
 
-## MCP server (`nansense.mcp_server`, `nansense.mcp_views`, `nansense.mcp_images`)
+## MCP server (`nansense.mcp_server`, `nansense.mcp_views`, `nansense.mcp_images`, `nansense.mcp_view_specs`)
 
 The agent-facing front end, served on the UI's own port at `/mcp` over MCP's
 streamable-HTTP transport. It is a second reader of the same `Session` — the
@@ -1821,6 +1825,17 @@ The split mirrors the UI's render/page split. `mcp_views` is pure translation
 unit-testable without the SDK; `mcp_images` is the same for pictures,
 `Session` → PNG bytes; `mcp_server` is the tool registration over both plus
 the transport wiring. None of them imports a page module.
+
+**Arguments whose validity depends on each other are typed, not prose.**
+`start_recording` and `save_snapshot` each draw one of five pages, and each
+page takes its own arguments; a flat keyword bag could only document that in a
+docstring and hope it was read. `mcp_view_specs` makes it a pydantic union
+discriminated on a `view` literal, so the tool's `inputSchema` publishes one
+`$defs` variant per page with exactly its own fields, their defaults and a
+one-line description each — an agent picking `weights` is never offered
+`log_y`, and omitting its required `layer` is a schema error rather than an
+error dict. The tool bodies then dispatch by `isinstance` instead of
+re-checking a bag of `None`s.
 
 **Pictures** (`mcp_images`) come from `nansense.ui.frames`, the shared
 per-view renderer the recordings also use, so what an agent sees is what the
