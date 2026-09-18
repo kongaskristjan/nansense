@@ -26,6 +26,8 @@ def test_form_schema_matches_the_typed_request(kind: str) -> None:
         {"stepps": 5},
         {"steps": "five"},
         {"steps": float("nan")},
+        {"steps": 10**400},
+        {"mean": [10**400]},
         {"lr": float("inf")},
         {"clamp": "false"},
         {"start": "random"},
