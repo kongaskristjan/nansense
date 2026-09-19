@@ -1835,7 +1835,11 @@ discriminated on a `view` literal, so the tool's `inputSchema` publishes one
 one-line description each — an agent picking `weights` is never offered
 `log_y`, and omitting its required `layer` is a schema error rather than an
 error dict. The tool bodies then dispatch by `isinstance` instead of
-re-checking a bag of `None`s.
+re-checking a bag of `None`s. Every *other* tool parameter carries its own
+`Annotated[..., Field(description=...)]` for the same reason — an agent reads
+the schema, not the source — and a test walks `list_tools()`, `$defs`
+included, asserting each property has one, so a new argument cannot ship with
+only its auto-generated title.
 
 **Pictures** (`mcp_images`) come from `nansense.ui.frames`, the shared
 per-view renderer the recordings also use, so what an agent sees is what the

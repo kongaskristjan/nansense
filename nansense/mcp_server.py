@@ -104,6 +104,27 @@ _MAX_WAIT_SECONDS = 300.0
 # Poll interval while waiting for a requested snapshot to be published.
 _SNAPSHOT_POLL_SECONDS = 0.05
 
+# One sentence per waiting flavour, shared by every tool that waits: the
+# timeout bounds the *reply*, never the command it was given with.
+_PauseTimeout = Annotated[
+    float,
+    pydantic.Field(
+        description=(
+            "How long to wait for training to pause before returning 'still "
+            "running'; the command stays in effect either way."
+        )
+    ),
+]
+_ProbeTimeout = Annotated[
+    float,
+    pydantic.Field(
+        description=(
+            "How long to wait for the re-run probe to finish before returning "
+            "'still waiting'; the probe stays armed either way."
+        )
+    ),
+]
+
 # Poll interval while waiting for one experiment request to finish. Coarser
 # than the snapshot poll: an experiment takes seconds to minutes, and its
 # progress publishes are already visible to `get_experiment_result`.
@@ -300,11 +321,30 @@ def build_server(
         both positions (live and the snapshot the statistics describe), the
         watched layers, and a one-line summary of any numerical warning.
         Start here.
+
+        `mode` is what a resume does next: "step" pauses on every batch,
+        "until_phase_change" / "until_epoch_change" run to the first batch of
+        the next phase / epoch, "until_position" runs to an exact position,
+        "until_end" runs to the run's last batch, and "detach" never pauses
+        again. `locked` marks a shared demo: run controls and settings are
+        refused there while every inspection tool keeps working. `stats_scope`
+        is the setting ("none" / "watched" / "all"); `stats_collecting` is
+        whether collection is actually happening under it.
         """
         return status_view(session)
 
     @server.tool()
-    async def get_architecture(include_graph: bool = True) -> dict[str, Any]:
+    async def get_architecture(
+        include_graph: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True (the default) appends the compute graph as Mermaid "
+                    "source; False returns just the layer table."
+                )
+            ),
+        ] = True,
+    ) -> dict[str, Any]:
         """The model's layers, with hyperparameters and parameter names.
 
         The layer names returned here are the ones every other tool accepts.
@@ -319,9 +359,36 @@ def build_server(
 
     @server.tool()
     async def get_layer_stats(
-        layers: list[str],
-        include_histogram: bool = False,
-        channel: int | None = None,
+        layers: Annotated[
+            list[str],
+            pydantic.Field(
+                description=(
+                    "One or more layer names from get_architecture; names the "
+                    "model does not have come back under `unknown_layers` "
+                    "rather than being dropped silently."
+                )
+            ),
+        ],
+        include_histogram: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True adds each stream's value distribution as "
+                    "`[value, count]` pairs over the signed-log bins; the "
+                    "default returns scalars only."
+                )
+            ),
+        ] = False,
+        channel: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Zero-based channel index whose own histogram to add "
+                    "beside the layer-wide one (clamped into the tracked "
+                    "range); omit for no per-channel histogram."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Activation and gradient statistics for the last captured batch.
 
@@ -350,7 +417,24 @@ def build_server(
 
     @server.tool()
     async def get_stats_history(
-        layer: str, phase: str | None = None
+        layer: Annotated[
+            str,
+            pydantic.Field(
+                description=(
+                    "One layer name from get_architecture; this trend covers "
+                    "one layer at a time."
+                )
+            ),
+        ],
+        phase: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "Phase name to restrict the trend to, e.g. 'train'; omit "
+                    "for every phase that has collected data."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """One layer's statistics per epoch — the trend across the run.
 
@@ -377,11 +461,50 @@ def build_server(
 
     @server.tool(structured_output=False)
     async def render_layer(
-        layers: list[str],
-        sample: int = 0,
-        include_input: bool = False,
-        average: bool = False,
-        values: Literal["unchanged", "abs", "square"] = "unchanged",
+        layers: Annotated[
+            list[str],
+            pydantic.Field(
+                description=(
+                    "One or more layer names from get_architecture, each drawn "
+                    "as its own pair of rows; unknown names are reported in "
+                    "the reply rather than dropped silently."
+                )
+            ),
+        ],
+        sample: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based index of the sample within the captured batch."
+                )
+            ),
+        ] = 0,
+        include_input: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True draws that sample's input image above the strips."
+                )
+            ),
+        ] = False,
+        average: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True collapses each strip's channels into one mean tile."
+                )
+            ),
+        ] = False,
+        values: Annotated[
+            Literal["unchanged", "abs", "square"],
+            pydantic.Field(
+                description=(
+                    "Per-value transform before colouring: 'abs' or 'square' "
+                    "drop the sign for a magnitude picture, applied before "
+                    "`average`."
+                )
+            ),
+        ] = "unchanged",
     ) -> list[Any]:
         """Picture of what these layers computed on the last captured batch.
 
@@ -417,7 +540,23 @@ def build_server(
 
     @server.tool(structured_output=False)
     async def render_input(
-        sample: int = 0, input_name: str | None = None
+        sample: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based index of the sample within the captured batch."
+                )
+            ),
+        ] = 0,
+        input_name: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "Which input of a multi-input model to draw, from `inputs` "
+                    "in get_architecture; omit for the primary (first) one."
+                )
+            ),
+        ] = None,
     ) -> list[Any]:
         """Picture of one sample of the model's input.
 
@@ -437,12 +576,62 @@ def build_server(
 
     @server.tool(structured_output=False)
     async def render_weights(
-        layer: str,
-        parameters: list[str] | None = None,
-        index: int = 0,
-        x_dim: int | None = None,
-        y_dim: int | None = None,
-        tile_dim: int | None = None,
+        layer: Annotated[
+            str,
+            pydantic.Field(
+                description=(
+                    "One layer name from get_architecture that has parameters "
+                    "of its own; this view draws one layer at a time."
+                )
+            ),
+        ],
+        parameters: Annotated[
+            list[str] | None,
+            pydantic.Field(
+                description=(
+                    "Parameter names of that layer as get_architecture lists "
+                    "them (e.g. 'weight', 'bias'); omit for all of them."
+                )
+            ),
+        ] = None,
+        index: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based position pinning every axis the layout does "
+                    "not show — the output channel for a conv weight, so this "
+                    "is how you page through filters."
+                )
+            ),
+        ] = 0,
+        x_dim: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Tensor dimension to lay across the image's horizontal "
+                    "axis; omit for the layout the page opens with."
+                )
+            ),
+        ] = None,
+        y_dim: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Tensor dimension to lay down the image's vertical axis; "
+                    "omit for the layout the page opens with."
+                )
+            ),
+        ] = None,
+        tile_dim: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Tensor dimension to spread the individual tiles over (the "
+                    "input channel for a conv kernel); omit for the layout the "
+                    "page opens with."
+                )
+            ),
+        ] = None,
     ) -> list[Any]:
         """Picture of a layer's parameters, gradients and optimizer state.
 
@@ -473,11 +662,48 @@ def build_server(
 
     @server.tool(structured_output=False)
     async def render_histogram(
-        layers: list[str],
-        phase: str | None = None,
-        log_x: bool = False,
-        log_y: bool = False,
-        channel: int | None = None,
+        layers: Annotated[
+            list[str],
+            pydantic.Field(
+                description=(
+                    "One or more layer names from get_architecture that the "
+                    "stats scope collects; unknown names are reported in the "
+                    "reply rather than dropped silently."
+                )
+            ),
+        ],
+        phase: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "Phase whose accumulators to draw, e.g. 'train'; omit for "
+                    "the newest phase with data."
+                )
+            ),
+        ] = None,
+        log_x: Annotated[
+            bool,
+            pydantic.Field(
+                description="True spreads the bins evenly by magnitude."
+            ),
+        ] = False,
+        log_y: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True log-scales the counts, revealing sparse tails."
+                )
+            ),
+        ] = False,
+        channel: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Zero-based channel index to narrow every subplot to; omit "
+                    "for the layer-wide distribution."
+                )
+            ),
+        ] = None,
     ) -> list[Any]:
         """Picture of the value distributions of watched layers.
 
@@ -507,11 +733,45 @@ def build_server(
 
     @server.tool(structured_output=False)
     async def render_extreme_patches(
-        layer: str,
-        phase: str | None = None,
-        grids: list[Literal["max_pixel", "min_pixel", "max_average", "min_average"]]
-        | None = None,
-        heatmap: bool = False,
+        layer: Annotated[
+            str,
+            pydantic.Field(
+                description=(
+                    "One watched layer name from get_architecture; this grid "
+                    "draws one layer at a time."
+                )
+            ),
+        ],
+        phase: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "Phase whose accumulators to draw, e.g. 'train'; omit for "
+                    "the newest phase with data."
+                )
+            ),
+        ] = None,
+        grids: Annotated[
+            list[Literal["max_pixel", "min_pixel", "max_average", "min_average"]]
+            | None,
+            pydantic.Field(
+                description=(
+                    "Which grids to draw — the `*_pixel` pair ranks samples by "
+                    "a single activation, the `*_average` pair by the "
+                    "channel's mean and needs "
+                    "set_watch_performance(average_patches=True); omit for all "
+                    "four."
+                )
+            ),
+        ] = None,
+        heatmap: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True blends the channel's activation map over each patch."
+                )
+            ),
+        ] = False,
     ) -> list[Any]:
         """Picture of the inputs that most excite (or least excite) each channel.
 
@@ -537,11 +797,51 @@ def build_server(
 
     @server.tool(structured_output=False)
     async def render_bin_samples(
-        layer: str,
-        channel: int,
-        value: float,
-        kind: Literal["activation", "gradient"] = "activation",
-        count: int = 4,
+        layer: Annotated[
+            str,
+            pydantic.Field(
+                description=(
+                    "One layer name from get_architecture; a histogram bar "
+                    "belongs to one layer, so this takes a single name."
+                )
+            ),
+        ],
+        channel: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based channel index the bar belongs to, e.g. a dead "
+                    "channel index from get_layer_stats."
+                )
+            ),
+        ],
+        value: Annotated[
+            float,
+            pydantic.Field(
+                description=(
+                    "A histogram value from "
+                    "get_layer_stats(include_histogram=True) or "
+                    "render_histogram; it is snapped to the bin it came from."
+                )
+            ),
+        ],
+        kind: Annotated[
+            Literal["activation", "gradient"],
+            pydantic.Field(
+                description=(
+                    "Which stream the bar came from: 'activation' (the "
+                    "default) or 'gradient'."
+                )
+            ),
+        ] = "activation",
+        count: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "How many sampled elements to draw, one input crop each."
+                )
+            ),
+        ] = 4,
     ) -> list[Any]:
         """Picture of the inputs behind one histogram bar.
 
@@ -576,8 +876,17 @@ def build_server(
 
     @server.tool()
     async def step(
-        unit: Literal["batch", "phase", "epoch"] = "batch",
-        timeout_seconds: float = _DEFAULT_WAIT_SECONDS,
+        unit: Annotated[
+            Literal["batch", "phase", "epoch"],
+            pydantic.Field(
+                description=(
+                    "'batch' (the default) pauses on the next batch; 'phase' "
+                    "and 'epoch' pause on the first batch of the next phase or "
+                    "epoch."
+                )
+            ),
+        ] = "batch",
+        timeout_seconds: _PauseTimeout = _DEFAULT_WAIT_SECONDS,
     ) -> dict[str, Any]:
         """Advance training and pause again, then report the new position.
 
@@ -641,10 +950,30 @@ def build_server(
 
     @server.tool()
     async def run_until(
-        phase: str,
-        epoch: int,
-        batch: int,
-        timeout_seconds: float = _DEFAULT_WAIT_SECONDS,
+        phase: Annotated[
+            str,
+            pydantic.Field(
+                description=(
+                    "Phase name to stop in, e.g. 'train'; only phases training "
+                    "has already reached exist, and the known ones come back "
+                    "with the refusal."
+                )
+            ),
+        ],
+        epoch: Annotated[
+            int,
+            pydantic.Field(description="Zero-based epoch index to stop in."),
+        ],
+        batch: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based batch index within that phase and epoch to "
+                    "pause on."
+                )
+            ),
+        ],
+        timeout_seconds: _PauseTimeout = _DEFAULT_WAIT_SECONDS,
     ) -> dict[str, Any]:
         """Run until an exact position, then pause there.
 
@@ -675,7 +1004,7 @@ def build_server(
 
     @server.tool()
     async def pause(
-        timeout_seconds: float = _DEFAULT_WAIT_SECONDS,
+        timeout_seconds: _PauseTimeout = _DEFAULT_WAIT_SECONDS,
     ) -> dict[str, Any]:
         """Stop training on the next batch and capture it.
 
@@ -686,7 +1015,18 @@ def build_server(
         )
 
     @server.tool()
-    async def refresh(timeout_seconds: float = 10.0) -> dict[str, Any]:
+    async def refresh(
+        timeout_seconds: Annotated[
+            float,
+            pydantic.Field(
+                description=(
+                    "How long to wait for the next batch to publish before "
+                    "returning `refreshed: false`; the request stays armed "
+                    "either way."
+                )
+            ),
+        ] = 10.0,
+    ) -> dict[str, Any]:
         """Publish a fresh snapshot from a freely running run, without pausing.
 
         Asks the next batch to publish what it already computed, so
@@ -719,7 +1059,18 @@ def build_server(
     # ---- Collection settings ----------------------------------------
 
     @server.tool()
-    async def watch_layers(layers: list[str]) -> dict[str, Any]:
+    async def watch_layers(
+        layers: Annotated[
+            list[str],
+            pydantic.Field(
+                description=(
+                    "One or more layer names from get_architecture to start "
+                    "watching; names the model does not have come back under "
+                    "`unknown_layers` rather than being dropped silently."
+                )
+            ),
+        ],
+    ) -> dict[str, Any]:
         """Watch these layers: the ones per-epoch statistics are kept for.
 
         Needed only for `get_stats_history`; `get_layer_stats` reads any layer
@@ -739,7 +1090,17 @@ def build_server(
         return view
 
     @server.tool()
-    async def unwatch_layers(layers: list[str]) -> dict[str, Any]:
+    async def unwatch_layers(
+        layers: Annotated[
+            list[str],
+            pydantic.Field(
+                description=(
+                    "One or more watched layer names to stop watching; a name "
+                    "that was not being watched is ignored."
+                )
+            ),
+        ],
+    ) -> dict[str, Any]:
         """Stop watching these layers, dropping the stats they stop collecting.
 
         Under the "watched" scope the statistics collected for them go too;
@@ -755,7 +1116,16 @@ def build_server(
 
     @server.tool()
     async def set_stats_scope(
-        scope: Literal["none", "watched", "all"],
+        scope: Annotated[
+            Literal["none", "watched", "all"],
+            pydantic.Field(
+                description=(
+                    "'none' (the default) collects nothing, 'watched' collects "
+                    "for the watched layers, 'all' for every layer in the "
+                    "model."
+                )
+            ),
+        ],
     ) -> dict[str, Any]:
         """Choose which layers collect running statistics.
 
@@ -773,11 +1143,52 @@ def build_server(
 
     @server.tool()
     async def configure_debug_checks(
-        enabled: bool | None = None,
-        interval_batches: int | None = None,
-        check_nan_inf: bool | None = None,
-        check_under_over: bool | None = None,
-        threshold_fraction: float | None = None,
+        enabled: Annotated[
+            bool | None,
+            pydantic.Field(
+                description=(
+                    "Whether the numerical-error debugger runs at all. Leave "
+                    "unset to keep the current value."
+                )
+            ),
+        ] = None,
+        interval_batches: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Batches between checks, 1 meaning every batch. Leave "
+                    "unset to keep the current value."
+                )
+            ),
+        ] = None,
+        check_nan_inf: Annotated[
+            bool | None,
+            pydantic.Field(
+                description=(
+                    "Whether to check gradients for NaN and Inf. Leave unset "
+                    "to keep the current value."
+                )
+            ),
+        ] = None,
+        check_under_over: Annotated[
+            bool | None,
+            pydantic.Field(
+                description=(
+                    "Whether to check gradients for the subnormal and overflow "
+                    "bands. Leave unset to keep the current value."
+                )
+            ),
+        ] = None,
+        threshold_fraction: Annotated[
+            float | None,
+            pydantic.Field(
+                description=(
+                    "Fraction of a layer's summed |gradient| (0..1) that must "
+                    "land in the subnormal/overflow band to trip the check. "
+                    "Leave unset to keep the current value."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Tune the numerical-error debugger; only the given fields change.
 
@@ -800,7 +1211,15 @@ def build_server(
 
     @server.tool()
     async def silence_debug_check(
-        category: Literal["nan_inf", "under_over"],
+        category: Annotated[
+            Literal["nan_inf", "under_over"],
+            pydantic.Field(
+                description=(
+                    "Which check to turn off and clear from the standing "
+                    "warning: 'nan_inf' or 'under_over'."
+                )
+            ),
+        ],
     ) -> dict[str, Any]:
         """Turn off one check and clear its part of the standing warning.
 
@@ -820,9 +1239,31 @@ def build_server(
 
     @server.tool()
     async def set_update_frequency(
-        unit: Literal["epoch", "batch"] = "epoch",
-        n: int = 1,
-        phase: str | None = None,
+        unit: Annotated[
+            Literal["epoch", "batch"],
+            pydantic.Field(
+                description="Whether `n` counts epochs (the default) or batches."
+            ),
+        ] = "epoch",
+        n: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "How many of those units between updates; 1 updates on "
+                    "every one."
+                )
+            ),
+        ] = 1,
+        phase: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "Phase whose batches to count, e.g. 'train'; only applies "
+                    "with unit='batch', and omitting it counts batches in "
+                    "every phase."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """How often the views refresh while training runs, without pausing.
 
@@ -842,10 +1283,42 @@ def build_server(
 
     @server.tool()
     async def set_watch_performance(
-        channel_limit_enabled: bool | None = None,
-        channel_limit: int | None = None,
-        samples_per_channel: int | None = None,
-        average_patches: bool | None = None,
+        channel_limit_enabled: Annotated[
+            bool | None,
+            pydantic.Field(
+                description=(
+                    "Whether the per-channel data is capped at all. Leave "
+                    "unset to keep the current value."
+                )
+            ),
+        ] = None,
+        channel_limit: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "How many leading channels keep per-channel histograms and "
+                    "patches. Leave unset to keep the current value."
+                )
+            ),
+        ] = None,
+        samples_per_channel: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "How many extreme input patches each channel retains. "
+                    "Leave unset to keep the current value."
+                )
+            ),
+        ] = None,
+        average_patches: Annotated[
+            bool | None,
+            pydantic.Field(
+                description=(
+                    "Whether to also collect the whole-input `*_average` patch "
+                    "grids. Leave unset to keep the current value."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Bound what watching a layer costs in memory; only given fields change.
 
@@ -877,7 +1350,17 @@ def build_server(
         return view
 
     @server.tool()
-    async def set_auto_run_experiments(enabled: bool) -> dict[str, Any]:
+    async def set_auto_run_experiments(
+        enabled: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True re-runs open experiment pages on every parameter "
+                    "change; False leaves them showing their last result."
+                )
+            ),
+        ],
+    ) -> dict[str, Any]:
         """Whether open experiment *pages* re-run on every parameter change.
 
         A session-wide preference shared with the browser. Worth turning off
@@ -892,7 +1375,25 @@ def build_server(
 
     @server.tool()
     async def get_weight_stats(
-        layer: str, parameters: list[str] | None = None
+        layer: Annotated[
+            str,
+            pydantic.Field(
+                description=(
+                    "One layer name from get_architecture that has parameters "
+                    "of its own; this view reports one layer at a time."
+                )
+            ),
+        ],
+        parameters: Annotated[
+            list[str] | None,
+            pydantic.Field(
+                description=(
+                    "Parameter names of that layer as get_architecture lists "
+                    "them (e.g. 'weight', 'bias'); omit for all of them, and "
+                    "unknown names are reported rather than dropped silently."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """A layer's parameters as numbers: values, gradients, optimizer state.
 
@@ -907,7 +1408,18 @@ def build_server(
         )
 
     @server.tool()
-    async def get_metrics(layers: list[str] | None = None) -> dict[str, Any]:
+    async def get_metrics(
+        layers: Annotated[
+            list[str] | None,
+            pydantic.Field(
+                description=(
+                    "Keep only the series attached to these layers — every "
+                    "metric is evaluated per collected layer, so each series "
+                    "has one — and omit for every layer's series."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """Custom scalar metrics the training script registered.
 
         These come from `session.watch_metric(...)` in the user's own code, so
@@ -926,7 +1438,16 @@ def build_server(
 
     @server.tool()
     async def time_travel(
-        epoch: int, timeout_seconds: float = _DEFAULT_WAIT_SECONDS
+        epoch: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based epoch to restart at; get_time_travel_status "
+                    "lists the restorable ones as `cached_epochs`."
+                )
+            ),
+        ],
+        timeout_seconds: _PauseTimeout = _DEFAULT_WAIT_SECONDS,
     ) -> dict[str, Any]:
         """Restart training at the beginning of `epoch` and pause there.
 
@@ -965,7 +1486,7 @@ def build_server(
         return probe_view(session)
 
     @server.tool()
-    async def pin_batch(timeout_seconds: float = 10.0) -> dict[str, Any]:
+    async def pin_batch(timeout_seconds: _ProbeTimeout = 10.0) -> dict[str, Any]:
         """Hold the current input and re-run the model on it at every capture.
 
         Stepping then shows how the network's response to one *constant*
@@ -987,7 +1508,9 @@ def build_server(
         return await _probe_result(session, after=before, timeout=timeout_seconds)
 
     @server.tool()
-    async def unpin_batch(timeout_seconds: float = 10.0) -> dict[str, Any]:
+    async def unpin_batch(
+        timeout_seconds: _ProbeTimeout = 10.0,
+    ) -> dict[str, Any]:
         """Release the pinned input; captures go back to showing the live batch."""
         refusal = _probe_refusal(session)
         if refusal is not None:
@@ -998,8 +1521,18 @@ def build_server(
 
     @server.tool()
     async def set_probe_mode(
-        mode: Literal["unchanged", "eval", "train"],
-        timeout_seconds: float = 10.0,
+        mode: Annotated[
+            Literal["unchanged", "eval", "train"],
+            pydantic.Field(
+                description=(
+                    "'unchanged' runs probes in whatever mode training left "
+                    "the model in, 'eval' forces inference behaviour "
+                    "(BatchNorm running statistics, dropout off), 'train' "
+                    "forces training behaviour."
+                )
+            ),
+        ],
+        timeout_seconds: _ProbeTimeout = 10.0,
     ) -> dict[str, Any]:
         """Choose the train/eval mode probe forwards run under.
 
@@ -1024,11 +1557,45 @@ def build_server(
 
     @server.tool()
     async def add_perturbation(
-        index: list[int],
-        values: list[float],
-        sample: int = 0,
-        input_name: str | None = None,
-        timeout_seconds: float = 10.0,
+        index: Annotated[
+            list[int],
+            pydantic.Field(
+                description=(
+                    "The position to pin: `[y, x]` for an image input, "
+                    "`[channel]` for a flat one."
+                )
+            ),
+        ],
+        values: Annotated[
+            list[float],
+            pydantic.Field(
+                description=(
+                    "Values to pin there, in the model's own already-normalized "
+                    "input space: one per channel for an image input, a single "
+                    "value for a flat one."
+                )
+            ),
+        ],
+        sample: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based index of the sample within the probe input to "
+                    "edit."
+                )
+            ),
+        ] = 0,
+        input_name: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "Which input of a multi-input model to perturb, from "
+                    "`inputs` in get_architecture; omit for the primary "
+                    "(first) one."
+                )
+            ),
+        ] = None,
+        timeout_seconds: _ProbeTimeout = 10.0,
     ) -> dict[str, Any]:
         """Pin one position of the probe input to fixed values and re-run.
 
@@ -1066,7 +1633,9 @@ def build_server(
         return await _probe_result(session, after=before, timeout=timeout_seconds)
 
     @server.tool()
-    async def clear_perturbations(timeout_seconds: float = 10.0) -> dict[str, Any]:
+    async def clear_perturbations(
+        timeout_seconds: _ProbeTimeout = 10.0,
+    ) -> dict[str, Any]:
         """Drop every perturbation; the probe goes back to the unedited input."""
         refusal = _probe_refusal(session)
         if refusal is not None:
@@ -1088,11 +1657,54 @@ def build_server(
 
     @server.tool()
     async def run_experiment(
-        kind: ExperimentKind,
-        layer: str,
-        params: dict[str, Any] | None = None,
-        timeout_seconds: float = 120.0,
-        video: bool = False,
+        kind: Annotated[
+            ExperimentKind,
+            pydantic.Field(
+                description=(
+                    "Which experiment to run; list_experiments describes each "
+                    "one and the layers it accepts."
+                )
+            ),
+        ],
+        layer: Annotated[
+            str,
+            pydantic.Field(
+                description=(
+                    "One layer name from get_architecture; an experiment runs "
+                    "against a single layer."
+                )
+            ),
+        ],
+        params: Annotated[
+            dict[str, Any] | None,
+            pydantic.Field(
+                description=(
+                    "Knobs for that kind, overriding its defaults — "
+                    "list_experiments has the keys, and any key this kind does "
+                    "not take comes back under `ignored_params`."
+                )
+            ),
+        ] = None,
+        timeout_seconds: Annotated[
+            float,
+            pydantic.Field(
+                description=(
+                    "How long to wait for the run to finish before returning "
+                    "its progress so far; the run continues, and "
+                    "get_experiment_result(seq) has the outcome."
+                )
+            ),
+        ] = 120.0,
+        video: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True records the whole deep-dream ascent to an MP4 and "
+                    "returns its path; inert for the Captum kinds, which "
+                    "publish a single result."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Run an interpretability experiment on the paused model.
 
@@ -1128,19 +1740,57 @@ def build_server(
         )
 
     @server.tool()
-    async def get_experiment_result(seq: int) -> dict[str, Any]:
+    async def get_experiment_result(
+        seq: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "The `seq` run_experiment returned for the request to "
+                    "report on."
+                )
+            ),
+        ],
+    ) -> dict[str, Any]:
         """The latest progress or outcome published for one experiment request."""
         return experiment_result_view(session, seq=seq)
 
     @server.tool()
-    async def cancel_experiment(seq: int | None = None) -> dict[str, Any]:
+    async def cancel_experiment(
+        seq: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "A `seq` from run_experiment to cancel; omit to cancel "
+                    "every queued and running experiment."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """Cancel one queued or running experiment, or every one when `seq` is
         omitted. A running experiment stops at its next abort check."""
         session.cancel_experiment(seq)
         return {"cancelled": "all" if seq is None else seq}
 
     @server.tool(structured_output=False)
-    async def render_experiment(seq: int, overlay: bool = False) -> list[Any]:
+    async def render_experiment(
+        seq: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "The `seq` run_experiment returned for the result to draw."
+                )
+            ),
+        ],
+        overlay: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True blends the attribution over the input it explains "
+                    "instead of drawing it alongside; inert for deep dream."
+                )
+            ),
+        ] = False,
+    ) -> list[Any]:
         """Picture of an experiment's result: the synthesized inputs or the
         attribution maps, beside the inputs they came from.
 
@@ -1195,7 +1845,17 @@ def build_server(
         )
 
     @server.tool()
-    async def stop_recording(key: str | None = None) -> dict[str, Any]:
+    async def stop_recording(
+        key: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "A recording key from list_recordings; omit to finalize "
+                    "every active recording."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """Finalize a recording and return its file path (all of them if
         `key` is omitted). `list_recordings` has the keys."""
         return await asyncio.to_thread(_stop_recording, session, key=key)
@@ -1227,7 +1887,17 @@ def build_server(
         )
 
     @server.tool()
-    async def discard_recording(key: str | None = None) -> dict[str, Any]:
+    async def discard_recording(
+        key: Annotated[
+            str | None,
+            pydantic.Field(
+                description=(
+                    "A recording key from list_recordings; omit to discard "
+                    "every active recording."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
         """Throw a recording away without writing a file (all if `key` is
         omitted) — the recording dialog's Delete beside its Save & Finish.
 

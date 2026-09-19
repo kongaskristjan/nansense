@@ -39,7 +39,10 @@ _LAYERS_DOC = (
 class LayersViewSpec(BaseModel):
     """The main page: per-channel activation and gradient strips."""
 
-    view: Literal["layers"] = "layers"
+    view: Literal["layers"] = Field(
+        default="layers",
+        description="Selects this variant: the main page's per-channel strips.",
+    )
     layers: list[str] | None = Field(
         default=None,
         description=(
@@ -66,7 +69,10 @@ class LayersViewSpec(BaseModel):
 class WeightsViewSpec(BaseModel):
     """The weights page: one layer's parameters, gradients and optimizer state."""
 
-    view: Literal["weights"] = "weights"
+    view: Literal["weights"] = Field(
+        default="weights",
+        description="Selects this variant: the weights page for one layer.",
+    )
     layer: str = Field(
         description="The one layer to draw; it must have parameters of its own."
     )
@@ -75,7 +81,10 @@ class WeightsViewSpec(BaseModel):
 class HistogramsViewSpec(BaseModel):
     """The `/stats` page's histograms over the watch accumulators."""
 
-    view: Literal["histograms"] = "histograms"
+    view: Literal["histograms"] = Field(
+        default="histograms",
+        description="Selects this variant: the `/stats` page's histograms.",
+    )
     layers: list[str] | None = Field(default=None, description=_LAYERS_DOC)
     phase: str | None = Field(default=None, description=_PHASE_DOC)
     log_x: bool = Field(
@@ -89,7 +98,10 @@ class HistogramsViewSpec(BaseModel):
 class PatchesViewSpec(BaseModel):
     """The `/stats` page's MIN/MAX grids: the inputs that most excite a channel."""
 
-    view: Literal["patches"] = "patches"
+    view: Literal["patches"] = Field(
+        default="patches",
+        description="Selects this variant: the `/stats` page's MIN/MAX grids.",
+    )
     layers: list[str] | None = Field(default=None, description=_LAYERS_DOC)
     phase: str | None = Field(default=None, description=_PHASE_DOC)
     heatmap: bool = Field(
@@ -101,7 +113,10 @@ class PatchesViewSpec(BaseModel):
 class ExperimentRecordingSpec(BaseModel):
     """An experiment re-run once per frame, as the page's auto experiment does."""
 
-    view: Literal["experiment"] = "experiment"
+    view: Literal["experiment"] = Field(
+        default="experiment",
+        description="Selects this variant: an experiment re-run once per frame.",
+    )
     layer: str = Field(description="Layer to run the experiment on.")
     kind: ExperimentKind = Field(
         description=(
@@ -122,7 +137,12 @@ class ExperimentRecordingSpec(BaseModel):
 class ExperimentSnapshotSpec(BaseModel):
     """One already-published experiment result, drawn as it stands."""
 
-    view: Literal["experiment"] = "experiment"
+    view: Literal["experiment"] = Field(
+        default="experiment",
+        description=(
+            "Selects this variant: an already-published experiment result."
+        ),
+    )
     seq: int | None = Field(
         default=None,
         description=(

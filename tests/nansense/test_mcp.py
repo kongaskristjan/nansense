@@ -398,6 +398,53 @@ def test_every_tool_is_registered_with_a_description() -> None:
     _run(go())
 
 
+def _undescribed(schema: dict[str, Any]) -> list[str]:
+    """Property paths in `schema` carrying no description.
+
+    Covers the `$defs` models too, where the recording tools' discriminated
+    view union keeps every one of its fields.
+    """
+    models = [("", schema)]
+    models += [(f"{name}.", model) for name, model in schema.get("$defs", {}).items()]
+    return [
+        f"{prefix}{prop}"
+        for prefix, model in models
+        for prop, spec in (model.get("properties") or {}).items()
+        if not spec.get("description")
+    ]
+
+
+def test_every_tool_parameter_is_described_in_its_schema() -> None:
+    """An agent reads the schema, not the source: a parameter left with only
+    its auto-generated title says nothing about units or valid values."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+
+    async def go() -> None:
+        async with Client(build_server(session, mermaid="graph TD")) as client:
+            undescribed = {
+                tool.name: missing
+                for tool in (await client.list_tools()).tools
+                if (missing := _undescribed(tool.input_schema))
+            }
+            assert not undescribed
+
+    _run(go())
+
+
+@pytest.mark.parametrize("mode", list(Mode))
+def test_get_status_describes_every_run_mode(mode: Mode) -> None:
+    """`get_status` reports `mode`, so its description has to name the values;
+    this is what keeps a new `Mode` member from arriving undocumented."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+
+    async def go() -> None:
+        async with Client(build_server(session, mermaid="graph TD")) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            assert f'"{mode.value}"' in (tools["get_status"].description or "")
+
+    _run(go())
+
+
 @pytest.mark.parametrize(
     ("tool_name", "experiment_fields", "absent"),
     [
