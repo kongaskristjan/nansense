@@ -808,8 +808,8 @@
 <td>Which layers produced NaN/Inf or collapsing gradients, with per-layer percentages</td>
 </tr>
 <tr>
-<td><code>step</code>, <code>run</code>, <code>run_until</code>, <code>pause</code>, <code>detach</code></td>
-<td>The top bar's run controls</td>
+<td><code>step</code>, <code>run</code>, <code>run_until</code>, <code>pause</code></td>
+<td>The top bar's run controls — including detach, as <code>run(detach=True)</code></td>
 </tr>
 <tr>
 <td><code>refresh</code></td>
@@ -828,7 +828,7 @@
 <p>| <code>get_weight_stats</code> | A layer's parameters, their gradients, and the optimizer state moving them |
 | <code>get_metrics</code> | Custom scalar metrics the training script registered with <code>watch_metric</code> |
 | <code>get_settings</code>, <code>set_update_frequency</code>, <code>set_watch_performance</code> | The settings dialog |</p>
-<p>Statistics come from two places, and the distinction matters when you read the agent's reasoning. <code>get_layer_stats</code> reads the last captured batch and covers <strong>any</strong> layer. <code>get_stats_history</code> reads the running accumulators, which only cover <strong>watched</strong> layers — so the agent watches a layer first, lets a few epochs run, and then asks for the trend.</p>
+<p>Statistics come from two places, and the distinction matters when you read the agent's reasoning. <code>get_layer_stats</code> reads the last captured batch and covers <strong>any</strong> layer. <code>get_stats_history</code> reads the running accumulators, which only cover <strong>watched</strong> layers and only while collection is on (it is off by default) — so the agent watches a layer, turns collection on with <code>set_stats_scope</code>, lets a few epochs run, and then asks for the trend. Ask too early and the tool names which of the three is missing rather than returning an empty series.</p>
 <h2 id="what-the-agent-can-see">What the agent can see<a class="headerlink" href="#what-the-agent-can-see" title="Permanent link">&para;</a></h2>
 <p>The <code>render_*</code> tools return the views as pictures — the same ones the browser draws, rendered server-side and sent as images the agent looks at directly.</p>
 <table>
@@ -899,11 +899,11 @@
 </tr>
 <tr>
 <td><code>start_recording</code>, <code>stop_recording</code>, <code>discard_recording</code>, <code>list_recordings</code></td>
-<td>Record a view to MP4, one frame per visualization update</td>
+<td>Record a view to MP4, one frame per visualization update — <code>view</code> is a typed per-view specification</td>
 </tr>
 <tr>
 <td><code>save_snapshot</code></td>
-<td>Save one still of a view as a PNG file to hand a human</td>
+<td>Save one still of a view as a PNG file to hand a human, from the same typed <code>view</code></td>
 </tr>
 </tbody>
 </table>
@@ -913,6 +913,7 @@
 <p>Experiment parameters are validated before queuing or replacing a recording’s auto-run. Invalid types and non-finite numbers return an error without changing the existing request. Unknown parameter keys are reported as ignored.</p>
 <p><strong>Record deep dream as a video.</strong> <code>render_experiment</code> returns the final image. Use <code>run_experiment(..., video=True)</code> when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass <code>params: {"all_steps": true}</code> to keep every step.</p>
 <p><strong>Recordings capture change over time.</strong> One frame per visualization update — so <code>set_update_frequency</code> is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. <code>save_snapshot</code> is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the <code>render_*</code> tools return the picture to <em>you</em>.</p>
+<p>Both take one <code>view</code> argument: an object whose own <code>view</code> field names the page — <code>layers</code>, <code>weights</code>, <code>histograms</code>, <code>patches</code> or <code>experiment</code> — alongside only the arguments that page takes, so <code>{"view": {"view": "layers", "layers": ["conv1"], "average": true}}</code> records the main view while <code>{"view": {"view": "weights", "layer": "conv1"}}</code> records one layer's kernels. The tool schema carries a variant per view with its fields and defaults, so there is nothing to guess. The <code>experiment</code> variant differs between the two: a recording registers a re-running request (<code>layer</code>, <code>kind</code>, <code>params</code>) so each frame is fresh, while a snapshot draws a result already published (<code>seq</code>, default the newest).</p>
 <h2 id="a-worked-example">A worked example<a class="headerlink" href="#a-worked-example" title="Permanent link">&para;</a></h2>
 <p>A typical exchange, once the run is paused:</p>
 <blockquote>

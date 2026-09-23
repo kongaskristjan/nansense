@@ -712,7 +712,7 @@
 
 
 <h1 id="custom-metrics-tensors">Custom metrics &amp; tensors<a class="headerlink" href="#custom-metrics-tensors" title="Permanent link">&para;</a></h1>
-<p>Instruments add your own per-layer metrics and tensors to the UI. Register a callback and NaNsense evaluates it for each watched layer using that batch's activations, gradients, weights, and optimizer state.</p>
+<p>Instruments add your own per-layer metrics and tensors to the UI. Register a callback and NaNsense evaluates it for each collecting layer using that batch's activations, gradients, weights, and optimizer state.</p>
 <p>There are three kinds:</p>
 <table>
 <thead>
@@ -781,7 +781,7 @@
 <p>Weight-tensor callbacks receive a <a href="../api/#nansense.WeightContext"><code>WeightContext</code></a>. The result must match the parameter's shape and appears beside it on the weights page.</p>
 <h2 id="the-rules">The rules<a class="headerlink" href="#the-rules" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Watched layers only.</strong> Instruments run for the layers the stats scope collects — the watched set by default, every layer under scope <code>"all"</code>, nothing under <code>"none"</code>.</li>
+<li><strong>Collecting layers only.</strong> Instruments run for the layers the stats scope collects — nothing under the default <code>"none"</code>, the watched set under <code>"watched"</code> (the top bar's stats button), every layer under <code>"all"</code>.</li>
 <li><strong>Training thread, live tensors, <code>no_grad</code>.</strong> Callbacks run inside the batch context against the live device tensors: fast (no copies), but treat every tensor as read-only.</li>
 <li><strong>Errors never kill training.</strong> A raising callback (or a wrong-shaped/typed return) disables that instrument, prints one console line, and reports on the <code>/stats</code> GRAPHS view and <code>session.instrument_errors</code>. Everything else keeps running.</li>
 <li><strong>Stateful instruments are just callables.</strong> Pass any object with <code>__call__</code> — <code>session.watch_metric("drift")(DriftTracker(model))</code>. If it also defines <code>on_rewind(epoch)</code>, the session calls it when time travel rewinds, so cross-batch state doesn't leak across timelines. Stored series from rewound epochs are dropped automatically.</li>

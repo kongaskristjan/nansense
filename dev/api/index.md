@@ -311,7 +311,7 @@ def sparsity(ctx: nansense.LayerContext) -> float:
     return (ctx.activation > 0).float().mean().item()
 ```
 
-The callback runs on the training thread, under `torch.no_grad()`, once per stats batch for every layer the stats scope collects (the watched set by default) — it receives a `LayerContext` with the batch's live activation, its gradient, and the layer's weights / optimizer state, and must not mutate them. It may return a number (or 1-element tensor), a mapping of named scalars (one plot trace per key), or `None` to skip the layer.
+The callback runs on the training thread, under `torch.no_grad()`, once per stats batch for every layer the stats scope collects (nothing until collection is turned on; see `set_stats_scope`) — it receives a `LayerContext` with the batch's live activation, its gradient, and the layer's weights / optimizer state, and must not mutate them. It may return a number (or 1-element tensor), a mapping of named scalars (one plot trace per key), or `None` to skip the layer.
 
 `on="batch"` plots every batch's value; `on="epoch"` folds each epoch's values through `reduce` — `"mean"` (default), `"sum"`, `"min"`, `"max"`, `"last"`, or any `values -> float` callable — into one point. The series appear in the `/stats` GRAPHS view, one plot per metric. A raising callback is disabled (training continues) and reported via `instrument_errors`. Raises `ValueError` on invalid arguments and `RuntimeError` on a locked session.
 
@@ -491,11 +491,11 @@ Bases: `StrEnum`
 
 Which layers fold their batches into the running statistics.
 
-- `NONE`: nothing is collected; already-collected stats are kept frozen (the pause the top bar's stats toggle uses).
-- `WATCHED` (default): the watched layers collect, and watching a layer is also what shows its cards — the classic coupled behaviour.
+- `NONE` (default): nothing is collected; already-collected stats are kept frozen. The top bar's stats toggle flips between this and the last collecting scope (`Session.collecting_scope`).
+- `WATCHED`: the watched layers collect, and watching a layer is also what shows its cards — the coupled behaviour.
 - `ALL`: every layer in `layer_names` collects, independent of the watched set.
 
-Outside `WATCHED`, the watched set no longer drives collection, so the UI treats showing/hiding a layer's cards as per-tab state that never touches the session (see `main_page`).
+Only under a collecting scope of `ALL` does the watched set stop driving the cards; the UI then treats showing/hiding a layer's cards as per-tab state that never touches the session (see `main_page`).
 
 ## nansense.WatchSnapshot
 

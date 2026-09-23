@@ -3144,10 +3144,11 @@ def sparsity(ctx: nansense.LayerContext) -&gt; float:
     return (ctx.activation &gt; 0).float().mean().item()
 </code></pre></div>
 <p>The callback runs on the training thread, under <code>torch.no_grad()</code>,
-once per stats batch for every layer the stats scope collects (the
-watched set by default) — it receives a <code>LayerContext</code> with the
-batch's live activation, its gradient, and the layer's weights /
-optimizer state, and must not mutate them. It may return a number
+once per stats batch for every layer the stats scope collects
+(nothing until collection is turned on; see <code>set_stats_scope</code>) — it
+receives a <code>LayerContext</code> with the batch's live activation, its
+gradient, and the layer's weights / optimizer state, and must not
+mutate them. It may return a number
 (or 1-element tensor), a mapping of named scalars (one plot trace
 per key), or <code>None</code> to skip the layer.</p>
 <p><code>on="batch"</code> plots every batch's value; <code>on="epoch"</code> folds each
@@ -3748,16 +3749,17 @@ name</code>. Empty without registered instruments (or when nothing collects).</p
 
         <p>Which layers fold their batches into the running statistics.</p>
 <ul>
-<li><code>NONE</code>: nothing is collected; already-collected stats are kept frozen
-  (the pause the top bar's stats toggle uses).</li>
-<li><code>WATCHED</code> (default): the watched layers collect, and watching a layer is
-  also what shows its cards — the classic coupled behaviour.</li>
+<li><code>NONE</code> (default): nothing is collected; already-collected stats are
+  kept frozen. The top bar's stats toggle flips between this and the
+  last collecting scope (<code>Session.collecting_scope</code>).</li>
+<li><code>WATCHED</code>: the watched layers collect, and watching a layer is also
+  what shows its cards — the coupled behaviour.</li>
 <li><code>ALL</code>: every layer in <code>layer_names</code> collects, independent of the watched
   set.</li>
 </ul>
-<p>Outside <code>WATCHED</code>, the watched set no longer drives collection, so the UI
-treats showing/hiding a layer's cards as per-tab state that never touches
-the session (see <code>main_page</code>).</p>
+<p>Only under a collecting scope of <code>ALL</code> does the watched set stop driving
+the cards; the UI then treats showing/hiding a layer's cards as per-tab
+state that never touches the session (see <code>main_page</code>).</p>
 
 
 
