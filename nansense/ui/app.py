@@ -60,9 +60,9 @@ from nansense.ui.weights_page import _build_weights_page
 
 
 class _DropBenignNiceguiNoise(logging.Filter):
-    """Drop two benign NiceGUI log lines that would otherwise spam the run.
+    """Drop benign NiceGUI log lines that would otherwise spam the run.
 
-    Both originate inside NiceGUI, are harmless here, and would repeat often
+    All originate inside NiceGUI, are harmless here, and would repeat often
     enough to bury real errors:
 
     - *"Event listeners changed after initial definition"* — a browser-relayed
@@ -85,6 +85,12 @@ class _DropBenignNiceguiNoise(logging.Filter):
       handler (``app.handle_exception`` → ``log.exception``), which logs a full
       traceback. Suppressing that one line is the only client-side lever; the
       durable fix is upstream (guarding the timer's context acquisition).
+
+    - *"<url> not found"* — logged for every 404. The port is often one other
+      local tools poll (8080 is llama.cpp's default, for one), and a browser
+      keeps re-fetching a stale service worker from a previous app on the same
+      origin; each would print a line into the training log. The client still
+      gets its 404 page.
     """
 
     _BENIGN: tuple[str, ...] = (
@@ -94,6 +100,8 @@ class _DropBenignNiceguiNoise(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
+        if message.endswith(" not found"):
+            return False
         return not any(noise in message for noise in self._BENIGN)
 
 

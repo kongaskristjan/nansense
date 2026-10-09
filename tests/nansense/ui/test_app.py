@@ -391,10 +391,12 @@ def _nicegui_record(message: object) -> logging.LogRecord:
         # The per-connection `ui.timer` disconnect race, logged as the bare
         # RuntimeError object exactly as NiceGUI's global handler emits it.
         RuntimeError("The parent slot of the element has been deleted."),
+        # A 404 from another local tool polling the port.
+        "http://127.0.0.1:8080/v1/models not found",
     ],
 )
 def test_benign_nicegui_noise_is_dropped(message: object) -> None:
-    """Both known-benign NiceGUI lines are filtered out of the run log."""
+    """The known-benign NiceGUI lines are filtered out of the run log."""
     assert _DropBenignNiceguiNoise().filter(_nicegui_record(message)) is False
 
 

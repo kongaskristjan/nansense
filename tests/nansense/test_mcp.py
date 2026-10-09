@@ -757,3 +757,20 @@ def test_the_server_advertises_the_package_version() -> None:
     assert build_server(session).version == _package_version()
     assert _package_version()  # the installed distribution is discoverable
     assert build_server(session, version="1.2.3").version == "1.2.3"
+
+
+def test_building_the_server_leaves_root_logging_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK's `logging.basicConfig(level="INFO")` would otherwise turn on
+    every library's info lines in the training script's log. The root logger
+    starts bare, as in a script that never configured logging — pytest's own
+    handlers would make `basicConfig` a no-op."""
+    import logging
+
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", logging.WARNING)
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    build_server(session)
+    assert (root.level, root.handlers) == (logging.WARNING, [])

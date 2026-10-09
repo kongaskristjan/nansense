@@ -27,9 +27,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -280,6 +281,23 @@ async def _run_control(
     return view
 
 
+@contextmanager
+def _root_logging_kept() -> Iterator[None]:
+    """Undo whatever the block does to the root logger's level and handlers.
+
+    `MCPServer.__init__` calls `logging.basicConfig(level="INFO")`, which on a
+    script that never configured logging installs a stderr handler at INFO —
+    flooding the training log with every library's info lines.
+    """
+    root = logging.getLogger()
+    level, handlers = root.level, root.handlers[:]
+    try:
+        yield
+    finally:
+        root.setLevel(level)
+        root.handlers[:] = handlers
+
+
 def build_server(
     session: Session,
     *,
@@ -299,12 +317,13 @@ def build_server(
     the `render_*` tools. They live on the training script rather than on the
     session, so they have to be handed down here too.
     """
-    server = MCPServer(
-        name="nansense",
-        title="NaNsense training debugger",
-        instructions=_INSTRUCTIONS,
-        version=_package_version() if version is None else version,
-    )
+    with _root_logging_kept():
+        server = MCPServer(
+            name="nansense",
+            title="NaNsense training debugger",
+            instructions=_INSTRUCTIONS,
+            version=_package_version() if version is None else version,
+        )
     display = InputDisplay(
         mean=input_mean, std=input_std, transform=input_transform
     )
