@@ -1,18 +1,18 @@
-# Debug with a coding agent (MCP)
+# Debug with a coding agent
 
-NaNsense supports [MCP](https://modelcontextprotocol.io), so a coding agent can pause training, inspect layers, and trace numerical problems for you.
+A coding agent can pause training, inspect layers, and trace numerical problems for you with `nansense-cli`, a command-line client that ships with NaNsense.
 
 The agent and browser share one session, so you can follow its work in the UI.
 
 ## Connect
 
-The endpoint is served alongside the UI, on the same port. Start your run as usual:
+Start your run as usual:
 
 ```bash
 uv run --group cpu examples/standard/main.py --nansense-port 8080
 ```
 
-The startup banner prints the command to register it:
+The startup banner prints the command an agent starts from:
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
@@ -20,13 +20,23 @@ The startup banner prints the command to register it:
 │ http://127.0.0.1:8080                                        │
 │                                                              │
 │ Debug this run from a coding agent:                          │
-│ claude mcp add --transport http nansense http://127.0.0.1:8080/mcp │
+│ nansense-cli --port 8080 tools                               │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Run the printed command in your project directory. For other MCP clients, connect to the same `/mcp` URL over Streamable HTTP.
+If the agent started the run itself, it reads this line from the output. Otherwise, tell it which port to use: *"Debug my training run with `nansense-cli --port 8080`."* Nothing needs to be registered, so several agents can each debug their own run on its own port at the same time.
 
-To turn the endpoint off, pass `mcp=False` to [`serve`][nansense.serve].
+`tools` prints a short guide and one line per tool. The agent then calls a tool by name, with its arguments as flags:
+
+```bash
+nansense-cli --port 8080 tools                         # the guide and the tool list
+nansense-cli --port 8080 get_layer_stats --help        # one tool's description and flags
+nansense-cli --port 8080 get_layer_stats --layers conv1 fc
+nansense-cli --port 8080 configure_debug_checks --interval_batches 1
+nansense-cli --port 8080 render_layer --layers conv1 --out shots
+```
+
+Results are printed as JSON. The `render_*` tools write their pictures as PNG files to `--out` (default `.nansense-cli/`) and print the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code.
 
 !!! note "It listens on localhost"
 
@@ -56,7 +66,7 @@ Statistics come from two places, and the distinction matters when you read the a
 
 ## What the agent can see
 
-The `render_*` tools return the views as pictures — the same ones the browser draws, rendered server-side and sent as images the agent looks at directly.
+The `render_*` tools return the views as pictures — the same ones the browser draws, rendered server-side and saved as PNG files the agent looks at directly.
 
 | Tool | The view |
 | --- | --- |
@@ -80,20 +90,20 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | `time_travel`, `get_time_travel_status` | Restart at an earlier epoch, with the model, optimizer and scheduler restored |
 | `pin_batch`, `unpin_batch`, `set_probe_mode`, `get_probe_status` | Re-run the model on one fixed input at every capture |
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
-| `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions — `run_experiment(video=True)` records a dream's whole ascent to MP4 |
+| `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions — `run_experiment --video` records a dream's whole ascent to MP4 |
 | `set_auto_run_experiments` | Stop open experiment pages re-running on the thread you need |
 | `start_recording`, `stop_recording`, `discard_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update — `view` is a typed per-view specification |
 | `save_snapshot` | Save one still of a view as a PNG file to hand a human, from the same typed `view` |
 
-**Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks(interval_batches=1)` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.
+**Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks --interval_batches 1` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.
 
-**Pin inputs for fair comparisons.** Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use `set_probe_mode("eval")` to check evaluation behavior, including BatchNorm's running statistics.
+**Pin inputs for fair comparisons.** Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use `set_probe_mode --mode eval` to check evaluation behavior, including BatchNorm's running statistics.
 
 **Experiments run on the paused training thread**, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and `run_experiment` returns statistics while `render_experiment` draws the result. A result you poll before it exists is not simply missing: `get_experiment_result` reports the request's `stage` — `running`, `queued` (with `queued_ahead`), or `absent` — so waiting longer and re-requesting are told apart.
 
 Experiment parameters are validated before queuing or replacing a recording’s auto-run. Invalid types and non-finite numbers return an error without changing the existing request. Unknown parameter keys are reported as ignored.
 
-**Record deep dream as a video.** `render_experiment` returns the final image. Use `run_experiment(..., video=True)` when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass `params: {"all_steps": true}` to keep every step.
+**Record deep dream as a video.** `render_experiment` returns the final image. Use `run_experiment ... --video` when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass `--params '{"all_steps": true}'` to keep every step.
 
 **Recordings capture change over time.** One frame per visualization update — so `set_update_frequency` is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. `save_snapshot` is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the `render_*` tools return the picture to *you*.
 
@@ -105,7 +115,7 @@ A typical exchange, once the run is paused:
 
 > **You:** Training loss goes to NaN around epoch 3. Find out where it starts.
 
-The agent calls `get_status` to see the run is paused at epoch 0, then `configure_debug_checks(interval_batches=1)` so the checks run on every batch instead of every hundredth, then `run` and polls until the debugger trips. `get_debug_report` names the layer and the fraction of its gradient that went non-finite, and `get_layer_stats` on that layer and the one feeding it shows which of the two was already unhealthy a batch earlier.
+The agent calls `get_status` to see the run is paused at epoch 0, then `configure_debug_checks --interval_batches 1` so the checks run on every batch instead of every hundredth, then `run` and polls until the debugger trips. `get_debug_report` names the layer and the fraction of its gradient that went non-finite, and `get_layer_stats` on that layer and the one feeding it shows which of the two was already unhealthy a batch earlier.
 
 Because the agent is driving the same session, you can open the UI at any point and see exactly the batch it stopped on.
 
@@ -118,3 +128,15 @@ Because the agent is driving the same session, you can open the UI at any point 
 **Long steps don't hang.** A `step` over a slow epoch returns after a timeout with a note that the run is still going; the command stays in effect and the agent polls `get_status`.
 
 **Locked sessions refuse.** On a [locked](playground.md) demo session the control tools return an explicit refusal rather than silently doing nothing, so an agent can't loop forever stepping a run that never moves. Inspection keeps working.
+
+## Connect over MCP
+
+`nansense-cli` is a client of an [MCP](https://modelcontextprotocol.io) endpoint that the run serves at `/mcp`, on the UI's port. An MCP client can connect to it directly over Streamable HTTP and get the same tools. For Claude Code:
+
+```bash
+claude mcp add --transport http nansense http://127.0.0.1:8080/mcp
+```
+
+A registration names one port, so it suits a single run better than several in parallel.
+
+To turn the endpoint (and with it `nansense-cli`) off, pass `mcp=False` to [`serve`][nansense.serve].

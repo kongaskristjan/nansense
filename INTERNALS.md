@@ -1991,6 +1991,23 @@ composes), so passing ours at construction is enough. On a loopback bind the
 transport enables DNS-rebinding protection, so a page on another origin cannot
 drive the run.
 
+`MCPServer.__init__` runs `logging.basicConfig(level="INFO")`, which would
+reconfigure the training script's root logger; `build_server` restores the
+root's level and handlers around the construction.
+
+**`nansense-cli`** (`nansense.cli`) is the documented way in for agents: a
+client of this endpoint, addressed by `--port` per call, so parallel agents
+on parallel runs share no registration. It knows no tool by name — each call
+fetches `tools/list` and builds an argparse parser from the tool's input
+schema (`T | None` unwraps to `T`, arrays take `nargs="+"`, enums become
+`choices`, objects take JSON), with every default suppressed so an omitted
+flag keeps the server's default. The tool list, help text and arguments are
+therefore always the MCP surface's own, and parity needs no maintenance. The
+server's `instructions` double as the `tools` guide. Image blocks are decoded
+to PNG files under `--out` and only their paths printed. A socket probe runs
+before connecting, since the SDK reports a refused connection as a nested
+exception group.
+
 ## Enabled flag (zero-overhead off switch)
 
 `nansense.start(model, ..., enabled=False)` returns a fully inert session,

@@ -47,6 +47,10 @@ Homepage = "https://github.com/kongaskristjan/nansense"
 Repository = "https://github.com/kongaskristjan/nansense"
 Documentation = "https://kongaskristjan.github.io/nansense/"
 
+[project.scripts]
+# The MCP tools as shell commands, for coding agents (`nansense.cli`).
+nansense-cli = "nansense.cli:main"
+
 # The torch variants live in (unpublished) dependency groups rather than
 # extras, so a plain install pulls torch only transitively (via captum) and
 # the matching hardware build is selected by syncing a group. The groups are

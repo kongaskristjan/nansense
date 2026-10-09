@@ -35,7 +35,7 @@ hide:
 - **Understand learned features.** [See activations and gradients](showcase.md#visualize-activations-and-gradients-throughout-training), [find the inputs that excite a channel](showcase.md#minmax-activation-patches), and [use deep dream to reveal what it has learned](showcase.md#simulate-what-a-neuron-is-searching-for-deep-dream).
 - **Find training problems.** Spot [small receptive fields](showcase.md#measure-the-receptive-field-of-a-neuron), [dead channels](showcase.md#investigate-dead-neurons), [padding artifacts](showcase.md#padding-artifacts), and [gradient underflow](showcase.md#spot-gradient-underflow).
 
-See the [Showcase](showcase.md) for screenshots, [Getting started](getting-started.md) to run an example, and the [Wiring guide](wiring.md) to add NaNsense to your project. A coding agent can also inspect the same session through [MCP](mcp.md).
+See the [Showcase](showcase.md) for screenshots, [Getting started](getting-started.md) to run an example, and the [Wiring guide](wiring.md) to add NaNsense to your project. A coding agent can also inspect the same session with [`nansense-cli`](mcp.md).
 
 ## How is this different from wandb or TensorBoard?
 

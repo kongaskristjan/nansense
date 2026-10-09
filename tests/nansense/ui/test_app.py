@@ -21,6 +21,7 @@ from starlette.routing import Mount
 import nansense
 from nansense.ui import app
 from nansense.ui.app import (
+    _agent_command,
     _announce,
     _announce_when_ready,
     _display_url,
@@ -163,6 +164,18 @@ def test_format_box_never_shrinks_below_content() -> None:
     box = _format_box([long_line], 10)
     assert all(len(line) == len(long_line) + 4 for line in box.splitlines())
     assert long_line in box
+
+
+@pytest.mark.parametrize(
+    ("host", "command"),
+    [
+        ("127.0.0.1", "nansense-cli --port 8080 tools"),
+        ("0.0.0.0", "nansense-cli --port 8080 tools"),
+        ("192.168.1.5", "nansense-cli --host 192.168.1.5 --port 8080 tools"),
+    ],
+)
+def test_agent_command_addresses_the_run(host: str, command: str) -> None:
+    assert _agent_command(host, 8080) == command
 
 
 @pytest.mark.parametrize("encoding, corner", [("utf-8", "┌"), ("cp1252", "+")])

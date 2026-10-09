@@ -140,11 +140,21 @@ def _install_server_filters() -> None:
 def _display_url(host: str, port: int) -> str:
     """The address to show a user (and to open in their browser).
 
-    `0.0.0.0` / `::` mean "bind every interface"; they are not routable from
-    a browser, so loopback is shown instead.
+    Wildcard binds are not routable from a browser, so loopback is shown.
     """
-    shown_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
-    return f"http://{shown_host}:{port}"
+    return f"http://{_shown_host(host)}:{port}"
+
+
+def _shown_host(host: str) -> str:
+    """`0.0.0.0` / `::` mean "bind every interface"; reach them via loopback."""
+    return "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+
+
+def _agent_command(host: str, port: int) -> str:
+    """The `nansense-cli` call that starts an agent off on this run."""
+    shown = _shown_host(host)
+    flags = "" if shown == "127.0.0.1" else f" --host {shown}"
+    return f"nansense-cli{flags} --port {port} tools"
 
 
 class _BoxChars(NamedTuple):
@@ -198,23 +208,19 @@ def _format_box(lines: list[str], width: int, chars: _BoxChars = _UNICODE_BOX) -
     )
 
 
-def _announce(url: str, mcp_url: str | None = None) -> None:
+def _announce(url: str, agent_command: str | None = None) -> None:
     """Print the UI address inside a box that spans the terminal width (a
     sensible default when output is redirected), padded by blank lines so it
     is easy to spot between training-log lines.
 
-    When the MCP endpoint is served too, the box also carries the command that
-    registers it with a coding agent — the address alone is not actionable, and
-    this is the one moment the user is looking for it.
+    When the MCP endpoint is served too, the box also carries the
+    `nansense-cli` command a coding agent starts from — an agent that launched
+    the run reads it here, with the run's own port already filled in.
     """
     width = shutil.get_terminal_size().columns
     lines = ["NaNsense UI is running at:", url]
-    if mcp_url is not None:
-        lines += [
-            "",
-            "Debug this run from a coding agent:",
-            f"claude mcp add --transport http nansense {mcp_url}",
-        ]
+    if agent_command is not None:
+        lines += ["", "Debug this run from a coding agent:", agent_command]
     box = _format_box(lines, width, _box_chars())
     console_print(f"\n{box}\n")
 
@@ -232,7 +238,7 @@ def _announce_when_ready(
     url: str,
     open_browser: bool,
     *,
-    mcp_url: str | None = None,
+    agent_command: str | None = None,
     timeout: float = 10.0,
 ) -> None:
     """Announce the UI — and, if `open_browser`, open a focused browser tab —
@@ -258,7 +264,7 @@ def _announce_when_ready(
         time.sleep(0.05)
     if not server.started:
         return  # a concurrent session holds the port — stay silent
-    _announce(url, mcp_url)
+    _announce(url, agent_command)
     if open_browser:
         try:
             webbrowser.open(url, new=2, autoraise=True)
@@ -439,7 +445,9 @@ def serve(
     threading.Thread(
         target=_announce_when_ready,
         args=(server, thread, url, open_browser),
-        kwargs={"mcp_url": None if mount is None else f"{url}{mount.path}"},
+        kwargs={
+            "agent_command": None if mount is None else _agent_command(host, port)
+        },
         name="nansense-announce",
         daemon=True,
     ).start()

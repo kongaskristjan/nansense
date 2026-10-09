@@ -43,6 +43,8 @@
 
 - `nansense/mcp_server.py` (tools) + `nansense/mcp_views.py` (JSON views) expose the
   debugger to coding agents; `serve()` mounts it alongside the UI.
+- `nansense-cli` (`nansense/cli.py`) is what users' agents are told to use. It builds
+  its commands from the MCP tool list at runtime, so it needs no change when a tool does.
 - **Keep the MCP surface at feature parity with the UI** — both are front-ends onto
   the same `Session`. Add or change the matching tool in the same commit as a UI
   capability. Parity is about capability, not presentation: agents may get JSON/text input where a page might draw pixels.

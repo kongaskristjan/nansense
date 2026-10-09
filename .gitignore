@@ -18,4 +18,5 @@ nansense-*.png
 models/
 .nansense_cache/
 nansense_recordings/
+.nansense-cli/
 site/
