@@ -1995,8 +1995,8 @@ drive the run.
 reconfigure the training script's root logger; `build_server` restores the
 root's level and handlers around the construction.
 
-**`nansense-cli`** (`nansense.cli`) is the documented way in for agents: a
-client of this endpoint, addressed by `--port` per call, so parallel agents
+**`nansense-cli`** (the top-level `nansense_cli` package) is the documented
+way in for agents: a client of this endpoint, addressed by `--port` per call, so parallel agents
 on parallel runs share no registration. It knows no tool by name — each call
 fetches `tools/list` and builds an argparse parser from the tool's input
 schema (`T | None` unwraps to `T`, arrays take `nargs="+"`, enums become
@@ -2007,6 +2007,10 @@ server's `instructions` double as the `tools` guide. Image blocks are decoded
 to PNG files under `--out` and only their paths printed. A socket probe runs
 before connecting, since the SDK reports a refused connection as a nested
 exception group.
+It lives outside `nansense` because importing that package pulls in torch and
+NiceGUI — about 2 s on every command, against 0.6 s for the MCP client alone —
+so it duplicates the `/mcp` path rather than import it (a test pins the two
+together).
 
 ## Enabled flag (zero-overhead off switch)
 

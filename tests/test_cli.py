@@ -7,6 +7,8 @@ import asyncio
 import base64
 import json
 import socket
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +17,11 @@ from mcp.client import Client
 from mcp.types import CallToolResult, ImageContent, TextContent, Tool
 
 import nansense
-from nansense.cli import main, print_result, run, tool_parser, top_parser
-from nansense.mcp_server import build_server
+from nansense.mcp_server import DEFAULT_MCP_PATH, build_server
+from nansense_cli import MCP_PATH, main, print_result, run, tool_parser, top_parser
 from nansense.session import Session
 
-from .helpers import TinyNet, paused_session
+from .nansense.helpers import TinyNet, paused_session
 
 
 @pytest.fixture(scope="module")
@@ -155,3 +157,16 @@ def test_nothing_serving_names_the_port_even_when_given_after_the_tool(
     port = _free_port()
     assert main(["get_status", "--port", str(port)]) == 2
     assert f"nothing is serving on 127.0.0.1:{port}" in capsys.readouterr().err
+
+
+def test_importing_the_cli_skips_nansense_and_torch() -> None:
+    """The point of living outside the package: seconds off every command."""
+    code = (
+        "import sys, nansense_cli; "
+        "print(sorted({'nansense', 'torch'} & sys.modules.keys()))"
+    )
+    imported = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    ).stdout
+    assert imported.strip() == "[]"
+    assert MCP_PATH == DEFAULT_MCP_PATH

@@ -1,5 +1,8 @@
 """`nansense-cli`: the MCP tools as shell commands, for coding agents.
 
+A top-level package rather than `nansense.cli` so a call never imports
+`nansense` — torch and NiceGUI would add seconds to every command.
+
 A thin client over the `/mcp` endpoint `serve` mounts. Nothing here knows any
 tool by name: the tool list, each tool's flags (built from its input schema)
 and its help text are fetched from the running server, so the CLI stays at
@@ -32,12 +35,12 @@ from typing import TYPE_CHECKING, Any
 from mcp.client import Client
 from mcp.types import CallToolResult, ImageContent, TextContent, Tool
 
-from nansense.mcp_server import DEFAULT_MCP_PATH
-
 if TYPE_CHECKING:
     from mcp.server import MCPServer
 
 _PROG = "nansense-cli"
+# `nansense.mcp_server.DEFAULT_MCP_PATH`, which this must not import.
+MCP_PATH = "/mcp"
 _SCALARS: dict[str, type] = {"integer": int, "number": float, "string": str}
 
 
@@ -212,9 +215,5 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    url = f"http://{args.host}:{args.port}{DEFAULT_MCP_PATH}"
+    url = f"http://{args.host}:{args.port}{MCP_PATH}"
     return asyncio.run(run(url, args.command, args.rest, args))
-
-
-if __name__ == "__main__":
-    sys.exit(main())

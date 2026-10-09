@@ -9,6 +9,7 @@
   - After investigating, write this group into memory so you don't waste time researching the same thing again.
 - Directory structure:
   - 'nansense/' - NaNsense visualization library (no training)
+  - `nansense_cli/` - `nansense-cli`, kept outside `nansense/` so it never imports torch
   - `examples/` - Runnable Python examples (fully contains training logic, each example in a separate subdirectory)
   - `tests/` - Tests for both examples and the NaNsense library
   - `assets/` - Assets
@@ -43,8 +44,10 @@
 
 - `nansense/mcp_server.py` (tools) + `nansense/mcp_views.py` (JSON views) expose the
   debugger to coding agents; `serve()` mounts it alongside the UI.
-- `nansense-cli` (`nansense/cli.py`) is what users' agents are told to use. It builds
+- `nansense-cli` (`nansense_cli/`) is what users' agents are told to use. It builds
   its commands from the MCP tool list at runtime, so it needs no change when a tool does.
+  It is a separate top-level package and must never import `nansense` (torch would
+  cost seconds per command).
 - **Keep the MCP surface at feature parity with the UI** — both are front-ends onto
   the same `Session`. Add or change the matching tool in the same commit as a UI
   capability. Parity is about capability, not presentation: agents may get JSON/text input where a page might draw pixels.
