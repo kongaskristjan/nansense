@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from collections.abc import Callable
 
 import numpy as np
@@ -26,7 +27,9 @@ from nansense.ui.render import (
     TILE_SIZE,
     default_weight_dims,
     dims_from_roles,
+    INPUT_BACKGROUND_FLOOR,
     image_mime,
+    input_background,
     input_blank_warning,
     linear_tile_height,
     render_image,
@@ -209,17 +212,21 @@ def test_2d_ambiguous_axes_prefer_tokens_first() -> None:
     assert strip == render_strip(grid, sample_idx=0)
 
 
-def test_2d_without_grid_fit_renders_single_heatmap_tile() -> None:
-    # Neither 7 nor 13 fits a 32x32 patch grid: a single [7, 13] tile.
-    tensor = torch.randn(2, 7, 13)
-    strip = render_strip(tensor, sample_idx=0, input_hw=(32, 32))
-    assert strip == render_strip(tensor[0].reshape(1, 1, 7, 13), sample_idx=0)
-
-
-def test_2d_without_input_hw_renders_single_heatmap_tile() -> None:
-    tensor = torch.randn(2, 64, 24)
-    strip = render_strip(tensor, sample_idx=0)
-    assert strip == render_strip(tensor[0].reshape(1, 1, 64, 24), sample_idx=0)
+@pytest.mark.parametrize(
+    "shape, input_hw",
+    # Neither 7 nor 13 fits a 32x32 patch grid; without input_hw nothing fits.
+    [((2, 7, 13), (32, 32)), ((2, 64, 24), None)],
+    ids=["no-grid-fit", "no-input-hw"],
+)
+def test_2d_without_grid_renders_single_non_spatial_heatmap_tile(
+    shape: tuple[int, int, int], input_hw: tuple[int, int] | None
+) -> None:
+    tensor = torch.randn(*shape)
+    strip = render_strip(tensor, sample_idx=0, input_hw=input_hw)
+    as_map = render_strip(tensor[0].reshape(1, 1, *shape[1:]), sample_idx=0)
+    assert strip is not None and as_map is not None
+    assert strip.tiles == tuple(replace(t, spatial=False) for t in as_map.tiles)
+    assert as_map.tiles[0].spatial  # a [C, H, W] map does sit on the input
 
 
 def test_zero_variance_tensor_renders() -> None:
@@ -419,15 +426,22 @@ def test_tile_size_sets_display_and_downsample_threshold(
 
 def test_cache_key_separates_every_option_combination() -> None:
     keys = {
-        RenderOptions(average=average, values=values).cache_key
+        RenderOptions(average=average, values=values, background=bg).cache_key
         for average in (False, True)
         for values in ("unchanged", "abs", "square")
+        for bg in (False, True)
     }
-    assert len(keys) == 6
+    assert len(keys) == 12
 
 
-def test_options_round_trip_through_recorded_params() -> None:
-    options = RenderOptions(average=True, values="square")
+@pytest.mark.parametrize(
+    "options",
+    [
+        RenderOptions(average=True, values="square"),
+        RenderOptions(background=True),
+    ],
+)
+def test_options_round_trip_through_recorded_params(options: RenderOptions) -> None:
     assert RenderOptions.from_params(options.as_params()) == options
     # An unknown mode falls back rather than reaching the renderer.
     assert RenderOptions.from_params({"render_values": "cube"}) == RenderOptions()
@@ -1008,3 +1022,17 @@ def test_dims_from_roles_resolves_axes() -> None:
     assert dims_from_roles(["index", "tile", "y", "x"]) == (3, 2, 1)
     assert dims_from_roles(["x"]) == (0, None, None)
     assert dims_from_roles(["index", "index"]) == (None, None, None)
+
+
+def test_input_background_is_the_input_lightened_to_gray() -> None:
+    image = torch.zeros(1, 3, 2, 2)
+    image[0, :, 0, 0] = 1.0  # one white pixel, the rest black
+    bg = input_background(image, 0)
+    assert bg is not None and bg.mode == "L" and bg.size == (2, 2)
+    assert bg.getpixel((0, 0)) == 255
+    assert bg.getpixel((1, 1)) == INPUT_BACKGROUND_FLOOR  # black is lifted
+
+
+@pytest.mark.parametrize("tensor", [None, torch.rand(1, 5), torch.rand(1, 4, 2, 2)])
+def test_input_background_needs_a_renderable_image(tensor: torch.Tensor | None) -> None:
+    assert input_background(tensor, 0) is None

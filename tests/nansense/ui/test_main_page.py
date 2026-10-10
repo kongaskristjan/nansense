@@ -9,13 +9,14 @@ import pytest
 import torch
 
 from nansense.probe import ProbeResult
-from nansense.ui.common import _strip_html
+from nansense.ui.common import _b64_img_src, _strip_html
 from nansense.ui.controllers.main import _seed_shown
 from nansense.ui.graph import slug_map
 from nansense.ui.main_page import (
     _PROBE_NO_GRADIENTS_HTML,
     _compute_frame,
     _display_batch_size,
+    _input_background_src,
     _input_img_src,
     _layer_info_script,
     _pick_tour_layer,
@@ -25,7 +26,9 @@ from nansense.ui.main_page import (
 from nansense.ui.render import (
     RenderOptions,
     StripRender,
+    encode_input_background,
     image_mime,
+    input_background,
     render_image,
     render_strip,
 )
@@ -448,6 +451,27 @@ def test_compute_frame_renders_at_the_slider_tile_size(probe_source: bool) -> No
 
     assert "width:256px; height:256px" in frame(256)
     assert "width:128px; height:128px" in frame(128)  # not served from the cache
+
+
+@pytest.mark.parametrize("probe_source", [False, True])
+def test_input_background_follows_the_shown_input(probe_source: bool) -> None:
+    snap = _frame_snapshot()
+    probe = _frame_probe_perturbed() if probe_source else None
+    shown = probe.shown_input("x") if probe is not None else snap.activations["x"]
+    expected_bg = input_background(shown, 0)
+    assert expected_bg is not None
+    src = _input_background_src(
+        snap, probe, "x", 0, mean=None, std=None, transform=None, cache=_RenderCache()
+    )
+    assert src == _b64_img_src(encode_input_background(expected_bg))
+
+
+def test_input_background_is_empty_without_an_image_input() -> None:
+    snap = _make_snapshot("train", 0, 0, activations={"x": torch.rand(2, 5)})
+    src = _input_background_src(
+        snap, None, "x", 0, mean=None, std=None, transform=None, cache=_RenderCache()
+    )
+    assert src == ""
 
 
 def test_display_batch_size_prefers_probe() -> None:

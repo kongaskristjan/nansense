@@ -64,6 +64,13 @@ class LayersViewSpec(BaseModel):
             "sign for a magnitude picture, applied before `average`."
         ),
     )
+    background: bool = Field(
+        default=False,
+        description=(
+            "Draw the input image (lightened grayscale) behind the spatial "
+            "tiles, multiplied with their colours."
+        ),
+    )
 
 
 class WeightsViewSpec(BaseModel):

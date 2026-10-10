@@ -647,7 +647,9 @@ def _main_frame(view: RecordedView, session: Session) -> Image.Image | None:
         std=config.input_std,
         transform=config.input_transform,
         options=RenderOptions(
-            average=config.render_average, values=config.render_values
+            average=config.render_average,
+            values=config.render_values,
+            background=config.render_background,
         ),
     )
 

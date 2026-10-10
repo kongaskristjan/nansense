@@ -253,6 +253,11 @@ def test_render_layer_render_options_reach_the_picture() -> None:
         assert averaged.png != plain.png
         assert "abs" in averaged.note and "averaged" in averaged.note
         assert "Render options" not in plain.note
+        background = layer_image(
+            session, layers=["conv"], display=_DISPLAY, input_name="x", background=True
+        )
+        assert background.png is not None and background.png != plain.png
+        assert "input as background" in background.note
 
 
 def test_render_layer_reports_unknown_layers_rather_than_dropping_them() -> None:

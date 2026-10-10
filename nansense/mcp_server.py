@@ -524,6 +524,15 @@ def build_server(
                 )
             ),
         ] = "unchanged",
+        background: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True draws the input image (lightened grayscale) behind "
+                    "every spatial tile, multiplied with its colours."
+                )
+            ),
+        ] = False,
     ) -> list[Any]:
         """Picture of what these layers computed on the last captured batch.
 
@@ -541,7 +550,9 @@ def build_server(
         magnitude on a sequential 0..max scale (squaring pulls the loudest
         features further out of the quiet ones); with `average` the transform
         is applied *before* the mean, so cancelling ± responses no longer
-        average away to nothing.
+        average away to nothing. `background` puts the input behind each
+        spatially aligned tile (conv feature maps, ViT tokens on their patch
+        grid) so a response can be read against the pixels that caused it.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -554,6 +565,7 @@ def build_server(
                 include_input=include_input,
                 average=average,
                 values=values,
+                background=background,
             )
         )
 
@@ -2227,7 +2239,11 @@ def _recorded_view(
                 )
             }
         options = RenderOptions.from_params(
-            {"render_average": spec.average, "render_values": spec.values}
+            {
+                "render_average": spec.average,
+                "render_values": spec.values,
+                "render_background": spec.background,
+            }
         )
         return RecordedView(
             key="main",
@@ -2241,6 +2257,7 @@ def _recorded_view(
                 input_transform=display.transform(input_name),
                 render_average=options.average,
                 render_values=options.values,
+                render_background=options.background,
             ),
         )
     if isinstance(spec, WeightsViewSpec):

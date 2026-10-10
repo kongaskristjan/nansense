@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 from torch import Tensor
 
 from nansense.ui.render import (
@@ -309,7 +309,10 @@ def captioned_columns(
 
 
 def strip_image(
-    strip: StripRender | None, *, show_labels: bool = True
+    strip: StripRender | None,
+    *,
+    show_labels: bool = True,
+    background: Image.Image | None = None,
 ) -> Image.Image | None:
     """Decode a `StripRender` to one display-resolution image.
 
@@ -326,23 +329,27 @@ def strip_image(
     baked gray `checkerboard` the same size as the upscaled tile, so the
     composed image shows the same GIMP-style backdrop the live UI paints with
     CSS. Opaque RGB tiles keep the plain path.
+
+    `background` is the "input background" render option (`render.input_background`):
+    every `spatial` tile is multiplied over it, stretched to the tile, as the
+    page's `mix-blend-mode: multiply` does — NaN/±Inf cells still show the bare
+    checkerboard, not the input.
     """
     if strip is None or not strip.tiles:
         return None
     legend = Image.open(io.BytesIO(strip.legend_image)).convert("RGB")
     columns: list[tuple[Image.Image, str]] = []
     for tile in strip.tiles:
-        decoded = Image.open(io.BytesIO(tile.image))
-        if decoded.mode == "RGBA":
-            up = decoded.resize((tile.width, tile.height), Image.Resampling.NEAREST)
-            up = Image.alpha_composite(
-                checkerboard(tile.width, tile.height), up
-            ).convert("RGB")
-        else:
-            up = decoded.convert("RGB").resize(
-                (tile.width, tile.height), Image.Resampling.NEAREST
-            )
-        columns.append((up, tile.label))
+        size = (tile.width, tile.height)
+        up = Image.open(io.BytesIO(tile.image)).resize(size, Image.Resampling.NEAREST)
+        rgb = up.convert("RGB")
+        if background is not None and tile.spatial:
+            under = background.resize(size, Image.Resampling.NEAREST).convert("RGB")
+            rgb = ImageChops.multiply(rgb, under)
+        if up.mode == "RGBA":
+            checker = checkerboard(*size).convert("RGB")
+            rgb = Image.composite(rgb, checker, up.getchannel("A"))
+        columns.append((rgb, tile.label))
     return captioned_columns(legend, columns, show_labels=show_labels)
 
 

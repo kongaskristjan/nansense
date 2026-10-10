@@ -9,6 +9,7 @@ from PIL import Image
 
 from nansense.ui.compose import (
     _CHECKER_DARK,
+    _COLUMN_GAP,
     _CHECKER_LIGHT,
     _power_ticks,
     histogram_image,
@@ -24,7 +25,13 @@ from nansense.ui.compose import (
     upscaled_image,
 )
 from nansense.ui.histograms import _PLOT_HEIGHT, PAPER_BG as PAPER_BG_HEX, PLOT_BG
-from nansense.ui.render import INPUT_IMAGE_SIZE, LABEL_HEIGHT, render_image, render_strip
+from nansense.ui.render import (
+    INPUT_IMAGE_SIZE,
+    LABEL_HEIGHT,
+    LEGEND_WIDTH,
+    render_image,
+    render_strip,
+)
 from nansense.watch import N_BINS, LayerStatsSnapshot, TensorStatsSnapshot
 from nansense.ui.theme import (
     ACTIVATIONS,
@@ -73,6 +80,39 @@ def test_strip_image_keeps_plain_path_for_finite_strip() -> None:
     assert composed is not None
     colors = {tuple(c) for row in np.asarray(composed) for c in row}
     assert _CHECKER_DARK not in colors
+
+
+def _gradient_background() -> Image.Image:
+    """A 2x1 gray background: dark left half, white right half."""
+    return Image.fromarray(np.array([[128, 255]], dtype=np.uint8), mode="L")
+
+
+def test_strip_image_multiplies_spatial_tiles_over_the_background() -> None:
+    tile = torch.zeros(1, 1, 4, 4)
+    tile[0, 0, :, 2:] = 1.0  # left half zero (white), right half +max (red)
+    strip = render_strip(tile, sample_idx=0, tile_px=8)
+    composed = strip_image(strip, show_labels=False, background=_gradient_background())
+    assert composed is not None
+    arr = np.asarray(composed)
+    x0 = LEGEND_WIDTH + _COLUMN_GAP  # the tile follows the legend
+    assert tuple(arr[4, x0 + 1]) == (128, 128, 128)  # white shows the input
+    assert tuple(arr[4, x0 + 6]) == (255, 0, 0)  # red over white input stays red
+
+
+@pytest.mark.parametrize(
+    "tensor",
+    [torch.randn(1, 6), torch.randn(1, 7, 13)],  # 1D row, non-grid 2D heatmap
+    ids=["linear", "heatmap"],
+)
+def test_strip_image_leaves_non_spatial_strips_alone(tensor: torch.Tensor) -> None:
+    strip = render_strip(tensor, sample_idx=0)
+    assert strip_image(strip, background=_gradient_background()) == strip_image(strip)
+
+
+def test_strip_image_background_keeps_nan_cells_on_the_checkerboard() -> None:
+    strip = render_strip(torch.full((1, 1, 8, 8), float("nan")), sample_idx=0)
+    composed = strip_image(strip, background=_gradient_background())
+    assert composed == strip_image(strip)  # the input never shows through a hole
 
 
 @pytest.mark.parametrize("value", [None, "empty"])

@@ -19,6 +19,7 @@ from nansense.ui.common import (
 )
 from nansense.ui.render import image_mime, render_strip
 from nansense.ui.static import (
+    _INPUT_BACKGROUND_VAR,
     _MIN_APP_WIDTH_CSS,
     _PANEL_RESIZE_CSS,
     _PANEL_RESIZE_JS,
@@ -69,6 +70,27 @@ def test_strip_html_uses_data_mime_for_nonfinite_strip() -> None:
     html = _strip_html(strip)
     assert "data:image/png;base64," in html  # tile img
     assert f"data:{image_mime()};base64," in html  # legend
+
+
+@pytest.mark.parametrize(
+    "tensor, blended, masked",
+    [
+        (torch.randn(1, 2, 8, 8), 2, 0),  # every conv tile sits on the input
+        (torch.full((1, 1, 4, 4), float("nan")), 1, 1),  # holes mask it out
+        (torch.randn(1, 6), 0, 0),  # a 1D row has no spatial layout
+    ],
+    ids=["conv", "nan", "linear"],
+)
+def test_strip_html_background_blends_spatial_tiles(
+    tensor: torch.Tensor, blended: int, masked: int
+) -> None:
+    strip = render_strip(tensor, sample_idx=0)
+    html = _strip_html(strip, background=True)
+    assert html.count("mix-blend-mode:multiply") == blended
+    assert html.count(f"var({_INPUT_BACKGROUND_VAR}, none)") == blended
+    assert html.count("mask-image:url('data:") == 2 * masked  # prefixed + standard
+    assert 'url("' not in html  # a double quote would end the style attribute
+    assert "mix-blend-mode" not in _strip_html(strip)
 
 
 def test_strip_html_empty_for_none() -> None:

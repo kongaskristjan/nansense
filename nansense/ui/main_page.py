@@ -39,6 +39,8 @@ from nansense.ui.render import (
     DEFAULT_RENDER_OPTIONS,
     TILE_SIZE,
     RenderOptions,
+    encode_input_background,
+    input_background,
     input_blank_warning,
     linear_tile_height,
     probe_act_tensor,
@@ -51,6 +53,7 @@ from nansense.ui.share import _add_share_button
 from nansense.ui.static import (
     _ARCHITECTURE_CLICK_CSS,
     _ARCHITECTURE_CLICK_JS,
+    _INPUT_BACKGROUND_VAR,
     _STRIP_MARKER_CSS,
 )
 from nansense.ui.theme import ACTIVATIONS, CUSTOM_TENSOR, GRADIENTS
@@ -243,6 +246,9 @@ class _MainPage:
         self.slugs = slug_map(layer_names)
         self.slug_to_name = {slug: name for name, slug in self.slugs.items()}
         self.layer_weights = session.layer_weights
+        # The input-background image last pushed into this document's CSS
+        # variable ("" = unset), so a frame only re-sends it when it changes.
+        self._input_bg_src = ""
         self._install_page()
         self._build_dialogs()
         with ui.column().classes("w-full h-screen no-wrap gap-0"):
@@ -427,6 +433,7 @@ class _MainPage:
                 input_transform=resolve_per_input(self.input_transform, selected),
                 render_average=self.input_panel.render_options.average,
                 render_values=self.input_panel.render_options.values,
+                render_background=self.input_panel.render_options.background,
             ),
         )
 
@@ -514,6 +521,7 @@ class _MainPage:
                 visible_names = [
                     n for n in self.layer_names if n in self.state.last_watched
                 ]
+                options = self.input_panel.render_options
                 rendered, input_src = await asyncio.to_thread(
                     _compute_frame,
                     visible_names,
@@ -521,7 +529,7 @@ class _MainPage:
                     probe,
                     sample_idx,
                     compare=self.input_panel.compare,
-                    options=self.input_panel.render_options,
+                    options=options,
                     tile_px=self.input_panel.tile_px,
                     input_name=self.input_name,
                     selected_input=selected,
@@ -530,8 +538,24 @@ class _MainPage:
                     input_transform=sel_transform,
                     cache=self.render_cache,
                 )
+                bg_src = (
+                    await asyncio.to_thread(
+                        _input_background_src,
+                        snap,
+                        probe,
+                        selected,
+                        sample_idx,
+                        mean=sel_mean,
+                        std=sel_std,
+                        transform=sel_transform,
+                        cache=self.render_cache,
+                    )
+                    if options.background
+                    else ""
+                )
             finally:
                 self.state.rendering = False
+            self.set_input_background(bg_src)
             _apply_all(self.layer_views, rendered)
             self.input_panel.set_image(input_src)
             selected_tensor = _selected_input_tensor(snap, probe, selected)
@@ -548,6 +572,19 @@ class _MainPage:
             self.input_panel.set_input_legend(
                 _input_img_src(render_input_legend(selected_tensor, sample_idx))
             )
+
+    def set_input_background(self, src: str) -> None:
+        """Point this document's input-background CSS variable at `src`."""
+        if src == self._input_bg_src:
+            return
+        self._input_bg_src = src
+        style = "document.documentElement.style"
+        ui.run_javascript(
+            f"{style}.setProperty({json.dumps(_INPUT_BACKGROUND_VAR)}, "
+            f"{json.dumps(f'url({src})')})"
+            if src
+            else f"{style}.removeProperty({json.dumps(_INPUT_BACKGROUND_VAR)})"
+        )
 
     def sync_stats_icon(self) -> None:
         self.stats_toggle.sync_collecting(self.session.stats_collecting)
@@ -720,6 +757,7 @@ def _strip_renderer(
                 options=options,
             ),
             show_labels=show_labels,
+            background=options.background,
         )
 
     return render
@@ -893,6 +931,34 @@ def _compute_probe_frame(
         ),
     )
     return rendered, input_src
+
+
+def _input_background_src(
+    snap: BatchSnapshot | None,
+    probe: ProbeResult | None,
+    name: str | None,
+    sample_idx: int,
+    *,
+    mean: tuple[float, ...] | None,
+    std: tuple[float, ...] | None,
+    transform: InputTransform | None,
+    cache: _RenderCache,
+) -> str:
+    """Data URI of the selected input's "input background", "" when it has none.
+
+    Built from the input as the pane shows it (the perturbed copy under a
+    probe), cached against the same source as the frame's strips.
+    """
+    source = probe if probe is not None else snap
+    tensor = _selected_input_tensor(snap, probe, name)
+
+    def render() -> str:
+        image = input_background(
+            tensor, sample_idx, mean=mean, std=std, transform=transform
+        )
+        return "" if image is None else _b64_img_src(encode_input_background(image))
+
+    return cache.get_or_render(source, (name or "", "input-bg", sample_idx), render)
 
 
 def _apply_all(

@@ -154,6 +154,7 @@ def layer_image(
     include_input: bool = False,
     average: bool = False,
     values: str = "unchanged",
+    background: bool = False,
 ) -> RenderedImage:
     """The main page for `layers`: one activation and gradient strip each.
 
@@ -162,9 +163,10 @@ def layer_image(
     checkerboard — so a diverged channel is visible as a hole rather than as an
     extreme color.
 
-    `average` and `values` are the page's render options: averaging collapses
-    each strip's channels into one mean tile, and `values` of `"abs"` /
-    `"square"` shows magnitude on a sequential 0..max scale instead.
+    `average`, `values` and `background` are the page's render options:
+    averaging collapses each strip's channels into one mean tile, `values` of
+    `"abs"` / `"square"` shows magnitude on a sequential 0..max scale instead,
+    and `background` multiplies every spatial tile over the lightened input.
     """
     from nansense.ui.frames import main_frame
     from nansense.ui.render import RenderOptions
@@ -189,16 +191,21 @@ def layer_image(
             std=std,
             transform=display.transform(input_name),
             options=RenderOptions.from_params(
-                {"render_average": average, "render_values": values}
+                {
+                    "render_average": average,
+                    "render_values": values,
+                    "render_background": background,
+                }
             ),
             require_image=True,
         )
     )
     note = f"Sample {sample} of the batch at {_position_note(session)}."
-    if average or values != "unchanged":
+    if average or values != "unchanged" or background:
         note += (
             f" Render options: values {values}"
-            f"{', channels averaged' if average else ''}."
+            f"{', channels averaged' if average else ''}"
+            f"{', input as background' if background else ''}."
         )
     if session.probe_result is not None:
         note += (

@@ -290,11 +290,12 @@ class _FakeToggle:
 
 
 def _render_options_panel(
-    *, average: bool, mode: str | None, current: RenderOptions
+    *, average: bool, mode: str | None, current: RenderOptions, background: bool = False
 ) -> tuple[InputPanel, _FakeToggle, list[str]]:
     panel = InputPanel.__new__(InputPanel)
     toggle = _FakeToggle(mode)
     panel._average_switch = cast(Switch, _FakeSwitch(average))
+    panel._background_switch = cast(Switch, _FakeSwitch(background))
     panel._values_toggle = cast(Toggle, toggle)
     panel._render_options = current
     changes: list[str] = []
@@ -303,19 +304,20 @@ def _render_options_panel(
 
 
 @pytest.mark.parametrize(
-    "average, mode, expected",
+    "average, mode, background, expected",
     [
-        (False, "unchanged", RenderOptions()),
-        (True, "unchanged", RenderOptions(average=True)),
-        (False, "abs", RenderOptions(values="abs")),
-        (True, "square", RenderOptions(average=True, values="square")),
+        (False, "unchanged", False, RenderOptions()),
+        (True, "unchanged", False, RenderOptions(average=True)),
+        (False, "abs", False, RenderOptions(values="abs")),
+        (True, "square", False, RenderOptions(average=True, values="square")),
+        (False, "unchanged", True, RenderOptions(background=True)),
     ],
 )
 def test_render_options_follow_the_controls(
-    average: bool, mode: str, expected: RenderOptions
+    average: bool, mode: str, background: bool, expected: RenderOptions
 ) -> None:
     panel, _, changes = _render_options_panel(
-        average=average, mode=mode, current=RenderOptions()
+        average=average, mode=mode, current=RenderOptions(), background=background
     )
     panel._on_render_options_change(None)
     assert panel.render_options == expected

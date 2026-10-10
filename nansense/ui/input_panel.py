@@ -351,6 +351,13 @@ class InputPanel:
                     ).props("dense label snap").classes("grow").tooltip(
                         "Display size of every layer's tiles, in pixels"
                     )
+                self._background_switch = ui.switch(
+                    "Input background",
+                    value=self._render_options.background,
+                    on_change=self._on_render_options_change,
+                ).props("dense").classes("self-start").tooltip(
+                    "Show the input image behind each feature map"
+                )
                 self._average_switch = ui.switch(
                     "Average",
                     value=self._render_options.average,
@@ -431,6 +438,7 @@ class InputPanel:
         self._render_options = RenderOptions(
             average=bool(self._average_switch.value),
             values=cast(ValueMode, mode),
+            background=bool(self._background_switch.value),
         )
         self._on_change()
 
@@ -584,6 +592,7 @@ class InputPanel:
             self._perturb_switch,
             self._clear_button,
             self._size_slider,
+            self._background_switch,
             self._average_switch,
             self._values_toggle,
             *self._value_controls,

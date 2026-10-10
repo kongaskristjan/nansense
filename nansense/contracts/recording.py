@@ -31,6 +31,7 @@ class MainView:
     input_transform: InputTransform | None = None
     render_average: bool = False
     render_values: ValueMode = "unchanged"
+    render_background: bool = False
 
 
 @dataclass(frozen=True)

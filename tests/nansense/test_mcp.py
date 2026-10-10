@@ -482,7 +482,9 @@ def test_the_view_argument_publishes_one_variant_per_view(
                 view["discriminator"]["mapping"].values()
             )
             layers = variants["layers"]["properties"]
-            assert {"layers", "sample", "average", "values"} <= set(layers)
+            assert {"layers", "sample", "average", "values", "background"} <= set(
+                layers
+            )
             assert layers["values"]["enum"] == ["unchanged", "abs", "square"]
             assert variants["weights"]["required"] == ["layer"]
             experiment = variants["experiment"]["properties"]
@@ -515,6 +517,21 @@ def test_a_recording_experiment_variant_pins_the_experiment_kinds() -> None:
                 == tools["run_experiment"].input_schema["properties"]["kind"]["enum"]
             )
             assert set(kinds) == set(experiments.EXPERIMENT_KINDS)
+
+    _run(go())
+
+
+def test_render_layer_offers_the_recorded_render_options() -> None:
+    """`render_layer` and the recorded `layers` view take the same render
+    options, so an agent can draw what a recording would freeze."""
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+
+    async def go() -> None:
+        async with Client(build_server(session, mermaid="graph TD")) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            props = tools["render_layer"].input_schema["properties"]
+            assert {"average", "values", "background"} <= set(props)
+            assert props["background"]["default"] is False
 
     _run(go())
 

@@ -1558,7 +1558,7 @@ Render conventions worth knowing before editing `render.py`:
 - Every strip (activations, gradients, weights) uses one diverging
   blue-white-red colormap; strips are told apart by a labelled colored marker
   bar, never by palette.
-- `RenderOptions` (`average` + `values`) is the main page's "Render options"
+- `RenderOptions` (`average` + `values` + `background`) is the main page's "Render options"
   section, threaded into `render_strip` and defaulting to the pre-existing
   render, so every other caller is unchanged byte for byte. `values`
   (`abs` / `square`) transforms inside `_render_chw` / `_render_1d` and
@@ -1574,6 +1574,19 @@ Render conventions worth knowing before editing `render.py`:
   configuration. MCP parses the equivalent `render_layer` arguments, and the
   `LayersViewSpec` that `start_recording` / `save_snapshot` take, at its
   boundary.
+- `RenderOptions.background` ("Input background") changes no rendered pixel:
+  `render_strip` marks tiles aligned with the input as `StripTile.spatial`
+  (`[C,H,W]` maps and token grids — not 1D rows or ungridded 2D heatmaps), and
+  each consumer multiplies those over `input_background` (the pane's image as
+  grayscale lifted into `[INPUT_BACKGROUND_FLOOR, 255]`, stretched to the
+  tile). The page does it in CSS so tile bytes and cached HTML don't depend
+  on the input: the image is pushed once per change into the document's
+  `--nansense-input-bg` variable (`_MainPage.set_input_background`), and
+  `_background_tile_html` stacks an input layer under the tile img with
+  `mix-blend-mode: multiply`. Tiles with NaN/±Inf holes (`StripTile.transparent`)
+  also mask that layer with their own alpha, so holes show the checkerboard,
+  not the input; `compose.strip_image` composites identically for recordings
+  and MCP.
 - The render options' **Size** slider is deliberately *not* a `RenderOptions`
   field: it is display-only (`InputPanel.tile_px`), never recorded nor offered
   over MCP. It is threaded into `render_strip` as `tile_px` (plus

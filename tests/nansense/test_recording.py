@@ -90,6 +90,7 @@ def _main_view(
     *,
     render_average: bool = False,
     render_values: Literal["unchanged", "abs", "square"] = "unchanged",
+    render_background: bool = False,
 ) -> RecordedView:
     return RecordedView(
         key="main",
@@ -102,6 +103,7 @@ def _main_view(
             input_std=None,
             render_average=render_average,
             render_values=render_values,
+            render_background=render_background,
         ),
     )
 
@@ -192,6 +194,9 @@ def test_main_frame_honours_recorded_render_options(tmp_path: Path) -> None:
     )
     assert plain is not None and averaged is not None
     assert averaged.width < plain.width
+    background = _main_frame(_main_view(render_background=True), session)
+    assert background is not None and background.size == plain.size
+    assert background.tobytes() != plain.tobytes()  # the input shows through
 
 
 def test_manager_start_end_delete(tmp_path: Path) -> None:

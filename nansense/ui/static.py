@@ -282,6 +282,11 @@ _ARCHITECTURE_CLICK_JS: str = """
 # strip reveal it — reading as "no value here" rather than a misleading
 # color or white. The two slate grays match `recording.CHECKER_*` so live
 # UI and recorded MP4 frames look identical.
+# CSS custom property holding the "input background" render option's image
+# (`url(data:…)` of `render.input_background`), set per document by the main
+# page and read by every spatial tile's backdrop (`common._strip_tile_html`).
+_INPUT_BACKGROUND_VAR: str = "--nansense-input-bg"
+
 _STRIP_CHECKERBOARD_STYLE: str = (
     "background-color:#f9fafb;"
     "background-image:"

@@ -42,6 +42,7 @@ from nansense.ui.render import (
     RenderOptions,
     attribution_vmax,
     default_weight_dims,
+    input_background,
     probe_act_tensor,
     render_attribution_overlay,
     render_image,
@@ -151,7 +152,8 @@ def main_frame(
     the picture would silently turn those strips into one flat heatmap.
 
     `options` is the page's render-options section: magnitude (`abs` /
-    `square`) and channel averaging, applied to every layer strip.
+    `square`), channel averaging and the input background, applied to every
+    layer strip.
     """
     snap = session.snapshot
     probe = session.probe_result
@@ -169,6 +171,13 @@ def main_frame(
         )
         input_hw = tensor_hw(shown_input)
 
+    background = (
+        input_background(
+            shown_input, sample_idx, mean=mean, std=std, transform=transform
+        )
+        if options.background
+        else None
+    )
     sections: list[_Section] = []
     if show_input:
         input_img = upscaled_image(
@@ -191,7 +200,8 @@ def main_frame(
                 Section(
                     "ACTIVATIONS",
                     strip_image(
-                        render_strip(act, 0, input_hw=input_hw, options=options)
+                        render_strip(act, 0, input_hw=input_hw, options=options),
+                        background=background,
                     ),
                     ACTIVATIONS,
                     header_gap=True,
@@ -209,7 +219,8 @@ def main_frame(
                             sample_idx,
                             input_hw=input_hw,
                             options=options,
-                        )
+                        ),
+                        background=background,
                     ),
                     ACTIVATIONS,
                     header_gap=True,
@@ -226,6 +237,7 @@ def main_frame(
                             options=options,
                         ),
                         show_labels=False,
+                        background=background,
                     ),
                     GRADIENTS,
                 )

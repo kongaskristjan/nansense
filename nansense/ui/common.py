@@ -15,6 +15,7 @@ from nansense.session import Session
 from nansense.ui.render import LABEL_HEIGHT, StripRender, StripTile, image_mime
 from nansense.ui.theme import LABEL_GAP, NEUTRAL_COLOR
 from nansense.ui.static import (
+    _INPUT_BACKGROUND_VAR,
     _MIN_APP_WIDTH_CSS,
     _PANEL_RESIZE_CSS,
     _PANEL_RESIZE_JS,
@@ -329,7 +330,9 @@ def _column_header_bar(label: str, width: int) -> str:
     return _label_bar_html(label, width=width)
 
 
-def _strip_tile_html(tile: StripTile, *, show_label: bool) -> str:
+def _strip_tile_html(
+    tile: StripTile, *, show_label: bool, background: bool = False
+) -> str:
     """One tile column: an optional `CHANNEL n` header bar above a native `<img>`.
 
     Explicit CSS width/height plus `image-rendering: pixelated` make the
@@ -344,20 +347,61 @@ def _strip_tile_html(tile: StripTile, *, show_label: bool) -> str:
     hides it, while a tile carrying transparent NaN/±Inf cells (RGBA PNG,
     `tile.mime`) reveals the checkerboard through them — so the bad cells read
     as "no value here" instead of a misleading color or white.
+
+    With `background` a `spatial` tile is drawn by `_background_tile_html`
+    instead: multiplied over the page's input-background image.
     """
     header = _column_header_bar(tile.label, tile.width) if show_label else ""
     gap = f" gap:{LABEL_GAP}px;" if show_label else ""
+    src = _b64_img_src(tile.image, mime=tile.mime)
+    size = f"width:{tile.width}px; height:{tile.height}px;"
+    img_style = (
+        f"{size} image-rendering:pixelated; display:block; flex:none; max-width:none;"
+    )
+    body = (
+        _background_tile_html(src, tile, size=size, img_style=img_style)
+        if background and tile.spatial
+        else f'<img src="{src}" style="{img_style} {_STRIP_CHECKERBOARD_STYLE}" />'
+    )
     return (
         f'<div style="display:flex; flex-direction:column; flex:none;{gap} '
-        f'width:{tile.width}px;">{header}'
-        f'<img src="{_b64_img_src(tile.image, mime=tile.mime)}" '
-        f'style="width:{tile.width}px; height:{tile.height}px; '
-        f"image-rendering:pixelated; display:block; flex:none; max-width:none; "
-        f'{_STRIP_CHECKERBOARD_STYLE}" /></div>'
+        f'width:{tile.width}px;">{header}{body}</div>'
     )
 
 
-def _strip_html(strip: StripRender | None, *, show_labels: bool = False) -> str:
+def _background_tile_html(
+    src: str, tile: StripTile, *, size: str, img_style: str
+) -> str:
+    """A tile multiplied over the input-background image (`_INPUT_BACKGROUND_VAR`).
+
+    The input layer is stretched to the tile and the tile img blends onto it
+    with `mix-blend-mode: multiply` (white cells show the input, strong ones
+    tint it), inside an isolated box so nothing else joins the blend. A tile
+    with transparent NaN/±Inf cells also masks the input layer with its own
+    alpha, so those cells show the bare checkerboard, not the input. Without
+    the variable (no image input) the layer is empty and the tile looks as usual.
+    """
+    stretch = "background-size:100% 100%; background-repeat:no-repeat;"
+    mask = (
+        f"-webkit-mask-image:url('{src}'); mask-image:url('{src}'); "
+        "-webkit-mask-size:100% 100%; mask-size:100% 100%; "
+        if tile.transparent
+        else ""
+    )
+    return (
+        f'<div style="position:relative; isolation:isolate; flex:none; {size} '
+        f'{_STRIP_CHECKERBOARD_STYLE}">'
+        f'<div style="position:absolute; inset:0; image-rendering:pixelated; '
+        f'background-color:#fff; background-image:var({_INPUT_BACKGROUND_VAR}, none); '
+        f'{stretch} {mask}"></div>'
+        f'<img src="{src}" style="{img_style} position:relative; '
+        'mix-blend-mode:multiply;" /></div>'
+    )
+
+
+def _strip_html(
+    strip: StripRender | None, *, show_labels: bool = False, background: bool = False
+) -> str:
     """HTML for one strip: a crisp legend `<img>` plus a row of tile columns.
 
     The legend column carries `data-tour="legend"` — the tour's anchor for
@@ -369,6 +413,7 @@ def _strip_html(strip: StripRender | None, *, show_labels: bool = False) -> str:
     without — their columns share the same widths and so sit under the same
     headers, reading as one table. A small `gap` spaces the columns in place of
     the white separators the renderer used to bake between tiles.
+    `background` draws spatial tiles over the input (`_background_tile_html`).
     """
     if strip is None or not strip.tiles:
         return ""
@@ -386,7 +431,8 @@ def _strip_html(strip: StripRender | None, *, show_labels: bool = False) -> str:
         'style="display:block; flex:none; max-width:none;" /></div>'
     )
     tiles_html = "".join(
-        _strip_tile_html(tile, show_label=show_labels) for tile in strip.tiles
+        _strip_tile_html(tile, show_label=show_labels, background=background)
+        for tile in strip.tiles
     )
     return (
         '<div style="display:flex; align-items:flex-start; gap:2px;">'

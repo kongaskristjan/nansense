@@ -96,6 +96,9 @@ PATCH_CELL_GAP: int = 2
 HEAT_MAX_ALPHA: float = 0.825
 _EMPTY_CELL_GRAY: int = 235
 PATCH_GRID_FORMAT: str = "PNG"
+# "Input background": the input shown behind spatial tiles as grayscale lifted
+# into [floor, 255], so a multiply keeps the tile colors legible over dark pixels.
+INPUT_BACKGROUND_FLOOR: int = 128
 
 
 def image_mime() -> str:
@@ -139,12 +142,18 @@ class RenderOptions:
     — a 1-D heatmap row, a token tensor with no matching patch grid — has no
     tile axis to collapse and is unchanged by `average`.
 
+    `background` doesn't change the rendered pixels: it asks the consumer (the
+    page's CSS, `compose.strip_image`) to multiply every spatially aligned tile
+    (`StripTile.spatial`) over `input_background`, so near-zero (white) cells
+    show the input and strong values tint it.
+
     The defaults are the pre-existing render, so every caller that doesn't
     care keeps its current picture byte for byte.
     """
 
     average: bool = False
     values: ValueMode = "unchanged"
+    background: bool = False
 
     @property
     def sequential(self) -> bool:
@@ -160,7 +169,10 @@ class RenderOptions:
     @property
     def cache_key(self) -> str:
         """Short token distinguishing these options in a render cache key."""
-        return f"{self.values}{'+avg' if self.average else ''}"
+        return (
+            f"{self.values}{'+avg' if self.average else ''}"
+            f"{'+bg' if self.background else ''}"
+        )
 
     def apply(self, tensor: Tensor) -> Tensor:
         """`tensor` with the value transform applied (identity by default)."""
@@ -172,7 +184,11 @@ class RenderOptions:
 
     def as_params(self) -> dict[str, object]:
         """These options as recorded-view params (see `from_params`)."""
-        return {"render_average": self.average, "render_values": self.values}
+        return {
+            "render_average": self.average,
+            "render_values": self.values,
+            "render_background": self.background,
+        }
 
     @classmethod
     def from_params(cls, params: dict[str, object]) -> RenderOptions:
@@ -181,6 +197,7 @@ class RenderOptions:
         return cls(
             average=bool_param(params, "render_average", False),
             values=cast(ValueMode, values) if values in VALUE_MODES else "unchanged",
+            background=bool_param(params, "render_background", False),
         )
 
 
@@ -203,6 +220,13 @@ class StripTile:
     encoded per `STRIP_FORMAT` (the fast `image_mime()` path), but a tile
     containing NaN/±Inf cells is RGBA PNG instead — those cells are fully
     transparent so the UI / recording can show a checkerboard behind them.
+
+    `transparent` says the image carries that alpha channel (its strip has a
+    NaN/±Inf somewhere) — `mime` alone can't tell when `STRIP_FORMAT` is PNG.
+
+    `spatial` marks a tile whose pixels map onto the input image (a conv
+    feature map, a token tensor unflattened onto its patch grid), so the
+    "input background" render option may draw the input behind it.
     """
 
     image: bytes
@@ -210,6 +234,8 @@ class StripTile:
     height: int
     label: str
     mime: str = _MIME_TYPES[STRIP_FORMAT]
+    transparent: bool = False
+    spatial: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,7 +295,7 @@ def render_strip(
     if sample.numel() == 0:
         return None
     if sample.ndim == 3:
-        return _render_chw(sample, tile_px=tile_px, options=options)
+        return _render_chw(sample, tile_px=tile_px, options=options, spatial=True)
     if sample.ndim == 2:
         return _render_tokens_2d(sample, input_hw, tile_px=tile_px, options=options)
     if sample.ndim == 1:
@@ -390,7 +416,10 @@ def _render_tokens_2d(
             extra, h, w = fit
             tokens = sample if token_axis == 0 else sample.T
             return _render_chw(
-                tokens[extra:].T.reshape(-1, h, w), tile_px=tile_px, options=options
+                tokens[extra:].T.reshape(-1, h, w),
+                tile_px=tile_px,
+                options=options,
+                spatial=True,
             )
     return _render_chw(sample.unsqueeze(0), tile_px=tile_px, options=options)
 
@@ -515,6 +544,7 @@ def _render_chw(
     *,
     tile_px: int = TILE_SIZE,
     options: RenderOptions = DEFAULT_RENDER_OPTIONS,
+    spatial: bool = False,
 ) -> StripRender | None:
     data = tensor.detach().float()
     # An empty tile (any zero-length dim) has no pixels to colormap, encode,
@@ -553,6 +583,8 @@ def _render_chw(
             height=tile_px,
             label=labels[i],
             mime=mime,
+            transparent=rgb.shape[-1] == 4,
+            spatial=spatial,
         )
         for i in range(n)
     )
@@ -679,6 +711,36 @@ def render_image(
     return render_input_image(
         tensor, sample_idx, mean=mean, std=std, transform=transform
     ).png
+
+
+def input_background(
+    tensor: Tensor | None,
+    sample_idx: int,
+    *,
+    mean: tuple[float, ...] | None = None,
+    std: tuple[float, ...] | None = None,
+    transform: InputTransform | None = None,
+) -> Image.Image | None:
+    """The "input background" image: the input pane's picture, lightened gray.
+
+    Native resolution, mode `"L"`, with values lifted into
+    `[INPUT_BACKGROUND_FLOOR, 255]`; consumers stretch it to each spatial tile
+    and multiply the tile over it. `None` unless the input is a renderable 4D
+    image (a flat `[B, C]` input has no spatial layout to align tiles with).
+    """
+    if tensor is None or tensor.ndim != 4:
+        return None
+    image = render_image(tensor, sample_idx, mean=mean, std=std, transform=transform)
+    if image is None:
+        return None
+    gray = Image.open(io.BytesIO(image)).convert("L")
+    scale = (255 - INPUT_BACKGROUND_FLOOR) / 255
+    return gray.point(lambda v: round(INPUT_BACKGROUND_FLOOR + v * scale))
+
+
+def encode_input_background(background: Image.Image) -> bytes:
+    """`input_background` encoded per `STRIP_FORMAT`, for a data URI."""
+    return _pil_to_bytes(background)
 
 
 def input_blank_warning(
