@@ -16,7 +16,7 @@ https://github.com/user-attachments/assets/b15f7dc5-1a6f-44d2-81fa-a97daafa89c6
 
 - 🕹️ **[Try the Playground](https://kongaskristjan.github.io/nansense/dev/playground/)** — explore a trained network in your browser
 - ✨ **[Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/)** — let a coding agent add NaNsense to your training loop
-- 🤖 **[Debug with a coding agent](https://kongaskristjan.github.io/nansense/dev/mcp/)** — let an agent inspect the same run with `nansense-cli`
+- 🤖 **[Debug with a coding agent](https://kongaskristjan.github.io/nansense/dev/cli/)** — let an agent inspect the same run with `nansense-cli`
 - 📚 **[Documentation](https://kongaskristjan.github.io/nansense/)** — guides, examples, and the Python API
 
 *NaNsense* is a visual debugger for PyTorch. Pause training, step through batches, revisit earlier epochs, and inspect activations, gradients, weights, and optimizer state.

@@ -372,6 +372,8 @@ def serve(
         )
     else:
         mount = None
+    # The MCP lifespan goes in at construction: NiceGUI wraps whatever lifespan
+    # it finds, and a mounted sub-app would never receive one.
     fastapi_app = FastAPI(lifespan=None if mount is None else mount.lifespan)
     if mount is not None:
         # Ahead of NiceGUI's `/` mount, which `ui.run_with` adds below and

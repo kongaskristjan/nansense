@@ -85,12 +85,9 @@ def serve(
     machine the bind still succeeds, so the banner prints and the browser open
     is a harmless no-op.
 
-    `mcp` (default `True`) also serves the MCP endpoint at `/mcp` on the same
-    port, so a coding agent can drive the debugger through the same session the
-    browser shows (`nansense.mcp_server`). Its route is registered *before*
-    NiceGUI's catch-all mount at `/` — Starlette matches routes in order — and
-    its lifespan is passed to the app at construction, since NiceGUI wraps
-    whatever lifespan it finds and a mounted sub-app never receives one.
+    `mcp` (default `True`) also serves the endpoint `nansense-cli` connects
+    to, on the same port, so a coding agent can drive the debugger through the
+    same session the browser shows.
 
     `input_mean` / `input_std` are passed to the input-image pane so the
     sample is denormalized (`x * std + mean`) before display. When either
@@ -99,8 +96,7 @@ def serve(
     image. Each of the three is either a single value applied to every input,
     or a `dict` keyed by input name for a multi-input model (see
     `nansense.input_config`); the stats and experiment panes use the primary
-    input's resolved values, and so does the MCP server, whose image tools
-    render the same views.
+    input's resolved values, and so do `nansense-cli`'s `render_*` tools.
     """
     if not session.enabled or not session.is_leader:
         return None

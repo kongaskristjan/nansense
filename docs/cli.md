@@ -38,6 +38,8 @@ nansense-cli --port 8080 render_layer --layers conv1 --out shots
 
 Results are printed as JSON. The `render_*` tools write their pictures as PNG files to `--out` (default `.nansense-cli/`) and print the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code.
 
+To turn agent access off, pass `mcp=False` to [`serve`][nansense.serve].
+
 !!! note "It listens on localhost"
 
     The endpoint is bound wherever you bound the UI, and it can control your training run. On the default loopback bind it also rejects requests carrying a foreign `Host` header, so a web page you visit cannot reach it. Don't expose the port to an untrusted network.
@@ -128,15 +130,3 @@ Because the agent is driving the same session, you can open the UI at any point 
 **Long steps don't hang.** A `step` over a slow epoch returns after a timeout with a note that the run is still going; the command stays in effect and the agent polls `get_status`.
 
 **Locked sessions refuse.** On a [locked](playground.md) demo session the control tools return an explicit refusal rather than silently doing nothing, so an agent can't loop forever stepping a run that never moves. Inspection keeps working.
-
-## Connect over MCP
-
-`nansense-cli` is a client of an [MCP](https://modelcontextprotocol.io) endpoint that the run serves at `/mcp`, on the UI's port. An MCP client can connect to it directly over Streamable HTTP and get the same tools. For Claude Code:
-
-```bash
-claude mcp add --transport http nansense http://127.0.0.1:8080/mcp
-```
-
-A registration names one port, so it suits a single run better than several in parallel.
-
-To turn the endpoint (and with it `nansense-cli`) off, pass `mcp=False` to [`serve`][nansense.serve].
