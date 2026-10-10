@@ -108,6 +108,40 @@ def _add_flag(
     parser.add_argument(f"--{name}", required=required, **flag)
 
 
+def _type_text(schema: dict[str, Any]) -> str:
+    schema = _nullable(schema)
+    if "const" in schema:
+        return json.dumps(schema["const"])
+    if "enum" in schema:
+        return " | ".join(json.dumps(value) for value in schema["enum"])
+    if schema.get("type") == "array":
+        return f"list of {_type_text(schema.get('items', {}))}"
+    return schema.get("type", "JSON")
+
+
+def _variants_text(schema: dict[str, Any]) -> str:
+    """The `$defs` behind a union-typed flag, spelled out for `--help`.
+
+    An MCP client reads these off the schema; here they are the only way an
+    agent learns which fields each JSON variant takes.
+    """
+    lines = ["JSON variants:"]
+    for name, variant in schema.get("$defs", {}).items():
+        lines.append(f"  {name}: {variant.get('description', '')}".rstrip())
+        required = set(variant.get("required", []))
+        for field, prop in variant.get("properties", {}).items():
+            default = prop.get("default")
+            suffix = " (required)" if field in required else (
+                f" = {json.dumps(default)}"
+                if default is not None and "const" not in prop
+                else ""
+            )
+            lines.append(f"    {field}: {_type_text(prop)}{suffix}")
+            if prop.get("description"):
+                lines.append(f"        {prop['description']}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def tool_parser(tool: Tool) -> argparse.ArgumentParser:
     """An argparse parser for one tool, with its docstring as the help text.
 
@@ -118,6 +152,7 @@ def tool_parser(tool: Tool) -> argparse.ArgumentParser:
         prog=f"{_PROG} {tool.name}",
         parents=[_common_options(defaults=False)],
         description=inspect.cleandoc(tool.description or ""),
+        epilog=_variants_text(tool.input_schema),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         argument_default=argparse.SUPPRESS,
     )
@@ -128,13 +163,16 @@ def tool_parser(tool: Tool) -> argparse.ArgumentParser:
     return parser
 
 
+def _summary(description: str | None) -> str:
+    """A docstring's first paragraph on one line — a summary may wrap."""
+    first = inspect.cleandoc(description or "").split("\n\n")[0]
+    return " ".join(first.split())
+
+
 def tool_listing(instructions: str | None, tools: Sequence[Tool], port: int) -> str:
     """The server's guide, then each tool's one-line summary."""
     width = max(len(t.name) for t in tools)
-    lines = [
-        f"  {t.name:<{width}}  {(t.description or '').strip().splitlines()[0]}"
-        for t in tools
-    ]
+    lines = [f"  {t.name:<{width}}  {_summary(t.description)}" for t in tools]
     header = f"Tools (`{_PROG} --port {port} <tool> --help` for a tool's flags):"
     return "\n".join([(instructions or "").strip(), "", header, *lines])
 

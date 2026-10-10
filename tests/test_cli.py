@@ -91,6 +91,8 @@ def test_tools_prints_the_guide_and_every_tool(
     assert out.startswith("NaNsense is a PyTorch debugger")
     assert "nansense-cli --port 8123 <tool> --help" in out
     assert all(f"  {name} " in out for name in tools)
+    # A summary that wraps in its docstring is still listed whole.
+    assert "(all of them if `key` is omitted)" in out
 
 
 def test_a_call_prints_the_tool_json(capsys: pytest.CaptureFixture[str]) -> None:
@@ -108,6 +110,15 @@ def test_help_shows_the_docstring_without_calling(
     out = capsys.readouterr().out
     assert "usage: nansense-cli get_layer_stats" in out
     assert "\nWorks for any layer" in out  # dedented
+
+
+def test_help_spells_out_a_union_flags_variants(tools: dict[str, Tool]) -> None:
+    """An MCP client reads the `$defs` off the schema; a CLI agent has only
+    `--help` to learn which fields each JSON variant takes."""
+    text = tool_parser(tools["start_recording"]).format_help()
+    assert "LayersViewSpec:" in text
+    assert '    view: "layers"\n' in text
+    assert "    kind: " in text and "(required)" in text
 
 
 def test_unknown_tool_points_at_the_listing(capsys: pytest.CaptureFixture[str]) -> None:
