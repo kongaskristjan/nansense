@@ -1566,7 +1566,14 @@ Render conventions worth knowing before editing `render.py`:
   `average` is mean magnitude, not the near-zero mean of a signed map, and a
   NaN channel still carries its hole into the mean. A non-negative strip needs
   no second colormap (a non-negative norm already maps to the white→red half),
-  only a `sequential` legend spanning `x` … `0` instead of `±x`. The options
+  only a `sequential` legend spanning `x` … `0` instead of `±x`. Every strip
+  path goes through `_normalized`: divide by the raw finite `|x|` max *before*
+  the transform (so fp32 casting / squaring can't underflow a tiny strip),
+  transform + average, then rescale by the displayed max so the strongest cell
+  is full color. The legend's scale is that max in original units as a Python
+  float (`max²` for `square`, fine below fp32's range); there is no epsilon
+  floor — only an exactly-zero (or all-non-finite) strip is special, rendering
+  white with a `0` legend. The options
   are **per browser connection**, owned by `InputPanel` like `sample_idx` and
   never touching the `Session` — which is what keeps them usable in a locked
   playground, where pin and forward mode are refused. They ride in the render

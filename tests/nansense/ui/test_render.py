@@ -230,11 +230,42 @@ def test_2d_without_grid_renders_single_non_spatial_heatmap_tile(
 
 
 def test_zero_variance_tensor_renders() -> None:
-    # All-zero input must not crash the diverging colormap (abs_max=0 edge).
+    # All-zero input must not crash the diverging colormap (abs_max=0 edge),
+    # and renders — legend included — white rather than at some epsilon scale.
     tensor = torch.zeros(2, 4, 8, 8)
     strip = render_strip(tensor, sample_idx=0)
     assert strip is not None
     assert _tile_sizes(strip) == [(8, 8)] * 4
+    assert _rgb_at(_decode(strip.tiles[0].image), 0, 0) == (255, 255, 255)
+    assert _legend_bar(strip, 0.0) == (255, 255, 255)
+
+
+@pytest.mark.parametrize("values", ["unchanged", "abs", "square"])
+@pytest.mark.parametrize(
+    "raw_max, dtype",
+    [
+        (1e-3, torch.float32),
+        (1e-15, torch.float32),
+        (1e-25, torch.float32),  # squared: 1e-50, far below fp32
+        (1e-35, torch.float32),
+        (1e-60, torch.float64),  # below fp32 before any transform
+    ],
+)
+def test_strip_scale_is_its_own_max_at_any_magnitude(
+    values: str, raw_max: float, dtype: torch.dtype
+) -> None:
+    # Regression: a 1e-12 floor whitewashed strips with a smaller max, and
+    # fp32 squaring underflowed. The strongest cell is full color whatever the
+    # magnitude, and the legend's scale is max (max² when squared).
+    options = RenderOptions(values=values)  # ty: ignore[invalid-argument-type]
+    tensor = torch.tensor([[raw_max / 2, raw_max]], dtype=dtype)
+    strip = render_strip(tensor, sample_idx=0, options=options)
+    assert strip is not None
+    assert _rgb_at(_decode(strip.tiles[0].image), 1, 0) == (255, 0, 0)
+    assert _legend_bar(strip, 0.0) == (255, 0, 0)
+    _, scale = render._normalized(tensor[0], options)
+    expected = raw_max**2 if values == "square" else raw_max
+    assert scale == pytest.approx(expected, rel=1e-6)
 
 
 def _decode_rgba(image: bytes) -> Image.Image:

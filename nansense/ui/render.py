@@ -182,6 +182,15 @@ class RenderOptions:
             return tensor * tensor
         return tensor
 
+    def apply_scale(self, magnitude: float) -> float:
+        """The transform of a non-negative `magnitude`, in Python floats.
+
+        A strip is transformed after being normalized to `[-1, 1]`; this maps
+        the normalizing max the same way, without fp32 underflowing a squared
+        tiny max (e.g. `1e-25² = 1e-50`).
+        """
+        return magnitude * magnitude if self.values == "square" else magnitude
+
     def as_params(self) -> dict[str, object]:
         """These options as recorded-view params (see `from_params`)."""
         return {
@@ -546,22 +555,13 @@ def _render_chw(
     options: RenderOptions = DEFAULT_RENDER_OPTIONS,
     spatial: bool = False,
 ) -> StripRender | None:
-    data = tensor.detach().float()
     # An empty tile (any zero-length dim) has no pixels to colormap, encode,
     # or lay out — the reductions and PIL encode below would raise. The
     # `render_strip` / `render_weight` callers hide a `None` strip, the same
     # way they hide an unsupported shape.
-    if data.numel() == 0:
+    if tensor.numel() == 0:
         return None
-    data = options.apply(data)
-    if options.average:
-        # Collapse the tile axis before the scale and the downsample: the
-        # single mean tile gets its own `abs_max`, so it uses the full color
-        # range rather than one set by the loudest channel it averaged away.
-        # A channel holding NaN/±Inf carries it into the mean, which is the
-        # honest answer — the hole stays visible instead of being diluted.
-        data = data.mean(dim=0, keepdim=True)
-    abs_max = _finite_abs_max(data)
+    data, abs_max = _normalized(tensor, options, tile_axis=True)
     if max(data.shape[1], data.shape[2]) > tile_px:
         # Downsampling needs real averaging server-side; *up*scaling small
         # maps is left to the browser's nearest-neighbour (CSS `pixelated`).
@@ -570,7 +570,7 @@ def _render_chw(
         # separately (the colormap re-derives the mask after downsampling).
         data = _interpolate_preserving_nonfinite(data, size=tile_px)
     n, _, _ = data.shape
-    rgb, mime = _apply_colormap(data.numpy(), abs_max=abs_max)
+    rgb, mime = _apply_colormap(data.numpy())
     # Each tile is shown as a tile_px × tile_px square (the browser nearest-
     # upscales its native map to fill it), matching the legend's tile_px height.
     # One mime covers the whole strip — if any tile carries NaN/±Inf, all encode
@@ -678,18 +678,19 @@ def render_input_legend(tensor: Tensor | None, sample_idx: int) -> bytes | None:
     """
     if tensor is None or tensor.ndim != 2 or not 0 <= sample_idx < tensor.shape[0]:
         return None
-    sample = tensor[sample_idx].detach().float().cpu()
+    sample = tensor[sample_idx]
     if sample.numel() == 0:
         return None
-    return _encode_image(_render_legend(LINEAR_TILE_HEIGHT, abs_max=_finite_abs_max(sample)))
+    _, abs_max = _normalized(sample.cpu(), DEFAULT_RENDER_OPTIONS)
+    return _encode_image(_render_legend(LINEAR_TILE_HEIGHT, abs_max=abs_max))
 
 
 def _encode_input_row(sample: Tensor) -> bytes | None:
     """A flat `[C]` sample as a `1 × C` colormapped row (native width `C`)."""
-    values = sample.detach().float().cpu()
-    if values.numel() == 0:
+    if sample.numel() == 0:
         return None
-    rgb, _ = _apply_colormap(values.numpy(), abs_max=_finite_abs_max(values))
+    values, _ = _normalized(sample.cpu(), DEFAULT_RENDER_OPTIONS)
+    rgb, _ = _apply_colormap(values.numpy())
     # Drop any alpha (inputs rarely carry NaN) so the row encodes as plain RGB,
     # matching the input pane's `image_mime()` data-URI.
     return _pil_to_bytes(Image.fromarray(rgb[None, :, :3], mode="RGB"))
@@ -1160,10 +1161,9 @@ def _render_1d(
     options: RenderOptions = DEFAULT_RENDER_OPTIONS,
     height: int = LINEAR_TILE_HEIGHT,
 ) -> StripRender | None:
-    values = options.apply(tensor.detach().float())
-    if values.numel() == 0:
+    if tensor.numel() == 0:
         return None
-    abs_max = _finite_abs_max(values)
+    values, abs_max = _normalized(tensor, options)
     f = values.shape[0]
     if f > LINEAR_MAX_BINS:
         # `nan_to_num` first so a single NaN can't poison a whole pooled bin;
@@ -1180,7 +1180,7 @@ def _render_1d(
             pooled = torch.where(bad > 0, torch.full_like(pooled, float("nan")), pooled)
         values = pooled
         f = LINEAR_MAX_BINS
-    rgb_row, mime = _apply_colormap(values.numpy(), abs_max=abs_max)
+    rgb_row, mime = _apply_colormap(values.numpy())
     # A 1-px-tall row stretched to the display height; the bins aren't channels,
     # so the single tile carries no column caption.
     return StripRender(
@@ -1199,23 +1199,54 @@ def _render_1d(
     )
 
 
-def _finite_abs_max(values: Tensor) -> float:
-    """Largest `|x|` over finite entries; a tiny epsilon when none are finite.
+def _normalized(
+    tensor: Tensor, options: RenderOptions, *, tile_axis: bool = False
+) -> tuple[Tensor, float]:
+    """`tensor` transformed per `options`, as fp32 in `[-1, 1]`, plus its scale.
 
-    Computing the symmetric colormap scale over finite values only is what
-    keeps one NaN/±Inf from turning the whole strip's scale into NaN/Inf
-    (which left every cell white — indistinguishable from all-zero). The
-    epsilon fallback keeps an all-non-finite (or finite-but-all-zero) strip
-    rendering without a divide-by-zero.
+    The raw strip is divided by its finite `|x|` max *before* the transform
+    (in fp64 for an fp64 tensor), so neither the fp32 cast nor `square`
+    underflows a tiny strip to zero. After the transform (and, with a
+    `tile_axis`, the `average` — so the mean tile uses the full color range
+    rather than one set by the loudest channel it averaged away) the strip
+    is rescaled by its own finite max, so its strongest cell is full color.
+    The returned scale is that displayed max in the strip's original units
+    (a Python float, safe below fp32's range) — what the legend labels; `0.0`
+    for an all-zero or all-non-finite strip. NaN/±Inf pass through, so the
+    colormap still renders them transparent.
+    """
+    data = tensor.detach()
+    if data.dtype != torch.float64:
+        data = data.float()
+    raw = _finite_abs_max(data)
+    if raw > 0.0:
+        data = data / raw
+    data = options.apply(data.float())
+    if tile_axis and options.average:
+        # A channel holding NaN/±Inf carries it into the mean, which is the
+        # honest answer — the hole stays visible instead of being diluted.
+        data = data.mean(dim=0, keepdim=True)
+    shown = _finite_abs_max(data)
+    if shown > 0.0:
+        data = data / shown
+    return data, shown * options.apply_scale(raw)
+
+
+def _finite_abs_max(values: Tensor) -> float:
+    """Largest `|x|` over finite entries; `0.0` when none are finite.
+
+    Finite-only is what keeps one NaN/±Inf from turning the whole strip's
+    scale into NaN/Inf (which left every cell white — indistinguishable from
+    all-zero).
     """
     finite = values[torch.isfinite(values)]
     if finite.numel() == 0:
-        return 1e-12
+        return 0.0
     return float(finite.abs().max())
 
 
-def _apply_colormap(values: np.ndarray, *, abs_max: float) -> tuple[np.ndarray, str]:
-    """Diverging colormap plus the MIME the data image must use.
+def _apply_colormap(norm: np.ndarray) -> tuple[np.ndarray, str]:
+    """Diverging colormap of `norm` (in `[-1, 1]`, see `_normalized`) plus the MIME.
 
     The all-finite common case returns an RGB array and the `STRIP_FORMAT`
     mime — byte-for-byte the previous fast path. When any value is NaN/±Inf
@@ -1224,10 +1255,8 @@ def _apply_colormap(values: np.ndarray, *, abs_max: float) -> tuple[np.ndarray, 
     recording reveal a checkerboard behind them instead of a misleading
     color or white.
     """
-    finite = np.isfinite(values)
-    scale = max(abs_max, 1e-12)
-    norm = np.where(finite, values, 0.0) / scale
-    rgb = _diverging_colormap(np.clip(norm, -1.0, 1.0))
+    finite = np.isfinite(norm)
+    rgb = _diverging_colormap(np.clip(np.where(finite, norm, 0.0), -1.0, 1.0))
     if finite.all():
         return rgb, image_mime()
     rgba = np.concatenate(
@@ -1264,10 +1293,15 @@ def _render_legend(
     (`RenderOptions` `abs` / `square`): the bar runs from `x` down to `0` and
     is labelled `x` / `x/2` / `0`, so the whole colorbar maps to values the
     strip can actually contain.
+
+    The bar is drawn in normalized units, so an `abs_max` below fp32's range
+    still gets a full ramp; `abs_max == 0` (an all-zero strip) is a white
+    bar labelled `0`.
     """
-    bottom = 0.0 if sequential else -abs_max
-    values = np.linspace(abs_max, bottom, height, dtype=np.float32)
-    bar_col, _ = _apply_colormap(values, abs_max=abs_max)  # finite: always RGB
+    top = 1.0 if abs_max > 0.0 else 0.0
+    bottom = 0.0 if sequential else -top
+    norm = np.linspace(top, bottom, height, dtype=np.float32)
+    bar_col, _ = _apply_colormap(norm)  # finite: always RGB
     bar = np.broadcast_to(bar_col[:, None, :], (height, LEGEND_BAR_WIDTH, 3)).copy()
 
     labels_img = Image.new("RGB", (LEGEND_LABEL_WIDTH, height), (255, 255, 255))
@@ -1275,11 +1309,11 @@ def _render_legend(
     font = ImageFont.load_default()
     x = LEGEND_LABEL_WIDTH - 2
     color = (0, 0, 0)
-    top_text = f"{abs_max:.2g}" if sequential else f"+{abs_max:.2g}"
-    bottom_text = "0" if sequential else f"-{abs_max:.2g}"
-    mid_text = f"{abs_max / 2:.2g}" if sequential else "0"
+    top_text = _legend_label("" if sequential else "+", abs_max)
+    bottom_text = "0" if sequential else _legend_label("-", abs_max)
+    mid_text = _legend_label("", abs_max / 2) if sequential else "0"
     if height < LEGEND_TWO_LABEL_MIN_HEIGHT:
-        only = f"{abs_max:.2g}" if sequential else f"±{abs_max:.2g}"
+        only = _legend_label("" if sequential else "±", abs_max)
         draw.text((x, height // 2), only, fill=color, font=font, anchor="rm")
     else:
         draw.text((x, 0), top_text, fill=color, font=font, anchor="ra")
@@ -1290,6 +1324,10 @@ def _render_legend(
 
     gap = np.full((height, LEGEND_GAP, 3), 255, dtype=np.uint8)
     return np.concatenate([labels, gap, bar, gap], axis=1)
+
+
+def _legend_label(sign: str, value: float) -> str:
+    return f"{sign}{value:.2g}" if value else "0"
 
 
 def _encode_image(rgb: np.ndarray, *, fmt: str | None = None) -> bytes:
