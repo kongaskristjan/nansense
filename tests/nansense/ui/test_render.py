@@ -28,6 +28,7 @@ from nansense.ui.render import (
     dims_from_roles,
     image_mime,
     input_blank_warning,
+    linear_tile_height,
     render_image,
     render_input_image,
     render_input_legend,
@@ -393,6 +394,27 @@ def test_defaults_render_exactly_what_they_used_to() -> None:
     assert plain is not None and explicit is not None
     assert [t.image for t in plain.tiles] == [t.image for t in explicit.tiles]
     assert plain.legend_image == explicit.legend_image
+
+
+@pytest.mark.parametrize("tile_px, row", [(32, 12), (64, 16), (128, 32), (384, 96)])
+def test_linear_rows_scale_with_tile_size(tile_px: int, row: int) -> None:
+    assert linear_tile_height(tile_px) == row
+    strip = render_strip(torch.randn(1, 10), 0, row_height=row)
+    assert strip is not None
+    assert strip.tiles[0].height == row
+    assert _decode(strip.legend_image).height == row  # legend matches the row
+
+
+@pytest.mark.parametrize("tile_px, native", [(64, 64), (128, 128), (384, 200)])
+def test_tile_size_sets_display_and_downsample_threshold(
+    tile_px: int, native: int
+) -> None:
+    """A larger display tile ships the map at full resolution, staying sharp."""
+    strip = render_strip(torch.randn(1, 2, 200, 200), 0, tile_px=tile_px)
+    assert strip is not None
+    assert _tile_sizes(strip) == [(native, native)] * 2
+    assert (strip.tiles[0].width, strip.tiles[0].height) == (tile_px, tile_px)
+    assert _decode(strip.legend_image).height == tile_px
 
 
 def test_cache_key_separates_every_option_combination() -> None:

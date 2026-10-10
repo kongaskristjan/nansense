@@ -322,6 +322,18 @@ def test_render_options_follow_the_controls(
     assert changes == ["dirty"]  # the page re-renders on the next tick
 
 
+@pytest.mark.parametrize("value, dirty", [(256, True), (128, False), (None, False)])
+def test_size_slider_sets_tile_size(value: int | None, dirty: bool) -> None:
+    panel, _, changes = _render_options_panel(
+        average=False, mode="unchanged", current=RenderOptions()
+    )
+    panel.tile_px = 128
+    panel._on_size_change(SimpleNamespace(value=value))
+    assert panel.tile_px == (value if dirty else 128)
+    assert changes == (["dirty"] if dirty else [])
+    assert panel.render_options == RenderOptions()  # display-only, never recorded
+
+
 def test_deselecting_the_value_toggle_restores_the_current_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

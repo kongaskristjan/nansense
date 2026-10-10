@@ -4,7 +4,7 @@ Hosts the per-sample spinner (moved out of the top bar), the batch-pinning
 and click-to-perturb controls for probe runs (see `nansense.probe`), the
 render options every layer card's strips are drawn with, and the input
 image. The panel owns the per-connection view state the page's tick loop
-reads (`sample_idx`, `render_options`, plus the derived `compare`) and
+reads (`sample_idx`, `render_options`, `tile_px`, plus the derived `compare`) and
 forwards pin / probe-mode / perturbation changes to the session; the session reacts
 asynchronously by publishing a new `ProbeResult`, which the tick loop picks
 up like a new snapshot.
@@ -28,7 +28,12 @@ from torch import Tensor
 
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
-from nansense.ui.render import RenderOptions, ValueMode, transform_preview_color
+from nansense.ui.render import (
+    TILE_SIZE,
+    RenderOptions,
+    ValueMode,
+    transform_preview_color,
+)
 from nansense.ui.common import (
     _defer_value_write,
     _label_bar_html,
@@ -40,6 +45,11 @@ _PROBE_MODE_OPTIONS: dict[str, str] = {
     "eval": "Eval",
     "train": "Train",
 }
+
+# The "Size" slider's range (CSS px per tile side); `TILE_SIZE` is the default.
+TILE_SIZE_MIN: int = 32
+TILE_SIZE_MAX: int = 384
+TILE_SIZE_STEP: int = 16
 
 _VALUE_MODE_OPTIONS: dict[str, str] = {
     "unchanged": "Unchanged",
@@ -118,6 +128,9 @@ class InputPanel:
         # visitors each get their own without the shared-state refusals pin and
         # forward mode run into.
         self._render_options = RenderOptions()
+        # Display side of every layer tile (the "Size" slider). Display-only, so
+        # unlike `_render_options` it is never recorded or offered over MCP.
+        self.tile_px = TILE_SIZE
         self._color = "#000000"
         self._spinner_max: int | None = None
         self._frozen = False
@@ -327,6 +340,17 @@ class InputPanel:
             with ui.column().classes("w-full items-center gap-2"):
                 ui.separator()
                 self._section_label("Render options")
+                with ui.row().classes("w-full items-center no-wrap gap-3"):
+                    ui.label("Size").classes("text-sm")
+                    self._size_slider = ui.slider(
+                        min=TILE_SIZE_MIN,
+                        max=TILE_SIZE_MAX,
+                        step=TILE_SIZE_STEP,
+                        value=self.tile_px,
+                        on_change=self._on_size_change,
+                    ).props("dense label snap").classes("grow").tooltip(
+                        "Display size of every layer's tiles, in pixels"
+                    )
                 self._average_switch = ui.switch(
                     "Average",
                     value=self._render_options.average,
@@ -388,6 +412,13 @@ class InputPanel:
     def render_options(self) -> RenderOptions:
         """How this connection draws activation / gradient / custom strips."""
         return self._render_options
+
+    def _on_size_change(self, e: object) -> None:
+        value = getattr(e, "value", None)
+        if value is None or int(value) == self.tile_px:
+            return
+        self.tile_px = int(value)
+        self._on_change()
 
     def _on_render_options_change(self, _e: object) -> None:
         mode = self._values_toggle.value
@@ -552,6 +583,7 @@ class InputPanel:
             self._mode_toggle,
             self._perturb_switch,
             self._clear_button,
+            self._size_slider,
             self._average_switch,
             self._values_toggle,
             *self._value_controls,

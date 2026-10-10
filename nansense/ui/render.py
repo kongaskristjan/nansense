@@ -61,6 +61,9 @@ from nansense.probe import ProbeResult
 
 TILE_SIZE: int = 128
 LINEAR_TILE_HEIGHT: int = 32
+# Floor for a 1D heatmap row scaled down with the tile size (`linear_tile_height`):
+# its legend still has to fit one line of label text.
+LINEAR_MIN_HEIGHT: int = 12
 LINEAR_MAX_BINS: int = 256
 LINEAR_BIN_WIDTH: int = 16
 INPUT_IMAGE_SIZE: int = 256
@@ -81,6 +84,8 @@ LEGEND_LABEL_WIDTH: int = 52
 LEGEND_GAP: int = 4
 LEGEND_WIDTH: int = LEGEND_LABEL_WIDTH + LEGEND_GAP + LEGEND_BAR_WIDTH + LEGEND_GAP
 LEGEND_MID_LABEL_MIN_HEIGHT: int = 64
+# Below this a legend can't fit separate top/bottom labels and shows one centered.
+LEGEND_TWO_LABEL_MIN_HEIGHT: int = 22
 # Extreme-patch grids: CSS pixel side of one cell, the strongest heatmap
 # overlay opacity, the fill for never-filled slots, and the grids' fixed
 # encoding (see `PatchGridRender` for why it isn't `STRIP_FORMAT`).
@@ -228,6 +233,7 @@ def render_strip(
     *,
     input_hw: tuple[int, int] | None = None,
     tile_px: int = TILE_SIZE,
+    row_height: int = LINEAR_TILE_HEIGHT,
     options: RenderOptions = DEFAULT_RENDER_OPTIONS,
 ) -> StripRender | None:
     """Render a per-channel horizontal strip.
@@ -245,7 +251,8 @@ def render_strip(
     the height its legend is rendered at; it defaults to `TILE_SIZE` and the
     experiment page bumps it to `INPUT_IMAGE_SIZE` so attribution strips sit
     at the same size as the input images beside them. It applies to the
-    tiled (2D/3D) renders only; a 1D heatmap row keeps its own height.
+    tiled (2D/3D) renders only; a 1D heatmap row is `row_height` tall instead
+    (the main page's size slider scales both, see `linear_tile_height`).
 
     `options` transforms the values (`abs` / `square`) and optionally averages
     the channels into one tile — see `RenderOptions`.
@@ -266,8 +273,17 @@ def render_strip(
     if sample.ndim == 2:
         return _render_tokens_2d(sample, input_hw, tile_px=tile_px, options=options)
     if sample.ndim == 1:
-        return _render_1d(sample, options=options)
+        return _render_1d(sample, options=options, height=row_height)
     return None
+
+
+def linear_tile_height(tile_px: int) -> int:
+    """The 1D heatmap row height matching tiles shown `tile_px` CSS px square.
+
+    Proportional (`LINEAR_TILE_HEIGHT` at the default `TILE_SIZE`), floored at
+    `LINEAR_MIN_HEIGHT` so the row's legend keeps a readable label.
+    """
+    return max(LINEAR_MIN_HEIGHT, round(LINEAR_TILE_HEIGHT * tile_px / TILE_SIZE))
 
 
 def tensor_hw(tensor: Tensor | None) -> tuple[int, int] | None:
@@ -1077,7 +1093,10 @@ def _nearest_resize(arr: np.ndarray, h: int, w: int) -> np.ndarray:
 
 
 def _render_1d(
-    tensor: Tensor, *, options: RenderOptions = DEFAULT_RENDER_OPTIONS
+    tensor: Tensor,
+    *,
+    options: RenderOptions = DEFAULT_RENDER_OPTIONS,
+    height: int = LINEAR_TILE_HEIGHT,
 ) -> StripRender | None:
     values = options.apply(tensor.detach().float())
     if values.numel() == 0:
@@ -1104,15 +1123,13 @@ def _render_1d(
     # so the single tile carries no column caption.
     return StripRender(
         legend_image=_encode_image(
-            _render_legend(
-                LINEAR_TILE_HEIGHT, abs_max=abs_max, sequential=options.sequential
-            )
+            _render_legend(height, abs_max=abs_max, sequential=options.sequential)
         ),
         tiles=(
             StripTile(
                 image=_encode_strip_data(rgb_row[None, :, :], mime),
                 width=f * LINEAR_BIN_WIDTH,
-                height=LINEAR_TILE_HEIGHT,
+                height=height,
                 label="",
                 mime=mime,
             ),
@@ -1178,7 +1195,8 @@ def _render_legend(
 
     `+x` sits at the top of the bar, `-x` at the bottom; the middle `0`
     label is dropped on short strips where it would collide with the
-    top/bottom labels.
+    top/bottom labels, and below `LEGEND_TWO_LABEL_MIN_HEIGHT` a single
+    centered `±x` (`x` when sequential) stands in for both.
 
     `sequential` is for a strip whose values are non-negative by construction
     (`RenderOptions` `abs` / `square`): the bar runs from `x` down to `0` and
@@ -1198,8 +1216,12 @@ def _render_legend(
     top_text = f"{abs_max:.2g}" if sequential else f"+{abs_max:.2g}"
     bottom_text = "0" if sequential else f"-{abs_max:.2g}"
     mid_text = f"{abs_max / 2:.2g}" if sequential else "0"
-    draw.text((x, 0), top_text, fill=color, font=font, anchor="ra")
-    draw.text((x, height - 1), bottom_text, fill=color, font=font, anchor="rd")
+    if height < LEGEND_TWO_LABEL_MIN_HEIGHT:
+        only = f"{abs_max:.2g}" if sequential else f"±{abs_max:.2g}"
+        draw.text((x, height // 2), only, fill=color, font=font, anchor="rm")
+    else:
+        draw.text((x, 0), top_text, fill=color, font=font, anchor="ra")
+        draw.text((x, height - 1), bottom_text, fill=color, font=font, anchor="rd")
     if height >= LEGEND_MID_LABEL_MIN_HEIGHT:
         draw.text((x, height // 2), mid_text, fill=color, font=font, anchor="rm")
     labels = np.asarray(labels_img)

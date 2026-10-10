@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 import torch
@@ -425,6 +426,30 @@ def test_compute_frame_cache_separates_render_options(probe_source: bool) -> Non
     assert frame(RenderOptions()) == plain  # and back again, from the cache
 
 
+@pytest.mark.parametrize("probe_source", [False, True])
+def test_compute_frame_renders_at_the_slider_tile_size(probe_source: bool) -> None:
+    snap = _frame_snapshot()
+    probe = _frame_probe() if probe_source else None
+    cache = _RenderCache()
+
+    def frame(tile_px: int) -> str:
+        rendered, _ = _compute_frame(
+            ["conv"],
+            snap,
+            probe,
+            0,
+            tile_px=tile_px,
+            input_name="x",
+            input_mean=None,
+            input_std=None,
+            cache=cache,
+        )
+        return rendered["conv"][0]
+
+    assert "width:256px; height:256px" in frame(256)
+    assert "width:128px; height:128px" in frame(128)  # not served from the cache
+
+
 def test_display_batch_size_prefers_probe() -> None:
     snap = _frame_snapshot()  # batch size 2
     probe = ProbeResult(
@@ -499,15 +524,11 @@ def test_compute_frame_raising_layer_does_not_drop_the_frame(
     def flaky_render_strip(
         tensor: torch.Tensor | None,
         sample_idx: int,
-        *,
-        input_hw: tuple[int, int] | None = None,
-        options: RenderOptions = RenderOptions(),
+        **kwargs: Any,
     ) -> StripRender | None:
         if tensor is bad:
             raise RuntimeError("boom")
-        return real_render_strip(
-            tensor, sample_idx, input_hw=input_hw, options=options
-        )
+        return real_render_strip(tensor, sample_idx, **kwargs)
 
     monkeypatch.setattr(main_page, "render_strip", flaky_render_strip)
     snap = _make_snapshot(

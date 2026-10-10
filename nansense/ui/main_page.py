@@ -37,8 +37,10 @@ from nansense.ui.graph import slug_map
 from nansense.ui.input_panel import InputPanel
 from nansense.ui.render import (
     DEFAULT_RENDER_OPTIONS,
+    TILE_SIZE,
     RenderOptions,
     input_blank_warning,
+    linear_tile_height,
     probe_act_tensor,
     render_image,
     render_input_legend,
@@ -520,6 +522,7 @@ class _MainPage:
                     sample_idx,
                     compare=self.input_panel.compare,
                     options=self.input_panel.render_options,
+                    tile_px=self.input_panel.tile_px,
                     input_name=self.input_name,
                     selected_input=selected,
                     input_mean=sel_mean,
@@ -694,6 +697,34 @@ def _render_layers(
     return dict(zip(layer_names, _RENDER_POOL.map(guarded, layer_names), strict=True))
 
 
+_StripRenderer = Callable[[Tensor | None, int], str]
+
+
+def _strip_renderer(
+    input_hw: tuple[int, int] | None,
+    options: RenderOptions,
+    tile_px: int,
+    *,
+    show_labels: bool = False,
+) -> _StripRenderer:
+    """`(tensor, sample_idx) -> strip html` under one frame's render settings."""
+
+    def render(tensor: Tensor | None, sample_idx: int) -> str:
+        return _strip_html(
+            render_strip(
+                tensor,
+                sample_idx,
+                input_hw=input_hw,
+                tile_px=tile_px,
+                row_height=linear_tile_height(tile_px),
+                options=options,
+            ),
+            show_labels=show_labels,
+        )
+
+    return render
+
+
 def _compute_frame(
     layer_names: list[str],
     snap: BatchSnapshot | None,
@@ -702,6 +733,7 @@ def _compute_frame(
     *,
     compare: bool = False,
     options: RenderOptions = DEFAULT_RENDER_OPTIONS,
+    tile_px: int = TILE_SIZE,
     input_name: str | None,
     selected_input: str | None = None,
     input_mean: tuple[float, ...] | None,
@@ -719,8 +751,10 @@ def _compute_frame(
     token grid for 2D activations); `selected_input` is the input shown in the
     pane — it defaults to `input_name` (the same one unless the user picked
     another from the multi-input dropdown). `options` is the viewer's render
-    choice (magnitude, channel averaging) and rides in the cache keys, so
-    switching it re-renders rather than serving the previous look.
+    choice (magnitude, channel averaging) and `tile_px` the size slider's tile
+    side (1D rows scale with it, see `linear_tile_height`); both ride in the
+    cache keys, so switching either re-renders rather than serving the
+    previous look.
     """
     if selected_input is None:
         selected_input = input_name
@@ -731,6 +765,7 @@ def _compute_frame(
             sample_idx,
             compare=compare,
             options=options,
+            tile_px=tile_px,
             input_name=input_name,
             selected_input=selected_input,
             input_mean=input_mean,
@@ -740,72 +775,35 @@ def _compute_frame(
         )
     assert snap is not None  # tick only renders when at least one source exists
     input_hw = tensor_hw(snap.activations.get(input_name) if input_name else None)
-    opt = options.cache_key
+    render = _strip_renderer(input_hw, options, tile_px)
+    render_labelled = _strip_renderer(input_hw, options, tile_px, show_labels=True)
+    opt = f"{options.cache_key}@{tile_px}"
 
     def strips(name: str) -> _LayerStrips:
-        if compare:
-            # Diff view without any probe (perturb mode on, nothing clicked
-            # yet, no pin): the diff is identically zero, rendered as a
-            # white strip — same as a perturbation-free probe diff.
-            act = cache.get_or_render(
-                snap,
-                (name, f"act-diff:{opt}", sample_idx),
-                lambda: _strip_html(
-                    render_strip(
-                        _zeros_like(snap.activations.get(name)),
-                        sample_idx,
-                        input_hw=input_hw,
-                        options=options,
-                    ),
-                    show_labels=True,
-                ),
+        def cached(kind: str, tensor: Tensor | None, html: _StripRenderer) -> str:
+            return cache.get_or_render(
+                snap, (name, kind, sample_idx), lambda: html(tensor, sample_idx)
             )
-        else:
-            act = cache.get_or_render(
-                snap,
-                (name, f"act:{opt}", sample_idx),
-                lambda: _strip_html(
-                    render_strip(
-                        snap.activations.get(name),
-                        sample_idx,
-                        input_hw=input_hw,
-                        options=options,
-                    ),
-                    show_labels=True,
-                ),
+
+        # Diff view without any probe (perturb mode on, nothing clicked yet,
+        # no pin): the diff is identically zero, rendered as a white strip —
+        # same as a perturbation-free probe diff.
+        act = (
+            cached(
+                f"act-diff:{opt}",
+                _zeros_like(snap.activations.get(name)),
+                render_labelled,
             )
-        grad = cache.get_or_render(
-            snap,
-            (name, f"grad:{opt}", sample_idx),
-            lambda: _strip_html(
-                render_strip(
-                    snap.activation_gradients.get(name),
-                    sample_idx,
-                    input_hw=input_hw,
-                    options=options,
-                )
-            ),
+            if compare
+            else cached(f"act:{opt}", snap.activations.get(name), render_labelled)
         )
+        grad = cached(f"grad:{opt}", snap.activation_gradients.get(name), render)
         # Custom layer-tensor strips ride below the pair; the diff view
         # skips them (a custom tensor has no perturbed counterpart to diff).
         custom: tuple[tuple[str, str], ...] = ()
         if not compare:
             custom = tuple(
-                (
-                    label,
-                    cache.get_or_render(
-                        snap,
-                        (name, f"custom:{label}:{opt}", sample_idx),
-                        lambda tensor=tensor: _strip_html(
-                            render_strip(
-                                tensor,
-                                sample_idx,
-                                input_hw=input_hw,
-                                options=options,
-                            )
-                        ),
-                    ),
-                )
+                (label, cached(f"custom:{label}:{opt}", tensor, render))
                 for label, tensor in sorted(
                     snap.custom_activations.get(name, {}).items()
                 )
@@ -836,6 +834,7 @@ def _compute_probe_frame(
     *,
     compare: bool,
     options: RenderOptions,
+    tile_px: int,
     input_name: str | None,
     selected_input: str | None,
     input_mean: tuple[float, ...] | None,
@@ -860,23 +859,18 @@ def _compute_probe_frame(
     kind = "probe-diff" if compare else (
         "probe-perturbed" if probe.perturbed_activations is not None else "probe-act"
     )
-    kind = f"{kind}:{options.cache_key}"
-    input_hw = tensor_hw(probe.base_input(input_name))
+    kind = f"{kind}:{options.cache_key}@{tile_px}"
+    render = _strip_renderer(
+        tensor_hw(probe.base_input(input_name)), options, tile_px, show_labels=True
+    )
 
     def strips(name: str) -> _LayerStrips:
         act = cache.get_or_render(
             probe,
             (name, kind, sample_idx),
-            lambda: _strip_html(
-                render_strip(
-                    probe_act_tensor(
-                        probe, name, compare=compare, sample_idx=sample_idx
-                    ),
-                    0,
-                    input_hw=input_hw,
-                    options=options,
-                ),
-                show_labels=True,
+            lambda: render(
+                probe_act_tensor(probe, name, compare=compare, sample_idx=sample_idx),
+                0,
             ),
         )
         # Custom layer tensors are snapshot cargo — a probe forward never

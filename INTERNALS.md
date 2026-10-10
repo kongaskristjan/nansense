@@ -1574,6 +1574,16 @@ Render conventions worth knowing before editing `render.py`:
   configuration. MCP parses the equivalent `render_layer` arguments, and the
   `LayersViewSpec` that `start_recording` / `save_snapshot` take, at its
   boundary.
+- The render options' **Size** slider is deliberately *not* a `RenderOptions`
+  field: it is display-only (`InputPanel.tile_px`), never recorded nor offered
+  over MCP. It is threaded into `render_strip` as `tile_px` (plus
+  `row_height=linear_tile_height(tile_px)` for 1D rows) rather than applied as
+  a CSS scale, so the server-side downsample threshold, the caption form
+  (`_tile_labels`) and the display-resolution legend all follow the chosen
+  size — a large size ships big maps at full resolution instead of upscaling a
+  128 px downsample, and legends stay crisp. The size rides in the main page's
+  render-cache keys next to `RenderOptions.cache_key`. Legends shorter than
+  `LEGEND_TWO_LABEL_MIN_HEIGHT` collapse to one centered `±x` label.
 - `render_strip` handles `[C,H,W]`, `[F]`, and 2D token shapes
   (`[tokens, dim]`, unflattened onto the input patch grid when `input_hw` is
   threaded in, assuming row-major ViT token order); 4D-and-beyond per-sample
