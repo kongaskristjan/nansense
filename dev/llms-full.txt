@@ -18,12 +18,12 @@ The playground may take a minute or two to start. The video below gives you a qu
 
 *NaNsense* is a visual debugger for PyTorch. Pause training, step through batches, revisit earlier epochs, and inspect activations, gradients, weights, and optimizer state.
 
-[🕹️ Try the Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) [✨ Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) [🤖 Debug with a coding agent](https://kongaskristjan.github.io/nansense/dev/mcp/index.md)
+[🕹️ Try the Playground](https://kongaskristjan.github.io/nansense/dev/playground/index.md) [✨ Integrate with one prompt](https://kongaskristjan.github.io/nansense/dev/integrate/index.md) [🤖 Debug with a coding agent](https://kongaskristjan.github.io/nansense/dev/cli/index.md)
 
 - **Understand learned features.** [See activations and gradients](https://kongaskristjan.github.io/nansense/dev/showcase/#visualize-activations-and-gradients-throughout-training), [find the inputs that excite a channel](https://kongaskristjan.github.io/nansense/dev/showcase/#minmax-activation-patches), and [use deep dream to reveal what it has learned](https://kongaskristjan.github.io/nansense/dev/showcase/#simulate-what-a-neuron-is-searching-for-deep-dream).
 - **Find training problems.** Spot [small receptive fields](https://kongaskristjan.github.io/nansense/dev/showcase/#measure-the-receptive-field-of-a-neuron), [dead channels](https://kongaskristjan.github.io/nansense/dev/showcase/#investigate-dead-neurons), [padding artifacts](https://kongaskristjan.github.io/nansense/dev/showcase/#padding-artifacts), and [gradient underflow](https://kongaskristjan.github.io/nansense/dev/showcase/#spot-gradient-underflow).
 
-See the [Showcase](https://kongaskristjan.github.io/nansense/dev/showcase/index.md) for screenshots, [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) to run an example, and the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) to add NaNsense to your project. A coding agent can also inspect the same session through [MCP](https://kongaskristjan.github.io/nansense/dev/mcp/index.md).
+See the [Showcase](https://kongaskristjan.github.io/nansense/dev/showcase/index.md) for screenshots, [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/index.md) to run an example, and the [Wiring guide](https://kongaskristjan.github.io/nansense/dev/wiring/index.md) to add NaNsense to your project. A coding agent can also inspect the same session with [`nansense-cli`](https://kongaskristjan.github.io/nansense/dev/cli/index.md).
 
 ## How is this different from wandb or TensorBoard?
 
@@ -434,9 +434,9 @@ NiceGUI is mounted onto a bare FastAPI app via `ui.run_with`; the app is then se
 
 Once the server thread is launched, a daemon thread waits for the port to bind and then prints the UI address inside a box (so it stands out in the training log) and, unless `open_browser` is `False`, opens it in a focused browser tab. If a concurrent session already holds the port the bind fails, so the banner and the browser tab are both suppressed — only uvicorn's own `address already in use` error is shown. On a headless machine the bind still succeeds, so the banner prints and the browser open is a harmless no-op.
 
-`mcp` (default `True`) also serves the MCP endpoint at `/mcp` on the same port, so a coding agent can drive the debugger through the same session the browser shows (`nansense.mcp_server`). Its route is registered *before* NiceGUI's catch-all mount at `/` — Starlette matches routes in order — and its lifespan is passed to the app at construction, since NiceGUI wraps whatever lifespan it finds and a mounted sub-app never receives one.
+`mcp` (default `True`) also serves the endpoint `nansense-cli` connects to, on the same port, so a coding agent can drive the debugger through the same session the browser shows.
 
-`input_mean` / `input_std` are passed to the input-image pane so the sample is denormalized (`x * std + mean`) before display. When either is `None`, the renderer assumes the input is already in `[0, 1]`. `input_transform` maps a non-RGB input to a displayable 1-/3-channel image. Each of the three is either a single value applied to every input, or a `dict` keyed by input name for a multi-input model (see `nansense.input_config`); the stats and experiment panes use the primary input's resolved values, and so does the MCP server, whose image tools render the same views.
+`input_mean` / `input_std` are passed to the input-image pane so the sample is denormalized (`x * std + mean`) before display. When either is `None`, the renderer assumes the input is already in `[0, 1]`. `input_transform` maps a non-RGB input to a displayable 1-/3-channel image. Each of the three is either a single value applied to every input, or a `dict` keyed by input name for a multi-input model (see `nansense.input_config`); the stats and experiment panes use the primary input's resolved values, and so do `nansense-cli`'s `render_*` tools.
 
 ## The session
 

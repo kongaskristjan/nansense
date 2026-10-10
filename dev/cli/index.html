@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/mcp/">
+        <link rel="canonical" href="https://kongaskristjan.github.io/nansense/dev/cli/">
       
       
         <link rel="prev" href="../ui/">
@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#debug-with-a-coding-agent-mcp" class="md-skip">
+        <a href="#debug-with-a-coding-agent" class="md-skip">
           Skip to content
         </a>
       
@@ -755,24 +755,32 @@
   
 
 
-<h1 id="debug-with-a-coding-agent-mcp">Debug with a coding agent (MCP)<a class="headerlink" href="#debug-with-a-coding-agent-mcp" title="Permanent link">&para;</a></h1>
-<p>NaNsense supports <a href="https://modelcontextprotocol.io">MCP</a>, so a coding agent can pause training, inspect layers, and trace numerical problems for you.</p>
+<h1 id="debug-with-a-coding-agent">Debug with a coding agent<a class="headerlink" href="#debug-with-a-coding-agent" title="Permanent link">&para;</a></h1>
+<p>A coding agent can pause training, inspect layers, and trace numerical problems for you with <code>nansense-cli</code>, a command-line client that ships with NaNsense.</p>
 <p>The agent and browser share one session, so you can follow its work in the UI.</p>
 <h2 id="connect">Connect<a class="headerlink" href="#connect" title="Permanent link">&para;</a></h2>
-<p>The endpoint is served alongside the UI, on the same port. Start your run as usual:</p>
+<p>Start your run as usual:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
 </code></pre></div>
-<p>The startup banner prints the command to register it:</p>
+<p>The startup banner prints the command an agent starts from:</p>
 <div class="highlight"><pre><span></span><code>┌──────────────────────────────────────────────────────────────┐
 │ NaNsense UI is running at:                                   │
 │ http://127.0.0.1:8080                                        │
 │                                                              │
 │ Debug this run from a coding agent:                          │
-│ claude mcp add --transport http nansense http://127.0.0.1:8080/mcp │
+│ nansense-cli --port 8080 tools                               │
 └──────────────────────────────────────────────────────────────┘
 </code></pre></div>
-<p>Run the printed command in your project directory. For other MCP clients, connect to the same <code>/mcp</code> URL over Streamable HTTP.</p>
-<p>To turn the endpoint off, pass <code>mcp=False</code> to <a class="autorefs autorefs-internal" title="nansense.serve" href="../api/#nansense.serve"><code>serve</code></a>.</p>
+<p>If the agent started the run itself, it reads this line from the output. Otherwise, tell it which port to use: <em>"Debug my training run with <code>nansense-cli --port 8080</code>."</em> Nothing needs to be registered, so several agents can each debug their own run on its own port at the same time.</p>
+<p><code>tools</code> prints a short guide and one line per tool. The agent then calls a tool by name, with its arguments as flags:</p>
+<div class="highlight"><pre><span></span><code>nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>tools<span class="w">                         </span><span class="c1"># the guide and the tool list</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>get_layer_stats<span class="w"> </span>--help<span class="w">        </span><span class="c1"># one tool&#39;s description and flags</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>get_layer_stats<span class="w"> </span>--layers<span class="w"> </span>conv1<span class="w"> </span><span class="nb">fc</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>configure_debug_checks<span class="w"> </span>--interval_batches<span class="w"> </span><span class="m">1</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>render_layer<span class="w"> </span>--layers<span class="w"> </span>conv1<span class="w"> </span>--out<span class="w"> </span>shots
+</code></pre></div>
+<p>Results are printed as JSON. The <code>render_*</code> tools write their pictures as PNG files to <code>--out</code> (default <code>.nansense-cli/</code>) and print the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code.</p>
+<p>To turn agent access off, pass <code>mcp=False</code> to <a class="autorefs autorefs-internal" title="nansense.serve" href="../api/#nansense.serve"><code>serve</code></a>.</p>
 <div class="admonition note">
 <p class="admonition-title">It listens on localhost</p>
 <p>The endpoint is bound wherever you bound the UI, and it can control your training run. On the default loopback bind it also rejects requests carrying a foreign <code>Host</code> header, so a web page you visit cannot reach it. Don't expose the port to an untrusted network.</p>
@@ -809,7 +817,7 @@
 </tr>
 <tr>
 <td><code>step</code>, <code>run</code>, <code>run_until</code>, <code>pause</code></td>
-<td>The top bar's run controls — including detach, as <code>run(detach=True)</code></td>
+<td>The top bar's run controls — including detach, as <code>run --detach</code></td>
 </tr>
 <tr>
 <td><code>refresh</code></td>
@@ -830,7 +838,7 @@
 | <code>get_settings</code>, <code>set_update_frequency</code>, <code>set_watch_performance</code> | The settings dialog |</p>
 <p>Statistics come from two places, and the distinction matters when you read the agent's reasoning. <code>get_layer_stats</code> reads the last captured batch and covers <strong>any</strong> layer. <code>get_stats_history</code> reads the running accumulators, which only cover <strong>watched</strong> layers and only while collection is on (it is off by default) — so the agent watches a layer, turns collection on with <code>set_stats_scope</code>, lets a few epochs run, and then asks for the trend. Ask too early and the tool names which of the three is missing rather than returning an empty series.</p>
 <h2 id="what-the-agent-can-see">What the agent can see<a class="headerlink" href="#what-the-agent-can-see" title="Permanent link">&para;</a></h2>
-<p>The <code>render_*</code> tools return the views as pictures — the same ones the browser draws, rendered server-side and sent as images the agent looks at directly.</p>
+<p>The <code>render_*</code> tools return the views as pictures — the same ones the browser draws, rendered server-side and saved as PNG files the agent looks at directly.</p>
 <table>
 <thead>
 <tr>
@@ -891,7 +899,7 @@
 </tr>
 <tr>
 <td><code>list_experiments</code>, <code>run_experiment</code>, <code>get_experiment_result</code>, <code>render_experiment</code>, <code>cancel_experiment</code></td>
-<td>Deep dream and the Captum attributions — <code>run_experiment(video=True)</code> records a dream's whole ascent to MP4</td>
+<td>Deep dream and the Captum attributions — <code>run_experiment --video</code> records a dream's whole ascent to MP4</td>
 </tr>
 <tr>
 <td><code>set_auto_run_experiments</code></td>
@@ -907,11 +915,11 @@
 </tr>
 </tbody>
 </table>
-<p><strong>Time travel is the one that changes how debugging goes.</strong> An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with <code>configure_debug_checks(interval_batches=1)</code> and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by <code>session.epochs()</code> with <code>session.restore_point()</code>; <code>get_time_travel_status</code> says whether yours is.</p>
-<p><strong>Pin inputs for fair comparisons.</strong> Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use <code>set_probe_mode("eval")</code> to check evaluation behavior, including BatchNorm's running statistics.</p>
+<p><strong>Time travel is the one that changes how debugging goes.</strong> An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with <code>configure_debug_checks --interval_batches 1</code> and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by <code>session.epochs()</code> with <code>session.restore_point()</code>; <code>get_time_travel_status</code> says whether yours is.</p>
+<p><strong>Pin inputs for fair comparisons.</strong> Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use <code>set_probe_mode --mode eval</code> to check evaluation behavior, including BatchNorm's running statistics.</p>
 <p><strong>Experiments run on the paused training thread</strong>, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and <code>run_experiment</code> returns statistics while <code>render_experiment</code> draws the result. A result you poll before it exists is not simply missing: <code>get_experiment_result</code> reports the request's <code>stage</code> — <code>running</code>, <code>queued</code> (with <code>queued_ahead</code>), or <code>absent</code> — so waiting longer and re-requesting are told apart.</p>
 <p>Experiment parameters are validated before queuing or replacing a recording’s auto-run. Invalid types and non-finite numbers return an error without changing the existing request. Unknown parameter keys are reported as ignored.</p>
-<p><strong>Record deep dream as a video.</strong> <code>render_experiment</code> returns the final image. Use <code>run_experiment(..., video=True)</code> when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass <code>params: {"all_steps": true}</code> to keep every step.</p>
+<p><strong>Record deep dream as a video.</strong> <code>render_experiment</code> returns the final image. Use <code>run_experiment ... --video</code> when the path it took matters. By default, the video keeps about 20 evenly spaced frames; pass <code>--params '{"all_steps": true}'</code> to keep every step.</p>
 <p><strong>Recordings capture change over time.</strong> One frame per visualization update — so <code>set_update_frequency</code> is the frame rate, and a run that stays paused records nothing. Start one, let training run, then stop it for the file path to show a human — or discard it, if the take went wrong, so no half-finished file is left looking like a result. <code>save_snapshot</code> is the same thing at length one: a single PNG of a view as it stands, written immediately, with nothing to start or stop. Use it for the file you want a human to open — the <code>render_*</code> tools return the picture to <em>you</em>.</p>
 <p>Both take one <code>view</code> argument: an object whose own <code>view</code> field names the page — <code>layers</code>, <code>weights</code>, <code>histograms</code>, <code>patches</code> or <code>experiment</code> — alongside only the arguments that page takes, so <code>{"view": {"view": "layers", "layers": ["conv1"], "average": true}}</code> records the main view while <code>{"view": {"view": "weights", "layer": "conv1"}}</code> records one layer's kernels. The tool schema carries a variant per view with its fields and defaults, so there is nothing to guess. The <code>experiment</code> variant differs between the two: a recording registers a re-running request (<code>layer</code>, <code>kind</code>, <code>params</code>) so each frame is fresh, while a snapshot draws a result already published (<code>seq</code>, default the newest).</p>
 <h2 id="a-worked-example">A worked example<a class="headerlink" href="#a-worked-example" title="Permanent link">&para;</a></h2>
@@ -919,7 +927,7 @@
 <blockquote>
 <p><strong>You:</strong> Training loss goes to NaN around epoch 3. Find out where it starts.</p>
 </blockquote>
-<p>The agent calls <code>get_status</code> to see the run is paused at epoch 0, then <code>configure_debug_checks(interval_batches=1)</code> so the checks run on every batch instead of every hundredth, then <code>run</code> and polls until the debugger trips. <code>get_debug_report</code> names the layer and the fraction of its gradient that went non-finite, and <code>get_layer_stats</code> on that layer and the one feeding it shows which of the two was already unhealthy a batch earlier.</p>
+<p>The agent calls <code>get_status</code> to see the run is paused at epoch 0, then <code>configure_debug_checks --interval_batches 1</code> so the checks run on every batch instead of every hundredth, then <code>run</code> and polls until the debugger trips. <code>get_debug_report</code> names the layer and the fraction of its gradient that went non-finite, and <code>get_layer_stats</code> on that layer and the one feeding it shows which of the two was already unhealthy a batch earlier.</p>
 <p>Because the agent is driving the same session, you can open the UI at any point and see exactly the batch it stopped on.</p>
 <h2 id="things-worth-knowing">Things worth knowing<a class="headerlink" href="#things-worth-knowing" title="Permanent link">&para;</a></h2>
 <p><strong>Two positions.</strong> <code>live_position</code> is where training is now; <code>snapshot_position</code> is the batch the statistics describe. They're identical while paused and diverge once the run advances freely — the tools report both so the agent doesn't read stale numbers as current.</p>

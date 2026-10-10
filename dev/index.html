@@ -514,7 +514,7 @@
   
   
     <li class="md-nav__item">
-      <a href="mcp/" class="md-nav__link">
+      <a href="cli/" class="md-nav__link">
         
   
   
@@ -673,12 +673,12 @@
 <p><em>NaNsense</em> is a visual debugger for PyTorch. Pause training, step through batches, revisit earlier epochs, and inspect activations, gradients, weights, and optimizer state.</p>
 <p><a class="md-button md-button--primary" href="playground/">🕹️ Try the Playground</a>
 <a class="md-button md-button--primary" href="integrate/">✨ Integrate with one prompt</a>
-<a class="md-button md-button--primary" href="mcp/">🤖 Debug with a coding agent</a></p>
+<a class="md-button md-button--primary" href="cli/">🤖 Debug with a coding agent</a></p>
 <ul>
 <li><strong>Understand learned features.</strong> <a href="showcase/#visualize-activations-and-gradients-throughout-training">See activations and gradients</a>, <a href="showcase/#minmax-activation-patches">find the inputs that excite a channel</a>, and <a href="showcase/#simulate-what-a-neuron-is-searching-for-deep-dream">use deep dream to reveal what it has learned</a>.</li>
 <li><strong>Find training problems.</strong> Spot <a href="showcase/#measure-the-receptive-field-of-a-neuron">small receptive fields</a>, <a href="showcase/#investigate-dead-neurons">dead channels</a>, <a href="showcase/#padding-artifacts">padding artifacts</a>, and <a href="showcase/#spot-gradient-underflow">gradient underflow</a>.</li>
 </ul>
-<p>See the <a href="showcase/">Showcase</a> for screenshots, <a href="getting-started/">Getting started</a> to run an example, and the <a href="wiring/">Wiring guide</a> to add NaNsense to your project. A coding agent can also inspect the same session through <a href="mcp/">MCP</a>.</p>
+<p>See the <a href="showcase/">Showcase</a> for screenshots, <a href="getting-started/">Getting started</a> to run an example, and the <a href="wiring/">Wiring guide</a> to add NaNsense to your project. A coding agent can also inspect the same session with <a href="cli/"><code>nansense-cli</code></a>.</p>
 <h2 id="how-is-this-different-from-wandb-or-tensorboard">How is this different from wandb or TensorBoard?<a class="headerlink" href="#how-is-this-different-from-wandb-or-tensorboard" title="Permanent link">&para;</a></h2>
 <p>Experiment trackers show that a run went wrong. NaNsense helps you find where it went wrong inside the network—for example, a layer with dead channels or underflowing gradients.</p>
 
