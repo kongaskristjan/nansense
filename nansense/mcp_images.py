@@ -496,7 +496,7 @@ def _histogram_caveats(*, channel: int | None, bands: bool) -> str:
         text += (
             " A row titled 'all channels' has no per-channel data (a 1D tensor "
             "or a collapsed older epoch) and shows the layer-wide histogram; "
-            "get_layer_stats reports each stream's channel_count."
+            "get_layer_stats reports each stream's channels_tracked."
         )
     if bands:
         text += (

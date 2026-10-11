@@ -2000,8 +2000,12 @@ onto the wire in the two shapes a reader can act on: the *indices* of the dead
 channels (a count cannot be drilled into — `render_bin_samples(channel=…)`
 needs the number) and, with `channel=`, one channel's own histogram, which can
 be saturated or collapsed while the layer-wide one it sums into looks
-unremarkable. The scalars stay tensor-wide in both cases; the accumulator keeps
-no per-channel sums, so re-scoping them would invent numbers. The narrowing
+unremarkable. The rows are capped at the first `channel_limit` channels, so the
+view reports `channels_tracked` beside the tensor's real `channel_count` and,
+when they differ, a `channels_note` (`channel_cap_note`) — otherwise "14 dead"
+reads as 14 of the whole layer. The scalars stay tensor-wide in both cases;
+the accumulator keeps no per-channel sums, so re-scoping them would invent
+numbers. The narrowing
 itself is `watch.narrow_to_channel`, shared with the `/stats` page's "Per
 channel" switch so the clamping and the no-rows fallback cannot drift between
 the two front-ends — and the picture's subplot title says `all channels` when a

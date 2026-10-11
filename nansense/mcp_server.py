@@ -484,7 +484,9 @@ def build_server(
         a single channel can be saturated or collapsed while the layer it sums
         into looks unremarkable. The scalars stay tensor-wide — the accumulator
         keeps no per-channel sums — and the index is clamped into the tracked
-        range (`channel_count`, capped by the `channel_limit` setting).
+        range. Per-channel data covers only the first `channels_tracked` of the
+        layer's `channel_count` channels (capped by `channel_limit`), so a
+        dead-channel count is out of `channels_tracked`.
 
         Tensors from `watch_layer_tensor` instruments are summarised under
         `custom` (mean, std, min, max over finite values in the whole captured

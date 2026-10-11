@@ -34,6 +34,7 @@ from nansense import debugger, experiments, hyperparams, instruments
 from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.session import Session, StatsScope, lost_loop_reason
 from nansense.watch import (
+    LayerStatsSnapshot,
     TensorStatsSnapshot,
     bin_midpoint,
     dead_channel_indices,
@@ -242,8 +243,23 @@ def histogram_view(hist: tuple[int, ...] | None) -> list[tuple[float, int]] | No
     ]
 
 
+def channel_cap_note(tracked: int, total: int | None) -> str | None:
+    """Why `tracked` per-channel rows may cover fewer than the `total` channels.
+
+    With 16 tracked channels on a 64-channel layer, a dead-channel count of 14
+    means 14 of those first 16; the remaining 48 channels are untracked.
+    """
+    if total is None or tracked >= total:
+        return None
+    return (
+        f"Per-channel statistics (dead channels, channel histograms) cover only "
+        f"the first {tracked} of {total} channels; raise `channel_limit` with "
+        "set_watch_performance to track more (this clears collected statistics)."
+    )
+
+
 def _channel_view(
-    stats: TensorStatsSnapshot, channel: int | None
+    stats: TensorStatsSnapshot, channel: int | None, total: int | None
 ) -> dict[str, Any]:
     """The per-channel keys: how many channels, which are dead, one's histogram.
 
@@ -255,11 +271,19 @@ def _channel_view(
     "twelve channels are dead" to seeing one of them. And a channel's own
     distribution can be bimodal, saturated or collapsed while the layer-wide
     histogram it sums into looks unremarkable.
+
+    `total` is the tensor's real channel count (its dim 1), when known, so a
+    capped row count is never mistaken for the whole layer.
     """
     rows = stats.channel_hists
     if rows is None:
         return {}
-    view: dict[str, Any] = {"channel_count": len(rows)}
+    view: dict[str, Any] = {"channels_tracked": len(rows)}
+    if total is not None:
+        view["channel_count"] = total
+    cap = channel_cap_note(len(rows), total)
+    if cap is not None:
+        view["channels_note"] = cap
     dead = dead_channel_indices(rows)
     if dead:
         # Bounded by `channel_limit` (16 by default), so the whole list ships
@@ -301,6 +325,7 @@ def tensor_stats_view(
     under the caller.
     """
     finite = stats.n
+    channels = int(shape[1]) if shape is not None and len(shape) >= 2 else None
     # `hist` counts every value, including the non-finite ones (NaN in the zero
     # band, ±Inf in the end bins); it is `None` only for a collapsed older
     # epoch, where the total is genuinely unknown.
@@ -322,7 +347,7 @@ def tensor_stats_view(
         )
         if include_histogram:
             view["histogram"] = histogram_view(stats.hist)
-        view.update(_channel_view(stats, channel))
+        view.update(_channel_view(stats, channel, channels))
         return view
 
     view["mean"] = _num(stats.mean)
@@ -343,7 +368,7 @@ def tensor_stats_view(
         view["dtype"] = dtype
     if include_histogram:
         view["histogram"] = histogram_view(stats.hist)
-    view.update(_channel_view(stats, channel))
+    view.update(_channel_view(stats, channel, channels))
     return view
 
 
@@ -508,6 +533,30 @@ def stats_gap_hint(session: Session, layers: Iterable[str]) -> str:
     )
 
 
+def _history_channel_cap(
+    session: Session, layer: str, buckets: Iterable[LayerStatsSnapshot]
+) -> str | None:
+    """`channel_cap_note` for a trend, whose buckets carry no tensor shape.
+
+    The tracked row count comes from any bucket still holding its rows, the
+    real channel count from the layer's activation in the published snapshot.
+    """
+    tracked = next(
+        (
+            len(stats.channel_hists)
+            for bucket in buckets
+            for stats in (bucket.activations, bucket.gradients)
+            if stats.channel_hists is not None
+        ),
+        None,
+    )
+    snapshot = session.snapshot
+    activation = None if snapshot is None else snapshot.activations.get(layer)
+    if tracked is None or activation is None or activation.ndim < 2:
+        return None
+    return channel_cap_note(tracked, int(activation.shape[1]))
+
+
 def stats_history_view(
     session: Session, *, layer: str, phase: str | None = None
 ) -> dict[str, Any]:
@@ -555,6 +604,10 @@ def stats_history_view(
         "phases_with_data": available,
         "history": history,
     }
+    buckets = [b for name in phases for b in snapshot.phase_history(layer, name)]
+    cap = _history_channel_cap(session, layer, buckets)
+    if cap is not None:
+        view["channels_note"] = cap
     # Weight samples are taken once per epoch, at its first watched batch, and
     # carry no phase — the same parameter is in play across all of them.
     weights = {

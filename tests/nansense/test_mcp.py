@@ -226,7 +226,18 @@ def test_dead_channels_report_which_ones_not_just_how_many() -> None:
     view = tensor_stats_view(_channelled((live, dead, dead)))
     assert view["dead_channels"] == 2
     assert view["dead_channel_indices"] == [1, 2]
-    assert view["channel_count"] == 3
+    assert view["channels_tracked"] == 3
+
+
+@pytest.mark.parametrize(("channels", "capped"), [(3, False), (64, True)])
+def test_a_capped_channel_count_says_what_it_is_out_of(
+    channels: int, capped: bool
+) -> None:
+    """14 dead out of 16 tracked must not read as 14 of the layer's 64."""
+    rows = (_hist(**{f"b{ZERO_BIN}": 4}),) * 3
+    view = tensor_stats_view(_channelled(rows), shape=torch.Size([2, channels, 4]))
+    assert (view["channels_tracked"], view["channel_count"]) == (3, channels)
+    assert ("channels_note" in view) is capped
 
 
 def test_channel_histogram_separates_one_channel_from_the_layer() -> None:
@@ -256,7 +267,7 @@ def test_channel_keys_are_absent_without_per_channel_tracking() -> None:
         n=2, sum=2.0, sum_sq=2.0, min=1.0, max=1.0, hist=_hist(**{f"b{ZERO_BIN + 1}": 2})
     )
     view = tensor_stats_view(flat, channel=0)
-    assert "channel_count" not in view
+    assert "channels_tracked" not in view
     assert "channel_histogram" not in view
 
 
@@ -274,7 +285,7 @@ def test_diverged_stats_still_report_their_channels() -> None:
     )
     view = tensor_stats_view(diverged, channel=0)
     assert "mean" not in view
-    assert view["channel_count"] == 1
+    assert view["channels_tracked"] == 1
     ((value, count),) = view["channel_histogram"]
     assert count == 4
     assert value == pytest.approx(bin_midpoint(N_BINS - 1), rel=1e-5)
