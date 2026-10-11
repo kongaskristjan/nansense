@@ -108,6 +108,9 @@ _MAX_WAIT_SECONDS = 300.0
 # thread to leave its pause before reporting the state.
 _RESUME_WAIT_SECONDS = 2.0
 
+# How long `shutdown` lets its reply flush before stopping the server.
+_SHUTDOWN_DELAY_SECONDS = 0.5
+
 # Poll interval while waiting for a requested snapshot to be published.
 _SNAPSHOT_POLL_SECONDS = 0.05
 
@@ -323,6 +326,7 @@ def build_server(
     input_mean: MeanStd | dict[str, MeanStd] | None = None,
     input_std: MeanStd | dict[str, MeanStd] | None = None,
     input_transform: InputTransform | dict[str, InputTransform] | None = None,
+    stop_server: Callable[[], None] | None = None,
 ) -> MCPServer:
     """An `MCPServer` whose tools drive and inspect `session`.
 
@@ -333,6 +337,9 @@ def build_server(
     for the same thing: turning an input tensor back into a viewable image for
     the `render_*` tools. They live on the training script rather than on the
     session, so they have to be handed down here too.
+
+    `stop_server` ends the serving process's UI server (`serve` passes it);
+    without it the `shutdown` tool refuses.
     """
     with _root_logging_kept():
         server = MCPServer(
@@ -2163,7 +2170,59 @@ def build_server(
         """
         return await asyncio.to_thread(_discard_recording, session, key=key)
 
+    # ---- Process -----------------------------------------------------
+
+    @server.tool()
+    async def shutdown() -> dict[str, Any]:
+        """Stop the NaNsense server once training has ended, so the process can exit.
+
+        A finished run keeps serving its last captured batch for post-mortem
+        browsing, which keeps the training process alive. This stops the UI
+        and this endpoint, allowing the process to exit once the training
+        script has ended. Later commands to this server report that nothing
+        is serving.
+
+        Refused while training is still live (let it finish first), on a
+        locked session, or when this endpoint is not hosted by nansense.serve().
+        """
+        refusal = _shutdown_refusal(session, stop_server)
+        if refusal is not None:
+            return refusal
+        assert stop_server is not None
+        # Later, not now: the reply has to leave before the server stops.
+        asyncio.get_running_loop().call_later(_SHUTDOWN_DELAY_SECONDS, stop_server)
+        return {
+            "state": "stopping",
+            "note": (
+                "The NaNsense server stops in a moment; open pages lose their "
+                "connection and later commands report that nothing is serving."
+            ),
+        }
+
     return server
+
+
+def _shutdown_refusal(
+    session: Session, stop_server: Callable[[], None] | None
+) -> dict[str, Any] | None:
+    """Why `shutdown` must not stop the server, or `None` when it may."""
+    if session.locked:
+        return {
+            "error": "This session is locked (a shared demo); it cannot be shut down.",
+            "state": "locked",
+        }
+    if stop_server is None:
+        return {"error": "Shutdown is unavailable outside nansense.serve()."}
+    if not (session.closed or session.training_lost):
+        return {
+            "error": (
+                "Training is still live. Let it finish first (e.g. call run "
+                "with detach=True); shutdown is available once get_status "
+                "reports 'finished' or 'lost'."
+            ),
+            "state": status_view(session)["state"],
+        }
+    return None
 
 
 def _probe_refusal(session: Session) -> dict[str, Any] | None:
@@ -2821,6 +2880,7 @@ def build_mount(
     input_mean: MeanStd | dict[str, MeanStd] | None = None,
     input_std: MeanStd | dict[str, MeanStd] | None = None,
     input_transform: InputTransform | dict[str, InputTransform] | None = None,
+    stop_server: Callable[[], None] | None = None,
 ) -> McpMount:
     """Build the MCP endpoint for `session` as routes plus a lifespan.
 
@@ -2830,7 +2890,7 @@ def build_mount(
     UI's port without a sub-mount's trailing-slash redirect on POST.
 
     The `input_*` arguments are `serve`'s, forwarded to `build_server` for the
-    image tools.
+    image tools, as is `stop_server` for the `shutdown` tool.
     """
     server = build_server(
         session,
@@ -2839,6 +2899,7 @@ def build_mount(
         input_mean=input_mean,
         input_std=input_std,
         input_transform=input_transform,
+        stop_server=stop_server,
     )
     app = server.streamable_http_app(streamable_http_path=path, host=host)
     manager = server.session_manager

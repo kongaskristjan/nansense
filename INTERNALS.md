@@ -1738,6 +1738,12 @@ is missing or found only in the venv (`uv run` prepends its `bin/`), it is spell
 `<sys.executable> -m nansense_cli`, which works from an agent's shell and
 survives stale venv shebangs.
 
+The uvicorn server outlives a finished training script (the thread is
+non-daemon, for post-mortem browsing). Besides Ctrl-C, the MCP `shutdown` tool
+stops the server: `serve` hands `build_mount` a `stop_server` callback that
+sets `should_exit`, deferred briefly to let the tool's reply leave first.
+The tool requires an unlocked session that is `closed` or `training_lost`,
+and a `stop_server` callback.
 
 **Main page.** One `_LayerView` card per layer, but a card is visible only
 while its layer is in the page's **shown** set. In the default `watched`

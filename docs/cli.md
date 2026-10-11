@@ -142,4 +142,6 @@ Because the agent is driving the same session, you can open the UI at any point 
 
 **Long steps don't hang.** A `step` over a slow epoch returns after a timeout with a note that the run is still going; the command stays in effect and the agent polls `get_status`.
 
+**A finished run keeps serving.** After training ends, the page stays up for post-mortem browsing, keeping the process alive. Press Ctrl-C or call `shutdown` from the agent to stop the server. `shutdown` allows the process to exit once the training script has ended; it is refused while training is still live or the session is locked.
+
 **Locked sessions refuse.** On a [locked](playground.md) demo session the control tools return an explicit refusal rather than silently doing nothing, so an agent can't loop forever stepping a run that never moves. Inspection keeps working.

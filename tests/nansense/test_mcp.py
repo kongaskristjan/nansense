@@ -633,6 +633,7 @@ def test_control_tools_refuse_on_a_locked_session() -> None:
         ("watch_layers", {"layers": ["fc1"]}),
         ("set_stats_scope", {"scope": "all"}),
         ("configure_debug_checks", {"interval_batches": 5}),
+        ("shutdown", {}),
     ):
         view = _call(session, name, arguments)
         assert view["state"] == "locked", name
@@ -648,6 +649,37 @@ def test_control_tools_refuse_once_training_has_finished() -> None:
     assert "finished" in view["error"]
     # The last captured batch stays inspectable.
     assert _call(session, "get_layer_stats", {"layers": ["fc1"]})["layers"]
+
+
+def _shutdown(session: Session, stop_server: Any) -> Any:
+    async def go() -> Any:
+        async with Client(build_server(session, stop_server=stop_server)) as client:
+            result = await client.call_tool("shutdown", {})
+            await asyncio.sleep(0)  # let the deferred stop run
+            block = result.content[0]
+            assert isinstance(block, TextContent)
+            return json.loads(block.text)
+
+    return _run(go())
+
+
+def test_shutdown_stops_the_server_only_once_training_has_ended(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent can end a finished run's lingering process, but never cut a
+    live run short."""
+    import nansense.mcp_server as mcp_server
+
+    monkeypatch.setattr(mcp_server, "_SHUTDOWN_DELAY_SECONDS", 0.0)
+    stops: list[bool] = []
+    with paused_session(TinyNet()) as session:
+        view = _shutdown(session, lambda: stops.append(True))
+        assert "still live" in view["error"] and view["state"] == "paused"
+    session.close()
+    assert "nansense.serve" in _shutdown(session, None)["error"]
+    assert not stops
+    assert _shutdown(session, lambda: stops.append(True))["state"] == "stopping"
+    assert stops == [True]
 
 
 def _finished_session() -> tuple[Session, TinyNet]:

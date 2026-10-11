@@ -381,6 +381,14 @@ def serve(
     # Imported here rather than at module scope: the MCP SDK is a second of
     # import time that only `serve()` ever needs, and every process that pulls
     # in `nansense` — spawned DDP ranks included — would otherwise pay it.
+    # The uvicorn server is built after the MCP mount it serves, so the mount's
+    # `shutdown` tool reaches it through this holder.
+    servers: list[uvicorn.Server] = []
+
+    def stop_server() -> None:
+        for running in servers:
+            running.should_exit = True
+
     if mcp:
         from nansense.mcp_server import build_mount
 
@@ -391,6 +399,7 @@ def serve(
             input_mean=input_mean,
             input_std=input_std,
             input_transform=input_transform,
+            stop_server=stop_server,
         )
     else:
         mount = None
@@ -462,6 +471,7 @@ def serve(
     )
     server = uvicorn.Server(config)
     setattr(server, "install_signal_handlers", lambda: None)
+    servers.append(server)
 
     thread = threading.Thread(target=server.run, name="nansense-ui", daemon=False)
     thread.start()
