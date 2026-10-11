@@ -2265,6 +2265,18 @@ class Session:
                 timeout=timeout,
             )
 
+    def wait_until_running(self, *, timeout: float | None = None) -> bool:
+        """Block until the training thread has left its pause (or closed).
+
+        A resume command only signals the paused thread; `is_running` flips
+        once that thread wakes, so a status read straight after the command
+        would still say "paused".
+        """
+        with self._cv:
+            return self._cv.wait_for(
+                lambda: not self._paused or self._closed, timeout=timeout
+            )
+
     def _set_mode(self, mode: Mode, *, resume: bool) -> None:
         # The single choke point for every run-control method (`stop`,
         # `step_*`, `detach`), so a locked session refuses them all here.
@@ -2848,6 +2860,7 @@ class Session:
                 )
                 if done:
                     self._paused = False
+                    self._cv.notify_all()
                 run_probe = False
                 client_probes: list[str] = []
                 experiment: ExperimentRequest | None = None

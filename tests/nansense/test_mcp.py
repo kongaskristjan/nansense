@@ -551,6 +551,8 @@ def test_run_detaches_without_waiting_when_asked() -> None:
         view = _call(session, "run", {"detach": True, "timeout_seconds": 30})
         assert session.mode is Mode.DETACH
         assert "waiting" not in view
+        # Reported once the run has left its pause, not sampled before.
+        assert view["state"] in ("running", "finished")
 
 
 def test_watch_layers_reports_unknown_names_and_updates_status() -> None:

@@ -104,6 +104,10 @@ DEFAULT_MCP_PATH = "/mcp"
 _DEFAULT_WAIT_SECONDS = 30.0
 _MAX_WAIT_SECONDS = 300.0
 
+# How long a non-waiting resume (`run(detach=True)`) waits for the training
+# thread to leave its pause before reporting the state.
+_RESUME_WAIT_SECONDS = 2.0
+
 # Poll interval while waiting for a requested snapshot to be published.
 _SNAPSHOT_POLL_SECONDS = 0.05
 
@@ -264,6 +268,9 @@ async def _run_control(
     run has nothing to resume, so waiting for a *new* pause would just burn
     the timeout. `None` defers that decision to here, where it can be made
     against the same `pause_count` the wait will use.
+
+    `wait=False` still waits, briefly, for the training thread to leave its
+    pause, so the reported state is the one the command produced.
     """
     refusal = _control_refusal(session)
     if refusal is not None:
@@ -278,6 +285,10 @@ async def _run_control(
     waited = _clamp_timeout(timeout)
     if should_wait:
         reached = await _await_pause(session, after=before, timeout=waited)
+    elif wait is False:
+        await asyncio.to_thread(
+            session.wait_until_running, timeout=_RESUME_WAIT_SECONDS
+        )
     view = status_view(session)
     if not reached:
         view["waiting"] = (
