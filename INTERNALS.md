@@ -221,7 +221,8 @@ function/method ops carry their literal non-tensor call arguments
 (graph inputs, `relu`, `add`, …) map to `""`. The main page publishes the
 non-empty entries to the browser as a slug-keyed JS map
 (`_layer_info_script`) and a cursor-following tooltip div in the shared
-static JS shows them while hovering a diagram node or a card header.
+static JS shows them while hovering a diagram node or a card header (but not
+the header's buttons, whose own tooltips it would cover).
 
 At `__exit__`:
 

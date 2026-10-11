@@ -176,6 +176,8 @@ _ARCHITECTURE_CLICK_JS: str = """
     if (!el || !el.closest) return null;
     const node = el.closest('g.node');
     if (node) return slugFromMermaidId(node.id);
+    // A header button has its own tooltip, which the info box would cover.
+    if (el.closest('[data-card-action]')) return null;
     const card = el.closest('[data-layer]');
     // Only the header names the layer; the strip area below is data.
     if (card && card.firstElementChild && card.firstElementChild.contains(el)) {
