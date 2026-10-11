@@ -12,6 +12,9 @@ from nicegui.element import Element
 from nicegui.elements.tooltip import Tooltip
 
 from nansense.ui.common import (
+    _CHIP_TONES,
+    _StatusChip,
+    _StatusPill,
     _resizable_pane_props,
     _resize_handle,
     _strip_html,
@@ -161,3 +164,13 @@ def test_min_app_width_css_matches_constant() -> None:
     # panes), narrower than a normal desktop window (so desktops never see
     # a horizontal scrollbar).
     assert 600 <= MIN_APP_WIDTH <= 1100
+
+
+def test_status_pill_swaps_tone_but_keeps_its_row_layout() -> None:
+    pill = _StatusPill(_StatusChip("running", None, "Running"))
+    pill.show(_StatusChip("done", "check_circle", "Done"))
+    classes = pill._row.classes
+    # nicegui's own flex classes lay the glyph out beside the label.
+    assert "nicegui-row" in classes and "items-center" in classes
+    assert set(_CHIP_TONES["done"].split()) <= set(classes)
+    assert not set(_CHIP_TONES["running"].split()) & set(classes)

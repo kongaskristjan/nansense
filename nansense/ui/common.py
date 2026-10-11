@@ -119,6 +119,7 @@ _CHIP_TONES: dict[str, str] = {
     "done": "bg-emerald-100 text-emerald-800 border-emerald-300",
     "failed": "bg-red-100 text-red-700 border-red-300",
 }
+_ALL_CHIP_TONES = " ".join(_CHIP_TONES.values())
 _CHIP_BASE = (
     "items-center gap-2 no-wrap w-fit max-w-full px-2.5 py-1 "
     "rounded border text-sm font-medium"
@@ -136,7 +137,7 @@ class _StatusPill:
 
     def __init__(self, chip: _StatusChip) -> None:
         self._chip: _StatusChip | None = None
-        self._row = ui.row()
+        self._row = ui.row().classes(_CHIP_BASE)
         with self._row:
             # `color=None` leaves the spinner inheriting the pill's text
             # color; a size in `em` keeps it on the label's baseline.
@@ -150,7 +151,9 @@ class _StatusPill:
         if chip == self._chip:
             return
         self._chip = chip
-        self._row.classes(replace=f"{_CHIP_BASE} {_CHIP_TONES[chip.tone]}")
+        # Swap only the tone: `replace=` would also drop nicegui's own
+        # `nicegui-row` flex classes and stack the icon above the label.
+        self._row.classes(add=_CHIP_TONES[chip.tone], remove=_ALL_CHIP_TONES)
         self._spinner.set_visibility(chip.icon is None)
         self._icon.set_visibility(chip.icon is not None)
         if chip.icon is not None:
