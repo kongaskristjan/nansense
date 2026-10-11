@@ -478,8 +478,9 @@ def build_server(
         """Activation and gradient statistics for the last captured batch.
 
         Works for any layer, watched or not. Reports count, shape, mean, std,
-        min, max, median, and the dead channels (those whose every value landed
-        in the zero band — dead ReLUs) as both a count and the indices
+        min, max, median (a histogram estimate rounded to two significant
+        digits), and the dead channels (those whose every value landed in the
+        zero band — dead ReLUs) as both a count and the indices
         themselves, which is what lets you drill into one with `channel` here
         or with `render_bin_samples`. `include_histogram` adds the value
         distribution as `[value, count]` pairs over signed-log bins.

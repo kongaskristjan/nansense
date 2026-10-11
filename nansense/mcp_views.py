@@ -64,6 +64,16 @@ def _num(value: float | None) -> float | str | None:
     return _finite_num(number)
 
 
+def _median_num(value: float) -> float | str | None:
+    """Round a histogram-derived median to two significant digits.
+
+    Regular nonzero bins span a seventh of a decade, so extra digits reflect
+    the bin geometry rather than additional measurement precision.
+    """
+    number = float(value)
+    return _num(number) if not math.isfinite(number) else float(f"{number:.2g}")
+
+
 def _dtype_name(dtype: torch.dtype | None) -> str | None:
     return None if dtype is None else str(dtype).removeprefix("torch.")
 
@@ -380,7 +390,7 @@ def tensor_stats_view(
     view["std"] = _num(stats.std)
     view["min"] = _num(stats.min)
     view["max"] = _num(stats.max)
-    view["median"] = _num(stats.median)
+    view["median"] = _median_num(stats.median)
     if non_finite > 0:
         view["note"] = (
             "mean, std, min and max describe only the finite values; the "
@@ -645,7 +655,7 @@ def _history_point(
             "std": _num(stats.std),
             "min": _num(stats.min),
             "max": _num(stats.max),
-            "median": _num(stats.median),
+            "median": _median_num(stats.median),
         }
     )
     dead = stats.dead_channel_count

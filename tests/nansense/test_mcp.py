@@ -219,6 +219,15 @@ def _channelled(rows: tuple[tuple[int, ...], ...]) -> TensorStatsSnapshot:
     )
 
 
+def test_the_median_keeps_only_the_digits_its_bin_gives_it() -> None:
+    """The median is a bin midpoint; six digits of it would be bin geometry."""
+    stats = TensorStatsSnapshot(
+        n=4, sum=4.0, sum_sq=4.0, min=0.04, max=0.05, hist=_hist(b160=4)
+    )
+    median = tensor_stats_view(stats)["median"]
+    assert median == float(f"{bin_midpoint(160):.2g}") != bin_midpoint(160)
+
+
 def test_dead_channels_report_which_ones_not_just_how_many() -> None:
     """A count cannot be drilled into: `render_bin_samples` needs an index."""
     live = _hist(**{f"b{ZERO_BIN + 1}": 4})
