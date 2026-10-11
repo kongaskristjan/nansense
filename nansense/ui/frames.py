@@ -420,24 +420,44 @@ def histogram_frame(
     log_x: bool = False,
     log_y: bool = False,
     channel: int | None = None,
+    bands: bool = False,
+    current_batch: bool = False,
 ) -> Image.Image | None:
     """The stats page's HISTOGRAMS view for one phase, redrawn server-side.
 
     `channel` is the page's "Per channel" switch: each row is narrowed to that
     channel's histogram, falling back to the universal one where per-channel
-    rows are absent (a 1D tensor, a collapsed older epoch).
+    rows are absent (a 1D tensor, a collapsed older epoch). `bands` is its
+    "Show subnormal/overflow" checkbox.
+
+    `current_batch` is the page's "Current batch" phase entry: the last
+    captured batch alone, for any layer, instead of the running statistics —
+    `phase` is then ignored.
     """
     if not layers:
         return None
-    snap = session.watch_snapshot(layers=list(layers), include_patches=False)
+    snap = (
+        session.current_batch_stats(layers=list(layers), include_patches=False)
+        if current_batch
+        else session.watch_snapshot(layers=list(layers), include_patches=False)
+    )
     rows: list[tuple[str, str, str, LayerStatsSnapshot]] = []
     for layer in layers:
-        stats = snap.latest_per_phase(layer).get(phase)
-        if stats is None:
-            continue
-        for kind in ("activation", "gradient"):
-            rows.append((layer, kind, phase, _narrowed(stats, kind, channel)))
-    return histogram_image(rows, log_x=log_x, log_y=log_y, channel=channel)
+        per_phase = snap.latest_per_phase(layer)
+        entries = per_phase.items() if current_batch else [(phase, per_phase.get(phase))]
+        for shown, stats in entries:
+            if stats is None:
+                continue
+            for kind in ("activation", "gradient"):
+                rows.append((layer, kind, shown, _narrowed(stats, kind, channel)))
+    return histogram_image(
+        rows,
+        log_x=log_x,
+        log_y=log_y,
+        channel=channel,
+        bands=bands,
+        current_batch=current_batch,
+    )
 
 
 def _narrowed(

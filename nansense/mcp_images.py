@@ -400,17 +400,31 @@ def histogram_image(
     log_x: bool = False,
     log_y: bool = False,
     channel: int | None = None,
+    bands: bool = False,
+    current_batch: bool = False,
 ) -> RenderedImage:
     """The stats page's histograms: value distributions per layer and phase.
 
     Reads the running accumulators, so it only covers the layers the current
     stats scope collects — the same restriction `get_stats_history` has, and
     the same diagnosis (`stats_gap_hint`) when there is nothing to draw.
+    `current_batch` (the page's "Current batch" phase entry) draws the last
+    captured batch instead, including unwatched layers with captured data.
     """
     from nansense.ui.frames import histogram_frame
 
     unknown = _unknown_layers(session, layers)
     resolved = [name for name in layers if name not in unknown]
+    if current_batch:
+        return _current_batch_histogram(
+            session,
+            layers=resolved,
+            unknown=unknown,
+            log_x=log_x,
+            log_y=log_y,
+            channel=channel,
+            bands=bands,
+        )
     without_stats = [name for name in resolved if not session.stats_phases(name)]
     collected = [name for name in resolved if name not in without_stats]
     if not collected:
@@ -441,19 +455,16 @@ def histogram_image(
             log_x=log_x,
             log_y=log_y,
             channel=channel,
+            bands=bands,
         )
     )
     note = (
         f"Activation and gradient histograms for {collected}, phase {chosen!r}"
-        f"{'' if channel is None else f', channel {channel}'}"
-        f"{' (log x)' if log_x else ''}{' (log y)' if log_y else ''}."
+        f"{_histogram_options(log_x=log_x, log_y=log_y, channel=channel)} — "
+        "each row shows that phase's latest retained epoch, so early in an "
+        "epoch it may cover only a few batches (n in the row title counts values)."
+        + _histogram_caveats(channel=channel, bands=bands)
     )
-    if channel is not None:
-        note += (
-            " A row titled 'all channels' has no per-channel data (a 1D tensor "
-            "or a collapsed older epoch) and shows the universal histogram; "
-            "get_layer_stats reports each stream's channel_count."
-        )
     if without_stats:
         note += f" Not collecting statistics, skipped: {without_stats}."
     if unknown:
@@ -463,6 +474,79 @@ def histogram_image(
             None,
             note + f" No bucket for phase {chosen!r}; phases with data: "
             f"{phases_with_data(session, collected)}.",
+        )
+    return RenderedImage(png, note + caveat)
+
+
+def _histogram_options(*, log_x: bool, log_y: bool, channel: int | None) -> str:
+    """The histogram note's option suffix, e.g. `", channel 1 (log x)"`."""
+    return (
+        f"{'' if channel is None else f', channel {channel}'}"
+        f"{' (log x)' if log_x else ''}{' (log y)' if log_y else ''}"
+    )
+
+
+def _histogram_caveats(*, channel: int | None, bands: bool) -> str:
+    """The sentences that explain what a histogram note's options drew."""
+    text = ""
+    if channel is not None:
+        text += (
+            " A row titled 'all channels' has no per-channel data (a 1D tensor "
+            "or a collapsed older epoch) and shows the layer-wide histogram; "
+            "get_layer_stats reports each stream's channel_count."
+        )
+    if bands:
+        text += (
+            " Dotted lines mark the dtype's subnormal and near-overflow edges "
+            "where visible within the histogram's 1e-9..1e6 magnitude range "
+            "(fp32 and bf16 edges lie outside it)."
+        )
+    return text
+
+
+def _current_batch_histogram(
+    session: Session,
+    *,
+    layers: Sequence[str],
+    unknown: Sequence[str],
+    log_x: bool,
+    log_y: bool,
+    channel: int | None,
+    bands: bool,
+) -> RenderedImage:
+    """`histogram_image` for the last captured batch, watched or not."""
+    from nansense.ui.frames import histogram_frame
+
+    if session.snapshot is None:
+        return _no_snapshot()
+    if not layers:
+        return RenderedImage(
+            None, f"Unknown layers: {list(unknown)} — call get_architecture."
+        )
+    png, caveat = _encode(
+        histogram_frame(
+            session,
+            layers=layers,
+            phase="",
+            log_x=log_x,
+            log_y=log_y,
+            channel=channel,
+            bands=bands,
+            current_batch=True,
+        )
+    )
+    note = (
+        f"Activation and gradient histograms for {list(layers)}, from the last "
+        f"captured batch only ({_position_note(session)})"
+        f"{_histogram_options(log_x=log_x, log_y=log_y, channel=channel)}."
+        + _histogram_caveats(channel=channel, bands=bands)
+    )
+    if unknown:
+        note += f" Unknown layers, skipped: {list(unknown)}."
+    if png is None:
+        return RenderedImage(
+            None,
+            note + " No activation or gradient data was captured for those layers."
         )
     return RenderedImage(png, note + caveat)
 

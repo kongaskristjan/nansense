@@ -42,7 +42,7 @@ from nansense.mcp_server import build_server
 from nansense.session import Session
 from nansense.ui.frames import PanelAxes, WeightPanel, _wrap_parts
 
-from .helpers import TinyNet, paused_session
+from .helpers import TinyNet, _layer_snap, paused_session
 
 _T = TypeVar("_T")
 
@@ -396,6 +396,32 @@ def test_histogram_channel_narrows_the_picture_and_names_itself() -> None:
         whole = histogram_image(session, layers=["conv"])
         assert whole.png is not None
         assert rendered.png != whole.png
+
+
+def test_histogram_of_the_current_batch_needs_no_watch() -> None:
+    """The page's "Current batch" phase: any layer, straight off the last
+    capture, where the accumulators would say "not watched"."""
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        assert histogram_image(session, layers=["fc"]).png is None
+        rendered = histogram_image(session, layers=["fc"], current_batch=True)
+        assert rendered.png is not None
+        assert "last captured batch" in rendered.note
+
+
+@pytest.mark.parametrize(("dtype", "drawn"), [(torch.float16, True), (torch.float32, False)])
+def test_histogram_bands_mark_the_dtypes_edges(dtype: torch.dtype, drawn: bool) -> None:
+    """fp16's subnormal/overflow edges fall on the axis and are drawn; fp32's
+    lie outside it, so the picture is unchanged."""
+    from dataclasses import replace
+
+    from nansense.ui.compose import histogram_image as compose_histogram
+
+    snap = _layer_snap("train", hist={5: 3, 100: 4})
+    snap = replace(snap, activations=replace(snap.activations, dtype=dtype))
+    rows = [("L", "activation", "train", snap)]
+    plain, banded = compose_histogram(rows), compose_histogram(rows, bands=True)
+    assert plain is not None and banded is not None
+    assert (plain.tobytes() != banded.tobytes()) is drawn
 
 
 def _gradcam_seq(session: Any) -> int:

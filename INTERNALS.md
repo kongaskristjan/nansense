@@ -1890,7 +1890,10 @@ rebuild rather than a restyle. The box is pre-checked whenever the page opens
 while an under/overflow issue is active (`_should_show_bands` reads
 `session.debug_error`), so any route to `/stats` — a layer card's Stats button,
 the numerical-warning dialog's per-row link, or a direct URL — surfaces the
-band that issue is about.
+band that issue is about. MCP's `render_histogram` exposes the checkbox as
+`bands` (`compose.histogram_image` draws the same edges with `axvline`) and the
+Phase dropdown's "Current batch" entry as `current_batch`, which ignores
+`phase` and reads `current_batch_stats` instead of the accumulators.
 
 **`/weights` page** (`?layer=`). One `_WeightPanel` per name in
 `session.layer_weights[layer]`, reading shapes from `model.named_parameters()`

@@ -786,6 +786,26 @@ def build_server(
                 )
             ),
         ] = None,
+        bands: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True marks the dtype's subnormal and near-overflow edges "
+                    "with dotted lines when visible (the page's 'Show "
+                    "subnormal/overflow')."
+                )
+            ),
+        ] = False,
+        current_batch: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True draws the last captured batch alone, for any layer "
+                    "with captured data, instead of the running statistics "
+                    "(the page's 'Current batch' phase); `phase` is then ignored."
+                )
+            ),
+        ] = False,
     ) -> list[Any]:
         """Picture of the value distributions of watched layers.
 
@@ -799,7 +819,12 @@ def build_server(
 
         `channel` narrows every subplot to one channel (the page's "Per
         channel" switch) — the way to tell one collapsed channel from a layer
-        that collapsed as a whole.
+        that collapsed as a whole. `bands` marks the dtype's subnormal and
+        near-overflow edges when they fall within the plotted range.
+
+        Each row shows its phase's latest retained epoch, so early in an epoch
+        it may cover only a few batches; `current_batch` shows the last captured
+        batch on its own, including unwatched layers with captured data.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -810,6 +835,8 @@ def build_server(
                 log_x=log_x,
                 log_y=log_y,
                 channel=channel,
+                bands=bands,
+                current_batch=current_batch,
             )
         )
 

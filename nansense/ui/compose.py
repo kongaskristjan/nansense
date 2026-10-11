@@ -567,6 +567,8 @@ def histogram_image(
     log_x: bool = False,
     log_y: bool = False,
     channel: int | None = None,
+    bands: bool = False,
+    current_batch: bool = False,
 ) -> Image.Image | None:
     """Matplotlib re-render of `(layer, kind, phase, stats)` histogram rows.
 
@@ -591,6 +593,10 @@ def histogram_image(
     `channel` only labels the subplot titles — the caller narrows the rows
     themselves, since a row without per-channel data keeps the universal
     histogram and the title has to say so rather than claim a channel.
+
+    `bands` is the page's "Show subnormal/overflow" checkbox: dotted lines at
+    each row's dtype-aware band edges. `current_batch` titles the rows as the
+    page's "Current batch" phase entry does.
     """
     if not rows:
         return None
@@ -618,6 +624,8 @@ def histogram_image(
             log_x=log_x,
             log_y=log_y,
             channel=channel,
+            bands=bands,
+            current_batch=current_batch,
         )
     fig.tight_layout()
     canvas = FigureCanvasAgg(fig)
@@ -635,9 +643,13 @@ def _draw_histogram_axes(
     log_x: bool,
     log_y: bool,
     channel: int | None = None,
+    bands: bool = False,
+    current_batch: bool = False,
 ) -> None:
     """One subplot: the same bars/ranges/chrome the watch page draws with Plotly."""
     from matplotlib.axes import Axes
+
+    from nansense import debugger
 
     from nansense.ui.histograms import (
         AXIS_TITLE_FONT_SIZE,
@@ -655,6 +667,7 @@ def _draw_histogram_axes(
         overflow_marks,
         phase_color,
         trace_heights,
+        under_over_line_positions,
         use_density,
         x_tick_layout,
     )
@@ -708,6 +721,33 @@ def _draw_histogram_axes(
                 zorder=3,
                 clip_on=False,
             )
+    if bands and tensor_stats.dtype is not None:
+        from nansense.ui.histograms import _UNDER_OVER_LINE_COLOR
+
+        band = debugger.dtype_band(tensor_stats.dtype)
+        lo, hi = ax.get_xlim()
+        for x, label in under_over_line_positions(band, log_x):
+            # The page's lines leave the view with the axis range; an edge
+            # off it would otherwise drag its label outside the plot.
+            if not lo <= x <= hi:
+                continue
+            ax.axvline(
+                x, color=_UNDER_OVER_LINE_COLOR, linewidth=1, linestyle=":", zorder=2
+            )
+            if label:
+                # Inside the plot, just right of the line: above it the
+                # label would collide with the row's titles.
+                ax.annotate(
+                    label,
+                    (x, 0.97),
+                    xycoords=("data", "axes fraction"),
+                    xytext=(3, 0),
+                    textcoords="offset points",
+                    ha="left",
+                    va="top",
+                    fontsize=_pt(9),
+                    color=_UNDER_OVER_LINE_COLOR,
+                )
     _style_histogram_axes(ax, log_x=log_x, density=density)
     # A row the caller could not narrow (no per-channel data) keeps the
     # universal histogram, so the title must not claim a channel it isn't
@@ -724,8 +764,13 @@ def _draw_histogram_axes(
     ax.set_title(
         f"{layer} — {kind}s", loc="left", fontsize=_pt(TITLE_FONT_SIZE), color="#1e293b"
     )
+    heading = (
+        f"current batch — {phase} ep {stats.epoch}"
+        if current_batch
+        else f"{phase} (ep {stats.epoch})"
+    )
     ax.set_title(
-        f"{phase} (ep {stats.epoch}){scope}",
+        f"{heading}{scope}",
         loc="center",
         fontsize=_pt(SUBPLOT_TITLE_FONT_SIZE),
         color=color,
