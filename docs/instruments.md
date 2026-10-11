@@ -7,8 +7,8 @@ There are three kinds:
 | Decorator | Returns | Shown |
 |---|---|---|
 | `session.watch_metric(name)` | scalar(s) per layer | `/stats` → GRAPHS, one plot per metric |
-| `session.watch_layer_tensor(name)` | tensor shaped like the activation | main page, extra strip under activations/gradients |
-| `session.watch_weight_tensor(name)` | tensor shaped like the parameter | `/weights`, next to weight/gradient/optimizer strips |
+| `session.watch_layer_tensor(name)` | tensor shaped like the activation | main page, extra strip under activations/gradients; agents see it in `render_layer` (except in probe views) and its summary under `custom` in `get_layer_stats` |
+| `session.watch_weight_tensor(name)` | tensor shaped like the parameter | `/weights`, next to weight/gradient/optimizer strips; agents see it in `render_weights` and its summary under `custom` in `get_weight_stats` |
 
 A runnable demo of all three lives in `examples/custom_metrics/`:
 

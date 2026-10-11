@@ -260,6 +260,59 @@ def test_render_layer_render_options_reach_the_picture() -> None:
         assert "input as background" in background.note
 
 
+def _width(rendered: RenderedImage) -> int:
+    assert rendered.png is not None, rendered.note
+    return Image.open(io.BytesIO(rendered.png)).width
+
+
+def test_render_layer_draws_a_channel_window_at_the_chosen_size() -> None:
+    """A wide layer is unreadable once scaled to fit, so the agent pages
+    through its tiles and sizes them like the page's Size slider."""
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        draw = lambda **kw: layer_image(  # noqa: E731
+            session, layers=["conv"], display=_DISPLAY, input_name="x", **kw
+        )
+        whole, window = draw(), draw(first_channel=1, channel_count=1)
+        assert _width(window) < _width(whole)
+        assert "Only channels 1..1" in window.note
+        assert _width(draw(size=32)) < _width(whole)
+        assert "32px tiles" in draw(size=32).note
+        # Past the last channel nothing is drawn, and the note says why.
+        assert "past their last channel" in draw(first_channel=9).note
+
+
+def test_custom_tensors_reach_the_render_and_stats_tools() -> None:
+    """`watch_layer_tensor` / `watch_weight_tensor` strips are on the pages, so
+    the agent's pictures and numbers carry them too."""
+    from nansense.ui.frames import main_frame, weights_frame
+
+    with paused_session(TinyConvNet(), _conv_step) as session:
+        session.watch("conv")
+        session.watch_layer_tensor("double")(lambda ctx: ctx.activation * 2)
+        session.watch_weight_tensor("neg")(lambda ctx: -ctx.weight)
+        before = session.pause_count
+        session.step_batch()
+        assert session.wait_until_paused(after_pauses=before, timeout=5.0)
+
+        def heights(frame: Any, **kw: Any) -> tuple[int, int]:
+            plain, extra = frame(session, **kw), frame(session, custom=True, **kw)
+            assert plain is not None and extra is not None
+            return plain.height, extra.height
+
+        plain, extra = heights(main_frame, layers=["conv"])
+        assert extra > plain
+        plain, extra = heights(weights_frame, panels=[WeightPanel(name="conv.weight")])
+        assert extra > plain
+
+        layer = _call(session, "get_layer_stats", {"layers": ["conv"]})
+        assert "double" in layer.structured_content["layers"][0]["custom"]
+        weights = _call(
+            session, "get_weight_stats", {"layer": "conv", "parameters": ["conv.weight"]}
+        )
+        entry = weights.structured_content["parameters"][0]
+        assert entry["custom"]["neg"]["shape"] == [3, 1, 3, 3]
+
+
 def test_render_layer_reports_unknown_layers_rather_than_dropping_them() -> None:
     with paused_session(TinyConvNet(), _conv_step) as session:
         rendered = layer_image(

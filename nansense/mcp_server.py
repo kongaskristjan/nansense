@@ -430,6 +430,10 @@ def build_server(
         keeps no per-channel sums — and the index is clamped into the tracked
         range (`channel_count`, capped by the `channel_limit` setting).
 
+        Tensors from `watch_layer_tensor` instruments are summarised under
+        `custom` (mean, std, min, max over finite values in the whole captured
+        batch).
+
         Non-finite values are reported as the strings "nan", "inf" and "-inf".
         """
         return await asyncio.to_thread(
@@ -539,6 +543,35 @@ def build_server(
                 )
             ),
         ] = False,
+        size: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Channel tile side length in pixels (the page's Size "
+                    "slider), clamped to 32-384; 1-D row heights scale with it."
+                )
+            ),
+        ] = 128,
+        first_channel: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "Zero-based index of the first channel tile to draw; "
+                    "negative indices are clamped to zero. Use with "
+                    "`channel_count` to page through a wide layer."
+                )
+            ),
+        ] = 0,
+        channel_count: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "How many channel tiles to draw from `first_channel`; "
+                    "omit for all remaining tiles. Counts below one are "
+                    "clamped to one."
+                )
+            ),
+        ] = None,
     ) -> list[Any]:
         """Picture of what these layers computed on the last captured batch.
 
@@ -559,6 +592,13 @@ def build_server(
         average away to nothing. `background` puts the input behind each
         spatially aligned tile (conv feature maps, ViT tokens on their patch
         grid) so a response can be read against the pixels that caused it.
+
+        A layer with many channels can be hard to read when scaled down to fit.
+        Draw a window of its tiles with `first_channel` / `channel_count`,
+        keeping the full strip's colour scale, and set the tile size with `size`.
+        Single-tile strips stay whole, including averaged strips and 1-D rows.
+        Captured tensors from `watch_layer_tensor` are drawn as extra rows under
+        the layer, as on the page; probe views omit these custom strips.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -572,6 +612,9 @@ def build_server(
                 average=average,
                 values=values,
                 background=background,
+                size=size,
+                first_channel=first_channel,
+                channel_count=channel_count,
             )
         )
 
@@ -683,6 +726,8 @@ def build_server(
         layout does not show, which for a conv weight is the output channel:
         raise it to page through filters. `x_dim` / `y_dim` / `tile_dim`
         re-assign the axes themselves when the default view is the wrong cut.
+        Custom tensors registered with `watch_weight_tensor` are drawn under
+        the same axis layout, after the optimizer state.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -1515,6 +1560,8 @@ def build_server(
         state (Adam's `exp_avg` / `exp_avg_sq`, SGD's `momentum_buffer`) and
         the live hyperparameters — so a learning rate a scheduler has driven to
         zero, or a second-moment estimate that has blown up, is visible here.
+        Tensors from `watch_weight_tensor` instruments are summarised under
+        `custom`, with statistics over the tensor's finite values.
         """
         return await asyncio.to_thread(
             weight_stats_view, session, layer=layer, parameters=parameters

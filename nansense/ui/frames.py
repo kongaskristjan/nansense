@@ -39,10 +39,13 @@ from nansense.ui.compose import (
 )
 from nansense.ui.render import (
     DEFAULT_RENDER_OPTIONS,
+    TILE_SIZE,
     RenderOptions,
+    StripRender,
     attribution_vmax,
     default_weight_dims,
     input_background,
+    linear_tile_height,
     probe_act_tensor,
     render_attribution_overlay,
     render_image,
@@ -51,10 +54,20 @@ from nansense.ui.render import (
     render_weight,
     tensor_hw,
 )
-from nansense.ui.theme import ACTIVATIONS, GRADIENTS, NEUTRAL, OPTIMIZER, WEIGHT
+from nansense.ui.theme import (
+    ACTIVATIONS,
+    CUSTOM,
+    CUSTOM_TENSOR,
+    GRADIENTS,
+    NEUTRAL,
+    OPTIMIZER,
+    WEIGHT,
+)
 from nansense.watch import LayerStatsSnapshot, narrow_to_channel
 
 if TYPE_CHECKING:
+    from torch import Tensor
+
     from nansense.experiments import ExperimentResult
     from nansense.session import Session
 
@@ -137,6 +150,9 @@ def main_frame(
     options: RenderOptions = DEFAULT_RENDER_OPTIONS,
     show_input: bool = True,
     require_image: bool = False,
+    tile_px: int = TILE_SIZE,
+    channels: tuple[int, int | None] | None = None,
+    custom: bool = False,
 ) -> Image.Image | None:
     """The main page: the input image plus each layer's strips.
 
@@ -153,7 +169,13 @@ def main_frame(
 
     `options` is the page's render-options section: magnitude (`abs` /
     `square`), channel averaging and the input background, applied to every
-    layer strip.
+    layer strip. `tile_px` is its Size slider (1D rows scale with it).
+
+    `channels` keeps only the tiles in `[start, stop)` of every multi-tile
+    strip, so one wide layer can be paged through; the strip is rendered whole
+    first, so the colour scale and the `CHANNEL n` captions stay the full
+    layer's. `custom` adds the `watch_layer_tensor` strips the page draws under
+    each card. Recordings leave both off: their frames must keep one size.
     """
     snap = session.snapshot
     probe = session.probe_result
@@ -178,6 +200,19 @@ def main_frame(
         if options.background
         else None
     )
+    row_height = linear_tile_height(tile_px)
+
+    def strip(tensor: Tensor | None, idx: int) -> StripRender | None:
+        rendered = render_strip(
+            tensor,
+            idx,
+            input_hw=input_hw,
+            tile_px=tile_px,
+            row_height=row_height,
+            options=options,
+        )
+        return _channel_window(rendered, channels)
+
     sections: list[_Section] = []
     if show_input:
         input_img = upscaled_image(
@@ -199,10 +234,7 @@ def main_frame(
             sections.append(
                 Section(
                     "ACTIVATIONS",
-                    strip_image(
-                        render_strip(act, 0, input_hw=input_hw, options=options),
-                        background=background,
-                    ),
+                    strip_image(strip(act, 0), background=background),
                     ACTIVATIONS,
                     header_gap=True,
                 )
@@ -214,12 +246,7 @@ def main_frame(
                 Section(
                     "ACTIVATIONS",
                     strip_image(
-                        render_strip(
-                            snap.activations.get(name),
-                            sample_idx,
-                            input_hw=input_hw,
-                            options=options,
-                        ),
+                        strip(snap.activations.get(name), sample_idx),
                         background=background,
                     ),
                     ACTIVATIONS,
@@ -230,19 +257,43 @@ def main_frame(
                 Section(
                     "GRADIENTS",
                     strip_image(
-                        render_strip(
-                            snap.activation_gradients.get(name),
-                            sample_idx,
-                            input_hw=input_hw,
-                            options=options,
-                        ),
+                        strip(snap.activation_gradients.get(name), sample_idx),
                         show_labels=False,
                         background=background,
                     ),
                     GRADIENTS,
                 )
             )
+            if custom:
+                for label, tensor in sorted(
+                    snap.custom_activations.get(name, {}).items()
+                ):
+                    sections.append(
+                        Section(
+                            label.upper(),
+                            strip_image(
+                                strip(tensor, sample_idx),
+                                show_labels=False,
+                                background=background,
+                            ),
+                            CUSTOM_TENSOR,
+                        )
+                    )
     return stack_sections(sections, require_image=require_image)
+
+
+def _channel_window(
+    strip: StripRender | None, channels: tuple[int, int | None] | None
+) -> StripRender | None:
+    """`strip` narrowed to the tiles in `channels`' `[start, stop)`.
+
+    A single-tile strip (averaged channels, a 1D row, a plain 2-D map) has no
+    channels to choose between and is kept whole.
+    """
+    if strip is None or channels is None or len(strip.tiles) <= 1:
+        return strip
+    start, stop = channels
+    return replace(strip, tiles=strip.tiles[start:stop])
 
 
 # Characters per scalar line under a weights frame's strips: the frame is only
@@ -266,6 +317,7 @@ def weights_frame(
     *,
     panels: Sequence[WeightPanel],
     require_image: bool = False,
+    custom: bool = False,
 ) -> Image.Image | None:
     """The weights page: each panel's weight, gradient and optimizer strips.
 
@@ -273,6 +325,8 @@ def weights_frame(
     axis layout; state of a different shape falls back to its own default
     layout, and scalar state (Adam's `step`) joins the hyperparameters on a
     text line; a hyperparameter changed from NaNsense also says what it was.
+    `custom` adds the `watch_weight_tensor` strips the page draws after the
+    optimizer's; recordings leave it off so their frames keep one size.
     """
     snap = session.snapshot
     if snap is None:
@@ -333,6 +387,19 @@ def weights_frame(
                     key.upper(), strip_image(strip, show_labels=False), OPTIMIZER
                 )
             )
+        if custom:
+            # The instrument contract pins these to the weight's shape, so the
+            # panel's layout applies, as on the page.
+            for key, extra in sorted(
+                snap.custom_weight_tensors.get(panel.name, {}).items()
+            ):
+                sections.append(
+                    Section(
+                        key.upper(),
+                        strip_image(render_weight(extra, **layout), show_labels=False),
+                        CUSTOM,
+                    )
+                )
         group = groups.get(panel.name)
         for key, value in sorted(snap.optimizer_hyperparams.get(panel.name, {}).items()):
             original = edited.get((group, key))

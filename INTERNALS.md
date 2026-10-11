@@ -611,7 +611,10 @@ Three kinds, registered through decorators on the session (`watch_metric`,
   `BatchSnapshot.custom_weight_tensors` (extra `/weights` strips under the
   panel's axis controls, after the optimizer entries). Shapes are enforced
   against the activation/parameter; results are CPU-cloned like all
-  snapshot cargo.
+  snapshot cargo. MCP's `render_layer` / `render_weights` draw them too
+  (`main_frame` / `weights_frame` with `custom=True`; recordings leave it off,
+  since a tensor appearing mid-video could change the frame size), and
+  `get_layer_stats` / `get_weight_stats` summarise them under `custom`.
 
 The GRAPHS view reads `Session.watch_metrics_snapshot()` (fetched by the
 stats page's refresh worker only while GRAPHS is showing): the manager
@@ -1653,8 +1656,12 @@ Render conventions worth knowing before editing `render.py`:
   not the input; `compose.strip_image` composites identically for recordings
   and MCP.
 - The render options' **Size** slider is deliberately *not* a `RenderOptions`
-  field: it is display-only (`InputPanel.tile_px`), never recorded nor offered
-  over MCP. It is threaded into `render_strip` as `tile_px` (plus
+  field: it is display-only (`InputPanel.tile_px`) and never recorded, since a
+  recording's frames must keep one size. MCP's `render_layer` takes it as
+  `size` (alongside a `first_channel` / `channel_count` tile window that
+  `frames._channel_window` cuts from the fully rendered strip, so captions and
+  colour scale remain those of the full strip). The size is passed to
+  `render_strip` as `tile_px` (plus
   `row_height=linear_tile_height(tile_px)` for 1D rows) rather than applied as
   a CSS scale, so the server-side downsample threshold, the caption form
   (`_tile_labels`) and the display-resolution legend all follow the chosen

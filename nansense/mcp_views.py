@@ -388,23 +388,25 @@ def layer_stats_view(
             continue
         activation = snapshot.activations.get(name)
         gradient = snapshot.activation_gradients.get(name)
-        entries.append(
-            {
-                "layer": name,
-                "activations": tensor_stats_view(
-                    layer_stats.activations,
-                    include_histogram=include_histogram,
-                    shape=None if activation is None else activation.shape,
-                    channel=channel,
-                ),
-                "gradients": tensor_stats_view(
-                    layer_stats.gradients,
-                    include_histogram=include_histogram,
-                    shape=None if gradient is None else gradient.shape,
-                    channel=channel,
-                ),
-            }
-        )
+        entry: dict[str, Any] = {
+            "layer": name,
+            "activations": tensor_stats_view(
+                layer_stats.activations,
+                include_histogram=include_histogram,
+                shape=None if activation is None else activation.shape,
+                channel=channel,
+            ),
+            "gradients": tensor_stats_view(
+                layer_stats.gradients,
+                include_histogram=include_histogram,
+                shape=None if gradient is None else gradient.shape,
+                channel=channel,
+            ),
+        }
+        custom = _custom_summaries(snapshot.custom_activations.get(name))
+        if custom:
+            entry["custom"] = custom
+        entries.append(entry)
 
     view: dict[str, Any] = {
         "position": position_view(position, schedule=session.schedule),
@@ -672,6 +674,13 @@ def hyperparameters_view(session: Session) -> dict[str, Any]:
     return view
 
 
+def _custom_summaries(
+    tensors: dict[str, torch.Tensor] | None,
+) -> dict[str, dict[str, Any]]:
+    """`_tensor_summary` per custom tensor instrument (`watch_*_tensor`)."""
+    return {key: _tensor_summary(value) for key, value in sorted((tensors or {}).items())}
+
+
 def weight_stats_view(
     session: Session, *, layer: str, parameters: Iterable[str] | None = None
 ) -> dict[str, Any]:
@@ -763,6 +772,9 @@ def weight_stats_view(
             edited = edited_keys.get(group, {}) if group is not None else {}
             if edited:
                 entry["edited_hyperparameters"] = edited
+        custom = _custom_summaries(snapshot.custom_weight_tensors.get(name))
+        if custom:
+            entry["custom"] = custom
         entries.append(entry)
     view: dict[str, Any] = {
         "layer": layer,

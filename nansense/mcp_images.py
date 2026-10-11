@@ -155,6 +155,9 @@ def layer_image(
     average: bool = False,
     values: str = "unchanged",
     background: bool = False,
+    size: int | None = None,
+    first_channel: int = 0,
+    channel_count: int | None = None,
 ) -> RenderedImage:
     """The main page for `layers`: one activation and gradient strip each.
 
@@ -167,14 +170,27 @@ def layer_image(
     averaging collapses each strip's channels into one mean tile, `values` of
     `"abs"` / `"square"` shows magnitude on a sequential 0..max scale instead,
     and `background` multiplies every spatial tile over the lightened input.
+    `size` is the page's Size slider, clamped into its range.
+
+    `first_channel` / `channel_count` draw only that window of each strip's
+    channel tiles — the way to read a layer too wide for one picture. Custom
+    `watch_layer_tensor` strips are drawn under each layer, as on the page.
     """
     from nansense.ui.frames import main_frame
-    from nansense.ui.render import RenderOptions
+    from nansense.ui.input_panel import TILE_SIZE_MAX, TILE_SIZE_MIN
+    from nansense.ui.render import TILE_SIZE, RenderOptions
 
     if session.snapshot is None and session.probe_result is None:
         return _no_snapshot()
     unknown = _unknown_layers(session, layers)
     resolved = [name for name in layers if name not in unknown]
+    tile_px = TILE_SIZE if size is None else min(max(size, TILE_SIZE_MIN), TILE_SIZE_MAX)
+    first = max(0, first_channel)
+    channels = (
+        None
+        if first == 0 and channel_count is None
+        else (first, None if channel_count is None else first + max(1, channel_count))
+    )
     mean, std = display.stats(input_name)
     png, caveat = _encode(
         main_frame(
@@ -198,14 +214,31 @@ def layer_image(
                 }
             ),
             require_image=True,
+            tile_px=tile_px,
+            channels=channels,
+            custom=True,
         )
     )
     note = f"Sample {sample} of the batch at {_position_note(session)}."
-    if average or values != "unchanged" or background:
+    if average or values != "unchanged" or background or tile_px != TILE_SIZE:
         note += (
             f" Render options: values {values}"
             f"{', channels averaged' if average else ''}"
-            f"{', input as background' if background else ''}."
+            f"{', input as background' if background else ''}"
+            f"{f', {tile_px}px tiles' if tile_px != TILE_SIZE else ''}."
+        )
+    if channels is not None:
+        start, stop = channels
+        note += (
+            f" Only channels {start}{' onward' if stop is None else f'..{stop - 1}'} "
+            "are drawn, using the full strip's colour scale; a strip that is a "
+            "single tile (averaged, 1-D, or a plain 2-D map) is drawn whole. "
+            "get_layer_stats reports each layer's shape."
+        )
+    if caveat and channels is None:
+        caveat += (
+            " For a wide layer, draw a window of its channels with "
+            "first_channel / channel_count."
         )
     if session.probe_result is not None:
         note += (
@@ -219,7 +252,8 @@ def layer_image(
             None,
             note
             + " Nothing renderable: the layers captured no activation on this "
-            "batch, or their per-sample shape has no 2-D view (4-D and beyond)."
+            "batch, or their per-sample shape has no 2-D view (4-D and beyond)"
+            + (", or first_channel is past their last channel." if channels else ".")
             + _sample_note(session, sample),
         )
     return RenderedImage(png, note + caveat)
@@ -335,6 +369,7 @@ def weights_image(
             session,
             panels=[WeightPanel(name=name, axes=axes, fixed=fixed) for name in names],
             require_image=True,
+            custom=True,
         )
     )
     note = f"{layer} — {', '.join(names)}, at {_position_note(session)}."

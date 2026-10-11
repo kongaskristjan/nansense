@@ -72,9 +72,9 @@ The `render_*` tools return the views as pictures — the same ones the browser 
 
 | Tool | The view |
 | --- | --- |
-| `render_layer` | Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes. `average` collapses each strip to one mean tile, `values="abs"`/`"square"` shows magnitude and `background` draws the input behind spatial tiles, matching the page's render options |
+| `render_layer` | Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes. `average` collapses each strip to one mean tile, `values="abs"`/`"square"` shows magnitude, `background` draws the input behind spatial tiles and `size` sets the tile size, matching the page's render options. `first_channel`/`channel_count` select a window of channel tiles while keeping the full strip's colour scale; single-tile strips stay whole. Captured custom tensors from `watch_layer_tensor` are drawn as extra rows, except in probe views |
 | `render_input` | One sample of the model's input, denormalized |
-| `render_weights` | A layer's kernels, gradients and optimizer state, plus the live learning rate |
+| `render_weights` | A layer's kernels, gradients, optimizer state and custom tensors from `watch_weight_tensor`, plus the live learning rate |
 | `render_histogram` | Value distributions of watched layers, over the signed-log bins |
 | `render_extreme_patches` | The inputs that most (and least) excite each channel |
 | `render_bin_samples` | The inputs behind one histogram bar — which samples landed in it |
