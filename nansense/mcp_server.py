@@ -2910,6 +2910,7 @@ def _recorded_view(
                     phase=resolved_phase,
                     log_x=spec.log_x,
                     log_y=spec.log_y,
+                    full_range=spec.full_range,
                 ),
             )
         return RecordedView(

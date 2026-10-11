@@ -38,7 +38,7 @@ Views follow the live training batch by default. **Pin batch** keeps the current
 
 Open a watched layer's **stats view** for a closer look at its distributions over the epoch. The page has three views, switchable per layer:
 
-**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](showcase.md#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](showcase.md#spot-gradient-underflow); it is pre-checked when a numerical warning is active.
+**Histogram** leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A **Per channel** switch breaks the histogram down to one row per channel — the quickest way to spot [dead neurons](showcase.md#investigate-dead-neurons). A **Show subnormal/overflow** checkbox marks the dtype-aware band edges where fp16 gradients [underflow](showcase.md#spot-gradient-underflow); it is pre-checked when a numerical warning is active. The x-axis is trimmed to keep outliers from squashing the plot; when at least 1% of values fall outside the visible range, a note under the plot reports the percentage. **Full range** fits the x-axis to every populated bin.
 
 **Min/max** is a gallery of the input patches that drove each channel to its most extreme responses — see the [showcase](showcase.md#minmax-activation-patches).
 

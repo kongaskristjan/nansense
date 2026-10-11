@@ -606,21 +606,16 @@ def axis_ranges(
 ) -> tuple[list[float] | None, list[float] | None]:
     """The histogram figure's `(x, y)` axis ranges.
 
-    By default, extracts the drawn traces once (`_phase_hists`) and delegates to
+    Extracts the drawn traces once (`_phase_hists`) and delegates to
     `_axis_ranges`. `_make_histogram_figure` calls `_axis_ranges` directly
     with the traces it already extracted.
-
-    `full_range` keeps every populated bin on the x-axis instead of trimming
-    the extreme tails; the linear y-axis keeps its base clip, while log y
-    still autoranges.
     """
-    phase_hists = _phase_hists(per_phase, kind)
-    if not full_range:
-        return _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
-    density = use_density(log_x)
-    bounds = _trimmed_bin_bounds(phase_hists, 0.0, density=density)
-    x_range = _log_x_range(bounds) if log_x else _linear_x_range(bounds)
-    return x_range, None if log_y else _linear_y_range(phase_hists, density)
+    return _axis_ranges(
+        _phase_hists(per_phase, kind),
+        log_x=log_x,
+        log_y=log_y,
+        full_range=full_range,
+    )
 
 
 def hidden_share(
@@ -655,6 +650,7 @@ def _axis_ranges(
     *,
     log_x: bool,
     log_y: bool,
+    full_range: bool = False,
 ) -> tuple[list[float] | None, list[float] | None]:
     """`axis_ranges` over already-extracted `(phase, histogram)` traces.
 
@@ -673,12 +669,21 @@ def _axis_ranges(
     With **Log y** the y-range is `None` (autorange) and the x-trim sticks
     to the base share — the log scale keeps the bars visible, so the fill
     heuristic doesn't apply. Both ranges are `None` when there's no data.
+
+    `full_range` (the page's "Full range" checkbox) keeps every populated bin
+    on the x-axis; the linear y-axis keeps its base clip, while log y still
+    autoranges.
     """
     density = use_density(log_x)
 
     def x_range_at(bounds: tuple[int, int] | None) -> list[float] | None:
         return _log_x_range(bounds) if log_x else _linear_x_range(bounds)
 
+    if full_range:
+        bounds = _trimmed_bin_bounds(phase_hists, 0.0, density=density)
+        return x_range_at(bounds), (
+            None if log_y else _linear_y_range(phase_hists, density)
+        )
     if log_y:
         bounds = _trimmed_bin_bounds(phase_hists, density=density)
         return x_range_at(bounds), None
@@ -881,6 +886,7 @@ def _make_histogram_figure(
     trace_names: list[str] | None = None,
     override_ranges: tuple[list[float] | None, list[float] | None] | None = None,
     under_over_band: tuple[float, float] | None = None,
+    full_range: bool = False,
 ) -> tuple[go.Figure, tuple[list[float] | None, list[float] | None]]:
     """Plotly bar chart of the signed-log histogram, one subplot row per phase.
 
@@ -924,12 +930,17 @@ def _make_histogram_figure(
     lines mark the band edges that fall within the histogram's representable
     magnitude range, so the gradient distribution can be read against the
     dtype's subnormal and overflow thresholds.
+
+    `full_range` fits the x-axis to every populated bin instead of trimming
+    the tails (see `_axis_ranges`); `override_ranges` wins over it.
     """
     phase_hists = _phase_hists(per_phase, kind)
     if override_ranges is not None:
         x_range, y_range = override_ranges
     else:
-        x_range, y_range = _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
+        x_range, y_range = _axis_ranges(
+            phase_hists, log_x=log_x, log_y=log_y, full_range=full_range
+        )
     # Signed-log mode draws at uniform bin indices; the linear value axis
     # draws at the bin centres but blanks the off-view tail bins so Plotly's
     # `hovermode="x"` hit-test stays on the bins on screen (see `_linear_bar_x`).

@@ -24,6 +24,7 @@ class _WatchPageState:
     axis_log_x: bool = False
     axis_log_y: bool = False
     retain_axes: bool = False
+    full_range: bool = False
     show_bands: bool = False
     view: str = _VIEW_HISTOGRAM
     grid_type: PatchType = "max_pixel"

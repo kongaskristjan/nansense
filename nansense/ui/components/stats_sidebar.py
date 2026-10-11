@@ -29,6 +29,7 @@ class StatsActions:
     set_axis_log_x: Callable[[bool], Awaitable[None]]
     set_axis_log_y: Callable[[bool], Awaitable[None]]
     set_retain_axes: Callable[[bool], Awaitable[None]]
+    set_full_range: Callable[[bool], Awaitable[None]]
     set_show_bands: Callable[[bool], Awaitable[None]]
     set_grid: Callable[[PatchType], Awaitable[None]]
     set_heat: Callable[[bool], Awaitable[None]]
@@ -140,6 +141,16 @@ class StatsSidebar:
                         "Keep the current axis ranges instead of "
                         "auto-fitting to the data"
                     )
+                )
+                self.hist_boxes.append(
+                    ui.checkbox(
+                        "Full range",
+                        value=state.full_range,
+                        on_change=lambda e: actions.set_full_range(bool(e.value)),
+                    )
+                    .props("dense")
+                    .classes("text-sm")
+                    .tooltip("Fit the x-axis to every populated bin")
                 )
                 self.hist_boxes.append(
                     ui.checkbox(

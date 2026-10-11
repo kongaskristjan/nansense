@@ -1225,7 +1225,12 @@ gridlines, no axis lines), font sizes converted px→pt (`_pt`; at 100 dpi a
 factors one exponent across an axis the way `exponentformat="power"` does
 — matplotlib would otherwise park a shared power in a corner offset box
 and label a ±2e-8 axis `-2.0 … 2.0`, which reads as if it ran to ±2. A row
-is `_PLOT_HEIGHT` tall, so it has the page's aspect. The
+is `_PLOT_HEIGHT` tall, so it has the page's aspect. The x-axis trim
+(`_axis_ranges`) and its `full_range` bypass are shared too: the page's
+"Full range" checkbox, `render_histogram --full_range` and a recorded
+`HistogramView.full_range` all fit the same window, and `hidden_share`
+measures what the trim leaves out (a note under the page's plot from 1%,
+any share in the MCP reply). The
 MIN/MAX view writes pixel-grid (crops) and average-grid (whole inputs)
 frames to *separate* `*_pixel.mp4` / `*_average.mp4` streams because
 their frame sizes differ. Every stream is locked to its first frame's

@@ -74,6 +74,7 @@ from nansense.ui.histograms import (
     _stats_table_html,
     _x_range_linear_to_log,
     _x_range_log_to_linear,
+    hidden_share,
     kind_stats,
     overflow_marks,
     phase_color,
@@ -256,6 +257,10 @@ class _StatsPage:
         self.state.retain_axes = value
         await self.refresh()
 
+    async def set_full_range(self, value: bool) -> None:
+        self.state.full_range = value
+        await self.refresh()
+
     async def set_show_bands(self, value: bool) -> None:
         self.state.show_bands = value
         await self.refresh()
@@ -340,6 +345,7 @@ class _StatsPage:
                 phase=phase,
                 log_x=self.state.axis_log_x,
                 log_y=self.state.axis_log_y,
+                full_range=self.state.full_range,
             ),
         )
 
@@ -565,6 +571,7 @@ class _StatsPage:
                     self.set_axis_log_x,
                     self.set_axis_log_y,
                     self.set_retain_axes,
+                    self.set_full_range,
                     self.set_show_bands,
                     self.set_grid,
                     self.set_heat,
@@ -784,6 +791,18 @@ _HIST_TOUR_ANCHORS: dict[str, str] = {
     "gradient": 'data-tour="hist-gradient"',
 }
 
+# The trim alone may leave out up to `_BASE_CLIP_SHARE` (0.5%) of the values
+# on purpose; note what it hides only once that is clearly more.
+_HIDDEN_NOTE_MIN_SHARE: float = 0.01
+
+
+def hidden_note_text(share: float) -> str:
+    """The note under a histogram whose trimmed x-axis leaves values out."""
+    return (
+        f"{share:.1%} of values are outside the visible x-axis range. "
+        "Select Full range to include them."
+    )
+
 
 class _HistPlot:
     """One Plotly histogram figure that refreshes its data in place.
@@ -839,6 +858,8 @@ class _HistPlot:
         # the "Show subnormal/overflow" checkbox — or the dtype first becoming
         # known — forces a rebuild.
         self._band: tuple[float, float] | None = None
+        # The "Full range" choice currently drawn; flipping it refits the axes.
+        self._full_range = self._state.full_range
         # Last axis ranges applied (set by every figure build, including the
         # empty one below), so refreshes only push a relayout when a cap
         # actually moved (a range write resets zoom on that axis).
@@ -880,6 +901,10 @@ class _HistPlot:
             .classes("w-full")
             .props(_HIST_TOUR_ANCHORS[kind])
         )
+        # What the trimmed x-axis leaves out, so the trim never silently
+        # hides a tail (the MCP `render_histogram` reply says the same).
+        self._hidden_note = ui.label("").classes("text-xs text-slate-500 -mt-1")
+        self._hidden_note.set_visibility(False)
         self._samples = ui.html(_HOVER_HINT_HTML).classes("w-full")
         self._sync_control_visibility()
         # Route hovers through the page's single shared handler (see
@@ -1024,17 +1049,25 @@ class _HistPlot:
         log_x, log_y = axis
         density = use_density(log_x)
         retain = self._state.retain_axes
+        full_range = self._state.full_range
         phase_hists = _phase_hists(per_phase, self._kind)
         band = self._under_over_band(per_phase)
-        if phases != self._phases or axis != self._axis or band != self._band:
+        if (
+            phases != self._phases
+            or axis != self._axis
+            or band != self._band
+            or full_range != self._full_range
+        ):
             # A phase appeared/disappeared, an axis-scale checkbox flipped, or
             # the under/overflow band toggled — rebuild the whole figure (the
             # band-edge lines are layout shapes only a rebuild can change).
             # With "Retain axes" on, carry the current view across
             # (re-expressed for the new scale); else let the build fit the
-            # ranges to the data and cache them.
+            # ranges to the data and cache them. Flipping "Full range" always
+            # refits — keeping the old window would make it a no-op.
+            keep_view = retain and full_range == self._full_range
             override = (
-                self._retained_ranges(axis, phase_hists) if retain else None
+                self._retained_ranges(axis, phase_hists) if keep_view else None
             )
             fig, (self._x_range, self._y_range) = _make_histogram_figure(
                 per_phase,
@@ -1045,11 +1078,13 @@ class _HistPlot:
                 trace_names=self._trace_names(per_phase),
                 override_ranges=override,
                 under_over_band=band,
+                full_range=full_range,
             )
             self.element.update_figure(_figure_payload(fig))
             self._phases = phases
             self._axis = axis
             self._band = band
+            self._full_range = full_range
             if not retain:
                 self._capture_y_top(phase_hists, density, self._y_range)
         elif phases:
@@ -1078,7 +1113,7 @@ class _HistPlot:
             # idle refresh doesn't keep snapping the user's zoom back.
             if not retain:
                 x_range, y_range = _axis_ranges(
-                    phase_hists, log_x=log_x, log_y=log_y
+                    phase_hists, log_x=log_x, log_y=log_y, full_range=full_range
                 )
                 if y_range is not None and y_range != self._y_range:
                     # Every row gets the same range (row 1 is "yaxis", row n is
@@ -1120,6 +1155,23 @@ class _HistPlot:
                 {"x": [m[0] for m in marks], "y": [m[1] for m in marks]},
                 list(range(n, 2 * n)),
             )
+        self._sync_hidden_note(per_phase)
+
+    def _sync_hidden_note(self, per_phase: dict[str, LayerStatsSnapshot]) -> None:
+        share = (
+            0.0
+            if self._full_range
+            else hidden_share(
+                per_phase, self._kind, self._x_range, log_x=self._axis[0]
+            )
+        )
+        visible = share >= _HIDDEN_NOTE_MIN_SHARE
+        if visible:
+            text = hidden_note_text(share)
+            if self._hidden_note.text != text:
+                self._hidden_note.text = text
+        if self._hidden_note.visible != visible:
+            self._hidden_note.set_visibility(visible)
 
     def _capture_y_top(
         self,

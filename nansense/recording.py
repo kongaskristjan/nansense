@@ -684,6 +684,7 @@ def _histogram_frame(view: RecordedView, session: Session) -> Image.Image | None
         phase=config.phase,
         log_x=config.log_x,
         log_y=config.log_y,
+        full_range=config.full_range,
     )
 
 

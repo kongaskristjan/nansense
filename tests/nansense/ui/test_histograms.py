@@ -327,6 +327,21 @@ def test_trimmed_tail_is_reported_and_full_range_draws_it(log_x: bool) -> None:
     assert hidden(True) == 0.0
 
 
+@pytest.mark.parametrize("full_range", [False, True])
+def test_full_range_figure_draws_the_trimmed_tail_bar(full_range: bool) -> None:
+    # On the linear axis off-view bars are blanked (NaN x), so without
+    # full_range the far tail bar isn't drawn at all, even when zoomed out.
+    tail = ZERO_BIN - 60
+    hist = {ZERO_BIN + 60: 1000, tail: 1}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+    fig, (x_range, _) = _make_histogram_figure(
+        per_phase, "activation", "a", full_range=full_range
+    )
+    assert x_range is not None
+    assert (x_range[0] <= BIN_CENTERS[tail]) is full_range
+    assert math.isnan(fig.data[0].x[tail]) is not full_range
+
+
 def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:
     # A huge exact-zero peak flanked by tall narrow near-zero bars plus a
     # long thin tail: at the base 0.5% budget the y-cap chases the narrow

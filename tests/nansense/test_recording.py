@@ -263,7 +263,11 @@ def test_histogram_recording_renders_matplotlib_frames(tmp_path: Path) -> None:
             key="watch_histogram",
             label="Histograms",
             config=HistogramView(
-                layers=("conv",), phase="train", log_x=True, log_y=False
+                layers=("conv",),
+                phase="train",
+                log_x=True,
+                log_y=False,
+                full_range=True,
             ),
         )
     )

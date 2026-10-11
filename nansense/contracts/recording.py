@@ -67,6 +67,7 @@ class HistogramView:
     phase: str = ""
     log_x: bool = False
     log_y: bool = False
+    full_range: bool = False
 
 
 @dataclass(frozen=True)

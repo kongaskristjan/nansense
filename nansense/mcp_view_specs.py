@@ -94,6 +94,13 @@ class HistogramsViewSpec(BaseModel):
     log_y: bool = Field(
         default=False, description="Log-scale the counts, revealing sparse tails."
     )
+    full_range: bool = Field(
+        default=False,
+        description=(
+            "Fit the x-axis to every populated bin instead of trimming sparse "
+            "tails."
+        ),
+    )
 
 
 class PatchesViewSpec(BaseModel):

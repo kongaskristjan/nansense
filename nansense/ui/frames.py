@@ -427,11 +427,13 @@ def histogram_frame(
     channel: int | None = None,
     bands: bool = False,
     current_batch: bool = False,
+    full_range: bool = False,
 ) -> Image.Image | None:
     """The stats page's HISTOGRAMS view for one phase, redrawn server-side.
 
-    `bands` is the page's "Show subnormal/overflow" checkbox; the other
-    options pick the rows, as in `histogram_rows`.
+    `bands` and `full_range` are the page's "Show subnormal/overflow" and
+    "Full range" checkboxes; the other options pick the rows, as in
+    `histogram_rows`.
     """
     return histogram_image(
         histogram_rows(
@@ -446,6 +448,7 @@ def histogram_frame(
         channel=channel,
         bands=bands,
         current_batch=current_batch,
+        full_range=full_range,
     )
 
 
