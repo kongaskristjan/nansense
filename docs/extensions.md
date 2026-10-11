@@ -10,13 +10,13 @@ Register your own experiment alongside the built-in ones (deep dream, Grad-CAM, 
 A runnable demo of both lives in `examples/custom_extensions/`:
 
 ```bash
-uv run examples/custom_extensions/main.py --nansense-port 8080
+uv run examples/custom_extensions/main.py --nansense-port 6464
 ```
 
 ## Register an experiment
 
 ```python
-session = nansense.start(model, optimizer=optimizer, port=8080)
+session = nansense.start(model, optimizer=optimizer, port=6464)
 
 @session.experiment(
     "ablate_channels",
@@ -122,7 +122,7 @@ def confusion(
     return {"accuracy": float(matrix.diag().sum() / matrix.sum()), "matrix": matrix}
 ```
 
-List the tool with `nansense-cli --port 8080 tools` and call it with `nansense-cli --port 8080 confusion --batches 4`. Add `--help` to see its docstring and argument flags. Completed calls return JSON. The UI's top-bar **Tools** button opens a page with a form for each tool and its results. The button appears only when tools are registered.
+List the tool with `nansense-cli --port 6464 tools` and call it with `nansense-cli --port 6464 confusion --batches 4`. Add `--help` to see its docstring and argument flags. Completed calls return JSON. The UI's top-bar **Tools** button opens a page with a form for each tool and its results. The button appears only when tools are registered.
 
 - **Arguments** follow the context parameter and should use types with a JSON schema, such as `int`, `float`, `bool`, `str`, `Literal[...]`, lists of these, or `X | None`. `Annotated[..., pydantic.Field(description=..., ge=...)]` adds help text and a constraint. Arguments without defaults are required, including nullable arguments. `*args` and `**kwargs` are not supported.
 - **Results** can contain numbers, strings, booleans, `None`, lists, dicts, tensors with at most 10,000 elements, or a [`Table`](api.md#nansense.Table). Tensors become JSON arrays or scalars; tables become objects with `columns` and `rows`. A returned dict becomes the top-level JSON object; other values arrive as `{"result": ...}`.

@@ -17,7 +17,7 @@ from tests.nansense.helpers import paused_worker
 
 def test_default_port(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["main.py"])
-    assert main_module.parse_args().nansense_port == 8080
+    assert main_module.parse_args().nansense_port == 6464
 
 
 def test_the_experiment_and_the_tool_run_on_a_paused_session() -> None:

@@ -9,7 +9,7 @@ The agent and browser share one session, so you can follow its work in the UI.
 Start your run as usual:
 
 ```bash
-uv run --group cpu examples/standard/main.py --nansense-port 8080
+uv run --group cpu examples/standard/main.py --nansense-port 6464
 ```
 
 The startup banner prints the command an agent starts from:
@@ -17,10 +17,10 @@ The startup banner prints the command an agent starts from:
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ NaNsense UI is running at:                                           │
-│ http://127.0.0.1:8080                                                │
+│ http://127.0.0.1:6464                                                │
 │                                                                      │
 │ Debug this run from a coding agent:                                  │
-│ /home/you/project/.venv/bin/python -m nansense_cli --port 8080 tools │
+│ /home/you/project/.venv/bin/python -m nansense_cli --port 6464 tools │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -28,16 +28,16 @@ The banner uses the run's own Python when `nansense-cli` is not on `PATH` or is 
 
 The banner appears once the endpoint accepts connections. An agent that launched the run in the background can wait for the banner, or pass `--wait 60` to its first command to wait up to 60 seconds for the server to accept connections.
 
-If the agent started the run itself, it reads this line from the output. Otherwise, tell it which port to use: *"Debug my training run with `nansense-cli --port 8080`."* Nothing needs to be registered, so several agents can each debug their own run on its own port at the same time.
+If the agent started the run itself, it reads this line from the output. Otherwise, tell it which port to use: *"Debug my training run with `nansense-cli --port 6464`."* Nothing needs to be registered, so several agents can each debug their own run on its own port at the same time.
 
 `tools` prints a short guide and one line per tool. The agent then calls a tool by name, with its arguments as flags:
 
 ```bash
-nansense-cli --port 8080 tools                         # the guide and the tool list
-nansense-cli --port 8080 get_layer_stats --help        # one tool's description and flags
-nansense-cli --port 8080 get_layer_stats --layers conv1 fc
-nansense-cli --port 8080 configure_debug_checks --interval_batches 1
-nansense-cli --port 8080 render_layer --layers conv1 --out shots
+nansense-cli --port 6464 tools                         # the guide and the tool list
+nansense-cli --port 6464 get_layer_stats --help        # one tool's description and flags
+nansense-cli --port 6464 get_layer_stats --layers conv1 fc
+nansense-cli --port 6464 configure_debug_checks --interval_batches 1
+nansense-cli --port 6464 render_layer --layers conv1 --out shots
 ```
 
 Most tools print JSON results. The `render_*` tools print a descriptive note and any additional JSON details; the CLI saves their pictures as PNG files under `--out` (default `.nansense-cli/`) and prints the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code. That includes a refusal, such as stepping a run that has finished; the message says why.

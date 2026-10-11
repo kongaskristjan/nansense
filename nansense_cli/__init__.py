@@ -10,9 +10,9 @@ parity with the MCP surface without being touched. The run is addressed by
 `--port` on every call, so parallel agents debugging parallel runs never share
 any registration.
 
-    nansense-cli --port 8080 tools                  # the guide + one line per tool
-    nansense-cli --port 8080 get_layer_stats --help  # one tool's docstring and flags
-    nansense-cli --port 8080 get_layer_stats --layers conv1 fc
+    nansense-cli --port 6464 tools                  # the guide + one line per tool
+    nansense-cli --port 6464 get_layer_stats --help  # one tool's docstring and flags
+    nansense-cli --port 6464 get_layer_stats --layers conv1 fc
 
 JSON results are printed as-is; pictures and files (`render_*` PNGs, the
 `export_tensors` `.pt`) are written to `--out` and their paths printed, so the
@@ -68,8 +68,8 @@ def _common_options(defaults: bool) -> argparse.ArgumentParser:
         help="Host the training run serves on (default 127.0.0.1).",
     )
     parser.add_argument(
-        "--port", type=int, default=8080 if defaults else keep,
-        help="The run's --nansense-port (default 8080).",
+        "--port", type=int, default=6464 if defaults else keep,
+        help="The run's --nansense-port (default 6464).",
     )
     parser.add_argument(
         "--out", type=Path, default=Path(".nansense-cli") if defaults else keep,

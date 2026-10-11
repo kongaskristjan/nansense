@@ -8,7 +8,7 @@ accuracy drops. Open a layer's Experiment page and pick "Channel ablation",
 or run it from a coding agent with ``run_experiment``. The ``confusion`` tool
 reports validation accuracy and a confusion matrix for up to ``batches``
 batches. Pause training, then call it with
-``nansense-cli --port 8080 confusion --batches 4`` or use the UI's Tools page.
+``nansense-cli --port 6464 confusion --batches 4`` or use the UI's Tools page.
 """
 
 from __future__ import annotations
@@ -149,8 +149,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--nansense-port",
         type=int,
-        default=8080,
-        help="Port for the NaNsense UI (default 8080).",
+        default=6464,
+        help="Port for the NaNsense UI (default 6464).",
     )
     parser.add_argument(
         "--disable-nansense",

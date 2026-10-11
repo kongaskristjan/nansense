@@ -14,7 +14,7 @@ git clone https://github.com/kongaskristjan/nansense
 cd nansense
 
 # --group: cpu | cuda (NVIDIA) | cuda-legacy (pre-Turing NVIDIA) | rocm (AMD)
-uv run --group cpu examples/standard/main.py --nansense-port 8080
+uv run --group cpu examples/standard/main.py --nansense-port 6464
 ```
 
 `--group cpu` works on any machine. For a GPU build, use the matching group:
@@ -30,12 +30,12 @@ The other bundled examples run the same way:
 
 ```bash
 # Other examples
-uv run --group cpu examples/game_of_life/main.py --nansense-port 8080
-uv run --group cpu examples/audio_keywords/main.py --nansense-port 8080
-uv run --group cpu examples/depth_make3d/main.py --nansense-port 8080
+uv run --group cpu examples/game_of_life/main.py --nansense-port 6464
+uv run --group cpu examples/audio_keywords/main.py --nansense-port 6464
+uv run --group cpu examples/depth_make3d/main.py --nansense-port 6464
 
 # Multiple model inputs
-uv run --group cpu examples/multimodal/main.py --nansense-port 8080
+uv run --group cpu examples/multimodal/main.py --nansense-port 6464
 ```
 
 A browser tab opens and training pauses on the first batch. Use the top bar to run or step through training; see the [UI guide](ui.md).
@@ -60,7 +60,7 @@ Wiring NaNsense into a training loop is a few lines:
 ```python
 import nansense
 
-session = nansense.start(model, optimizer=optimizer, port=8080)
+session = nansense.start(model, optimizer=optimizer, port=6464)
 for epoch in session.epochs(50):
     with session.restore_point():
         for inputs, targets in session.batches(train_dl, phase="train"):

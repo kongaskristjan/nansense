@@ -4,7 +4,7 @@ The callback maps NaNsense's per-batch context onto Lightning's hook pairs
 (`on_*_batch_start` / `on_*_batch_end`), so a stock `Trainer` gets the full
 pause/step/inspect experience with no changes to the training code:
 
-    callback = NansenseCallback(port=8080, model="net")
+    callback = NansenseCallback(port=6464, model="net")
     trainer = L.Trainer(max_epochs=50, callbacks=[callback])
     trainer.fit(module, datamodule)
 

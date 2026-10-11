@@ -141,8 +141,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--nansense-port",
         type=int,
-        default=8080,
-        help="Port for the NaNsense UI (default 8080).",
+        default=6464,
+        help="Port for the NaNsense UI (default 6464).",
     )
     parser.add_argument(
         "--disable-nansense",

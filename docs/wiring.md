@@ -16,7 +16,7 @@ train_dl, val_dl = ...
 
 # Setup UI. The schedule is discovered as you train (phase names and batch
 # counts are learned from the loop below); no need to declare them up front.
-session = nansense.start(model, optimizer=optimizer, port=8080, enabled=True)
+session = nansense.start(model, optimizer=optimizer, port=6464, enabled=True)
 
 # Time travel needs an epoch cache. `session.epochs(50)` iterates like
 # `range(50)` but checkpoints each epoch start; wrap each iteration's body in
@@ -71,7 +71,7 @@ module = ...
 datamodule = ...
 
 # `model="net"` is the attribute path to the network inside your LightningModule, e.g. module.net
-callback = NansenseCallback(port=8080, model="net", enabled=True)
+callback = NansenseCallback(port=6464, model="net", enabled=True)
 
 # Time travel consumes the running fit, so the trainer comes from a factory:
 # fit_with_time_travel builds a fresh Trainer for each jump-and-replay attempt.

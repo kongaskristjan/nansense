@@ -92,7 +92,7 @@ class _DropBenignNiceguiNoise(logging.Filter):
       durable fix is upstream (guarding the timer's context acquisition).
 
     - *"<url> not found"* — logged for every 404. The port is often one other
-      local tools poll (8080 is llama.cpp's default, for one), and a browser
+      local tools poll (8080, llama.cpp's default, used to be ours), and a browser
       keeps re-fetching a stale service worker from a previous app on the same
       origin; each would print a line into the training log. The client still
       gets its 404 page.
@@ -393,7 +393,7 @@ def _stop_server_on_sigint(server: _Stoppable) -> None:
 def serve(
     session: Session,
     *,
-    port: int = 8080,
+    port: int = 6464,
     host: str = "127.0.0.1",
     log_level: str = "warning",
     open_browser: bool = True,

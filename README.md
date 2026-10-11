@@ -37,7 +37,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/kongaskristjan/nansense
 cd nansense
 
-uv run --group cpu examples/standard/main.py --nansense-port 8080
+uv run --group cpu examples/standard/main.py --nansense-port 6464
 ```
 
 [Getting started](https://kongaskristjan.github.io/nansense/dev/getting-started/) lists all the examples and explains the hardware groups.

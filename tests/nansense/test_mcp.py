@@ -766,7 +766,7 @@ def test_mounted_route_answers_the_protocol_and_runs_its_lifespan() -> None:
     manager — a mounted sub-app would never get one, which is why `serve`
     passes the lifespan to the app it actually serves."""
     session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
-    with TestClient(_mounted_app(session), base_url="http://127.0.0.1:8080") as client:
+    with TestClient(_mounted_app(session), base_url="http://127.0.0.1:6464") as client:
         response = client.post(
             "/mcp",
             json=_initialize_request(),

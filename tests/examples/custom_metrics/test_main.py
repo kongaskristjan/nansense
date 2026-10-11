@@ -36,7 +36,7 @@ def test_model_shape_and_fx_traceable() -> None:
 
 def test_default_port(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["main.py"])
-    assert main_module.parse_args().nansense_port == 8080
+    assert main_module.parse_args().nansense_port == 6464
 
 
 def test_instruments_record_through_a_training_step() -> None:

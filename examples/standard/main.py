@@ -2,11 +2,11 @@
 
 Choose a dataset and model with command-line options:
 
-    uv run examples/standard/main.py --nansense-port 8080
+    uv run examples/standard/main.py --nansense-port 6464
 
 Distributed training is also supported:
 
-    uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 8080
+    uv run torchrun --nproc_per_node=2 examples/standard/main.py --distributed --nansense-port 6464
 """
 
 from __future__ import annotations
@@ -127,8 +127,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--nansense-port",
         type=int,
-        default=8080,
-        help="Port for the NaNsense UI (default 8080).",
+        default=6464,
+        help="Port for the NaNsense UI (default 6464).",
     )
     parser.add_argument(
         "--disable-nansense",

@@ -129,29 +129,29 @@ def test_serve_can_omit_the_mcp_endpoint(monkeypatch: pytest.MonkeyPatch) -> Non
 @pytest.mark.parametrize(
     ("host", "expected"),
     [
-        ("127.0.0.1", "http://127.0.0.1:8080"),
-        ("localhost", "http://localhost:8080"),
-        ("192.168.1.5", "http://192.168.1.5:8080"),
+        ("127.0.0.1", "http://127.0.0.1:6464"),
+        ("localhost", "http://localhost:6464"),
+        ("192.168.1.5", "http://192.168.1.5:6464"),
         # "bind every interface" addresses are not routable from a browser,
         # so they are shown as loopback.
-        ("0.0.0.0", "http://127.0.0.1:8080"),
-        ("::", "http://127.0.0.1:8080"),
-        ("", "http://127.0.0.1:8080"),
+        ("0.0.0.0", "http://127.0.0.1:6464"),
+        ("::", "http://127.0.0.1:6464"),
+        ("", "http://127.0.0.1:6464"),
     ],
 )
 def test_display_url(host: str, expected: str) -> None:
-    assert _display_url(host, 8080) == expected
+    assert _display_url(host, 6464) == expected
 
 
 def test_format_box_frames_every_line() -> None:
-    box = _format_box(["NaNsense UI is running at:", "http://127.0.0.1:8080"], 100)
+    box = _format_box(["NaNsense UI is running at:", "http://127.0.0.1:6464"], 100)
     lines = box.splitlines()
     # Top/bottom borders plus one row per input line.
     assert len(lines) == 4
     assert lines[0].startswith("┌") and lines[0].endswith("┐")
     assert lines[-1].startswith("└") and lines[-1].endswith("┘")
     # The URL is framed, and every framed row shares the box width.
-    assert "http://127.0.0.1:8080" in box
+    assert "http://127.0.0.1:6464" in box
     assert len({len(line) for line in lines}) == 1
 
 
@@ -172,16 +172,16 @@ def test_format_box_never_shrinks_below_content() -> None:
 @pytest.mark.parametrize(
     ("host", "command"),
     [
-        ("127.0.0.1", "nansense-cli --port 8080 tools"),
-        ("0.0.0.0", "nansense-cli --port 8080 tools"),
-        ("192.168.1.5", "nansense-cli --host 192.168.1.5 --port 8080 tools"),
+        ("127.0.0.1", "nansense-cli --port 6464 tools"),
+        ("0.0.0.0", "nansense-cli --port 6464 tools"),
+        ("192.168.1.5", "nansense-cli --host 192.168.1.5 --port 6464 tools"),
     ],
 )
 def test_agent_command_addresses_the_run(
     monkeypatch: pytest.MonkeyPatch, host: str, command: str
 ) -> None:
     monkeypatch.setattr(app, "_cli_invocation", lambda: "nansense-cli")
-    assert _agent_command(host, 8080) == command
+    assert _agent_command(host, 6464) == command
 
 
 @pytest.mark.parametrize(
@@ -222,10 +222,10 @@ def test_announce_prints_a_box_the_console_can_encode(
     and killed the announcer thread — costing both the address and the tab."""
     raw = io.BytesIO()
     monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding=encoding))
-    _announce("http://127.0.0.1:8080")
+    _announce("http://127.0.0.1:6464")
     sys.stdout.flush()
     out = raw.getvalue().decode(encoding)
-    assert "http://127.0.0.1:8080" in out
+    assert "http://127.0.0.1:6464" in out
     assert corner in out
 
 
@@ -392,11 +392,11 @@ def test_announce_when_ready_announces_and_opens_focused_tab(
 
     monkeypatch.setattr(app.webbrowser, "open", fake_open)
     _announce_when_ready(
-        _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:8080", True,
+        _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:6464", True,
         timeout=0.0,
     )
-    assert "http://127.0.0.1:8080" in capsys.readouterr().out
-    assert calls == [("http://127.0.0.1:8080", 2, True)]
+    assert "http://127.0.0.1:6464" in capsys.readouterr().out
+    assert calls == [("http://127.0.0.1:6464", 2, True)]
 
 
 def test_announce_when_ready_suppressed_under_concurrent_session(
@@ -414,7 +414,7 @@ def test_announce_when_ready_suppressed_under_concurrent_session(
 
     monkeypatch.setattr(app.webbrowser, "open", fake_open)
     _announce_when_ready(
-        _FakeServer(started=False), _exited_thread(), "http://127.0.0.1:8080", True,
+        _FakeServer(started=False), _exited_thread(), "http://127.0.0.1:6464", True,
         timeout=5.0,
     )
     assert capsys.readouterr().out == ""
@@ -433,10 +433,10 @@ def test_announce_when_ready_respects_open_browser_false(
 
     monkeypatch.setattr(app.webbrowser, "open", fake_open)
     _announce_when_ready(
-        _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:8080", False,
+        _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:6464", False,
         timeout=0.0,
     )
-    assert "http://127.0.0.1:8080" in capsys.readouterr().out
+    assert "http://127.0.0.1:6464" in capsys.readouterr().out
     assert calls == []
 
 
@@ -451,11 +451,11 @@ def test_announce_when_ready_swallows_browser_backend_errors(
 
     monkeypatch.setattr(app.webbrowser, "open", boom)
     _announce_when_ready(
-        _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:8080", True,
+        _FakeServer(started=True), _exited_thread(), "http://127.0.0.1:6464", True,
         timeout=0.0,
     )
     out = capsys.readouterr().out
-    assert "http://127.0.0.1:8080" in out  # banner printed despite the error
+    assert "http://127.0.0.1:6464" in out  # banner printed despite the error
 
 
 def _nicegui_record(message: object) -> logging.LogRecord:

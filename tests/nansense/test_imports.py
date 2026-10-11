@@ -35,7 +35,7 @@ def test_headless_use_and_rendering_do_not_load_the_web_server(tmp_path: Path) -
 
         model = torch.nn.Linear(2, 1)
         session = nansense.start(model, epochs=1, phases={"train": 1}, enabled=False,
-                                 port=8080, open_browser=False)
+                                 port=6464, open_browser=False)
         assert nansense.serve(session) is None
         assert nansense.ui.serve(SimpleNamespace(enabled=True, is_leader=False)) is None
         with session.batch(phase="train", epoch=0):

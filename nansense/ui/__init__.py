@@ -47,7 +47,7 @@ def __dir__() -> list[str]:
 def serve(
     session: Session,
     *,
-    port: int = 8080,
+    port: int = 6464,
     host: str = "127.0.0.1",
     log_level: str = "warning",
     open_browser: bool = True,
@@ -58,7 +58,7 @@ def serve(
 ) -> threading.Thread | None:
     """Start the NiceGUI app on a background thread and return that thread.
 
-    `port` / `host` pick the bind address (default `127.0.0.1:8080`).
+    `port` / `host` pick the bind address (default `127.0.0.1:6464`).
     `log_level` is uvicorn's log level — `"warning"` by default, so routine
     request logging stays out of the training console.
 

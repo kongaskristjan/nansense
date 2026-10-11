@@ -13,13 +13,13 @@ There are three kinds:
 A runnable demo of all three lives in `examples/custom_metrics/`:
 
 ```bash
-uv run examples/custom_metrics/main.py --nansense-port 8080
+uv run examples/custom_metrics/main.py --nansense-port 6464
 ```
 
 ## Scalar metrics
 
 ```python
-session = nansense.start(model, optimizer=optimizer, port=8080)
+session = nansense.start(model, optimizer=optimizer, port=6464)
 
 @session.watch_metric("sparsity")                      # one point per batch
 def sparsity(ctx: nansense.LayerContext) -> float:
