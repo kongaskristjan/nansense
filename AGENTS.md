@@ -29,6 +29,8 @@
   - A tiny task can be done on main agent, but bigger ones generally are handed to sub-agents
   - A rule of thumb: the main agent gets many different implementation requests and should not fill it's context
 - If a large model is used for main agent, then easier tasks can be delegated to smaller models, eg. Fable -> Opus
+- If you're claude, ask codex gpt-6.1 sol to review/improve any changes that has user-facing explanations and text (eg. docs, tutorials, tooltips etc.)
+  - Use --yolo mode if you're yourself running in --dangerously-skip-permissions mode. Make sure to run in non-interactive mode
 
 ## Worktrees
 
