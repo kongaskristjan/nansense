@@ -217,3 +217,37 @@ def test_time_travel_restores_the_multipliers_of_its_checkpoint() -> None:
     session._rewind_to_epoch(0)
     assert session.lr_multipliers == {}
     assert type(scheduler) is torch.optim.lr_scheduler.OneCycleLR
+
+
+@pytest.mark.parametrize(
+    ("values", "betas", "message"),
+    [
+        ({"beta2": 0.99}, (0.9, 0.99), None),
+        ({"beta1": 0.5, "beta2": 0.0}, (0.5, 0.0), None),
+        ({"beta1": 1.0}, None, "at least 0 and below 1"),
+        ({"beta2": -0.1}, None, "at least 0 and below 1"),
+    ],
+)
+def test_betas_edit_element_by_element(
+    values: dict[str, float], betas: tuple[float, float] | None, message: str | None
+) -> None:
+    optimizer = torch.optim.Adam(TinyNet().parameters())
+    group = optimizer.param_groups[0]
+    assert {"beta1", "beta2"} <= set(hyperparams.numeric_hyperparams(group))
+    if message is not None:
+        with pytest.raises(ValueError, match=message):
+            hyperparams.plan_changes(optimizer, values, 0)
+        return
+    hyperparams.apply_changes(optimizer, hyperparams.plan_changes(optimizer, values, 0))
+    assert group["betas"] == betas
+    assert isinstance(group["betas"], tuple)
+    assert hyperparams.source_key(group, "beta2") == "betas[1]"
+
+
+def test_tuple_element_names_avoid_existing_keys() -> None:
+    group = {"params": [], "betas": (0.9, 0.99), "beta2": 0.5}
+    assert set(hyperparams.numeric_hyperparams(group)) == {
+        "beta1",
+        "betas[1]",
+        "beta2",
+    }

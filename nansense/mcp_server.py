@@ -1835,7 +1835,9 @@ def build_server(
 
         Lists each group's numeric hyperparameters (`lr`, `momentum`,
         `weight_decay`, ...), its model parameter count, and up to five
-        parameter names. `get_weight_stats` reports each parameter's group.
+        parameter names. Numeric tuples appear one element at a time, so
+        Adam's `betas` are `beta1` and `beta2`. `get_weight_stats` reports
+        each parameter's group.
         Changes made with `set_hyperparameters` appear under `edited`, with
         the value from before the first edit. Groups with an active schedule
         multiplier also list `lr_multiplier` and `scheduled_lr`, the current
@@ -1851,8 +1853,10 @@ def build_server(
             pydantic.Field(
                 description=(
                     'New values by key, e.g. {"lr": 0.01, "weight_decay": 0}. '
-                    "Use numeric keys listed by get_hyperparameters; each key "
-                    "must exist in every targeted group. Values must be finite; "
+                    "Use keys listed by get_hyperparameters; each key must "
+                    "exist in every targeted group. Adam's betas are beta1 "
+                    "and beta2, each at least 0 and below 1. "
+                    "Values must be finite; "
                     "integer settings require whole numbers."
                 )
             ),

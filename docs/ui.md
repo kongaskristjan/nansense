@@ -56,6 +56,8 @@ Every layer with parameters has a **weights view**. Each parameter gets a panel 
 
 While training is paused, edit a numeric hyperparameter such as learning rate, weight decay, momentum or epsilon, then press Enter or leave the field to apply it. The change affects the whole parameter group from the next optimizer step; the tooltip shows how many model parameters share it. An edited field stays tinted until you restore the value from before its first edit, shown in the tooltip, or time travel undoes that edit.
 
+Numeric tuples are edited one element at a time: Adam's `betas` appear as `beta1` and `beta2`, each at least 0 and below 1, and the tooltip names the underlying setting, such as `betas[0]`.
+
 By default, schedulers keep adjusting the learning rate after an edit. `StepLR`, `ExponentialLR`, `CosineAnnealingLR` and `ReduceLROnPlateau` continue from your value; `LambdaLR`, `OneCycleLR` and `CyclicLR` recompute it from their own schedule and replace it at their next step. Time travel restores the checkpoint's hyperparameters, so to replay an epoch with a different learning rate, travel back first, edit, then resume training.
 
 To scale future learning rates while keeping the schedule's shape, check **scale schedule** next to `lr` before editing it. This requires a scheduler passed to `start`. The edit sets a multiplier — new `lr` ÷ the schedule's current, unscaled `lr` — applied after every later scheduler step. A `OneCycleLR` warm-up and decay, for example, continue with all learning rates scaled by that factor.

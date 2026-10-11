@@ -23,7 +23,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from torch import nn
 from torch.optim import Optimizer
@@ -31,10 +31,14 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from nansense.schedule import BatchPosition
 
-# Knobs whose negative values no torch optimizer accepts.
+# Knobs whose negative values no torch optimizer accepts (for a tuple, each
+# element: Rprop's `step_sizes`).
 _NON_NEGATIVE: frozenset[str] = frozenset(
-    {"lr", "weight_decay", "eps", "momentum", "dampening", "lr_decay"}
+    {"lr", "weight_decay", "eps", "momentum", "dampening", "lr_decay", "step_sizes"}
 )
+
+# Tuple-valued knobs whose elements must lie in [0, 1): Adam-style `betas`.
+_UNIT_INTERVAL: frozenset[str] = frozenset({"betas"})
 
 
 @dataclass(frozen=True)
@@ -79,19 +83,62 @@ def active_multipliers(history: tuple[LrMultiplier, ...]) -> dict[int, float]:
     return {group: factor for group, factor in latest.items() if factor != 1.0}
 
 
-def numeric_hyperparams(group: Mapping[str, object]) -> dict[str, float]:
-    """A param group's plain-numeric knobs (`lr`, `momentum`, ...).
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
-    Booleans (`nesterov`, `amsgrad`) and tuples (`betas`) are left out; these
-    are exactly the values the weights page shows and lets you edit.
+
+@dataclass(frozen=True)
+class _Entry:
+    """Where an editable value lives: `group[key]`, or `group[key][index]`."""
+
+    key: str
+    index: int | None
+    value: int | float
+
+
+def _entries(group: Mapping[str, object]) -> dict[str, _Entry]:
+    """Return a parameter group's editable numeric values by name.
+
+    Scalar numbers keep their key. Each element of a nonempty, all-numeric
+    tuple or list gets a name: the key with any trailing `s` removed, followed
+    by a 1-based position (`beta1`, `beta2` for `betas`). If that name is
+    already a group key, use `key[i]` with a zero-based index instead.
     """
-    return {
-        key: float(value)
-        for key, value in group.items()
-        if key != "params"
-        and isinstance(value, (int, float))
-        and not isinstance(value, bool)
-    }
+    entries: dict[str, _Entry] = {}
+    for key, value in group.items():
+        if key == "params":
+            continue
+        if _is_number(value):
+            entries[key] = _Entry(key, None, cast(int | float, value))
+        elif isinstance(value, (tuple, list)) and value and all(map(_is_number, value)):
+            for i, element in enumerate(value):
+                name = f"{key.removesuffix('s')}{i + 1}"
+                entries[name if name not in group else f"{key}[{i}]"] = _Entry(
+                    key, i, cast(int | float, element)
+                )
+    return entries
+
+
+def numeric_hyperparams(group: Mapping[str, object]) -> dict[str, float]:
+    """Return editable numeric hyperparameters (`lr`, `momentum`, `beta1`, ...).
+
+    Excludes booleans such as `nesterov` and `amsgrad`. Numeric tuples and
+    lists expose one value per element: `betas` becomes `beta1` and `beta2`,
+    or `betas[i]` (zero-based) if the corresponding name is already a group
+    key. These are the settings shown and edited on the weights page.
+    """
+    return {name: float(entry.value) for name, entry in _entries(group).items()}
+
+
+def source_key(group: Mapping[str, object], name: str) -> str:
+    """Return the optimizer setting behind a `numeric_hyperparams` name.
+
+    For example, `lr` stays `lr`, and `beta1` maps to `betas[0]`.
+    """
+    entry = _entries(group).get(name)
+    if entry is None or entry.index is None:
+        return name
+    return f"{entry.key}[{entry.index}]"
 
 
 def group_indices(model: nn.Module, optimizer: Optimizer | None) -> dict[str, int]:
@@ -110,10 +157,13 @@ def group_indices(model: nn.Module, optimizer: Optimizer | None) -> dict[str, in
 def plan_changes(
     optimizer: Optimizer, values: Mapping[str, float], group: int | None
 ) -> list[tuple[int, str, float]]:
-    """Validate a request into `(group, key, value)` writes; `ValueError` if bad.
+    """Validate edits and return `(group, key, value)` writes.
 
-    `group=None` targets every param group, each of which must have the key.
-    A value for an integer-valued knob must itself be a whole number.
+    Keys are names returned by `numeric_hyperparams`; `beta2`, for example,
+    targets `betas[1]`. `group=None` targets every parameter group, and each
+    key must exist in every targeted group. Values must be finite, integer
+    settings require whole numbers, and each beta must be in `[0, 1)`.
+    Raises `ValueError` if any edit is invalid.
     """
     groups = optimizer.param_groups
     if not values:
@@ -129,9 +179,10 @@ def plan_changes(
         )
     changes: list[tuple[int, str, float]] = []
     for index in targets:
-        editable = numeric_hyperparams(groups[index])
+        editable = _entries(groups[index])
         for key, value in values.items():
-            if key not in editable:
+            entry = editable.get(key)
+            if entry is None:
                 raise ValueError(
                     f"Param group {index} has no numeric hyperparameter {key!r}; "
                     f"editable keys: {', '.join(sorted(editable)) or 'none'}."
@@ -139,9 +190,11 @@ def plan_changes(
             value = float(value)
             if not math.isfinite(value):
                 raise ValueError(f"{key} must be finite; received {value}.")
-            if key in _NON_NEGATIVE and value < 0:
+            if entry.key in _NON_NEGATIVE and value < 0:
                 raise ValueError(f"{key} cannot be negative; received {value}.")
-            if isinstance(groups[index][key], int) and not value.is_integer():
+            if entry.key in _UNIT_INTERVAL and not 0 <= value < 1:
+                raise ValueError(f"{key} must be at least 0 and below 1; received {value}.")
+            if isinstance(entry.value, int) and not value.is_integer():
                 raise ValueError(f"{key} requires a whole number; received {value}.")
             changes.append((index, key, value))
     return changes
@@ -150,17 +203,25 @@ def plan_changes(
 def apply_changes(
     optimizer: Optimizer, changes: list[tuple[int, str, float]]
 ) -> list[tuple[int, str, float]]:
-    """Write `changes` into the param groups; returns `(group, key, old)` triples.
+    """Apply validated edits and return `(group, key, old_value)` triples.
 
-    An integer-valued knob keeps its `int` type, so the optimizer sees exactly
-    the kind of value the script gave it.
+    Keys are names returned by `numeric_hyperparams`. Integer settings keep
+    their `int` type. Editing a tuple or list element preserves the container
+    type and the other elements.
     """
     previous: list[tuple[int, str, float]] = []
-    for index, key, value in changes:
+    for index, name, value in changes:
         group = optimizer.param_groups[index]
-        old = group[key]
-        group[key] = int(value) if isinstance(old, int) else value
-        previous.append((index, key, float(old)))
+        entry = _entries(group)[name]
+        new = int(value) if isinstance(entry.value, int) else value
+        if entry.index is None:
+            group[entry.key] = new
+        else:
+            sequence = group[entry.key]
+            elements = list(sequence)
+            elements[entry.index] = new
+            group[entry.key] = type(sequence)(elements)
+        previous.append((index, name, float(entry.value)))
     return previous
 
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from nicegui import ui
 
-from nansense.hyperparams import HyperparameterEdit
+from nansense.hyperparams import HyperparameterEdit, source_key
 from nansense.session import Session
 
 # Applied to an input whose value was changed from NaNsense.
@@ -209,11 +209,17 @@ class HyperparameterFields:
         scope = (
             "Applies to this parameter only"
             if self._group_size == 1
-            else f"Shared by all {self._group_size} parameters in param group {self.group}"
+            else f"Shared by {self._group_size} parameters in parameter group {self.group}"
+        )
+        optimizer = self._session.optimizer
+        source = (
+            source_key(optimizer.param_groups[self.group], key)
+            if optimizer is not None and self.group is not None
+            else key
         )
         text = (
-            f"The optimizer's {key}. {scope}. While paused, enter a new value "
-            "and press Enter or leave the field; it applies from the next "
+            f"Optimizer setting: {source}. {scope}. While paused, enter a new value "
+            "and press Enter or leave the field to apply it from the next "
             "optimizer step."
         )
         if edit is not None:

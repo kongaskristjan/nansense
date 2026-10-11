@@ -1437,9 +1437,12 @@ button itself.
 ## Hyperparameter edits (`nansense.hyperparams`)
 
 `Session.set_hyperparameters(values, group=None)` writes numeric entries of
-`optimizer.param_groups` — the same plain-numeric knobs
-`current_optimizer_hyperparams` reports (`numeric_hyperparams`: no bools, no
-`betas` tuples). It is the backend of the weights page's hyperparameter
+`optimizer.param_groups` — the same numeric knobs
+`current_optimizer_hyperparams` reports (`numeric_hyperparams`: no bools; an
+all-numeric tuple such as `betas` is split into one entry per element, named
+`beta1`/`beta2` — singular key plus 1-based position, or `betas[i]` if that
+name is taken — and written back by rebuilding the tuple, so its type
+survives). It is the backend of the weights page's hyperparameter
 inputs (`ui/hyperparam_fields.py`) and of the `set_hyperparameters` MCP tool.
 
 - **Only while paused.** The write happens under `_cv` with `_paused` set,
