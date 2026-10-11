@@ -20,6 +20,7 @@ from nansense.ui.common import (
     _strip_marker,
     _weights_placeholder,
 )
+from nansense.ui.export import start_download
 from nansense.ui.histograms import _format_stat
 from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
 from nansense.ui.share import _add_share_button
@@ -158,6 +159,18 @@ def _build_weights_page(session: Session, layer: str) -> None:
                 ).props(
                     f'dense no-caps size=sm href="{_weight_graphs_href(layer)}"'
                 ).classes("ml-2").tooltip("This layer's weight statistics per epoch")
+                ui.button(
+                    "Download",
+                    icon="download",
+                    color="slate-500",
+                    on_click=lambda: start_download(
+                        session, layer, activations=False, weights=True
+                    ),
+                ).props("dense no-caps size=sm").classes("ml-2").tooltip(
+                    "Download this layer's parameters and available gradients, "
+                    "optimizer state, hyperparameters and custom tensors "
+                    "from the latest captured batch (.pt)"
+                )
             _add_settings_button(session, record_view).classes("ml-auto")
             _add_tour_button()
             _add_share_button(session)

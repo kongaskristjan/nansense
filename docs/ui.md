@@ -22,6 +22,8 @@ Running statistics (histograms, min/max galleries, per-epoch graphs) accumulate 
 
 Each card renders one strip per tensor: a row of per-channel images on a shared diverging blue-white-red scale. From the card you can jump to the layer's [stats view](#the-stats-page), [weights view](#the-weights-page), or [experiment page](#the-experiment-page).
 
+The card's download button saves the layer's activation, available gradient and custom tensors from the latest captured batch as a `.pt` file — full batch, every channel, with each tensor's dtype preserved. Load it with `torch.load(path, weights_only=True)` for analysis in your own scripts. The file holds the training batch even while the page shows a pinned or perturbed input, and is limited to 256 MiB of tensor data.
+
 ## The input panel
 
 The right sidebar chooses the input shown throughout the page. For a model with several inputs, use the **Input** menu; use **Sample** to move through the current batch. See [Displaying inputs correctly](wiring.md#displaying-inputs-correctly) for non-RGB and flat inputs.
@@ -52,7 +54,7 @@ The settings dialog can also switch collection between none (the default), the w
 
 Every layer with parameters has a **weights view**. Each parameter gets a panel rendering the weight tensor, its gradient, and — when the session was given an optimizer — one strip per tensor-valued optimizer-state entry (momentum buffers, Adam moments; 0-dim entries like Adam's `step` join a scalar line below), plus the parameter group's live hyperparameters such as the current learning rate.
 
-Use the axis controls to lay out convolution kernels, matrices, or embeddings. **Weight graphs** opens the layer's per-epoch history.
+Use the axis controls to lay out convolution kernels, matrices, or embeddings. **Weight graphs** opens the layer's per-epoch history. **Download** saves the layer's parameters with available gradients, optimizer state, numeric optimizer hyperparameters and custom weight tensors as a `.pt` file. Load it with `torch.load(path, weights_only=True)`; the same 256 MiB limit on tensor data applies.
 
 !!! note
     Weight *gradients* are read when a batch exits, so keep `optimizer.zero_grad()` at the start of your batch body — zeroing after `step()` would leave the gradient views empty (see the [Wiring guide](wiring.md#wire-it-into-your-loop-raw-pytorch)).

@@ -33,6 +33,7 @@ from nansense.ui.common import (
 )
 from nansense.ui.components.stats_toggle import STATS_TOGGLE_CSS, StatsToggle
 from nansense.ui.controllers.main import MainController
+from nansense.ui.export import start_download
 from nansense.ui.graph import slug_map
 from nansense.ui.input_panel import InputPanel
 from nansense.ui.render import (
@@ -350,6 +351,7 @@ class _MainPage:
                         decoupled=self.decoupled(),
                         weights=self.layer_weights.get(name, []),
                         on_toggle_watch=self.toggle_layer,
+                        on_download=self.download_layer,
                     )
             self.input_handle = _resize_handle("main-input", "right")
             self.input_pane = (
@@ -625,6 +627,9 @@ class _MainPage:
             self.state.dirty = True
         self.empty_hint.set_visibility(not shown)
         self.refresh_chip()
+
+    def download_layer(self, name: str) -> None:
+        start_download(self.session, name, activations=True, weights=False)
 
     def toggle_layer(self, name: str) -> None:
         if (
@@ -1002,6 +1007,7 @@ class _LayerView:
         decoupled: bool,
         weights: list[str],
         on_toggle_watch: Callable[[str], None],
+        on_download: Callable[[str], None],
     ) -> None:
         self.name = name
         card = ui.element("div").classes(
@@ -1071,6 +1077,17 @@ class _LayerView:
                     ).style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip("Open this layer's stats")
+                with ui.element("div").props("data-card-action"):
+                    ui.button(
+                        icon="download",
+                        on_click=lambda: on_download(name),
+                        color="slate-500",
+                    ).props('dense no-caps aria-label="Download tensors"').style(
+                        "min-height: 0; padding: 1px 6px; font-size: 11px"
+                    ).tooltip(
+                        "Download this layer's activation, available gradient and "
+                        "custom tensors from the latest captured batch (.pt)"
+                    )
                 # The card only shows while the layer is shown, so the button
                 # is always the "off" direction; its label reflects what
                 # hiding does (see the class docstring) via `set_decoupled`.

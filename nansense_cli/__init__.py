@@ -14,8 +14,9 @@ any registration.
     nansense-cli --port 8080 get_layer_stats --help  # one tool's docstring and flags
     nansense-cli --port 8080 get_layer_stats --layers conv1 fc
 
-JSON results are printed as-is; pictures are written to `--out` as PNG files
-and their paths printed, so the caller looks at only the ones it wants.
+JSON results are printed as-is; pictures and files (`render_*` PNGs, the
+`export_tensors` `.pt`) are written to `--out` and their paths printed, so the
+caller opens only the ones it wants.
 """
 
 from __future__ import annotations
@@ -33,7 +34,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcp.client import Client
-from mcp.types import CallToolResult, ImageContent, TextContent, Tool
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+    Tool,
+)
 
 if TYPE_CHECKING:
     from mcp.server import MCPServer
@@ -62,7 +70,10 @@ def _common_options(defaults: bool) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--out", type=Path, default=Path(".nansense-cli") if defaults else keep,
-        help="Directory for the PNG files of render_* tools (default .nansense-cli).",
+        help=(
+            "Directory for returned files (render_* PNGs and export_tensors "
+            ".pt files; default .nansense-cli)."
+        ),
     )
     return parser
 
@@ -177,13 +188,26 @@ def tool_listing(instructions: str | None, tools: Sequence[Tool], port: int) -> 
     return "\n".join([(instructions or "").strip(), "", header, *lines])
 
 
+def _stamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+
+
 def _image_path(out: Path, tool: str, index: int) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
-    return out / f"{tool}-{stamp}-{index}.png"
+    return out / f"{tool}-{_stamp()}-{index}.png"
+
+
+def _file_path(out: Path, uri: str) -> Path:
+    """Where a returned file goes: its server-given name, stamped so repeated
+    exports never overwrite each other. Only the last path segment is used, so
+    a name cannot escape `out`."""
+    name = Path(str(uri).rsplit("/", 1)[-1]).name or "file"
+    stem, dot, suffix = name.rpartition(".")
+    return out / (f"{stem}-{_stamp()}.{suffix}" if dot else f"{name}-{_stamp()}")
 
 
 def print_result(result: CallToolResult, tool: str, out: Path) -> int:
-    """Print the result's text, save its pictures, and return the exit code."""
+    """Print the result's text, save its pictures and files, and return the
+    exit code."""
     stream = sys.stderr if result.is_error else sys.stdout
     images = 0
     for block in result.content:
@@ -195,6 +219,13 @@ def print_result(result: CallToolResult, tool: str, out: Path) -> int:
             path = _image_path(out, tool, images)
             path.write_bytes(base64.b64decode(block.data))
             print(f"Image: {path}", file=stream)
+        elif isinstance(block, EmbeddedResource) and isinstance(
+            block.resource, BlobResourceContents
+        ):
+            out.mkdir(parents=True, exist_ok=True)
+            path = _file_path(out, str(block.resource.uri))
+            path.write_bytes(base64.b64decode(block.resource.blob))
+            print(f"File: {path}", file=stream)
     return 1 if result.is_error else 0
 
 

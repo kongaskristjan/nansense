@@ -26,6 +26,7 @@ Two invariants shape every tool below:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -38,9 +39,10 @@ from typing import Annotated, Any, Literal
 
 import pydantic
 from mcp.server import MCPServer
+from mcp.types import BlobResourceContents, EmbeddedResource
 from starlette.routing import BaseRoute
 
-from nansense import experiments
+from nansense import experiments, export
 from nansense.contracts.recording import (
     ExperimentView,
     HistogramView,
@@ -902,6 +904,82 @@ def build_server(
         if values:
             reply.insert(1, json.dumps({"samples": values}))
         return reply
+
+    # ---- Raw tensors -------------------------------------------------
+
+    @server.tool(structured_output=False)
+    async def export_tensors(
+        layers: Annotated[
+            list[str],
+            pydantic.Field(
+                description=(
+                    "One or more layer names from get_architecture. Use names "
+                    "from its `inputs` list to export model input tensors."
+                )
+            ),
+        ],
+        activations: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "Include each layer's activation, available activation "
+                    "gradient, and custom layer tensors."
+                )
+            ),
+        ] = True,
+        weights: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "Include each layer's parameters, with available gradients, "
+                    "optimizer state, numeric optimizer hyperparameters "
+                    "and custom weight tensors."
+                )
+            ),
+        ] = True,
+    ) -> list[Any]:
+        """Export these layers' latest captured tensors as one `.pt` file.
+
+        For analysis beyond the other tools, load the file with
+        `torch.load(path, weights_only=True)`. The reply contains a JSON
+        manifest (shapes, dtypes, batch position) followed by the file;
+        nansense-cli saves it under `--out`. The server writes no file.
+
+        Tensors come from the latest published snapshot: the full batch,
+        every channel, on CPU, with each tensor's captured dtype preserved.
+        Pinned inputs, perturbations and display options do not affect the
+        export. The payload has `format`, `position` and `layers` keys;
+        each layer contains `activation`, `gradient`, `custom` and
+        `parameters`. Each parameter contains `value`, `gradient`,
+        `optimizer_state`, `hyperparameters` and `custom`, when available.
+
+        Missing snapshot entries are omitted. Optimizer state and
+        hyperparameters require an optimizer passed to `start`.
+        Unknown layer names are skipped and listed in `unknown_layers`
+        in the manifest; at least one layer name must be valid.
+        Exports are capped at 256 MiB of tensor data, excluding file overhead.
+        Export fewer layers or disable activations or weights to stay under it.
+        """
+        try:
+            built = await asyncio.to_thread(
+                export.build_export,
+                session,
+                layers=layers,
+                activations=activations,
+                weights=weights,
+            )
+            data = await asyncio.to_thread(built.to_bytes)
+        except export.ExportError as exc:
+            return [json.dumps({"error": str(exc)})]
+        resource = EmbeddedResource(
+            type="resource",
+            resource=BlobResourceContents(
+                uri=f"nansense://export/{built.filename}",
+                mime_type="application/octet-stream",
+                blob=base64.b64encode(data).decode("ascii"),
+            ),
+        )
+        return [json.dumps(built.manifest), resource]
 
     # ---- Run control -------------------------------------------------
 

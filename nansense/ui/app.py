@@ -54,6 +54,7 @@ from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
 from nansense.ui.graph import build_mermaid
 from nansense.ui.main_page import _build_page, _RenderCache
+from nansense.ui.export import add_export_route
 from nansense.ui.share import add_video_download_route
 from nansense.ui.stats_page import _build_stats_page
 from nansense.ui.weights_page import _build_weights_page
@@ -383,6 +384,8 @@ def serve(
     # (`nansense.ui.share`), which the app serves from its own origin so the
     # browser saves the file instead of playing it.
     add_video_download_route(fastapi_app)
+    # And the layer cards' / weights page's tensor downloads (`ui.export`).
+    add_export_route(fastapi_app, session)
     favicon_path = logo_small_path()
     # One cache for all connections: two tabs on the same session share
     # rendered strips instead of re-rendering them per connection.

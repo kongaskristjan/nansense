@@ -2229,6 +2229,28 @@ batch once at boot (seconds for LeNet, under a minute for the imagenette
 ResNet on the free Space's CPUs); the container ships no dataset and no
 epoch cache (time travel is disabled under lock anyway).
 
+## Tensor export (`nansense.export`, `nansense.ui.export`)
+
+On-demand only: `build_export` selects layers' tensors out of the published
+`BatchSnapshot` by reference (no copy, no training-thread work) and
+`to_bytes` `torch.save`s them, so a run that never exports pays nothing and
+nothing is written to disk on the server. The payload nests per layer —
+`activation` / `gradient` / `custom` plus `parameters -> name -> value /
+gradient / optimizer_state / hyperparameters / custom` — and holds only
+plain containers, so it loads with `weights_only=True`. A parameter shared by
+two layers is the same tensor object twice, which `torch.save` stores once and
+`_unique_nbytes` counts once against `MAX_EXPORT_BYTES` (256 MiB).
+
+Two front-ends, one builder. The `export_tensors` MCP tool returns a JSON
+manifest (shapes, dtypes, position) followed by the file as an
+`EmbeddedResource` blob; `nansense-cli` saves any blob resource under `--out`
+under the last segment of its URI, stamped, so the agent gets a local file
+even against a remote `--host`. The UI's download buttons (layer card:
+activation side; weights page: parameter side) first build the selection in
+the click handler, so a refusal is a notification, then point the browser at
+`GET /nansense/export.pt`, which rebuilds it from whatever snapshot is current
+and serves it as an attachment from Starlette's threadpool.
+
 ## Console output (`nansense.console`)
 
 Every line NaNsense prints to stdout goes through `console_print` rather than

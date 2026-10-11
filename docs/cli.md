@@ -83,6 +83,12 @@ This is worth its tokens when the numbers say *that* something is wrong but not 
 
 Pictures are capped at 1568 pixels on the longest side and downscaled past it, with a note saying so, since a wide layer would otherwise arrive as an unreadably large image.
 
+### Raw tensors
+
+When neither statistics nor pictures answer the question, `export_tensors --layers conv1 fc` returns the latest captured batch's tensors as one `.pt` file: each layer's activation and parameters, with available gradients, optimizer state, numeric optimizer hyperparameters and custom tensors. The CLI saves it under `--out` and prints the path alongside a JSON manifest of shapes, dtypes and batch position. `--no-weights` exports only activations, their gradients and custom layer tensors; `--no-activations` exports only parameters and their associated data.
+
+The agent loads the file with `torch.load(path, weights_only=True)` and analyses it with its own scripts. Tensors include the full batch and every channel, on CPU, with each tensor's captured dtype preserved. Missing entries are omitted; optimizer state and hyperparameters require an optimizer passed to `start`. The server writes no file. Each export is capped at 256 MiB of tensor data, excluding file overhead; select fewer layers or disable activations or weights for a smaller export.
+
 ## What the agent can try
 
 Reading a paused run is one thing; the rest of the UI is about *interrogating* it.

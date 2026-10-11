@@ -14,7 +14,14 @@ from typing import Any
 
 import pytest
 from mcp.client import Client
-from mcp.types import CallToolResult, ImageContent, TextContent, Tool
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+    Tool,
+)
 
 import nansense
 from nansense.mcp_server import DEFAULT_MCP_PATH, build_server
@@ -146,6 +153,24 @@ def test_images_are_written_to_out(
     assert path.parent == tmp_path / "shots"
     assert path.name.startswith("render_input-")
     assert path.read_bytes() == png
+
+
+def test_files_are_written_to_out_under_their_own_name_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A returned file keeps its server-given name and suffix, stamped so a
+    repeat never overwrites it — and no directory part can leave `--out`."""
+    blob = BlobResourceContents(
+        uri="nansense://export/../escape/a.b.pt",
+        mime_type="application/octet-stream",
+        blob=base64.b64encode(b"tensors").decode(),
+    )
+    result = CallToolResult(content=[EmbeddedResource(type="resource", resource=blob)])
+    assert print_result(result, "export_tensors", tmp_path) == 0
+    path = Path(capsys.readouterr().out.strip().removeprefix("File: "))
+    assert path.parent == tmp_path
+    assert path.name.startswith("a.b-") and path.suffix == ".pt"
+    assert path.read_bytes() == b"tensors"
 
 
 def test_a_tool_error_goes_to_stderr_with_a_failing_exit(
