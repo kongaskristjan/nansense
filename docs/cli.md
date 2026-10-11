@@ -66,8 +66,10 @@ Ask in plain language — "why has my loss stopped falling?" — and the agent w
 | `configure_debug_checks`, `silence_debug_check` | Tune the numerical-error checks |
 
 | `get_weight_stats` | A layer's parameters, their gradients, and the optimizer state moving them |
-| `get_metrics` | Custom scalar metrics the training script registered with `watch_metric` |
+| `get_metrics` | Custom scalar metrics registered with `watch_metric` |
 | `get_settings`, `set_update_frequency`, `set_watch_performance` | The settings dialog |
+
+Run controls return a short status; `get_status` has the full view. Filter custom metrics with `--metrics`, `--phase` and `--layers`; `--last N` keeps each series' newest N points.
 
 Statistics come from two places, and the distinction matters when you read the agent's reasoning. `get_layer_stats` reads the last captured batch and covers **any** layer. `get_stats_history` reads the running accumulators, which only cover **watched** layers and only while collection is on (it is off by default) — so the agent watches a layer, turns collection on with `set_stats_scope`, lets a few epochs run, and then asks for the trend. Ask too early and the tool names which of the three is missing rather than returning an empty series.
 

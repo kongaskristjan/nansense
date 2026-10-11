@@ -332,9 +332,11 @@ def test_the_experiment_catalog_describes_kinds_params_and_layers() -> None:
         assert dream["summary"] and dream["description"]
         assert {spec["key"] for spec in dream["params"]} >= {"steps", "channels"}
         # Grad-CAM needs an nn.Module, so the fx intermediate is excluded.
-        assert "conv" in by_kind["gradcam"]["layers"]
-        assert "relu" not in by_kind["gradcam"]["layers"]
-        assert "relu" in by_kind["deep_dream"]["layers"]
+        assert by_kind["gradcam"]["accepts"] == "modules_only"
+        assert by_kind["deep_dream"]["accepts"] == "any_layer"
+        sets = view["layer_sets"]
+        assert "conv" in sets["modules_only"] and "relu" not in sets["modules_only"]
+        assert "relu" in sets["any_layer"]
 
 
 def test_running_a_deep_dream_returns_its_result() -> None:
@@ -615,7 +617,7 @@ def test_custom_metrics_come_back_as_series() -> None:
     """These exist only because the training script author wrote them, which
     makes their presence a signal in itself."""
     model = TinyNet()
-    session = collecting(nansense.start(model, epochs=1, phases={"train": 1}))
+    session = collecting(nansense.start(model, epochs=1, phases={"train": 2}))
     # Nothing here drives the pause loop, so run detached rather than waiting
     # out the unserved-session timeout.
     session.detach()
@@ -628,12 +630,21 @@ def test_custom_metrics_come_back_as_series() -> None:
     with session.batch(phase="train", epoch=0):
         train_step(model)
 
+    with session.batch(phase="train", epoch=0):
+        train_step(model)
+
     view = metrics_view(session)
     assert view["series"], view
     entry = view["series"][0]
     assert entry["metric"] == "sparsity"
     assert entry["layer"] == "fc1"
     assert 0.0 <= entry["points"][0]["value"] <= 1.0
+    # `last` keeps the newest points and says how many there were.
+    (latest,) = metrics_view(session, last=1)["series"]
+    assert latest["points"] == entry["points"][-1:]
+    assert latest["points_total"] == len(entry["points"]) == 2
+    filtered = metrics_view(session, metrics=["other"])
+    assert filtered["series"] == [] and filtered["available_metrics"] == ["sparsity"]
 
 
 def test_no_custom_metrics_points_at_how_to_add_them() -> None:
@@ -1153,9 +1164,9 @@ def test_the_catalog_does_not_offer_the_graph_input_as_a_target() -> None:
 
     with paused_session(TinyClassifier(), _image_step) as session:
         catalog = experiment_catalog_view(session)
-        for entry in catalog["kinds"]:
-            assert "x" not in entry["layers"], entry["kind"]
-        assert "conv" in catalog["kinds"][0]["layers"]
+        for names in catalog["layer_sets"].values():
+            assert "x" not in names
+        assert "conv" in catalog["layer_sets"]["any_layer"]
 
 
 def test_settings_survive_an_unserializable_experiment_default() -> None:

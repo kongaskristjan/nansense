@@ -86,6 +86,7 @@ from nansense.mcp_view_specs import (
 from nansense.mcp_views import (
     RankMetric,
     architecture_view,
+    brief_status_view,
     debug_view,
     default_phase,
     experiment_catalog_view,
@@ -305,7 +306,7 @@ async def _run_control(
         await asyncio.to_thread(
             session.wait_until_running, timeout=_RESUME_WAIT_SECONDS
         )
-    view = status_view(session)
+    view = brief_status_view(session)
     if not reached:
         view["waiting"] = (
             f"Training was still running {waited:g}s after the command. "
@@ -1346,7 +1347,7 @@ def build_server(
         already current) and reports so.
         """
         if not session.is_running:
-            view = status_view(session)
+            view = brief_status_view(session)
             view["refreshed"] = False
             view["note"] = (
                 "Training is not advancing, so the last captured batch is "
@@ -1358,7 +1359,7 @@ def build_server(
         published = await asyncio.to_thread(
             _wait_for_snapshot, session, before, _clamp_timeout(timeout_seconds)
         )
-        view = status_view(session)
+        view = brief_status_view(session)
         view["refreshed"] = published
         if not published:
             view["note"] = (
@@ -1732,15 +1733,44 @@ def build_server(
                 )
             ),
         ] = None,
+        metrics: Annotated[
+            list[str] | None,
+            pydantic.Field(
+                description="Keep only these metric names; omit for all of them."
+            ),
+        ] = None,
+        phase: Annotated[
+            str | None,
+            pydantic.Field(
+                description="Keep only this phase's series, e.g. 'train'."
+            ),
+        ] = None,
+        last: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Keep only each series' newest N points; omit for the "
+                    "whole series."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Custom scalar metrics the training script registered.
 
         These come from `session.watch_metric(...)` in the user's own code, so
         what exists here is specific to this project — and worth reading early,
         since a metric someone bothered to add usually marks what they were
-        worried about.
+        worried about. A per-batch metric grows fast: narrow with `metrics`,
+        `phase`, `layers` and `last`.
         """
-        return await asyncio.to_thread(metrics_view, session, layers=layers)
+        return await asyncio.to_thread(
+            metrics_view,
+            session,
+            layers=layers,
+            metrics=metrics,
+            phase=phase,
+            last=last,
+        )
 
     # ---- Hyperparameters ---------------------------------------------
 
@@ -1838,7 +1868,7 @@ def build_server(
         reached = await _await_pause(
             session, after=before, timeout=_clamp_timeout(timeout_seconds)
         )
-        view = status_view(session)
+        view = brief_status_view(session)
         view["travelled_to_epoch"] = epoch
         if not reached:
             view["waiting"] = (
@@ -2020,7 +2050,8 @@ def build_server(
         """Every experiment kind, what it shows, and the knobs it takes.
 
         Call before `run_experiment` — the parameter keys, defaults and the
-        layers each kind accepts all come from here.
+        layers each kind accepts all come from here. Each kind's `accepts`
+        names one of the `layer_sets` lists.
         """
         return await asyncio.to_thread(experiment_catalog_view, session)
 

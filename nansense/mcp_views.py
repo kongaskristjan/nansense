@@ -193,6 +193,32 @@ def status_view(session: Session) -> dict[str, Any]:
     return view
 
 
+def brief_status_view(session: Session) -> dict[str, Any]:
+    """Brief run status returned by control commands.
+
+    Reports where the run is and any current numerical warning.
+    `get_status` has the full view, including watched layers, phases and
+    collection settings.
+    """
+    full = status_view(session)
+    snapshot = full["snapshot_position"]
+    view: dict[str, Any] = {
+        "state": full["state"],
+        "mode": full["mode"],
+        "live_position": full["live_position"],
+        "snapshot_position": None if snapshot is None else snapshot["text"],
+    }
+    warning = full["numerical_warning"]
+    if warning is not None:
+        view["numerical_warning"] = (
+            f"{warning['reasons']} — see get_debug_report"
+        )
+    for key in ("training_error", "hint"):
+        if key in full:
+            view[key] = full[key]
+    return view
+
+
 def architecture_view(
     session: Session, *, mermaid: str | None = None
 ) -> dict[str, Any]:
@@ -1111,6 +1137,13 @@ def experiment_catalog_view(session: Session) -> dict[str, Any]:
     # turns a kinds x layers x modules sweep — seconds on a large model, on the
     # event loop — into one pass.
     modules = set(dict(session.model.named_modules()))
+    # Every kind accepts one of two layer lists, so each list ships once under
+    # `layer_sets` and a kind names its own — repeating it per kind made the
+    # catalog tens of kilobytes on a large model.
+    layer_sets = {
+        "any_layer": layers,
+        "modules_only": [name for name in layers if name in modules],
+    }
     defaults = session.experiment_defaults
     kinds: list[dict[str, Any]] = []
     for spec in session.experiment_specs.values():
@@ -1121,18 +1154,19 @@ def experiment_catalog_view(session: Session) -> dict[str, Any]:
                 "title": spec.label,
                 "summary": spec.summary,
                 "description": spec.description,
-                "layers": [
-                    name for name in layers if not needs_module or name in modules
-                ],
+                "accepts": "modules_only" if needs_module else "any_layer",
                 "params": [_param_spec_view(param, defaults) for param in spec.params],
             }
         )
+    used = {kind["accepts"] for kind in kinds}
     return {
         "kinds": kinds,
+        "layer_sets": {key: names for key, names in layer_sets.items() if key in used},
         "hint": (
             "Experiments run on the paused training thread, so pause first. "
-            "`layers` lists what each kind accepts — Grad-CAM and the neuron "
-            "methods need a real nn.Module, so fx intermediates are excluded."
+            "Each kind's `accepts` names the `layer_sets` list it can target "
+            "— Grad-CAM and the neuron methods need a real nn.Module, so fx "
+            "intermediates are excluded from `modules_only`."
         ),
         "time_limit_seconds": experiments._EXPERIMENT_TIME_LIMIT,
     }
@@ -1231,34 +1265,55 @@ def experiment_result_view(
     return view
 
 
-def _series_view(series: instruments.MetricSeries) -> dict[str, Any]:
-    return {
-        "cadence": series.on,
-        "points": [
-            {"epoch": epoch, "batch": batch, "value": _num(value)}
-            for epoch, batch, value in zip(
-                series.epochs, series.batches, series.values, strict=True
-            )
-        ],
-    }
+def _series_view(series: instruments.MetricSeries, last: int | None) -> dict[str, Any]:
+    points = list(zip(series.epochs, series.batches, series.values, strict=True))
+    view: dict[str, Any] = {"cadence": series.on}
+    if last is not None and len(points) > max(last, 0):
+        view["points_total"] = len(points)
+        points = points[len(points) - max(last, 0) :]
+    view["points"] = [
+        {"epoch": epoch, "batch": batch, "value": _num(value)}
+        for epoch, batch, value in points
+    ]
+    return view
 
 
 def metrics_view(
-    session: Session, *, layers: Iterable[str] | None = None
+    session: Session,
+    *,
+    layers: Iterable[str] | None = None,
+    metrics: Iterable[str] | None = None,
+    phase: str | None = None,
+    last: int | None = None,
 ) -> dict[str, Any]:
     """Custom scalar metrics registered by the training script.
 
     These come from `session.watch_metric(...)` in the user's own code, so what
     is here is entirely up to that script — and the fact that a metric *exists*
     is itself a signal about what its author was worried about.
+
+    `metrics` and `phase` keep only matching series, and `last` keeps each
+    series' newest points. When points are omitted, `points_total` gives the
+    count before truncation. Per-batch metrics can produce large responses.
     """
     snapshot = session.watch_metrics_snapshot(layers=layers)
+    wanted = None if metrics is None else set(metrics)
     series: list[dict[str, Any]] = []
-    for (layer, phase, metric, name), values in sorted(snapshot.series.items()):
-        entry: dict[str, Any] = {"layer": layer, "phase": phase, "metric": metric}
+    available: set[str] = set()
+    for (layer, series_phase, metric, name), values in sorted(snapshot.series.items()):
+        available.add(metric)
+        if (wanted is not None and metric not in wanted) or (
+            phase is not None and series_phase != phase
+        ):
+            continue
+        entry: dict[str, Any] = {
+            "layer": layer,
+            "phase": series_phase,
+            "metric": metric,
+        }
         if name:
             entry["series"] = name
-        entry.update(_series_view(values))
+        entry.update(_series_view(values, last))
         series.append(entry)
     view: dict[str, Any] = {"series": series}
     errors = session.instrument_errors
@@ -1268,6 +1323,9 @@ def metrics_view(
             "A raising instrument is disabled rather than taking the run down; "
             "these stopped collecting at the error shown."
         )
+    elif not series and available:
+        view["available_metrics"] = sorted(available)
+        view["hint"] = "No series matches the filters; these metrics exist."
     elif not series:
         view["hint"] = (
             "No custom metrics. The training script registers them with "

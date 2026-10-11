@@ -560,6 +560,10 @@ def test_step_advances_the_run_and_reports_the_new_position() -> None:
         view = _call(session, "step", {"unit": "batch", "timeout_seconds": 5})
         assert view["state"] == "paused"
         assert view["live_position"]["batch"] == before + 1
+        # A brief echo: the settings a step cannot change stay in get_status.
+        assert "watched_layers" not in view and isinstance(
+            view["snapshot_position"], str
+        )
         assert "waiting" not in view
 
 
