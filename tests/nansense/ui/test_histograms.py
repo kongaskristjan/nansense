@@ -16,6 +16,7 @@ from nansense.ui.histograms import (
     axis_ranges,
     _bin_coord_to_value,
     dead_channels,
+    hidden_share,
     _fill_fraction,
     _linear_bar_x,
     _linear_x_range,
@@ -308,6 +309,22 @@ def test_axis_ranges_keep_base_share_when_plot_is_full() -> None:
     )
     assert x_range == _linear_x_range(_trimmed_bin_bounds(hists))
     assert y_range == _linear_y_range(hists, density=True)
+
+
+@pytest.mark.parametrize("log_x", [False, True])
+def test_trimmed_tail_is_reported_and_full_range_draws_it(log_x: bool) -> None:
+    # 1 value in 1001 sits far out: the trim drops it, full_range keeps it.
+    hist = {ZERO_BIN + 60: 1000, ZERO_BIN - 60: 1}
+    per_phase = {"train": _layer_snap("train", hist=hist)}
+
+    def hidden(full_range: bool) -> float:
+        x_range, _ = axis_ranges(
+            per_phase, "activation", log_x=log_x, log_y=False, full_range=full_range
+        )
+        return hidden_share(per_phase, "activation", x_range, log_x=log_x)
+
+    assert hidden(False) == pytest.approx(1 / 1001)
+    assert hidden(True) == 0.0
 
 
 def test_axis_ranges_raise_clip_share_when_plot_nearly_empty() -> None:

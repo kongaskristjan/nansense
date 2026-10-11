@@ -425,17 +425,45 @@ def histogram_frame(
 ) -> Image.Image | None:
     """The stats page's HISTOGRAMS view for one phase, redrawn server-side.
 
+    `bands` is the page's "Show subnormal/overflow" checkbox; the other
+    options pick the rows, as in `histogram_rows`.
+    """
+    return histogram_image(
+        histogram_rows(
+            session,
+            layers=layers,
+            phase=phase,
+            channel=channel,
+            current_batch=current_batch,
+        ),
+        log_x=log_x,
+        log_y=log_y,
+        channel=channel,
+        bands=bands,
+        current_batch=current_batch,
+    )
+
+
+def histogram_rows(
+    session: Session,
+    *,
+    layers: Sequence[str],
+    phase: str,
+    channel: int | None = None,
+    current_batch: bool = False,
+) -> list[tuple[str, str, str, LayerStatsSnapshot]]:
+    """`(layer, kind, phase, stats)` rows for `histogram_image`, one per stream.
+
     `channel` is the page's "Per channel" switch: each row is narrowed to that
     channel's histogram, falling back to the universal one where per-channel
-    rows are absent (a 1D tensor, a collapsed older epoch). `bands` is its
-    "Show subnormal/overflow" checkbox.
+    rows are absent (a 1D tensor, a collapsed older epoch).
 
     `current_batch` is the page's "Current batch" phase entry: the last
     captured batch alone, for any layer, instead of the running statistics —
     `phase` is then ignored.
     """
     if not layers:
-        return None
+        return []
     snap = (
         session.current_batch_stats(layers=list(layers), include_patches=False)
         if current_batch
@@ -450,14 +478,7 @@ def histogram_frame(
                 continue
             for kind in ("activation", "gradient"):
                 rows.append((layer, kind, shown, _narrowed(stats, kind, channel)))
-    return histogram_image(
-        rows,
-        log_x=log_x,
-        log_y=log_y,
-        channel=channel,
-        bands=bands,
-        current_batch=current_batch,
-    )
+    return rows
 
 
 def _narrowed(

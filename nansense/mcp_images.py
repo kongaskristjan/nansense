@@ -53,6 +53,8 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from PIL.Image import Image
 
+    from nansense.watch import LayerStatsSnapshot
+
 #: Longest side an image is sent at. Larger pictures are area-downscaled: a
 #: vision model resamples anything bigger anyway, and the bytes are the agent's
 #: to pay for.
@@ -405,6 +407,7 @@ def histogram_image(
     channel: int | None = None,
     bands: bool = False,
     current_batch: bool = False,
+    full_range: bool = False,
 ) -> RenderedImage:
     """The stats page's histograms: value distributions per layer and phase.
 
@@ -413,9 +416,9 @@ def histogram_image(
     the same diagnosis (`stats_gap_hint`) when there is nothing to draw.
     `current_batch` (the page's "Current batch" phase entry) draws the last
     captured batch instead, including unwatched layers with captured data.
+    The note names the share of each stream's values in bins outside the
+    trimmed x-axis (`full_range` includes every populated bin on that axis).
     """
-    from nansense.ui.frames import histogram_frame
-
     unknown = _unknown_layers(session, layers)
     resolved = [name for name in layers if name not in unknown]
     if current_batch:
@@ -427,6 +430,7 @@ def histogram_image(
             log_y=log_y,
             channel=channel,
             bands=bands,
+            full_range=full_range,
         )
     without_stats = [name for name in resolved if not session.stats_phases(name)]
     collected = [name for name in resolved if name not in without_stats]
@@ -450,16 +454,15 @@ def histogram_image(
     # Without a phase, the one training is actually in — across *all* the
     # requested layers, not just the first, and not whichever sorts last.
     chosen = phase if phase is not None else (default_phase(session, collected) or "")
-    png, caveat = _encode(
-        histogram_frame(
-            session,
-            layers=collected,
-            phase=chosen,
-            log_x=log_x,
-            log_y=log_y,
-            channel=channel,
-            bands=bands,
-        )
+    png, caveat = _draw_histograms(
+        session,
+        layers=collected,
+        phase=chosen,
+        log_x=log_x,
+        log_y=log_y,
+        channel=channel,
+        bands=bands,
+        full_range=full_range,
     )
     note = (
         f"Activation and gradient histograms for {collected}, phase {chosen!r}"
@@ -479,6 +482,74 @@ def histogram_image(
             f"{phases_with_data(session, collected)}.",
         )
     return RenderedImage(png, note + caveat)
+
+
+def _draw_histograms(
+    session: Session,
+    *,
+    layers: Sequence[str],
+    phase: str,
+    log_x: bool,
+    log_y: bool,
+    channel: int | None,
+    bands: bool,
+    full_range: bool,
+    current_batch: bool = False,
+) -> tuple[bytes | None, str]:
+    """The histogram picture, and its caveats: a downscale, a trimmed tail."""
+    from nansense.ui.compose import histogram_image as compose_histograms
+    from nansense.ui.frames import histogram_rows
+
+    rows = histogram_rows(
+        session,
+        layers=layers,
+        phase=phase,
+        channel=channel,
+        current_batch=current_batch,
+    )
+    png, caveat = _encode(
+        compose_histograms(
+            rows,
+            log_x=log_x,
+            log_y=log_y,
+            channel=channel,
+            bands=bands,
+            current_batch=current_batch,
+            full_range=full_range,
+        )
+    )
+    return png, _hidden_note(
+        rows, log_x=log_x, log_y=log_y, full_range=full_range
+    ) + caveat
+
+
+def _hidden_note(
+    rows: Sequence[tuple[str, str, str, LayerStatsSnapshot]],
+    *,
+    log_x: bool,
+    log_y: bool,
+    full_range: bool,
+) -> str:
+    """Which streams' values the trimmed x-axis leaves out, and how many."""
+    from nansense.ui.histograms import axis_ranges, hidden_share
+
+    hidden: list[str] = []
+    for layer, kind, phase, stats in rows:
+        per_phase = {phase: stats}
+        x_range, _ = axis_ranges(
+            per_phase, kind, log_x=log_x, log_y=log_y, full_range=full_range
+        )
+        share = hidden_share(per_phase, kind, x_range, log_x=log_x)
+        if share > 0:
+            hidden.append(f"{layer} {kind}s {share:.2%}")
+    if not hidden:
+        return ""
+    return (
+        " The x-axis is trimmed to the bulk of the values, leaving out bins "
+        "containing: "
+        + ", ".join(hidden)
+        + ". Pass full_range=true to include every populated bin on the x-axis."
+    )
 
 
 def _histogram_options(*, log_x: bool, log_y: bool, channel: int | None) -> str:
@@ -516,27 +587,25 @@ def _current_batch_histogram(
     log_y: bool,
     channel: int | None,
     bands: bool,
+    full_range: bool,
 ) -> RenderedImage:
     """`histogram_image` for the last captured batch, watched or not."""
-    from nansense.ui.frames import histogram_frame
-
     if session.snapshot is None:
         return _no_snapshot()
     if not layers:
         return RenderedImage(
             None, f"Unknown layers: {list(unknown)} — call get_architecture."
         )
-    png, caveat = _encode(
-        histogram_frame(
-            session,
-            layers=layers,
-            phase="",
-            log_x=log_x,
-            log_y=log_y,
-            channel=channel,
-            bands=bands,
-            current_batch=True,
-        )
+    png, caveat = _draw_histograms(
+        session,
+        layers=layers,
+        phase="",
+        log_x=log_x,
+        log_y=log_y,
+        channel=channel,
+        bands=bands,
+        full_range=full_range,
+        current_batch=True,
     )
     note = (
         f"Activation and gradient histograms for {list(layers)}, from the last "

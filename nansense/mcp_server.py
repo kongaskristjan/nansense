@@ -869,6 +869,16 @@ def build_server(
                 )
             ),
         ] = False,
+        full_range: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True includes every populated bin on the x-axis; the "
+                    "default trims the extreme tails so the bulk stays "
+                    "legible, and the reply says what share that leaves out."
+                )
+            ),
+        ] = False,
     ) -> CallToolResult:
         """Picture of the value distributions of watched layers.
 
@@ -888,6 +898,13 @@ def build_server(
         Each row shows its phase's latest retained epoch, so early in an epoch
         it may cover only a few batches; `current_batch` shows the last captured
         batch on its own, including unwatched layers with captured data.
+
+        The x-axis is trimmed to the bulk of the values, so a sparse tail can
+        be off the picture entirely (the few negative true-class logit
+        gradients in softmax cross-entropy, say). The reply names the share
+        of each stream's values in bins outside the view; `full_range`
+        includes every populated bin on the x-axis. The linear y-axis can
+        still clip tall bars.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -900,6 +917,7 @@ def build_server(
                 channel=channel,
                 bands=bands,
                 current_batch=current_batch,
+                full_range=full_range,
             )
         )
 

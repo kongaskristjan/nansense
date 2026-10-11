@@ -569,6 +569,7 @@ def histogram_image(
     channel: int | None = None,
     bands: bool = False,
     current_batch: bool = False,
+    full_range: bool = False,
 ) -> Image.Image | None:
     """Matplotlib re-render of `(layer, kind, phase, stats)` histogram rows.
 
@@ -596,7 +597,8 @@ def histogram_image(
 
     `bands` is the page's "Show subnormal/overflow" checkbox: dotted lines at
     each row's dtype-aware band edges. `current_batch` titles the rows as the
-    page's "Current batch" phase entry does.
+    page's "Current batch" phase entry does. `full_range` draws every
+    populated bin instead of trimming the tails.
     """
     if not rows:
         return None
@@ -626,6 +628,7 @@ def histogram_image(
             channel=channel,
             bands=bands,
             current_batch=current_batch,
+            full_range=full_range,
         )
     fig.tight_layout()
     canvas = FigureCanvasAgg(fig)
@@ -645,6 +648,7 @@ def _draw_histogram_axes(
     channel: int | None = None,
     bands: bool = False,
     current_batch: bool = False,
+    full_range: bool = False,
 ) -> None:
     """One subplot: the same bars/ranges/chrome the watch page draws with Plotly."""
     from matplotlib.axes import Axes
@@ -697,7 +701,9 @@ def _draw_histogram_axes(
             linewidth=0,
         )
     per_phase = {phase: stats}
-    x_range, y_range = axis_ranges(per_phase, kind, log_x=log_x, log_y=log_y)
+    x_range, y_range = axis_ranges(
+        per_phase, kind, log_x=log_x, log_y=log_y, full_range=full_range
+    )
     if x_range is not None:
         ax.set_xlim((x_range[0], x_range[1]))
     if log_y:

@@ -602,14 +602,52 @@ def axis_ranges(
     *,
     log_x: bool,
     log_y: bool,
+    full_range: bool = False,
 ) -> tuple[list[float] | None, list[float] | None]:
     """The histogram figure's `(x, y)` axis ranges.
 
-    Extracts the drawn traces once (`_phase_hists`) and delegates to
+    By default, extracts the drawn traces once (`_phase_hists`) and delegates to
     `_axis_ranges`. `_make_histogram_figure` calls `_axis_ranges` directly
     with the traces it already extracted.
+
+    `full_range` keeps every populated bin on the x-axis instead of trimming
+    the extreme tails; the linear y-axis keeps its base clip, while log y
+    still autoranges.
     """
-    return _axis_ranges(_phase_hists(per_phase, kind), log_x=log_x, log_y=log_y)
+    phase_hists = _phase_hists(per_phase, kind)
+    if not full_range:
+        return _axis_ranges(phase_hists, log_x=log_x, log_y=log_y)
+    density = use_density(log_x)
+    bounds = _trimmed_bin_bounds(phase_hists, 0.0, density=density)
+    x_range = _log_x_range(bounds) if log_x else _linear_x_range(bounds)
+    return x_range, None if log_y else _linear_y_range(phase_hists, density)
+
+
+def hidden_share(
+    per_phase: dict[str, LayerStatsSnapshot],
+    kind: str,
+    x_range: list[float] | None,
+    *,
+    log_x: bool,
+) -> float:
+    """Share of `kind`'s values in bins whose centre falls outside `x_range`.
+
+    The trim that keeps a lone outlier from stretching the axis also hides
+    real values, sometimes a whole tail (e.g. the few negative gradients of
+    the true-class logits in softmax cross-entropy), and the picture alone
+    cannot say so.
+    """
+    if x_range is None:
+        return 0.0
+    lo, hi = x_range
+    hidden = total = 0
+    for _, hist in _phase_hists(per_phase, kind):
+        for index, count in enumerate(hist):
+            centre = index if log_x else BIN_CENTERS[index]
+            total += count
+            if not lo <= centre <= hi:
+                hidden += count
+    return hidden / total if total else 0.0
 
 
 def _axis_ranges(
