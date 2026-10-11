@@ -26,6 +26,7 @@ import asyncio
 import base64
 import inspect
 import json
+import os
 import socket
 import sys
 import time
@@ -310,4 +311,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     url = f"http://{args.host}:{args.port}{MCP_PATH}"
-    return asyncio.run(run(url, args.command, args.rest, args))
+    try:
+        code = asyncio.run(run(url, args.command, args.rest, args))
+        # Flushed here, so a closed pipe surfaces below rather than at exit.
+        sys.stdout.flush()
+        return code
+    except BrokenPipeError:
+        # The reader went away (`| head`): stop quietly, as shell tools do,
+        # and point stdout at /dev/null so the interpreter's final flush
+        # does not raise the same error again.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0

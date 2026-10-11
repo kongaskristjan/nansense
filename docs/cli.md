@@ -40,7 +40,7 @@ nansense-cli --port 8080 configure_debug_checks --interval_batches 1
 nansense-cli --port 8080 render_layer --layers conv1 --out shots
 ```
 
-Results are printed as JSON. The `render_*` tools write their pictures as PNG files to `--out` (default `.nansense-cli/`) and print the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code. That includes a refusal, such as stepping a run that has finished; the message says why.
+Most tools print JSON results. The `render_*` tools print a descriptive note and any additional JSON details; the CLI saves their pictures as PNG files under `--out` (default `.nansense-cli/`) and prints the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code. That includes a refusal, such as stepping a run that has finished; the message says why.
 
 To turn agent access off, pass `mcp=False` to [`serve`][nansense.serve].
 
@@ -64,7 +64,6 @@ Ask in plain language — "why has my loss stopped falling?" — and the agent w
 | `refresh` | Publish a fresh snapshot from a free-running session without pausing it |
 | `watch_layers`, `unwatch_layers`, `set_stats_scope` | Choose which layers collect running statistics |
 | `configure_debug_checks`, `silence_debug_check` | Tune the numerical-error checks |
-
 | `get_weight_stats` | A layer's parameters, their gradients, and the optimizer state moving them |
 | `get_metrics` | Custom scalar metrics registered with `watch_metric` |
 | `get_settings`, `set_update_frequency`, `set_watch_performance` | The settings dialog |

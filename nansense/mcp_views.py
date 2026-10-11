@@ -155,13 +155,15 @@ def _state_hint(session: Session) -> str | None:
     return None
 
 
-def _warning_summary(error: debugger.DebugError | None) -> dict[str, Any] | None:
+def _warning_summary(session: Session) -> dict[str, Any] | None:
     """The numerical-error banner in brief; `get_debug_report` has the detail."""
+    error = session.debug_error
     if error is None:
         return None
     return {
         "reasons": debugger.reasons_text(error),
-        "first_detected_at": format_position(error.position),
+        # The same shape `get_debug_report` gives, so either can be targeted.
+        "first_detected_at": position_view(error.position, schedule=session.schedule),
         "affected_layers": [report.layer for report in error.layers],
         "detail": "Call get_debug_report for per-layer fractions and settings.",
     }
@@ -191,7 +193,7 @@ def status_view(session: Session) -> dict[str, Any]:
         "watched_layers": sorted(session.watched_layers),
         "stats_scope": str(session.stats_scope),
         "stats_collecting": session.stats_collecting,
-        "numerical_warning": _warning_summary(session.debug_error),
+        "numerical_warning": _warning_summary(session),
     }
     # Only when there is one: a run that is still going has nothing to say
     # here, and the field would read as an error every caller has to dismiss.
