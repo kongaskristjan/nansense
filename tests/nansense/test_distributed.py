@@ -37,7 +37,7 @@ from nansense.distributed import _unpack_reduced
 from nansense.ui.app import serve
 from nansense.watch import WatchAccumulator, bin_index
 
-from tests.nansense.helpers import TinyNet, live_hist
+from tests.nansense.helpers import TinyNet, live_hist, make_position
 
 
 def _filled_accumulator(xs: list[torch.Tensor]) -> WatchAccumulator:
@@ -229,8 +229,9 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
         model = TinyNet()
         ddp = DistributedDataParallel(model)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
         session = nansense.start(
-            ddp, epochs=1, phases={"train": 2}, optimizer=optimizer
+            ddp, epochs=1, phases={"train": 2}, optimizer=optimizer, scheduler=scheduler
         )
         # The DDP wrapper is unwrapped: clean names, leader on rank 0 only.
         assert session.model is model
@@ -244,9 +245,11 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
             session.set_update_frequency(unit="batch", n=100)
             assert session.watch("x")
             session.set_stats_scope("watched")
-            # A leader-side hyperparameter edit (what `set_hyperparameters`
-            # does while paused) reaches the followers at the next batch.
+            # A leader-side hyperparameter edit and schedule multiplier (what
+            # `set_hyperparameters` does while paused) reach the followers at
+            # the next batch.
             optimizer.param_groups[0]["lr"] = 0.5
+            session._apply_multipliers({0: 5.0}, make_position("train", 0, 0))
             session._hparam_version += 1
 
         # Rank-distinguishable data: rank r feeds constant `r + 1`, so the
@@ -280,6 +283,8 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
             # shard locally.
             assert session.watched_layers == frozenset({"x"})
             assert optimizer.param_groups[0]["lr"] == 0.5
+            assert session._rescaler is not None
+            assert session._rescaler.factors == {0: 5.0}
             local = session._watch_accumulator.snapshot(
                 layers=["x"], include_patches=False
             )

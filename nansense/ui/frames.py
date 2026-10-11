@@ -324,7 +324,8 @@ def weights_frame(
     Optimizer state whose shape matches the parameter is drawn under the same
     axis layout; state of a different shape falls back to its own default
     layout, and scalar state (Adam's `step`) joins the hyperparameters on a
-    text line; a hyperparameter changed from NaNsense also says what it was.
+    text line. Edited hyperparameters include their original values, and a
+    rescaled `lr` includes its schedule multiplier.
     `custom` adds the `watch_weight_tensor` strips the page draws after the
     optimizer's; recordings leave it off so their frames keep one size.
     """
@@ -336,6 +337,7 @@ def weights_frame(
     edited: dict[tuple[int | None, str], float] = {
         (e.group, e.key): e.original for e in session.hyperparameter_edits
     }
+    multipliers = session.lr_multipliers
     for panel in panels:
         tensor = snap.weights.get(panel.name)
         if tensor is None:
@@ -401,11 +403,14 @@ def weights_frame(
                     )
                 )
         group = groups.get(panel.name)
+        factor = multipliers.get(group) if group is not None else None
         for key, value in sorted(snap.optimizer_hyperparams.get(panel.name, {}).items()):
             original = edited.get((group, key))
+            notes = [] if original is None else [f"was {original:.4g}"]
+            if key == "lr" and factor is not None:
+                notes.append(f"scheduled lr ×{factor:.4g}")
             scalar_parts.append(
-                f"{key} = {value:.4g}"
-                + ("" if original is None else f" (was {original:.4g})")
+                f"{key} = {value:.4g}" + (f" ({', '.join(notes)})" if notes else "")
             )
         sections += [Section(line, None) for line in _wrap_parts(scalar_parts)]
     sections.insert(0, Section(format_position(snap.position), None))

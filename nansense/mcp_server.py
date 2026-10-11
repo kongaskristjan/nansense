@@ -1837,8 +1837,10 @@ def build_server(
         `weight_decay`, ...), its model parameter count, and up to five
         parameter names. `get_weight_stats` reports each parameter's group.
         Changes made with `set_hyperparameters` appear under `edited`, with
-        the value from before the first edit. Also identifies an attached
-        scheduler and explains how it may affect an edited learning rate.
+        the value from before the first edit. Groups with an active schedule
+        multiplier also list `lr_multiplier` and `scheduled_lr`, the current
+        learning rate before scaling. Identifies an attached scheduler and
+        explains how it may affect an edited learning rate.
         """
         return await asyncio.to_thread(hyperparameters_view, session)
 
@@ -1864,21 +1866,40 @@ def build_server(
                 )
             ),
         ] = None,
+        rescale_schedule: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "Set a per-group multiplier: new lr / the schedule's "
+                    "current, unscaled lr. Applied after every later scheduler "
+                    "step to preserve the schedule's shape. Requires an lr "
+                    "value and the optimizer's scheduler passed to start. "
+                    "Set lr to the group's scheduled_lr with this flag to "
+                    "end its multiplier. Only lr is rescaled; schedulers still "
+                    "control any momentum or betas they cycle."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Change the optimizer's hyperparameters while training is paused.
 
         The new values apply to the targeted groups from the next optimizer
         step. Nothing changes unless the entire request is valid. An active
         scheduler may later change or replace an edited learning rate.
+        With `rescale_schedule=True`, the edit sets a multiplier applied
+        after every later scheduler step.
         To replay an epoch with a different value, call `time_travel` first,
         then set the value and resume training: time travel restores the
-        checkpoint's values. Returns the same view as `get_hyperparameters`.
+        checkpoint's values and multipliers. Returns the same view as
+        `get_hyperparameters`.
         """
         refusal = _settings_refusal(session)
         if refusal is not None:
             return refusal
         try:
-            session.set_hyperparameters(values, group=group)
+            session.set_hyperparameters(
+                values, group=group, rescale_schedule=rescale_schedule
+            )
         except ValueError as error:
             return {"error": str(error)}
         return await asyncio.to_thread(hyperparameters_view, session)

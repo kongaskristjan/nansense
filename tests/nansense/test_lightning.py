@@ -156,6 +156,27 @@ def test_callback_pauses_steps_and_completes(tmp_path: Path) -> None:
     assert session.closed  # on_fit_end closed it; the UI would stay up
 
 
+def test_rescaled_schedule_under_lightning(tmp_path: Path) -> None:
+    """Lightning's own scheduler stepping goes through the rescaling."""
+    seed_everything(0)
+    module = BoringModule()
+    callback = NansenseCallback(model="net")
+    trainer = _make_trainer(tmp_path, callbacks=[callback])
+
+    def drive() -> None:
+        session = _wait_for_session(callback)
+        assert session.wait_until_paused(after_pauses=0, timeout=60.0)
+        session.set_hyperparameters({"lr": 0.3}, rescale_schedule=True)
+        session.detach()
+
+    driver = _Driver(callback, drive)
+    trainer.fit(module, train_dataloaders=_loader(shuffle=False))
+    driver.join()
+    # Three epoch-end StepLR halvings of 0.1, times the multiplier of 3.
+    (optimizer,) = trainer.optimizers
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(0.1 * 0.5**3 * 3)
+
+
 def test_disabled_callback_is_inert(tmp_path: Path) -> None:
     seed_everything(0)
     module = BoringModule()

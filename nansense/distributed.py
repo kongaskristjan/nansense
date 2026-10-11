@@ -18,7 +18,8 @@ Coordination happens at two points, both on the training thread:
    leader's stats scope, its armed time-travel target (`jump_epoch`, -1
    when none), and its hyperparameter-edit version. When a version changed
    since the last broadcast, a follow-up object broadcast carries the
-   watched-layer list or the leader's per-group hyperparameters — so
+   watched-layer list or the leader's per-group hyperparameters and `lr`
+   schedule multipliers — so
    steady-state batches pay one tiny broadcast. This is also the pacing point: a leader paused in the UI holds
    every follower at its next batch start, mirroring how DDP itself would
    block them in the next gradient all-reduce. A `jump_epoch >= 0` tells
@@ -66,6 +67,7 @@ import torch.distributed as dist
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel
 
+from nansense.hyperparams import HyperparameterPayload
 from nansense.watch import N_BINS, TensorStatsSnapshot
 
 if TYPE_CHECKING:
@@ -98,7 +100,7 @@ class FollowerControl:
     watched: list[str] | None
     scope_idx: int
     jump_epoch: int
-    hparams: list[dict[str, float]] | None
+    hparams: HyperparameterPayload | None
 
 
 class DistContext:
@@ -137,7 +139,7 @@ class DistContext:
         scope_idx: int,
         jump_epoch: int,
         hparam_version: int,
-        hparams: Callable[[], list[dict[str, float]]],
+        hparams: Callable[[], HyperparameterPayload],
     ) -> None:
         """Leader side of the per-batch control sync.
 
@@ -146,7 +148,8 @@ class DistContext:
         `jump_epoch` carries the leader's armed time-travel target (-1 when
         none): a `>= 0` value tells every rank to raise `TimeTravelJump` at
         this same batch-start barrier, before any forward/backward.
-        `hparams` builds the leader's per-group hyperparameters; it is only
+        `hparams` builds the leader's per-group hyperparameters and schedule
+        multipliers; it is only
         called (and sent) when `hparam_version` moved since the last batch.
         """
         t = torch.tensor(
@@ -182,11 +185,11 @@ class DistContext:
             dist.broadcast_object_list(obj, src=0, device=self.device)
             watched = cast(list[str], obj[0])
             self._synced_version = version
-        hparams: list[dict[str, float]] | None = None
+        hparams: HyperparameterPayload | None = None
         if hparam_version != self._synced_hparam_version:
             obj = [None]
             dist.broadcast_object_list(obj, src=0, device=self.device)
-            hparams = cast(list[dict[str, float]], obj[0])
+            hparams = cast(HyperparameterPayload, obj[0])
             self._synced_hparam_version = hparam_version
         return FollowerControl(
             publish=bool(publish),

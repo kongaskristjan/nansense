@@ -121,6 +121,26 @@ def test_set_hyperparameters_round_trip() -> None:
         assert weight["edited_hyperparameters"] == {"lr": {"original": 0.1}}
 
 
+def test_set_hyperparameters_rescales_the_schedule() -> None:
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda e: 0.5**e)
+    with paused_session(
+        model,
+        lambda m: optimizer_train_step(m, optimizer),
+        optimizer=optimizer,
+        scheduler=scheduler,
+    ) as session:
+        view = _call(
+            session,
+            "set_hyperparameters",
+            {"values": {"lr": 0.3}, "rescale_schedule": True},
+        )
+        (group,) = view["groups"]
+        assert group["lr_multiplier"] == pytest.approx(3.0)
+        assert group["scheduled_lr"] == pytest.approx(0.1)
+
+
 def test_weight_stats_explain_a_missing_optimizer() -> None:
     """No optimizer state has two very different causes, and an agent that
     reads "empty" as "the optimizer is broken" goes looking for nothing."""

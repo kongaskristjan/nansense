@@ -56,7 +56,11 @@ Every layer with parameters has a **weights view**. Each parameter gets a panel 
 
 While training is paused, edit a numeric hyperparameter such as learning rate, weight decay, momentum or epsilon, then press Enter or leave the field to apply it. The change affects the whole parameter group from the next optimizer step; the tooltip shows how many model parameters share it. An edited field stays tinted until you restore the value from before its first edit, shown in the tooltip, or time travel undoes that edit.
 
-Schedulers keep adjusting the learning rate after an edit. `StepLR`, `ExponentialLR`, `CosineAnnealingLR` and `ReduceLROnPlateau` continue from your value; `LambdaLR`, `OneCycleLR` and `CyclicLR` recompute it from their own schedule and replace it at their next step. Time travel restores the checkpoint's hyperparameters, so to replay an epoch with a different learning rate, travel back first, edit, then resume training.
+By default, schedulers keep adjusting the learning rate after an edit. `StepLR`, `ExponentialLR`, `CosineAnnealingLR` and `ReduceLROnPlateau` continue from your value; `LambdaLR`, `OneCycleLR` and `CyclicLR` recompute it from their own schedule and replace it at their next step. Time travel restores the checkpoint's hyperparameters, so to replay an epoch with a different learning rate, travel back first, edit, then resume training.
+
+To scale future learning rates while keeping the schedule's shape, check **scale schedule** next to `lr` before editing it. This requires a scheduler passed to `start`. The edit sets a multiplier — new `lr` ÷ the schedule's current, unscaled `lr` — applied after every later scheduler step. A `OneCycleLR` warm-up and decay, for example, continue with all learning rates scaled by that factor.
+
+An active multiplier appears as an amber `×factor` next to the field. Click it while paused to remove the multiplier and restore the schedule's current value, or enter that value with **scale schedule** checked. Time travel restores the multipliers in force at the checkpoint. Only `lr` is rescaled; schedulers still control any momentum or betas they cycle.
 
 Use the axis controls to lay out convolution kernels, matrices, or embeddings. **Weight graphs** opens the layer's per-epoch history. **Download** saves the layer's parameters with available gradients, optimizer state, numeric optimizer hyperparameters and custom weight tensors as a `.pt` file. Load it with `torch.load(path, weights_only=True)`; the same 256 MiB limit on tensor data applies.
 

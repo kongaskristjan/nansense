@@ -22,7 +22,11 @@ from nansense.ui.common import (
 )
 from nansense.ui.export import start_download
 from nansense.ui.histograms import _format_stat
-from nansense.ui.hyperparam_fields import HYPERPARAM_CSS, HyperparameterFields
+from nansense.ui.hyperparam_fields import (
+    HYPERPARAM_CSS,
+    HyperparameterFields,
+    RescaleChoice,
+)
 from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
 from nansense.ui.share import _add_share_button
 from nansense.ui.static import _STRIP_MARKER_CSS
@@ -127,6 +131,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     }
     step_until_custom = _build_step_until_custom_dialog(session)
     panels: list[_WeightPanel] = []
+    rescale = RescaleChoice()
     record_key = f"weights:{layer}"
 
     def record_view() -> RecordedView | None:
@@ -203,6 +208,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
                             shape=shapes[name],
                             session=session,
                             tour_anchor=name == anchor,
+                            rescale=rescale,
                         )
                     )
 
@@ -290,6 +296,7 @@ class _WeightPanel:
         shape: tuple[int, ...],
         session: Session,
         tour_anchor: bool = False,
+        rescale: RescaleChoice | None = None,
     ) -> None:
         self.name = name
         self._shape = shape
@@ -401,7 +408,7 @@ class _WeightPanel:
             ):
                 self._opt_scalars = ui.label("")
                 self._opt_scalars.set_visibility(False)
-                self.hyperparams = HyperparameterFields(session, name)
+                self.hyperparams = HyperparameterFields(session, name, rescale)
         self._sync_index_visibility()
 
     @property

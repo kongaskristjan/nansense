@@ -77,7 +77,12 @@ from nansense.extensions import (
     custom_experiment_spec,
 )
 from nansense.tools import ToolCall, ToolFn, ToolManager, ToolSpec, tool_spec
-from nansense.hyperparams import HyperparameterEdit
+from nansense.hyperparams import (
+    HyperparameterEdit,
+    HyperparameterPayload,
+    LrMultiplier,
+    ScheduleRescaler,
+)
 from nansense.input_config import InputTransform, MeanStd
 from nansense.instruments import (
     InstrumentManager,
@@ -494,6 +499,11 @@ class Session:
         # identity), and a counter followers sync edits by (`distributed`).
         self._hparam_edits: tuple[HyperparameterEdit, ...] = ()
         self._hparam_version = 0
+        # `lr` schedule multipliers (`set_hyperparameters(...,
+        # rescale_schedule=True)`): the history time travel filters, and the
+        # scheduler wrapper — created on first use, unwrapped at factor 1.
+        self._lr_multipliers: tuple[LrMultiplier, ...] = ()
+        self._rescaler: ScheduleRescaler | None = None
 
     @property
     def schedule(self) -> Schedule:
@@ -1964,8 +1974,21 @@ class Session:
         """
         return self._hparam_edits
 
+    @property
+    def lr_multipliers(self) -> dict[int, float]:
+        """Active learning-rate multipliers by parameter group, excluding 1.
+
+        Set by `set_hyperparameters(..., rescale_schedule=True)`: the group's
+        `lr` is the schedule's current, unscaled value times this factor.
+        """
+        return hyperparams.active_multipliers(self._lr_multipliers)
+
     def set_hyperparameters(
-        self, values: Mapping[str, float], *, group: int | None = None
+        self,
+        values: Mapping[str, float],
+        *,
+        group: int | None = None,
+        rescale_schedule: bool = False,
     ) -> None:
         """Change optimizer hyperparameters (`lr`, `weight_decay`, ...) while paused.
 
@@ -1975,7 +1998,7 @@ class Session:
         new values apply from the next optimizer step, and are written to
         every rank of a distributed run before its next batch.
 
-        This is a plain write into the param group, so an attached scheduler
+        By default, this writes directly into the param group, so a scheduler
         keeps driving the value from there: a chainable one (`StepLR`,
         `ExponentialLR`, `CosineAnnealingLR`, `ReduceLROnPlateau`) continues
         from the new value, while one that recomputes from its own schedule
@@ -1983,10 +2006,22 @@ class Session:
         step. Time travel restores the checkpoint's values, so to replay an
         epoch with a different learning rate, travel first and edit after.
 
+        `rescale_schedule=True` requires the optimizer's scheduler passed to
+        `start()`. It sets a per-group multiplier: new `lr` divided by the
+        schedule's current, unscaled `lr`. The factor is applied after every
+        later scheduler step, preserving the schedule's shape. Set `lr` back
+        to the schedule's current value (`lr / lr_multipliers[group]` for an
+        active multiplier) with `rescale_schedule=True` to end the multiplier.
+        Only `lr` is rescaled; other keys are written directly, and schedulers
+        still control any momentum or betas they cycle. Time travel restores
+        the multipliers in force at the checkpoint.
+
         Raises `ValueError` — with a message fit to display — when the session
         is locked, has no optimizer, isn't paused, or the request is invalid
         (unknown group or key, non-finite or negative value, a fraction for
-        an integer knob). Nothing is written unless every entry is valid.
+        an integer knob, rescaling without a scheduler or without `lr`, or
+        rescaling when the schedule's current `lr` is zero).
+        Nothing is written unless every entry is valid.
         """
         if self._locked:
             raise ValueError("This session is locked; hyperparameter changes are disabled.")
@@ -2003,12 +2038,63 @@ class Session:
                     "Hyperparameters can only be changed while training is paused."
                 )
             changes = hyperparams.plan_changes(optimizer, values, group)
+            factors = (
+                self._plan_rescale(optimizer, changes) if rescale_schedule else {}
+            )
             previous = hyperparams.apply_changes(optimizer, changes)
             self._hparam_edits = _merge_hparam_edits(
                 self._hparam_edits, changes, previous, position
             )
+            if factors:
+                self._apply_multipliers(factors, position)
             self._hparam_version += 1
         self._refresh_snapshot_hyperparams()
+
+    def _plan_rescale(
+        self, optimizer: Optimizer, changes: list[tuple[int, str, float]]
+    ) -> dict[int, float]:
+        """Validate a rescaling request into new per-group multipliers.
+
+        A multiplier that ends rewrites its `lr` change to land exactly on
+        the schedule's own value, so no rounding is left behind.
+        """
+        scheduler = self._scheduler
+        if scheduler is None or scheduler.optimizer is not optimizer:
+            raise ValueError(
+                "Rescaling lr needs the optimizer's scheduler; pass it as "
+                "scheduler= to nansense.start()."
+            )
+        active = self.lr_multipliers
+        factors = hyperparams.plan_multipliers(optimizer, changes, active)
+        for i, (index, key, _) in enumerate(changes):
+            if key == "lr" and factors.get(index) == 1.0:
+                lr = float(optimizer.param_groups[index]["lr"])
+                changes[i] = (index, key, lr / active.get(index, 1.0))
+        return factors
+
+    def _apply_multipliers(
+        self, factors: Mapping[int, float], position: BatchPosition
+    ) -> None:
+        """Record new multipliers and put them in force (caller holds `_cv`)."""
+        self._lr_multipliers += tuple(
+            LrMultiplier(index, factor, position) for index, factor in factors.items()
+        )
+        # Back at the schedule's own value, `lr` no longer counts as edited.
+        ended = {index for index, factor in factors.items() if factor == 1.0}
+        self._hparam_edits = tuple(
+            e for e in self._hparam_edits if not (e.key == "lr" and e.group in ended)
+        )
+        self._set_rescaler_factors(self.lr_multipliers)
+
+    def _set_rescaler_factors(self, factors: Mapping[int, float]) -> None:
+        """Put `factors` in force on the scheduler (no wrapper while empty)."""
+        if self._scheduler is None:
+            return
+        if self._rescaler is None:
+            if not factors:
+                return
+            self._rescaler = ScheduleRescaler(self._scheduler)
+        self._rescaler.set_factors(factors)
 
     def _refresh_snapshot_hyperparams(self) -> None:
         """Write the live hyperparameters into the shown snapshot (in place).
@@ -2025,12 +2111,18 @@ class Session:
             if name in live:
                 shown[name] = live[name]
 
-    def _hyperparameter_payload(self) -> list[dict[str, float]]:
-        """Every param group's numeric hyperparameters, for followers to mirror."""
+    def _hyperparameter_payload(self) -> HyperparameterPayload:
+        """Every param group's numeric hyperparameters and schedule
+        multipliers, for followers to mirror."""
         assert self._optimizer is not None
-        return [hyperparams.numeric_hyperparams(g) for g in self._optimizer.param_groups]
+        return HyperparameterPayload(
+            values=[
+                hyperparams.numeric_hyperparams(g) for g in self._optimizer.param_groups
+            ],
+            lr_multipliers=self.lr_multipliers,
+        )
 
-    def _mirror_hyperparameters(self, payload: list[dict[str, float]]) -> None:
+    def _mirror_hyperparameters(self, payload: HyperparameterPayload) -> None:
         """Follower side: adopt the leader's hyperparameters (training thread)."""
         if self._optimizer is None:
             return
@@ -2038,10 +2130,11 @@ class Session:
             self._optimizer,
             [
                 (index, key, value)
-                for index, values in enumerate(payload)
+                for index, values in enumerate(payload.values)
                 for key, value in values.items()
             ],
         )
+        self._set_rescaler_factors(payload.lr_multipliers)
 
     def request_snapshot(self) -> None:
         """Ask the next batch to publish a snapshot (the UI Refresh button).
@@ -2990,6 +3083,16 @@ class Session:
             self._hparam_edits = tuple(
                 e for e in self._hparam_edits if e.position.epoch < epoch
             )
+            # Its lr and scheduler state were saved under the multipliers in
+            # force then, so those come back too. Followers keep no history;
+            # the version bump hands them the leader's.
+            before = self.lr_multipliers
+            self._lr_multipliers = tuple(
+                m for m in self._lr_multipliers if m.position.epoch < epoch
+            )
+            if self.lr_multipliers != before:
+                self._set_rescaler_factors(self.lr_multipliers)
+                self._hparam_version += 1
         self._watch_accumulator.forget_epochs_from(epoch)
         # Custom-metric series from the abandoned timeline are dropped the
         # same way, and stateful instrument callables get their optional

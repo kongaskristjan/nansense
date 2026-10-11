@@ -872,8 +872,9 @@ def hyperparameters_view(session: Session) -> dict[str, Any]:
     """The optimizer's param groups and their live numeric hyperparameters.
 
     Marks every value changed from NaNsense with what it was before its first
-    edit, and names an attached scheduler, which keeps driving `lr` after an
-    edit (see `Session.set_hyperparameters`).
+    edit. Groups with an active schedule multiplier include its factor and
+    the current, unscaled `lr`. Names an attached scheduler and explains how
+    it affects edits (see `Session.set_hyperparameters`).
     """
     optimizer = session.optimizer
     if optimizer is None:
@@ -883,6 +884,7 @@ def hyperparameters_view(session: Session) -> dict[str, Any]:
         }
     group_of = session.optimizer_group_indices()
     edited_keys = _edited_keys(session)
+    multipliers = session.lr_multipliers
     groups: list[dict[str, Any]] = []
     for index, group in enumerate(optimizer.param_groups):
         names = [name for name, g in group_of.items() if g == index]
@@ -897,15 +899,25 @@ def hyperparameters_view(session: Session) -> dict[str, Any]:
         }
         if index in edited_keys:
             entry["edited"] = edited_keys[index]
+        factor = multipliers.get(index)
+        if factor is not None:
+            entry["lr_multiplier"] = _num(factor)
+            entry["scheduled_lr"] = _num(float(group["lr"]) / factor)
         groups.append(entry)
     view: dict[str, Any] = {"optimizer": type(optimizer).__name__, "groups": groups}
     if session.scheduler is not None:
         view["scheduler"] = type(session.scheduler).__name__
         view["scheduler_note"] = (
-            "The scheduler keeps adjusting lr after an edit. StepLR, "
+            "By default, the scheduler keeps adjusting lr after an edit. StepLR, "
             "ExponentialLR, CosineAnnealingLR and ReduceLROnPlateau continue "
             "from the edited value; LambdaLR, OneCycleLR and CyclicLR recompute "
-            "lr from their own schedule and replace it at their next step."
+            "lr from their own schedule and replace it at their next step. "
+            "With rescale_schedule=true, set_hyperparameters sets a multiplier "
+            "(new lr / current unscaled scheduled lr), applied after every "
+            "later scheduler step. Set lr to the group's scheduled_lr with "
+            "the same flag to end its multiplier. Time travel restores the "
+            "checkpoint's multipliers. Only lr is rescaled; schedulers still "
+            "control any momentum or betas they cycle."
         )
     return view
 
@@ -957,6 +969,7 @@ def weight_stats_view(
     unknown = [name for name in requested if name not in available]
     group_of = session.optimizer_group_indices()
     edited_keys = _edited_keys(session)
+    multipliers = session.lr_multipliers
     # A frozen parameter has no gradient and no optimizer state for a reason
     # that has nothing to do with the training loop's timing, and "nothing has
     # run backward yet" would send a reader looking for a bug in their loop.
@@ -1008,6 +1021,9 @@ def weight_stats_view(
             edited = edited_keys.get(group, {}) if group is not None else {}
             if edited:
                 entry["edited_hyperparameters"] = edited
+            factor = multipliers.get(group) if group is not None else None
+            if factor is not None:
+                entry["lr_multiplier"] = _num(factor)
         custom = _custom_summaries(snapshot.custom_weight_tensors.get(name))
         if custom:
             entry["custom"] = custom

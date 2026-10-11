@@ -213,6 +213,7 @@ def paused_session(
     epochs: int = 1,
     phases: dict[str, int] | None = None,
     optimizer: torch.optim.Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     timeout: float = 5.0,
 ) -> Iterator[Session]:
     """Start a session whose worker runs the whole schedule with `step` per
@@ -220,7 +221,13 @@ def paused_session(
     if phases is None:
         phases = {"train": 2}
     session = collecting(
-        nansense.start(model, epochs=epochs, phases=phases, optimizer=optimizer)
+        nansense.start(
+            model,
+            epochs=epochs,
+            phases=phases,
+            optimizer=optimizer,
+            scheduler=scheduler,
+        )
     )
 
     def loop() -> None:

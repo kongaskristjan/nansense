@@ -1461,15 +1461,37 @@ inputs (`ui/hyperparam_fields.py`) and of the `set_hyperparameters` MCP tool.
   identity. `_rewind_to_epoch(K)` drops records first made in epoch `K` or
   later — the epoch-`K` checkpoint was written before them, so the restore
   undid them; earlier edits are inside the checkpoint and stay.
-- **Schedulers** are not adjusted: an edit is a plain write, so a chainable
-  scheduler continues from it and a closed-form one (`LambdaLR`,
-  `OneCycleLR`, `CyclicLR`) overwrites `lr` at its next step. The docs and
-  the tools' `scheduler_note` say so.
+- **Schedulers** are not adjusted by a plain edit: a chainable scheduler
+  continues from it and a closed-form one (`LambdaLR`, `OneCycleLR`,
+  `CyclicLR`) overwrites `lr` at its next step. The docs and the tools'
+  `scheduler_note` say so.
+- **Rescaled schedules.** `rescale_schedule=True` (the page's shared
+  "scale schedule" checkbox, the tool's flag) turns each `lr` write into a
+  per-group multiplier: `plan_multipliers` divides the requested `lr` by the
+  schedule's own value (live `lr` / current multiplier), snapping to exactly
+  1 within rounding, which ends the multiplier and drops the `lr` edit
+  record. `ScheduleRescaler` puts the active factors in force by swapping
+  the scheduler instance's `__class__` for a cached subclass whose `step`
+  divides each scaled group's `lr`, runs the original step and multiplies
+  back (also fixing `_last_lr`), so chainable and closed-form arithmetic
+  both only see the unscaled schedule. A class swap rather than an
+  instance attribute keeps `state_dict()` (a copy of `__dict__`, saved into
+  epoch checkpoints) clean. With every factor at 1 the original class is
+  restored: no wrapper exists unless a multiplier is active, and the
+  rescaler itself is only created on the first rescaling edit. The
+  multipliers live as an `LrMultiplier` history; `_rewind_to_epoch(K)`
+  keeps entries made before epoch `K` — the ones in force when the
+  epoch-`K` checkpoint (scaled `lr`, scheduler state) was written — and
+  bumps `_hparam_version` when that changes the active set. Momentum or
+  betas a scheduler cycles (`cycle_momentum`) are not rescaled.
 - **DDP.** Each edit bumps `_hparam_version`; the per-batch control
   broadcast carries it, and on a change the leader sends every group's
-  numeric hyperparameters (`_hyperparameter_payload`), which followers
-  write into their own optimizer (`_mirror_hyperparameters`) before the
-  batch's forward — the batch the leader's edit first applies to.
+  numeric hyperparameters and active multipliers
+  (`_hyperparameter_payload`, a `HyperparameterPayload`), which followers
+  write into their own optimizer and scheduler (`_mirror_hyperparameters`)
+  before the batch's forward — the batch the leader's edit first applies
+  to. Followers keep no multiplier history; after a rewind they get the
+  leader's through the same version bump.
 
 ## PyTorch Lightning integration (`nansense.lightning`)
 
