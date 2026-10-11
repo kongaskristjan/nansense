@@ -563,6 +563,18 @@ def test_get_architecture_can_omit_the_graph() -> None:
         )
 
 
+@pytest.mark.parametrize(("count", "reached"), [(2, 2), (3, None)])
+def test_step_count_stays_inside_the_phase(count: int, reached: int | None) -> None:
+    """Three train batches, parked on the first: two on is the last one, and
+    three would cross the phase end, which a position target could miss."""
+    with paused_session(TinyNet(), epochs=1, phases={"train": 3}) as session:
+        view = _call(session, "step", {"count": count, "timeout_seconds": 5})
+        if reached is None:
+            assert "within the current phase" in view["error"]
+        else:
+            assert view["live_position"]["batch"] == reached
+
+
 def test_step_advances_the_run_and_reports_the_new_position() -> None:
     with paused_session(TinyNet(), epochs=1, phases={"train": 3}) as session:
         before = status_view(session)["live_position"]["batch"]

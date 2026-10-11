@@ -95,6 +95,7 @@ from nansense.mcp_views import (
     layer_ranking_view,
     layer_stats_view,
     metrics_view,
+    position_view,
     probe_view,
     recordings_view,
     settings_view,
@@ -313,6 +314,42 @@ async def _run_control(
             "Call get_status to check again; the command remains in effect."
         )
     return view
+
+
+async def _step_batches(
+    session: Session, count: int, *, timeout: float
+) -> dict[str, Any]:
+    """`step --count N`: run to the batch `count` on in the current phase.
+
+    Built on `step_until_position`, so it is refused where that target could
+    be missed: across a phase boundary, or in a phase whose length is not
+    known yet (a target past its end would run the whole run out).
+    """
+    refusal = _control_refusal(session)
+    if refusal is not None:
+        return refusal
+    live = session.live_position
+    order = session.schedule.phase_order
+    total = None if live is None else session.schedule.phase_count(live.phase)
+    if live is None or count < 1 or total is None or live.batch_idx + count >= total:
+        return {
+            "error": (
+                f"Cannot step {count} batches here: the count must be at least "
+                "1 and stay within the current phase, whose length must be "
+                "known."
+            ),
+            "live_position": position_view(live, schedule=session.schedule),
+            "hint": "Use `step --unit phase` or `run_until` to cross a phase.",
+        }
+    return await _run_control(
+        session,
+        lambda: session.step_until_position(
+            phase_index=order.index(live.phase),
+            epoch=live.epoch,
+            batch_idx=live.batch_idx + count,
+        ),
+        timeout=timeout,
+    )
 
 
 def _text(text: str) -> TextContent:
@@ -1200,15 +1237,30 @@ def build_server(
                 )
             ),
         ] = "batch",
+        count: Annotated[
+            int,
+            pydantic.Field(
+                description=(
+                    "With unit 'batch': how many batches to advance (at least "
+                    "1). Counts above 1 require a known phase length and must "
+                    "stay within that phase. Ignored for other units."
+                )
+            ),
+        ] = 1,
         timeout_seconds: _PauseTimeout = _DEFAULT_WAIT_SECONDS,
     ) -> dict[str, Any]:
         """Advance training and pause again, then report the new position.
 
-        `batch` pauses on the next batch; `phase` and `epoch` pause on the
-        first batch of the next phase / epoch. Returns once training pauses, or
-        after `timeout_seconds` with a note that it is still running (the
-        command stays in effect — poll `get_status`).
+        `batch` advances by `count` batches (default 1). Counts above 1
+        require a known phase length and must stay within the current phase;
+        counts below 1 are rejected. `phase` and `epoch` pause on the first
+        batch of the next phase / epoch and ignore `count`.
+        Returns once training pauses, or after `timeout_seconds` with a note
+        that it is still running (the command stays in effect — poll
+        `get_status`).
         """
+        if unit == "batch" and count != 1:
+            return await _step_batches(session, count, timeout=timeout_seconds)
         commands = {
             "batch": session.step_batch,
             "phase": session.step_phase,
