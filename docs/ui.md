@@ -69,6 +69,12 @@ Each layer card has an **Experiment** button. On the experiment page, pick a met
 
 Turn on **Live** to rerun the experiment at each capture as training advances. Runs happen on the training thread between batches.
 
+## The tools page
+
+When [custom tools](extensions.md#tools) are available, the main page's top bar shows a tools icon with the tooltip **Custom tools**. Open it, set a tool's arguments, and click **Run** on its card. List fields accept a JSON array or comma-separated values. Tables returned directly or as fields of a result object appear as sortable tables; remaining data appears as JSON. A tool that returns `None` shows no result output.
+
+By default, tools run on the training thread while training is paused. If training is running, click **Stop** to let queued calls run. Tools registered with `on_training_thread=False` start on a worker thread without waiting for a pause. Locked sessions show only tools registered with `public=True`.
+
 ## Numerical debugging
 
 Every few batches (configurable in the settings dialog), NaNsense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.

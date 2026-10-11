@@ -51,6 +51,7 @@ from nansense.ui.render import (
     tensor_hw,
 )
 from nansense.ui.share import _add_share_button
+from nansense.ui.tools_page import add_tools_button
 from nansense.ui.static import (
     _ARCHITECTURE_CLICK_CSS,
     _ARCHITECTURE_CLICK_JS,
@@ -309,6 +310,7 @@ class _MainPage:
                 toggle=self.toggle_stats,
             )
             _add_settings_button(self.session, self.record_view)
+            add_tools_button(self.session)
             self.input_toggle = (
                 ui.button(icon="image", color="slate-500")
                 .props("dense size=md")

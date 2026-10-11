@@ -984,6 +984,15 @@ signature as `__signature__` — the SDK derives the schema from it — plus
 rejected. The handler waits up to the tool's `timeout` and otherwise returns
 the seq. On a locked session `specs` lists only `public` tools.
 
+**Tools page** (`/tools`, `ui/tools_page.py`): linked from the main page's top
+bar only when `tool_specs` is non-empty. One card per tool; the form comes from
+`ToolSpec.json_schema()` through `ui/controllers/tools.py` (`tool_fields`,
+`collect_arguments` — empty optional fields keep their defaults, list fields
+take JSON or comma-separated values), and each card polls its call's
+`tool_call(seq)` on a 0.25 s timer. `result_layout` pulls `{columns, rows}`
+tables out of a result (top level or one level down a dict) and shows the rest
+as JSON.
+
 **Result payloads.** An `ExperimentResult` carries an `image`, an
 `attribution`, a `Table`, headline `scalars` or a `note` (`payload` names the
 main one). The page renders tables as a sortable `ui.table` and scalars as a

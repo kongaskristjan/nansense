@@ -55,6 +55,7 @@ from nansense.console import console_print, stream_encoding
 from nansense.input_config import InputTransform, MeanStd, resolve_per_input
 from nansense.session import Session
 from nansense.ui.experiment_page import _build_experiment_page
+from nansense.ui.tools_page import _build_tools_page
 from nansense.ui.graph import build_mermaid
 from nansense.ui.main_page import _build_page, _RenderCache
 from nansense.ui.export import add_export_route
@@ -460,6 +461,10 @@ def serve(
         _build_experiment_page(
             session, layer, input_mean=primary_mean, input_std=primary_std
         )
+
+    @ui.page("/tools", favicon=str(favicon_path))
+    def tools_page() -> None:
+        _build_tools_page(session)
 
     ui.run_with(fastapi_app, storage_secret="nansense")
 
