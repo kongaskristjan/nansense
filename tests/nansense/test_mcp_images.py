@@ -21,6 +21,7 @@ from typing import Any, TypeVar
 import pytest
 import torch
 from mcp.client import Client
+from mcp.types import ImageContent, TextContent
 from PIL import Image
 from torch import Tensor, nn
 
@@ -113,15 +114,19 @@ def test_encoding_nothing_yields_no_caveat() -> None:
 
 def test_a_failed_render_answers_in_words_alone() -> None:
     """"No image" and "an image of nothing" are indistinguishable on the wire,
-    so a failure returns the reason as text and no image block."""
+    so a failure returns the reason as text, flagged as a tool error."""
     reply = image_reply(RenderedImage(None, "nothing captured yet"))
-    assert reply == ["nothing captured yet"]
+    assert reply.is_error
+    assert [block.type for block in reply.content] == ["text"]
 
 
 def test_a_successful_render_puts_the_note_before_the_picture() -> None:
-    reply = image_reply(RenderedImage(b"\x89PNG", "at epoch 0"))
-    assert reply[0] == "at epoch 0"
-    assert getattr(reply[1], "_mime_type", None) == "image/png"
+    reply = image_reply(RenderedImage(b"\x89PNG", "at epoch 0"), data={"n": 1})
+    assert not reply.is_error
+    assert [block.type for block in reply.content] == ["text", "text", "image"]
+    note, _, image = reply.content
+    assert isinstance(note, TextContent) and note.text == "at epoch 0"
+    assert isinstance(image, ImageContent) and image.mime_type == "image/png"
 
 
 # --- input display resolution ----------------------------------------

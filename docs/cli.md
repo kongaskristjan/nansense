@@ -40,7 +40,7 @@ nansense-cli --port 8080 configure_debug_checks --interval_batches 1
 nansense-cli --port 8080 render_layer --layers conv1 --out shots
 ```
 
-Results are printed as JSON. The `render_*` tools write their pictures as PNG files to `--out` (default `.nansense-cli/`) and print the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code.
+Results are printed as JSON. The `render_*` tools write their pictures as PNG files to `--out` (default `.nansense-cli/`) and print the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code. That includes a refusal, such as stepping a run that has finished; the message says why.
 
 To turn agent access off, pass `mcp=False` to [`serve`][nansense.serve].
 

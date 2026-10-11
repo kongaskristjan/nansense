@@ -21,6 +21,9 @@ Two invariants shape every tool below:
 - **A refusal is an answer.** A locked or finished session silently no-ops its
   control methods; tools check for that up front and say so, because an agent
   that gets a plain "ok" from a command that did nothing will loop forever.
+  The answer is a JSON object with an `error` key (plus whatever the caller
+  needs to recover); `_Server` marks it as a tool error, so `nansense-cli`
+  exits non-zero for it.
 """
 
 from __future__ import annotations
@@ -39,7 +42,14 @@ from typing import Annotated, Any, Literal
 
 import pydantic
 from mcp.server import MCPServer
-from mcp.types import BlobResourceContents, EmbeddedResource
+from mcp.server.mcpserver import Context
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    InputRequiredResult,
+    TextContent,
+)
 from starlette.routing import BaseRoute
 
 from nansense import experiments, export
@@ -301,6 +311,34 @@ async def _run_control(
     return view
 
 
+def _text(text: str) -> TextContent:
+    return TextContent(type="text", text=text)
+
+
+class _Server(MCPServer):
+    """An `MCPServer` whose tools' refusals reach the client as tool errors.
+
+    Flagged here, in one place, rather than by every tool: a JSON reply with a
+    top-level `error` key is a refusal (see the module docstring), and the
+    tool's own text still carries it in full.
+    """
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context[Any, Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        result = await super().call_tool(name, arguments, context)
+        if (
+            isinstance(result, CallToolResult)
+            and isinstance(result.structured_content, dict)
+            and "error" in result.structured_content
+        ):
+            return result.model_copy(update={"is_error": True})
+        return result
+
+
 @contextmanager
 def _root_logging_kept() -> Iterator[None]:
     """Undo whatever the block does to the root logger's level and handlers.
@@ -342,7 +380,7 @@ def build_server(
     without it the `shutdown` tool refuses.
     """
     with _root_logging_kept():
-        server = MCPServer(
+        server = _Server(
             name="nansense",
             title="NaNsense training debugger",
             instructions=_INSTRUCTIONS,
@@ -590,7 +628,7 @@ def build_server(
                 )
             ),
         ] = None,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Picture of what these layers computed on the last captured batch.
 
         One row of per-channel tiles per layer for its activations and another
@@ -655,7 +693,7 @@ def build_server(
                 )
             ),
         ] = None,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Picture of one sample of the model's input.
 
         Denormalized with the statistics the training script passed to `serve`.
@@ -730,7 +768,7 @@ def build_server(
                 )
             ),
         ] = None,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Picture of a layer's parameters, gradients and optimizer state.
 
         Conv kernels are drawn as `kH×kW` tiles laid out across the input
@@ -824,7 +862,7 @@ def build_server(
                 )
             ),
         ] = False,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Picture of the value distributions of watched layers.
 
         Activations and gradients, one subplot each, over the signed-log bins.
@@ -899,7 +937,7 @@ def build_server(
                 )
             ),
         ] = False,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Picture of the inputs that most excite (or least excite) each channel.
 
         Columns are channels, rows the top-scoring samples for that channel —
@@ -969,7 +1007,7 @@ def build_server(
                 )
             ),
         ] = 4,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Picture of the inputs behind one histogram bar.
 
         A histogram says how many values fell in a bin; this says *which* —
@@ -994,10 +1032,7 @@ def build_server(
             display=display,
             input_name=primary_input,
         )
-        reply = image_reply(rendered)
-        if values:
-            reply.insert(1, json.dumps({"samples": values}))
-        return reply
+        return image_reply(rendered, data={"samples": values} if values else None)
 
     # ---- Raw tensors -------------------------------------------------
 
@@ -1031,7 +1066,7 @@ def build_server(
                 )
             ),
         ] = True,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Export these layers' latest captured tensors as one `.pt` file.
 
         For analysis beyond the other tools, load the file with
@@ -1064,7 +1099,9 @@ def build_server(
             )
             data = await asyncio.to_thread(built.to_bytes)
         except export.ExportError as exc:
-            return [json.dumps({"error": str(exc)})]
+            return CallToolResult(
+                content=[_text(json.dumps({"error": str(exc)}))], is_error=True
+            )
         resource = EmbeddedResource(
             type="resource",
             resource=BlobResourceContents(
@@ -1073,7 +1110,7 @@ def build_server(
                 blob=base64.b64encode(data).decode("ascii"),
             ),
         )
-        return [json.dumps(built.manifest), resource]
+        return CallToolResult(content=[_text(json.dumps(built.manifest)), resource])
 
     # ---- Run control -------------------------------------------------
 
@@ -2052,7 +2089,7 @@ def build_server(
                 )
             ),
         ] = False,
-    ) -> list[Any]:
+    ) -> CallToolResult:
         """Picture of an experiment's result: the synthesized inputs or the
         attribution maps, beside the inputs they came from.
 

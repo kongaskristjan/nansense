@@ -39,7 +39,7 @@ from nansense.mcp_views import (
 from nansense.session import Mode, Session
 from nansense.watch import N_BINS, ZERO_BIN, TensorStatsSnapshot, bin_midpoint
 
-from .helpers import TinyNet, make_position, paused_session
+from .helpers import TinyNet, call_tool_json, make_position, paused_session
 
 _T = TypeVar("_T")
 
@@ -61,17 +61,7 @@ def _step_and_wait(session: Session, *, timeout: float = 5.0) -> None:
 
 
 def _call(session: Session, name: str, arguments: dict[str, Any] | None = None) -> Any:
-    """Call one tool through a real MCP client and parse its JSON payload."""
-
-    async def go() -> Any:
-        async with Client(build_server(session, mermaid="graph TD")) as client:
-            result = await client.call_tool(name, arguments or {})
-            assert result.content, f"{name} returned no content"
-            block = result.content[0]
-            assert isinstance(block, TextContent)
-            return json.loads(block.text)
-
-    return _run(go())
+    return call_tool_json(session, name, arguments, mermaid="graph TD")
 
 
 # --- number rendering -------------------------------------------------

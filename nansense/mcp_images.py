@@ -31,7 +31,9 @@ of every process that merely does `import nansense`.
 
 from __future__ import annotations
 
+import base64
 import io
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -48,6 +50,7 @@ from nansense.patches import PATCH_TYPES
 from nansense.session import Session
 
 if TYPE_CHECKING:
+    from mcp.types import CallToolResult
     from PIL.Image import Image
 
 #: Longest side an image is sent at. Larger pictures are area-downscaled: a
@@ -777,16 +780,31 @@ def experiment_image(
     return RenderedImage(png, note + caveat)
 
 
-def image_reply(rendered: RenderedImage) -> list[Any]:
-    """A `RenderedImage` as the content blocks an MCP tool returns.
+def image_reply(
+    rendered: RenderedImage, *, data: dict[str, Any] | None = None
+) -> CallToolResult:
+    """A `RenderedImage` as the result an MCP tool returns.
 
     Text first, then the picture: the note says which batch is being shown and
     whether it was scaled, and both belong before the image rather than after
-    it. A failed render is text alone — the tool still answers, it just answers
-    in words.
+    it. `data` rides between the two as JSON. A failed render returns the note
+    and any `data`, without a picture, flagged as a tool error so the CLI exits
+    non-zero for it.
     """
-    from mcp.server.mcpserver import Image as McpImage
+    from mcp.types import CallToolResult, ContentBlock, ImageContent, TextContent
 
+    content: list[ContentBlock] = [
+        TextContent(type="text", text=rendered.note)
+    ]
+    if data is not None:
+        content.append(TextContent(type="text", text=json.dumps(data)))
     if rendered.png is None:
-        return [rendered.note]
-    return [rendered.note, McpImage(data=rendered.png, format="png")]
+        return CallToolResult(content=content, is_error=True)
+    content.append(
+        ImageContent(
+            type="image",
+            data=base64.b64encode(rendered.png).decode(),
+            mime_type="image/png",
+        )
+    )
+    return CallToolResult(content=content)

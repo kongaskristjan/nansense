@@ -7,10 +7,12 @@ snapshot and watch-stats builders shared by the UI page tests.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import torch
 from torch import Tensor, nn
@@ -27,6 +29,34 @@ from nansense.watch import (
     LayerStatsSnapshot,
     TensorStatsSnapshot,
 )
+
+
+def call_tool_json(
+    session: Session, name: str, arguments: dict[str, Any] | None = None, **server: Any
+) -> Any:
+    """Call one tool through a real MCP client and parse its JSON payload.
+
+    Also checks the refusal contract: a payload comes back flagged as a tool
+    error if and only if it is a JSON object with a top-level `error` key.
+    """
+    from mcp.client import Client
+    from mcp.types import TextContent
+
+    from nansense.mcp_server import build_server
+
+    async def go() -> Any:
+        async with Client(build_server(session, **server)) as client:
+            result = await client.call_tool(name, arguments or {})
+            assert result.content, f"{name} returned no content"
+            block = result.content[0]
+            assert isinstance(block, TextContent)
+            payload = json.loads(block.text)
+            assert result.is_error == (
+                isinstance(payload, dict) and "error" in payload
+            ), payload
+            return payload
+
+    return asyncio.run(go())
 
 
 def make_position(

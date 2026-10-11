@@ -61,7 +61,9 @@ def _export_tool(session: Session, arguments: dict[str, Any]) -> tuple[Any, byte
             if isinstance(b, EmbeddedResource)
             and isinstance(b.resource, BlobResourceContents)
         ]
-        return json.loads(text.text), (blobs[0] if blobs else None)
+        payload = json.loads(text.text)
+        assert result.is_error == ("error" in payload)
+        return payload, (blobs[0] if blobs else None)
 
     return asyncio.run(go())
 
@@ -87,6 +89,12 @@ def test_the_tool_returns_the_snapshot_tensors_and_a_manifest() -> None:
             "shape": [2, 8], "dtype": "float32"
         }
         assert manifest["file"] == "nansense-2-layers-train-e0-b0.pt"
+
+
+def test_a_refused_export_is_a_tool_error() -> None:
+    with paused_session(TinyNet()) as session:
+        reply, data = _export_tool(session, {"layers": ["nope"]})
+        assert "No known layer" in reply["error"] and data is None
 
 
 @pytest.mark.parametrize(

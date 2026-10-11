@@ -1978,7 +1978,10 @@ tensors (`current_batch_stats`, `watch_snapshot`) both go through
 `asyncio.to_thread`, the discipline the `/stats` page already follows. Second,
 *a refusal is an answer*: a locked or closed session silently no-ops its
 control methods, so the tools check for that up front — an agent that reads a
-no-op as success loops forever.
+no-op as success loops forever. The answer is a JSON object with an `error`
+key, and `_Server.call_tool` flags any such reply as an MCP tool error (a
+failed `render_*` does the same through `image_reply`), so `nansense-cli`
+prints it to stderr and exits non-zero.
 
 **Serialization decisions that carry meaning.** JSON has no NaN literal, so
 non-finite floats render as the strings `"nan"` / `"inf"` / `"-inf"` rather

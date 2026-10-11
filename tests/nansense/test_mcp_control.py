@@ -42,6 +42,7 @@ from nansense.session import Mode, Session
 
 from .helpers import (
     TinyNet,
+    call_tool_json,
     collecting,
     optimizer_train_step,
     paused_session,
@@ -56,17 +57,7 @@ def _run(coro: Coroutine[Any, Any, _T]) -> _T:
 
 
 def _call(session: Session, name: str, arguments: dict[str, Any] | None = None) -> Any:
-    """Call one tool through a real MCP client and parse its JSON payload."""
-
-    async def go() -> Any:
-        async with Client(build_server(session)) as client:
-            result = await client.call_tool(name, arguments or {})
-            assert result.content, f"{name} returned no content"
-            block = result.content[0]
-            assert isinstance(block, TextContent)
-            return json.loads(block.text)
-
-    return _run(go())
+    return call_tool_json(session, name, arguments)
 
 
 class TinyClassifier(nn.Module):
