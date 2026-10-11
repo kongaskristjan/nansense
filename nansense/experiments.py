@@ -59,6 +59,7 @@ from torch.nn import functional as F
 from nansense.capture import _CaptureInterpreter
 from nansense.contracts.experiments import (
     LOCKED_PARAM_LIMITS,
+    AttributionParams,
     DreamParams,
     ExperimentParams,
     GradCamParams,
@@ -84,12 +85,13 @@ _PUBLISH_COUNT: int = 20
 
 @dataclass(frozen=True)
 class ExperimentParam:
-    """One configurable knob of an experiment.
+    """One configurable knob shared by the experiment page and MCP tools.
 
-    Both front-ends read these: the experiment page renders one form widget per
-    spec, and the MCP server describes and validates a tool call's `params`
-    against them. `default` is the value `run` falls back to when the key is
-    absent, so the two stay in step — a knob is described in exactly one place.
+    `key` names the entry in the request's `params`; `label` and `tooltip`
+    describe its form widget. `kind` is "int", "float", "bool" or "select".
+    `default` is used when the key is omitted. For a select, `options` maps
+    values to labels. `minimum` sets a numeric lower bound; `step` sets the
+    increment for float widgets (integer widgets step by 1).
     """
 
     key: str
@@ -119,6 +121,10 @@ class ExperimentSpec:
     `needs_module` kinds only accept layers backed by an `nn.Module`.
     `parse` validates one request's raw form values into the immutable params
     the runner reads, raising `ValueError` before anything is queued.
+
+    `custom` marks a kind the training script registered (`Session.experiment`).
+    A locked session (a shared demo) offers a custom kind only when it has
+    `locked_limits` — the caps its numeric knobs are clamped to there.
     """
 
     name: str
@@ -129,6 +135,8 @@ class ExperimentSpec:
     runner: ExperimentRunner
     parse: Callable[[Mapping[str, object], bool], ExperimentParams]
     needs_module: bool = False
+    custom: bool = False
+    locked_limits: Mapping[str, float] | None = None
 
 
 # Shared knobs reused across kinds. A param is shared *by key*, so its value
@@ -569,7 +577,7 @@ def _captum_input(
         return _error(request, "no input available yet — run at least one batch first")
     if base.ndim != 4:
         return _error(request, "experiments need an image input [B, C, H, W]")
-    assert not isinstance(request.params, DreamParams)
+    assert isinstance(request.params, AttributionParams)
     batch = request.params.batch
     count = min(batch, int(base.shape[0]))
     return base[:count].detach().clone().float()
@@ -1038,17 +1046,33 @@ class ExperimentManager:
         self._defaults: dict[str, object] = {}
         self._specs = dict(BUILTIN_EXPERIMENTS)
 
+    def _visible(self, spec: ExperimentSpec) -> bool:
+        return not spec.custom or spec.locked_limits is not None or not self._locked()
+
     @property
     def specs(self) -> dict[str, ExperimentSpec]:
         with self._cv:
-            return dict(self._specs)
+            return {k: s for k, s in self._specs.items() if self._visible(s)}
 
     def spec(self, kind: str) -> ExperimentSpec:
         with self._cv:
             spec = self._specs.get(kind)
-        if spec is None:
+        if spec is None or not self._visible(spec):
             raise ValueError(f"unknown experiment kind {kind!r}")
         return spec
+
+    @property
+    def all_kinds(self) -> frozenset[str]:
+        """Every registered name, hidden ones included (names stay unique)."""
+        with self._cv:
+            return frozenset(self._specs)
+
+    def register(self, spec: ExperimentSpec) -> None:
+        with self._cv:
+            if spec.name in self._specs:
+                raise ValueError(f"experiment kind {spec.name!r} already exists")
+            self._specs[spec.name] = spec
+            self._cv.notify_all()
 
     def parse(
         self, kind: str, values: Mapping[str, object], *, locked: bool

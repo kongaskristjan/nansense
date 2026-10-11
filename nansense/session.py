@@ -36,11 +36,11 @@ import contextlib
 import sys
 import threading
 import warnings
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -64,10 +64,17 @@ from nansense import capture, debugger, distributed, experiments, hyperparams, p
 from nansense.console import console_print
 from nansense.debugger import DebugError, DebugSettings
 from nansense.experiments import (
+    ExperimentParam,
     ExperimentQueueState,
     ExperimentRequest,
     ExperimentResult,
     ExperimentSpec,
+)
+from nansense.extensions import (
+    ExperimentFn,
+    ModelMode,
+    check_name,
+    custom_experiment_spec,
 )
 from nansense.hyperparams import HyperparameterEdit
 from nansense.input_config import InputTransform, MeanStd
@@ -455,6 +462,9 @@ class Session:
             run=lambda request, abort: experiments.run(self, request, abort),
             make_clip=lambda request: experiments._experiment_clip(self, request),
         )
+        # The publishing batch's loader item while its __exit__ publishes and
+        # pauses — what custom experiments and tools see as `batch_item`.
+        self._batch_item: object | None = None
         # Visualization update frequency (see `UpdateFrequency`): mutated by
         # the UI under `_cv`; `_freq_counter` (batch unit) and `_freq_epoch`
         # (epoch unit, the last epoch the detector saw) are touched by the
@@ -1320,6 +1330,80 @@ class Session:
     def experiment_spec(self, kind: str) -> ExperimentSpec:
         """The registered experiment `kind`; `ValueError` if there is none."""
         return self._experiments.spec(kind)
+
+    def experiment(
+        self,
+        name: str,
+        *,
+        label: str | None = None,
+        summary: str = "",
+        description: str = "",
+        params: Sequence[ExperimentParam] = (),
+        layers: Literal["any", "modules"] = "any",
+        mode: ModelMode = "eval",
+        locked_limits: Mapping[str, float] | None = None,
+    ) -> Callable[[ExperimentFn], ExperimentFn]:
+        """Register a custom experiment kind, used as a decorator:
+
+            @session.experiment(
+                "ablate_channels",
+                params=[nansense.ExperimentParam("top", "Channels to list", "int", default=10)],
+            )
+            def ablate(ctx: nansense.ExperimentContext) -> nansense.ExperimentOutput:
+                ...
+
+        The kind joins the built-ins everywhere: the experiment page's
+        dropdown (with a form built from `params`), `list_experiments` and
+        `run_experiment` for agents, queuing, cancelling and recording. The
+        function runs on the training thread between batches, while paused or
+        at a snapshot capture for Live experiments. It receives an
+        `ExperimentContext` (the model, the chosen layer, the knob
+        values, the batch), and returns an `ExperimentOutput` — an image, an
+        attribution, a table, scalars or a note — or yields several to stream
+        progress. Afterwards, training flags, existing buffers, PyTorch RNG
+        state, existing parameter values and their `.grad` are restored. Keep
+        the model structure intact; optimizer state and other side effects
+        are not restored. An exception in the function publishes an error
+        result with its type, message and traceback location.
+
+        `label` is the dropdown text (default: `name`); `summary` and
+        `description` default to the docstring's first line and the whole
+        docstring. `layers="modules"` restricts the kind to layers backed by an
+        `nn.Module`. `mode` sets the model's training flags ("eval",
+        "train" or "unchanged"); it does not disable gradients. A locked
+        session (a shared demo) offers the kind only when `locked_limits` is
+        given; it caps numeric knobs there, e.g. `{"top": 20}` (`{}` offers it
+        uncapped).
+
+        Registration adds no per-batch callbacks. Raises `ValueError` for an
+        invalid or taken name, an invalid knob, or an unsupported `layers` or
+        `mode`; `TypeError` if a knob is not an `ExperimentParam`; and
+        `RuntimeError` when registering on a locked session.
+        A disabled session (`enabled=False`) returns the function unchanged.
+        """
+        if self._locked:
+            raise RuntimeError("cannot register experiments on a locked session")
+
+        def register(fn: ExperimentFn) -> ExperimentFn:
+            if not self._enabled:
+                return fn
+            check_name(name, self._experiments.all_kinds, "experiment")
+            self._experiments.register(
+                custom_experiment_spec(
+                    name,
+                    fn,
+                    label=label,
+                    summary=summary,
+                    description=description,
+                    params=params,
+                    layers=layers,
+                    mode=mode,
+                    locked_limits=locked_limits,
+                )
+            )
+            return fn
+
+        return register
 
     @property
     def experiment_result(self) -> ExperimentResult | None:
@@ -3123,6 +3207,7 @@ class _BatchContext:
                 capture.remove_hooks(self._session)
                 if exc is None and not self._session.closed:
                     force = debug_force
+                    self._session._batch_item = self._item
                     if self._publishes or force:
                         self._session._publish_snapshot(self._position)
                         # The snapshot holds CPU clones of everything; drop the
@@ -3152,6 +3237,7 @@ class _BatchContext:
             finally:
                 capture.remove_hooks(self._session)
                 self._session._activations.clear()
+                self._session._batch_item = None
         # Single-process: every batch boundary — captured, stats-only, or
         # plain (detach) — consumes an armed time-travel jump and raises here.
         # `_wait_for_proceed` above returns immediately when a jump is pending,

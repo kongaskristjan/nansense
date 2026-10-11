@@ -104,7 +104,7 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | `get_hyperparameters`, `set_hyperparameters` | Read the optimizer's numeric settings; change them while paused, for one parameter group or all groups |
 | `pin_batch`, `unpin_batch`, `set_probe_mode`, `get_probe_status` | Re-run the model on one fixed input at every capture |
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
-| `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions — `run_experiment --video` records a dream's whole ascent to MP4 |
+| `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream, Captum attributions and the training script's [custom experiments](extensions.md) — `run_experiment --video` records deep dream or streamed custom results to MP4 |
 | `set_auto_run_experiments` | Stop open experiment pages re-running on the thread you need |
 | `start_recording`, `stop_recording`, `discard_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update — `view` is a typed per-view specification |
 | `save_snapshot` | Save one still of a view as a PNG file to hand a human, from the same typed `view` |

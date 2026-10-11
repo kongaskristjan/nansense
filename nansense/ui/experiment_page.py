@@ -256,7 +256,7 @@ class _ExperimentPage:
             )
         self.form.rebuild_params()
         self.update_description()
-        self.overlay_switch.set_visibility(self.state.kind != "deep_dream")
+        self.sync_overlay_visibility()
         self.compare_button.set_visibility(self.state.kind == "deep_dream")
         self.sync_compare_href()
         self.sync_back_href()
@@ -282,6 +282,16 @@ class _ExperimentPage:
         self.state.overlay = bool(getattr(e, "value", False))
         if self.state.last_result is not None and self.state.last_result.error is None:
             self.results.render(self.state.last_result, overlay=self.state.overlay)
+
+    def sync_overlay_visibility(self) -> None:
+        """Offer the overlay for attributions: the Captum kinds always, a
+        custom kind once its result turns out to be one."""
+        if self.session.experiment_spec(self.state.kind).custom:
+            last = self.state.last_result
+            visible = last is not None and last.attribution is not None
+        else:
+            visible = self.state.kind != "deep_dream"
+        self.overlay_switch.set_visibility(visible)
 
     def sync_compare_href(self) -> None:
         self.compare_button.props(f'href="{_minmax_stats_href(self.state.layer)}"')
@@ -379,6 +389,7 @@ class _ExperimentPage:
             self.state.last_result = result
             if result.error is None:
                 self.results.render(result, overlay=self.state.overlay)
+            self.sync_overlay_visibility()
 
     def _build_header(self) -> None:
         with _top_bar_row():
@@ -474,7 +485,7 @@ class _ExperimentPage:
                 .props("dense")
                 .tooltip("Blend each map over its input instead of side by side")
             )
-            self.overlay_switch.set_visibility(self.state.kind != "deep_dream")
+            self.sync_overlay_visibility()
             ui.space()
             self.compare_button = (
                 ui.button("Compare with MIN/MAX", icon="bar_chart", color="teal")

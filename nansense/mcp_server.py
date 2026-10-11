@@ -2069,9 +2069,11 @@ def build_server(
             bool,
             pydantic.Field(
                 description=(
-                    "True records the whole deep-dream ascent to an MP4 and "
-                    "returns its path; inert for the Captum kinds, which "
-                    "publish a single result."
+                    "True records the whole deep-dream ascent (or a custom "
+                    "kind's streamed progress) to an MP4 and returns its "
+                    "path when there are renderable frames. Captum kinds "
+                    "publish a single result and are not recorded; locked "
+                    "demos do not record runs."
                 )
             ),
         ] = False,
@@ -2080,23 +2082,26 @@ def build_server(
 
         Deep dream synthesizes the input that most excites each channel — what
         the unit "wants" to see; the Captum methods attribute a prediction back
-        onto the input. Both answer questions statistics cannot: whether a
-        channel has learned anything, and what the model is actually looking at.
+        onto the input. Custom kinds run the training script's registered
+        functions. The built-in methods help show whether a channel has learned
+        anything and what the model is looking at.
 
         Runs on the training thread, so **training must be paused** — otherwise
-        it is queued until the next pause. Returns once the run finishes,
-        `timeout_seconds` elapses, or the server's own wall-clock ceiling stops
-        it. `render_experiment` draws the result.
+        it is queued until the next pause. Returns once the run finishes or
+        `timeout_seconds` elapses. Runs have a cooperative 90-second time
+        limit; custom functions should check `ctx.should_abort()` in long
+        loops. `render_experiment` draws the result.
 
-        `video` (deep dream only) records the whole ascent to an MP4 and
-        returns its path: `render_experiment` shows what a channel converged
-        *to*, the video shows how it got there — whether the image formed
-        steadily or the objective went somewhere and came back. It records the
-        progress the run publishes, which is the starting image and then ~20
-        evenly spaced steps; add `{"all_steps": true}` to `params` for a frame
-        per step — the start is in the file either way. Both cost the
-        run time — the frames are drawn on the training thread, inside the
-        same wall-clock ceiling as the ascent itself.
+        `video` records deep dream or a custom kind's renderable results to an
+        MP4 and returns its path: `render_experiment` shows what a channel
+        converged *to*, the video shows how it got there — whether the image
+        formed steadily or the objective went somewhere and came back. For deep
+        dream it records the starting image and about 20 evenly spaced steps;
+        add `{"all_steps": true}` to `params` for a frame per step. For custom
+        kinds it records the outputs the function returns or yields. Frame
+        rendering runs on the training thread and counts towards the same time
+        limit as the experiment. Captum kinds and locked demos do not record
+        runs.
         """
         return await _run_experiment(
             session,
@@ -2552,7 +2557,8 @@ async def _run_experiment(
     # at the end, so their "video" would be that single frame held for a tenth
     # of a second. That and the locked-demo refusal (the session drops the flag
     # itself) are reported below rather than silently swallowed.
-    record = video and kind == "deep_dream" and not session.locked
+    streams = kind == "deep_dream" or session.experiment_spec(kind).custom
+    record = video and streams and not session.locked
     running = session.is_running
     try:
         seq = session.request_experiment(
@@ -2570,21 +2576,21 @@ async def _run_experiment(
     }
     if session.locked:
         view["params_note"] = (
-            "This is a locked demo, which caps the heavier knobs (steps, "
-            "channels, inputs); the run may have used lower values than these."
+            "This is a locked demo. Built-in kinds cap steps, channels and "
+            "inputs; custom kinds apply their registered locked_limits. "
+            "The run may have used lower values than those shown."
         )
     if video and not record:
         view["video_note"] = (
             f"No video: {kind} publishes a single result at the end, so there "
-            "is no process to record. Deep dream is the kind with an ascent to "
-            "replay."
-            if kind != "deep_dream"
+            "is no progress to record. Use deep dream or a custom kind that "
+            "streams renderable results."
+            if not streams
             else "No video: this is a locked demo, where runs are not recorded."
         )
     elif record and view.get("video") is None and view.get("done"):
         view["video_note"] = (
-            "No video file: the run published nothing renderable to record "
-            "(a non-image input has no frames to draw)."
+            "No video file: the run published no renderable frames to record."
         )
     if unknown:
         view["ignored_params"] = unknown

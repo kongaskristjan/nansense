@@ -949,6 +949,24 @@ dispatches through the spec's runner, and the page's dropdown and form, the
 MCP catalog and `run_experiment`'s validation all read the same registry — so
 the tool schemas take `kind` as a plain string rather than a closed enum.
 
+**Custom kinds** (`nansense.extensions`). `Session.experiment(name, ...)`
+validates the name and knobs and registers a spec built by
+`custom_experiment_spec`: `custom=True`, a `parse` that validates the
+`ExperimentParam` knobs into a `CustomParams` (a values mapping plus the
+display mean/std), and a runner (`_run_custom`) that calls the user function
+inside `isolated_model(mode)` plus `_restored_parameters` (parameter values and
+`.grad` copied back in place, so DDP buckets and optimizer references survive).
+The user function gets an `ExperimentContext` — the snapshot's inputs on
+device, the loader item of the batch whose `__exit__` is publishing
+(`Session._batch_item`, set only on hooked batches and cleared in the finally),
+`forward(edit=)` (an fx `_EditingInterpreter`, or per-module forward hooks in
+the hook fallback) and `activation(layer)`. A returned `ExperimentOutput`
+becomes the final result; a generator streams every output but the last as
+progress, and the last publishes only after the isolation scope has restored
+the model. Exceptions become an error result naming the user's file and line.
+On a locked session, `ExperimentManager.specs` hides custom kinds registered
+without `locked_limits`; `all_kinds` still reserves their names.
+
 **Result payloads.** An `ExperimentResult` carries an `image`, an
 `attribution`, a `Table`, headline `scalars` or a `note` (`payload` names the
 main one). The page renders tables as a sortable `ui.table` and scalars as a

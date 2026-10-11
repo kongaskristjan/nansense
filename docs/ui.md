@@ -65,9 +65,9 @@ Use the axis controls to lay out convolution kernels, matrices, or embeddings. *
 
 ## The experiment page
 
-Each layer card has an **Experiment** button. On the experiment page, pick a method — deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion — set its parameters, and run it on the layer. Experiments run between batches, so training must be paused; results show one card per input sample.
+Each layer card has an **Experiment** button. On the experiment page, pick a method — deep dream, a Captum attribution (Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion), or one of the training script's own [custom experiments](extensions.md) — set its parameters, and run it on the layer. Pause training to run an experiment manually. Attribution results show one card per input sample; custom experiments can also show tables, headline numbers, images or text.
 
-Turn on **Live** to rerun the experiment as training advances.
+Turn on **Live** to rerun the experiment at each capture as training advances. Runs happen on the training thread between batches.
 
 ## Numerical debugging
 

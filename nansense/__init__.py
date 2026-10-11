@@ -9,6 +9,8 @@ web UI. It deliberately contains no training logic; training lives in
 from __future__ import annotations
 
 from nansense.debugger import DebugError, DebugSettings, LayerReport
+from nansense.experiments import ExperimentParam, Table
+from nansense.extensions import ExperimentContext, ExperimentOutput, PauseContext
 from nansense.instruments import (
     LayerContext,
     MetricSeries,
@@ -36,6 +38,9 @@ __all__ = [
     "BatchSnapshot",
     "DebugError",
     "DebugSettings",
+    "ExperimentContext",
+    "ExperimentOutput",
+    "ExperimentParam",
     "LayerContext",
     "LayerReport",
     "LayerStatsSnapshot",
@@ -43,9 +48,11 @@ __all__ = [
     "MetricsSnapshot",
     "Mode",
     "MomentError",
+    "PauseContext",
     "Schedule",
     "Session",
     "StatsScope",
+    "Table",
     "TensorStatsSnapshot",
     "TimeTravelError",
     "TimeTravelJump",

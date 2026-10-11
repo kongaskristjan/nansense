@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import ClassVar, Literal
 
 DEFAULT_BATCH = 8
@@ -65,12 +65,21 @@ class OcclusionParams(AttributionParams):
     stride: int = 2
 
 
+@dataclass(frozen=True)
+class CustomParams(DisplayParams):
+    """A user-registered kind's validated knob values (`Session.experiment`)."""
+
+    kind: str = ""
+    values: Mapping[str, object] = field(default_factory=dict)
+
+
 ExperimentParams = (
     DreamParams
     | GradCamParams
     | NeuronGradientParams
     | NeuronIGParams
     | OcclusionParams
+    | CustomParams
 )
 _DEFAULTS: dict[str, ExperimentParams] = {
     value.kind: value
@@ -120,7 +129,7 @@ def resolve_params(
     return values, [k for k in overrides if k not in values]
 
 
-def _finite_number(value: object, key: str) -> int | float:
+def finite_number(value: object, key: str) -> int | float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         try:
             if math.isfinite(value):
@@ -130,14 +139,14 @@ def _finite_number(value: object, key: str) -> int | float:
     raise ValueError(f"{key} must be a finite number")
 
 
-def _normalization(value: object, key: str) -> tuple[float, ...] | None:
+def normalization(value: object, key: str) -> tuple[float, ...] | None:
     if value is None:
         return None
     if not isinstance(value, (list, tuple)):
         raise ValueError(f"{key} must be a finite numeric sequence or None")
     numbers: list[float] = []
     for number in value:
-        numbers.append(float(_finite_number(number, key)))
+        numbers.append(float(finite_number(number, key)))
     result = tuple(numbers)
     if key == "std" and any(v <= 0 for v in result):
         raise ValueError("std values must be positive")
@@ -156,13 +165,13 @@ def parse_params(
     for key, default in defaults.items():
         value = values.get(key, default)
         if key in ("mean", "std"):
-            parsed[key] = _normalization(value, key)
+            parsed[key] = normalization(value, key)
         elif isinstance(default, bool):
             if not isinstance(value, bool):
                 raise ValueError(f"{key} must be a boolean")
             parsed[key] = value
         elif isinstance(default, (int, float)):
-            number = max(_MINIMUMS[key], _finite_number(value, key))
+            number = max(_MINIMUMS[key], finite_number(value, key))
             if key == "diffusion":
                 number = min(1.0, number)
             if locked and key in LOCKED_PARAM_LIMITS:
