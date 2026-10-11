@@ -17,7 +17,7 @@ nav:
   - UI guide: ui.md
   - Debug with a coding agent: cli.md
   - Custom metrics & tensors: instruments.md
-  - Custom experiments: extensions.md
+  - Custom experiments & tools: extensions.md
   - API reference: api.md
 
 theme:

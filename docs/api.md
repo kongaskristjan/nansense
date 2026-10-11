@@ -34,6 +34,10 @@ The public surface of the `nansense` package. Everything here is importable as `
         - watch_metrics_snapshot
         - instrument_errors
         - experiment
+        - tool
+        - request_tool
+        - tool_call
+        - tool_specs
 
 ## PyTorch Lightning integration
 
@@ -115,9 +119,9 @@ See the [Custom metrics & tensors guide](instruments.md) for usage; the registra
 
 ::: nansense.LayerReport
 
-## Custom experiments
+## Custom experiments and tools
 
-See the [Custom experiments guide](extensions.md) for usage. Register an experiment with `Session.experiment` above.
+See the [Custom experiments & tools guide](extensions.md) for usage. Register experiments with `Session.experiment` and tools with `Session.tool` above.
 
 ::: nansense.ExperimentParam
 
@@ -131,5 +135,7 @@ See the [Custom experiments guide](extensions.md) for usage. Register an experim
         - activation
 
 ::: nansense.ExperimentOutput
+
+::: nansense.ToolContext
 
 ::: nansense.Table

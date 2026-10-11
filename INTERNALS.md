@@ -954,7 +954,7 @@ validates the name and knobs and registers a spec built by
 `custom_experiment_spec`: `custom=True`, a `parse` that validates the
 `ExperimentParam` knobs into a `CustomParams` (a values mapping plus the
 display mean/std), and a runner (`_run_custom`) that calls the user function
-inside `isolated_model(mode)` plus `_restored_parameters` (parameter values and
+inside `isolated_model(mode)` plus `restored_parameters` (parameter values and
 `.grad` copied back in place, so DDP buckets and optimizer references survive).
 The user function gets an `ExperimentContext` — the snapshot's inputs on
 device, the loader item of the batch whose `__exit__` is publishing
@@ -966,6 +966,23 @@ progress, and the last publishes only after the isolation scope has restored
 the model. Exceptions become an error result naming the user's file and line.
 On a locked session, `ExperimentManager.specs` hides custom kinds registered
 without `locked_limits`; `all_kinds` still reserves their names.
+
+**Custom tools** (`nansense.tools`). `Session.tool` builds a `ToolSpec` whose
+`signature` is the function's own (annotations evaluated, the context
+parameter dropped, return `dict[str, Any]`). `ToolManager` holds the specs, a
+call queue and the last 16 `ToolCall` outcomes. `request` validates the
+arguments with a pydantic model built from the signature. A training-thread
+call queues and is drained by `_wait_for_proceed` next to probes and
+experiments, running inside `isolated_model` + `restored_parameters`; an
+off-thread call runs at once on a daemon thread with CPU inputs and the
+snapshot only. Return values go through `jsonable` (tables become
+`{columns, rows}`, small tensors lists). `build_server` subscribes to the
+manager (`add_listener` replays existing tools, then sees later ones under the
+same lock), adding each as an MCP tool whose handler carries the spec's
+signature as `__signature__` — the SDK derives the schema from it — plus
+`get_tool_result` with the first one; a name a built-in tool already has is
+rejected. The handler waits up to the tool's `timeout` and otherwise returns
+the seq. On a locked session `specs` lists only `public` tools.
 
 **Result payloads.** An `ExperimentResult` carries an `image`, an
 `attribution`, a `Table`, headline `scalars` or a `note` (`payload` names the

@@ -185,7 +185,7 @@ class _EditingInterpreter(fx.Interpreter):
 
 
 @contextmanager
-def _restored_parameters(model: nn.Module) -> Iterator[None]:
+def restored_parameters(model: nn.Module) -> Iterator[None]:
     """Put every parameter's value and `.grad` back on exit.
 
     Copies in place when the shape still matches, so parameters keep their
@@ -352,7 +352,7 @@ def _run_custom(
     last: ExperimentOutput | None = None
     step = 0
     try:
-        with isolated_model(session, mode) as device, _restored_parameters(
+        with isolated_model(session, mode) as device, restored_parameters(
             session.model
         ):
             ctx = ExperimentContext(

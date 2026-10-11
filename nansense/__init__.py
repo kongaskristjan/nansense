@@ -26,6 +26,7 @@ from nansense.restore import (
 )
 from nansense.schedule import BatchPosition, Schedule
 from nansense.session import BatchSnapshot, Mode, Session, StatsScope, start
+from nansense.tools import ToolContext
 from nansense.ui import serve
 from nansense.watch import (
     LayerStatsSnapshot,
@@ -57,6 +58,7 @@ __all__ = [
     "TimeTravelError",
     "TimeTravelJump",
     "TimeTravelStatus",
+    "ToolContext",
     "TrainingRestorer",
     "WatchSnapshot",
     "WeightContext",

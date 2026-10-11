@@ -53,6 +53,7 @@ from mcp.types import (
 from starlette.routing import BaseRoute
 
 from nansense import experiments, export
+from nansense.tools import ToolCall, ToolSpec
 from nansense.contracts.recording import (
     ExperimentView,
     HistogramView,
@@ -2397,7 +2398,107 @@ def build_server(
             ),
         }
 
+    # ---- The training script's own tools ------------------------------
+
+    def add_custom_tool(spec: ToolSpec) -> None:
+        # The SDK keeps no public "is this name taken" check; a silent
+        # replacement would shadow a built-in tool the agent relies on.
+        if server._tool_manager.get_tool(spec.name) is not None:
+            raise ValueError(f"tool name {spec.name!r} is already used by a NaNsense MCP tool")
+        if server._tool_manager.get_tool("get_tool_result") is None:
+            server.add_tool(get_tool_result)
+        server.add_tool(
+            _custom_tool(session, spec), name=spec.name, description=spec.description
+        )
+
+    async def get_tool_result(
+        seq: Annotated[
+            int,
+            pydantic.Field(
+                description="The `seq` returned by a queued or running custom tool call."
+            ),
+        ],
+    ) -> dict[str, Any]:
+        """Get a custom tool call's result or current status by sequence number.
+
+        Training-thread tools run while paused. If a call is queued, pause
+        training; if it is running, poll again for its result. Recent results
+        are retained; an absent call was never requested or is no longer kept.
+        """
+        return _tool_call_view(session, session.tool_call(seq))
+
+    session._tools.add_listener(add_custom_tool)
     return server
+
+
+def _custom_tool(session: Session, spec: ToolSpec) -> Callable[..., Any]:
+    """An MCP handler for `spec`, whose schema is the function's own signature."""
+
+    async def call(**arguments: Any) -> dict[str, Any]:
+        if spec.name not in session.tool_specs:
+            return {"error": f"Tool '{spec.name}' is unavailable in this locked session."}
+        if spec.on_training_thread and session.closed:
+            return {
+                "error": (
+                    f"Training has finished. Tool '{spec.name}' requires the "
+                    "training thread and can no longer run."
+                ),
+                "state": "finished",
+            }
+        if spec.on_training_thread and session.training_lost:
+            return _lost_refusal(session, "this tool requires the training thread and cannot run")
+        try:
+            seq = session.request_tool(spec.name, arguments)
+        except ValueError as error:
+            return {"error": str(error)}
+        running = session.is_running
+        done = await asyncio.to_thread(
+            _await_tool, session, seq=seq, timeout=_clamp_timeout(spec.timeout + 1.0)
+        )
+        view = _tool_call_view(session, session.tool_call(seq))
+        if not done and running:
+            view["waiting"] = (
+                "Training was running when the call was requested. "
+                f"If still queued, call pause; poll get_tool_result with seq {seq}."
+            )
+        return view
+
+    # The SDK reads the schema off `inspect.signature`, which honours this.
+    setattr(call, "__signature__", spec.signature)
+    call.__name__ = spec.name
+    return call
+
+
+def _await_tool(session: Session, *, seq: int, timeout: float) -> bool:
+    """Block until call `seq` is done, or time out (see `_await_experiment`)."""
+    deadline = time.monotonic() + timeout
+    while session.tool_call(seq).stage != "done":
+        if session.closed or session.training_lost or time.monotonic() >= deadline:
+            return session.tool_call(seq).stage == "done"
+        time.sleep(_EXPERIMENT_POLL_SECONDS)
+    return True
+
+
+def _tool_call_view(session: Session, call: ToolCall) -> dict[str, Any]:
+    """A call's JSON reply: the tool's own dict (or `{"result": value}`), its
+    error, or where it waits."""
+    if call.stage == "absent":
+        return {
+            "error": f"Call {call.seq} was never requested or is no longer retained.",
+            "seq": call.seq,
+        }
+    if call.stage != "done":
+        return {
+            "seq": call.seq,
+            "stage": call.stage,
+            "waiting": f"Call is {call.stage}; poll get_tool_result with seq {call.seq}.",
+        }
+    if call.error is not None:
+        return {"error": call.error, "seq": call.seq}
+    value = call.value
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    return {"result": value}
 
 
 def _shutdown_refusal(

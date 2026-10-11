@@ -107,6 +107,7 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
 | `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream, Captum attributions and the training script's [custom experiments](extensions.md) — `run_experiment --video` records deep dream or streamed custom results to MP4 |
 | `set_auto_run_experiments` | Stop open experiment pages re-running on the thread you need |
+| Custom tools, `get_tool_result` | Call functions registered with [`session.tool`](extensions.md#tools), listed by `tools`; poll queued or running calls with `get_tool_result --seq N` |
 | `start_recording`, `stop_recording`, `discard_recording`, `list_recordings` | Record a view to MP4, one frame per visualization update — `view` is a typed per-view specification |
 | `save_snapshot` | Save one still of a view as a PNG file to hand a human, from the same typed `view` |
 

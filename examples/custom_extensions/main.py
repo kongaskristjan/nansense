@@ -1,11 +1,14 @@
-"""See how to add your own experiments to NaNsense.
+"""Add custom experiments and tools to NaNsense.
 
 A small CNN learns which quadrant of a synthetic image holds a blob, so no
 download is required (the model and data are the custom-metrics example's).
 The script registers ``ablate_channels``: an experiment that zeroes each
 channel of the chosen layer in turn and lists how much the paused batch's
 accuracy drops. Open a layer's Experiment page and pick "Channel ablation",
-or run it from a coding agent with ``run_experiment``.
+or run it from a coding agent with ``run_experiment``. The ``confusion`` tool
+reports validation accuracy and a confusion matrix for up to ``batches``
+batches. Pause training, then call it with
+``nansense-cli --port 8080 confusion --batches 4`` or use the UI's Tools page.
 """
 
 from __future__ import annotations
@@ -13,7 +16,9 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
+from typing import Annotated
 
+import pydantic
 import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
@@ -28,13 +33,16 @@ from examples.common import (
 from examples.custom_metrics.main import BlobNet, make_blob_dataset
 
 
+QUADRANTS = ("top left", "top right", "bottom left", "bottom right")
+
+
 def _accuracy(logits: object, targets: Tensor) -> float:
     assert isinstance(logits, Tensor)
     return float((logits.argmax(dim=1) == targets).float().mean())
 
 
-def register_extensions(session: nansense.Session) -> None:
-    """The pedagogical core: one custom experiment on the session."""
+def register_extensions(session: nansense.Session, val_loader: DataLoader) -> None:
+    """Register channel ablation and a validation confusion-matrix tool."""
 
     @session.experiment(
         "ablate_channels",
@@ -91,6 +99,39 @@ def register_extensions(session: nansense.Session) -> None:
             table=nansense.Table(("channel", "accuracy drop"), drops[:top]),
             scalars={"baseline accuracy": baseline, "channels": channels},
         )
+
+    @session.tool()
+    def confusion(
+        ctx: nansense.ToolContext,
+        batches: Annotated[
+            int, pydantic.Field(ge=1, description="Validation batches to evaluate")
+        ] = 8,
+    ) -> dict[str, object]:
+        """Compute validation accuracy and a confusion matrix for up to `batches` batches.
+
+        Include overall and per-quadrant accuracy. Matrix rows are true
+        quadrants; columns are predicted quadrants.
+        """
+        matrix = torch.zeros(len(QUADRANTS), len(QUADRANTS), dtype=torch.long)
+        with torch.no_grad():
+            for i, (images, labels) in enumerate(val_loader):
+                if i >= batches or ctx.should_abort():
+                    break
+                logits = ctx.model(images.to(ctx.device))
+                assert isinstance(logits, Tensor)
+                predicted = logits.argmax(dim=1).cpu()
+                matrix.index_put_(
+                    (labels, predicted), torch.ones_like(labels), accumulate=True
+                )
+        per_class = matrix.diag() / matrix.sum(dim=1).clamp(min=1)
+        return {
+            "accuracy": float(matrix.diag().sum() / matrix.sum().clamp(min=1)),
+            "per_quadrant_accuracy": dict(zip(QUADRANTS, per_class.tolist())),
+            "matrix": nansense.Table(
+                ("true / predicted", *QUADRANTS),
+                [(name, *row) for name, row in zip(QUADRANTS, matrix.tolist())],
+            ),
+        }
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,7 +191,7 @@ def run(args: argparse.Namespace, device: torch.device) -> None:
         input_mean=(0.0,),
         input_std=(1.0,),
     )
-    register_extensions(session)
+    register_extensions(session, val_loader)
 
     for epoch in session.epochs(args.epochs, cache_dir=args.cache_dir):
         with session.restore_point():

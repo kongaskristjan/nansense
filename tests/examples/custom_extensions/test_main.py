@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 
 import pytest
 import torch
+from torch.utils.data import DataLoader
 
 import nansense
 from examples.custom_extensions import main as main_module
@@ -17,11 +20,12 @@ def test_default_port(monkeypatch: pytest.MonkeyPatch) -> None:
     assert main_module.parse_args().nansense_port == 8080
 
 
-def test_channel_ablation_tabulates_every_channel_of_the_layer() -> None:
+def test_the_experiment_and_the_tool_run_on_a_paused_session() -> None:
     model = main_module.BlobNet(channels=4)
     session = nansense.start(model, epochs=1, phases={"train": 2})
-    main_module.register_extensions(session)
-    images, labels = main_module.make_blob_dataset(8, seed=0).tensors
+    dataset = main_module.make_blob_dataset(8, seed=0)
+    main_module.register_extensions(session, DataLoader(dataset, batch_size=4))
+    images, labels = dataset.tensors
     items = [(images[:4], labels[:4]), (images[4:], labels[4:])]
 
     def loop() -> None:
@@ -34,6 +38,14 @@ def test_channel_ablation_tabulates_every_channel_of_the_layer() -> None:
         )
         assert session.wait_for_experiment(timeout=10.0)
         result = session.experiment_result_for(seq)
+        call = session.request_tool("confusion", {"batches": 1})
+        deadline = time.monotonic() + 10.0
+        while session.tool_call(call).stage != "done" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        confusion = session.tool_call(call)
+    assert confusion.error is None, confusion.error
+    reply = json.loads(json.dumps(confusion.value))  # it is plain JSON data
+    assert len(reply["matrix"]["rows"]) == 4
     assert result is not None and result.error is None
     assert result.table is not None and len(result.table.rows) == 3
     assert result.scalars["channels"] == 4

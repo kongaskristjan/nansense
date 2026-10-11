@@ -1,8 +1,13 @@
-# Custom experiments
+# Custom experiments & tools
+
+Two decorators plug your own code into NaNsense:
+
+- [`session.experiment`](#register-an-experiment) adds an experiment to the Experiment page, next to the built-in ones.
+- [`session.tool`](#tools) adds a tool for coding agents (`nansense-cli`), which the UI's Tools page also offers.
 
 Register your own experiment alongside the built-in ones (deep dream, Grad-CAM, …). It appears on the Experiment page, with a form for its knobs. Coding agents can list it with `list_experiments` and run it with `run_experiment`. It runs on the training thread between batches, using the model and captured inputs, and can return a table, headline numbers, an image or a note. Pause training to run it manually, or turn on **Live** to rerun it at each capture.
 
-A runnable demo lives in `examples/custom_extensions/`:
+A runnable demo of both lives in `examples/custom_extensions/`:
 
 ```bash
 uv run examples/custom_extensions/main.py --nansense-port 8080
@@ -91,3 +96,40 @@ To stream progress, write a generator that yields several outputs. Each output p
 - `layers="modules"` limits the experiment to layers backed by an `nn.Module`, such as `conv1`. Other layers, such as a functional `relu`, cannot run it.
 - **Locked sessions.** A locked session (a shared demo) hides custom experiments unless they are registered with `locked_limits`, e.g. `{"top": 32}`. Those caps clamp numeric knobs there; `{}` offers the experiment uncapped. Register before `session.lock()`.
 - **Distributed runs.** Under DDP the experiment runs on the leader rank only, against its own shard of the batch.
+
+## Tools
+
+A tool is a function an agent calls by name, with typed arguments:
+
+```python
+from typing import Annotated
+import pydantic
+
+@session.tool()
+def confusion(
+    ctx: nansense.ToolContext,
+    batches: Annotated[int, pydantic.Field(ge=1, description="Validation batches to evaluate")] = 8,
+) -> dict[str, object]:
+    """Confusion matrix and accuracy for up to `batches` validation batches."""
+    matrix = torch.zeros(4, 4, dtype=torch.long)
+    with torch.no_grad():
+        for i, (images, labels) in enumerate(val_loader):
+            if i >= batches or ctx.should_abort():
+                break
+            predicted = ctx.model(images.to(ctx.device)).argmax(1).cpu()
+            matrix.index_put_((labels, predicted), torch.ones_like(labels), accumulate=True)
+    return {"accuracy": float(matrix.diag().sum() / matrix.sum()), "matrix": matrix}
+```
+
+List the tool with `nansense-cli --port 8080 tools` and call it with `nansense-cli --port 8080 confusion --batches 4`. Add `--help` to see its docstring and argument flags. Completed calls return JSON. The UI's top-bar **Tools** button opens a page with a form for each tool and its results. The button appears only when tools are registered.
+
+- **Arguments** follow the context parameter and should use types with a JSON schema, such as `int`, `float`, `bool`, `str`, `Literal[...]`, lists of these, or `X | None`. `Annotated[..., pydantic.Field(description=..., ge=...)]` adds help text and a constraint. Arguments without defaults are required, including nullable arguments. `*args` and `**kwargs` are not supported.
+- **Results** can contain numbers, strings, booleans, `None`, lists, dicts, tensors with at most 10,000 elements, or a [`Table`](api.md#nansense.Table). Tensors become JSON arrays or scalars; tables become objects with `columns` and `rows`. A returned dict becomes the top-level JSON object; other values arrive as `{"result": ...}`.
+- **Errors.** Exceptions and returned dicts with a top-level `error` key are reported as tool errors; `nansense-cli` exits with a nonzero status.
+- **When it runs.** By default, calls run on the training thread while paused, in evaluation mode. Pause before calling to avoid waiting in the queue. If the agent's wait expires, it receives a `seq` and `stage`; the call remains queued or running. Pause training if needed, then use `get_tool_result --seq N` to poll it. Up to 16 recent call results are retained.
+- **Restoration.** As with custom experiments, training flags, existing buffers, parameter values, `.grad` and PyTorch RNG state for CPU and the model's device are restored after the call. Keep the model structure intact; optimizer state and other side effects are not restored. Set `mode="train"` or `mode="unchanged"` to change how the model runs.
+- **Timeouts are cooperative.** `timeout` defaults to 60 seconds, measured from when execution starts. After that, `ctx.should_abort()` returns true; check it in long loops. It does not forcibly stop the function. The agent waits up to `timeout + 1` seconds, capped at 300 seconds, before receiving the call's status. This wait includes time in the queue and does not cancel the call.
+- **Snapshot-only tools.** `on_training_thread=False` starts the call on a worker thread without waiting for a pause. Read only [`ctx.snapshot`](api.md#nansense.BatchSnapshot) and `ctx.inputs`, which are on CPU. Do not access the live model, including through `ctx.forward()` or `ctx.activation()`. Before the first capture, `snapshot` is `None` and `inputs` is empty.
+- **Locked sessions** allow only tools registered with `public=True`. Register before `session.lock()`.
+
+The [`ToolContext`](api.md#nansense.ToolContext) has everything an experiment's context has except `layer` and `params`, plus `snapshot`.

@@ -76,6 +76,7 @@ from nansense.extensions import (
     check_name,
     custom_experiment_spec,
 )
+from nansense.tools import ToolCall, ToolFn, ToolManager, ToolSpec, tool_spec
 from nansense.hyperparams import HyperparameterEdit
 from nansense.input_config import InputTransform, MeanStd
 from nansense.instruments import (
@@ -461,6 +462,11 @@ class Session:
             control_state=self._experiment_control_state,
             run=lambda request, abort: experiments.run(self, request, abort),
             make_clip=lambda request: experiments._experiment_clip(self, request),
+        )
+        self._tools = ToolManager(
+            self._cv,
+            locked=lambda: self.locked,
+            control_state=self._experiment_control_state,
         )
         # The publishing batch's loader item while its __exit__ publishes and
         # pauses — what custom experiments and tools see as `batch_item`.
@@ -1404,6 +1410,110 @@ class Session:
             return fn
 
         return register
+
+    def tool(
+        self,
+        name: str | None = None,
+        *,
+        description: str | None = None,
+        on_training_thread: bool = True,
+        mode: ModelMode = "eval",
+        timeout: float = 60.0,
+        public: bool = False,
+    ) -> Callable[[ToolFn], ToolFn]:
+        """Register a custom tool for agents and the UI, used as a decorator:
+
+            @session.tool()
+            def confusion(ctx: nansense.ToolContext, batches: int = 20) -> dict:
+                \"\"\"Confusion matrix on the validation set.\"\"\"
+                ...
+
+        Listed by `nansense-cli tools` under `name` (default: the function's
+        name). The docstring, or `description` override, supplies CLI help;
+        arguments become flags and fields on the UI's Tools page.
+        The first parameter receives a `ToolContext`. Use argument types
+        with a JSON schema, such as `int`, `float`, `bool`, `str`,
+        `Literal[...]`, lists of these, or `X | None`.
+        `Annotated[int, pydantic.Field(description=..., ge=...)]` adds help
+        text and validation. Parameters without defaults are required.
+
+        By default, calls run on the training thread while paused, in
+        evaluation mode. `mode` also accepts `"train"` and `"unchanged"`.
+        Training flags, existing buffers, parameter values, `.grad` and
+        PyTorch RNG state for CPU and the model's device are restored
+        afterwards. Keep the model structure intact; optimizer state and
+        other side effects are not restored.
+        With `on_training_thread=False`, calls start on a worker thread
+        without waiting for a pause. Read only `ctx.snapshot` and `ctx.inputs`
+        (CPU tensors); do not access the live model or call `ctx.forward()`
+        or `ctx.activation()`.
+
+        `timeout` defaults to 60 seconds from the start of execution. After
+        that, `ctx.should_abort()` returns true; check it in long loops.
+        Stopping is cooperative. The MCP call waits up to `timeout + 1`
+        seconds, capped at 300, including queue time. If unfinished, it
+        returns `seq` and `stage`; poll `get_tool_result` with that `seq`.
+        Returning a pending status does not cancel the call.
+
+        Return JSON-compatible values, tensors with at most 10,000 elements,
+        or a `nansense.Table`. Tensors become arrays or scalars; tables become
+        objects with `columns` and `rows`. Dicts become the top-level JSON
+        object; other values are wrapped in `{"result": ...}`. Exceptions
+        and dicts with a top-level `error` key become MCP tool errors.
+        Locked sessions allow only `public=True` tools; register before
+        locking. A disabled session returns the function unchanged.
+
+        Raises `ValueError` for invalid registration options, duplicate names
+        or argument types without a JSON schema, and `RuntimeError` if the
+        session is locked.
+        """
+        if self._locked:
+            raise RuntimeError("cannot register tools on a locked session")
+
+        def register(fn: ToolFn) -> ToolFn:
+            if not self._enabled:
+                return fn
+            tool_name = name or getattr(fn, "__name__", "")
+            check_name(tool_name, self._tools.all_names, "tool")
+            self._tools.register(
+                tool_spec(
+                    tool_name,
+                    fn,
+                    description=description,
+                    on_training_thread=on_training_thread,
+                    mode=mode,
+                    timeout=timeout,
+                    public=public,
+                )
+            )
+            return fn
+
+        return register
+
+    @property
+    def tool_specs(self) -> dict[str, ToolSpec]:
+        """Registered tools keyed by name; only `public=True` tools are
+        included when the session is locked."""
+        return self._tools.specs
+
+    def request_tool(self, name: str, arguments: Mapping[str, object]) -> int:
+        """Request custom tool `name` and return its call sequence number.
+
+        Training-thread calls queue for execution while paused; worker-thread
+        calls start without waiting for a pause. This method does not wait
+        for completion. Use `tool_call(seq)` to check the status and result.
+        Raises `ValueError` if the tool is unavailable or arguments are invalid.
+        """
+        return self._tools.request(self, name, arguments)
+
+    def tool_call(self, seq: int) -> ToolCall:
+        """Return call `seq`'s status: `queued`, `running`, `done` or `absent`.
+
+        A completed call has a JSON-ready `value` or an `error`. Up to 16
+        recent results are retained; `absent` means the call was never
+        requested or is no longer retained.
+        """
+        return self._tools.call_state(seq)
 
     @property
     def experiment_result(self) -> ExperimentResult | None:
@@ -2916,7 +3026,7 @@ class Session:
         # training runs to completion instead of hanging. A served session
         # waits for the UI indefinitely (grace is None).
         grace = None if self._served else _UNSERVED_PAUSE_TIMEOUT
-        # Pause-time job loop: probe and experiment requests from the UI also
+        # Pause-time job loop: probe, experiment and tool requests also
         # wake the paused training thread, which runs the work *here* — the
         # model is only ever touched from the training thread — and re-enters
         # the wait. Jobs run outside the lock so UI reads (mode, pause_count,
@@ -2928,7 +3038,8 @@ class Session:
                     or self._closed
                     or self._pending_jump is not None
                     or self._probes.pending
-                    or self._experiments.pending,
+                    or self._experiments.pending
+                    or self._tools.pending,
                     timeout=grace,
                 )
                 if not resumed:
@@ -2948,9 +3059,11 @@ class Session:
                 run_probe = False
                 client_probes: list[str] = []
                 experiment: ExperimentRequest | None = None
+                tool_job = None
                 if not done:
                     run_probe, client_probes = self._probes.take_pending()
                     experiment = self._experiments.take_pending()
+                    tool_job = self._tools.take_pending()
             if not resumed:
                 # The detach above already satisfied `done`; warn outside the
                 # lock and return so the batch proceeds.
@@ -2967,6 +3080,8 @@ class Session:
                 self._probes.run_client_probe_guarded(client_key)
             if experiment is not None:
                 self._experiments.run_experiment_guarded(experiment)
+            if tool_job is not None:
+                self._tools.run_guarded(self, tool_job)
             # Reap per-client containers whose page heartbeat lapsed. A parked
             # demo has no snapshot publishes to hang the sweep off, so it runs
             # here on pause-loop activity; the LRU cap bounds memory otherwise.
