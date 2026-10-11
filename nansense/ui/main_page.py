@@ -1038,6 +1038,17 @@ class _LayerView:
                 # `data-tour` marks the wrappers as the tour's arrow targets
                 # (`tour.py`) — on the divs for the same reason as
                 # `data-card-action` above.
+                with ui.element("div").props("data-card-action"):
+                    ui.button(
+                        icon="download",
+                        on_click=lambda: on_download(name),
+                        color="slate-500",
+                    ).props('dense no-caps aria-label="Download tensors"').style(
+                        "min-height: 0; padding: 1px 6px; font-size: 11px"
+                    ).tooltip(
+                        "Download this layer's activation, available gradient and "
+                        "custom tensors from the latest captured batch (.pt)"
+                    )
                 if weights:
                     with ui.element("div").props(
                         'data-card-action data-tour="weights"'
@@ -1079,17 +1090,6 @@ class _LayerView:
                     ).style(
                         "min-height: 0; padding: 1px 6px; font-size: 11px"
                     ).tooltip("Open this layer's stats")
-                with ui.element("div").props("data-card-action"):
-                    ui.button(
-                        icon="download",
-                        on_click=lambda: on_download(name),
-                        color="slate-500",
-                    ).props('dense no-caps aria-label="Download tensors"').style(
-                        "min-height: 0; padding: 1px 6px; font-size: 11px"
-                    ).tooltip(
-                        "Download this layer's activation, available gradient and "
-                        "custom tensors from the latest captured batch (.pt)"
-                    )
                 # The card only shows while the layer is shown, so the button
                 # is always the "off" direction; its label reflects what
                 # hiding does (see the class docstring) via `set_decoupled`.
