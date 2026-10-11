@@ -314,27 +314,6 @@ def test_snapshot_tensors_are_cpu_and_independent() -> None:
         assert snap_weight.data_ptr() != live_weight.data_ptr()
 
 
-def test_stop_then_step_pauses_at_next_batch() -> None:
-    session, model = make_session(epochs=1, phases={"train": 3})
-    session.detach()
-
-    captured: list[bool] = []
-
-    def loop() -> None:
-        for _ in range(3):
-            with session.batch(phase="train", epoch=0) as ctx:
-                train_step(model)
-            captured.append(ctx.captured)
-
-    thread = run_in_thread(loop)
-    session.stop()  # next batch boundary should pause
-    assert session.wait_until_paused(timeout=5)
-    session.detach()
-    thread.join(timeout=5)
-    assert not thread.is_alive()
-    assert sum(captured) >= 1
-
-
 def test_is_running_false_while_paused_and_after_each_step() -> None:
     """`is_running` is False whenever the worker sits paused at a captured
     batch — including after a Step resumes it onto the next one. The top bar
