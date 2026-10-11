@@ -16,7 +16,7 @@
         <link rel="prev" href="../cli/">
       
       
-        <link rel="next" href="../api/">
+        <link rel="next" href="../extensions/">
       
       
         
@@ -601,6 +601,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../extensions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom experiments & tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../api/" class="md-nav__link">
         
   
@@ -731,20 +758,20 @@
 <tr>
 <td><code>session.watch_layer_tensor(name)</code></td>
 <td>tensor shaped like the activation</td>
-<td>main page, extra strip under activations/gradients</td>
+<td>main page, extra strip under activations/gradients; agents see it in <code>render_layer</code> (except in probe views) and its summary under <code>custom</code> in <code>get_layer_stats</code></td>
 </tr>
 <tr>
 <td><code>session.watch_weight_tensor(name)</code></td>
 <td>tensor shaped like the parameter</td>
-<td><code>/weights</code>, next to weight/gradient/optimizer strips</td>
+<td><code>/weights</code>, next to weight/gradient/optimizer strips; agents see it in <code>render_weights</code> and its summary under <code>custom</code> in <code>get_weight_stats</code></td>
 </tr>
 </tbody>
 </table>
 <p>A runnable demo of all three lives in <code>examples/custom_metrics/</code>:</p>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>examples/custom_metrics/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>examples/custom_metrics/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">6464</span>
 </code></pre></div>
 <h2 id="scalar-metrics">Scalar metrics<a class="headerlink" href="#scalar-metrics" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">6464</span><span class="p">)</span>
 
 <span class="nd">@session</span><span class="o">.</span><span class="n">watch_metric</span><span class="p">(</span><span class="s2">&quot;sparsity&quot;</span><span class="p">)</span>                      <span class="c1"># one point per batch</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">sparsity</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">nansense</span><span class="o">.</span><span class="n">LayerContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
@@ -840,13 +867,13 @@
         
         
           
-          <a href="../api/" class="md-footer__link md-footer__link--next" aria-label="Next: API reference">
+          <a href="../extensions/" class="md-footer__link md-footer__link--next" aria-label="Next: Custom experiments &amp; tools">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                API reference
+                Custom experiments & tools
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -546,6 +546,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="What the agent can see">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#raw-tensors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw tensors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -604,6 +621,33 @@
     
   
     Custom metrics & tensors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../extensions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom experiments & tools
   
 
     
@@ -700,6 +744,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="What the agent can see">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#raw-tensors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raw tensors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -760,26 +821,28 @@
 <p>The agent and browser share one session, so you can follow its work in the UI.</p>
 <h2 id="connect">Connect<a class="headerlink" href="#connect" title="Permanent link">&para;</a></h2>
 <p>Start your run as usual:</p>
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">6464</span>
 </code></pre></div>
 <p>The startup banner prints the command an agent starts from:</p>
-<div class="highlight"><pre><span></span><code>┌──────────────────────────────────────────────────────────────┐
-│ NaNsense UI is running at:                                   │
-│ http://127.0.0.1:8080                                        │
-│                                                              │
-│ Debug this run from a coding agent:                          │
-│ nansense-cli --port 8080 tools                               │
-└──────────────────────────────────────────────────────────────┘
+<div class="highlight"><pre><span></span><code>┌──────────────────────────────────────────────────────────────────────┐
+│ NaNsense UI is running at:                                           │
+│ http://127.0.0.1:6464                                                │
+│                                                                      │
+│ Debug this run from a coding agent:                                  │
+│ /home/you/project/.venv/bin/python -m nansense_cli --port 6464 tools │
+└──────────────────────────────────────────────────────────────────────┘
 </code></pre></div>
-<p>If the agent started the run itself, it reads this line from the output. Otherwise, tell it which port to use: <em>"Debug my training run with <code>nansense-cli --port 8080</code>."</em> Nothing needs to be registered, so several agents can each debug their own run on its own port at the same time.</p>
+<p>The banner uses the run's own Python when <code>nansense-cli</code> is not on <code>PATH</code> or is found only inside the run's virtual environment (as under <code>uv run</code>). That command works without activating the environment in the agent's shell. When <code>nansense-cli</code> is found on <code>PATH</code> outside that environment, the banner prints just <code>nansense-cli</code>. The examples below use the short name.</p>
+<p>The banner appears once the endpoint accepts connections. An agent that launched the run in the background can wait for the banner, or pass <code>--wait 60</code> to its first command to wait up to 60 seconds for the server to accept connections.</p>
+<p>If the agent started the run itself, it reads this line from the output. Otherwise, tell it which port to use: <em>"Debug my training run with <code>nansense-cli --port 6464</code>."</em> Nothing needs to be registered, so several agents can each debug their own run on its own port at the same time.</p>
 <p><code>tools</code> prints a short guide and one line per tool. The agent then calls a tool by name, with its arguments as flags:</p>
-<div class="highlight"><pre><span></span><code>nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>tools<span class="w">                         </span><span class="c1"># the guide and the tool list</span>
-nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>get_layer_stats<span class="w"> </span>--help<span class="w">        </span><span class="c1"># one tool&#39;s description and flags</span>
-nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>get_layer_stats<span class="w"> </span>--layers<span class="w"> </span>conv1<span class="w"> </span><span class="nb">fc</span>
-nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>configure_debug_checks<span class="w"> </span>--interval_batches<span class="w"> </span><span class="m">1</span>
-nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span><span class="w"> </span>render_layer<span class="w"> </span>--layers<span class="w"> </span>conv1<span class="w"> </span>--out<span class="w"> </span>shots
+<div class="highlight"><pre><span></span><code>nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">6464</span><span class="w"> </span>tools<span class="w">                         </span><span class="c1"># the guide and the tool list</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">6464</span><span class="w"> </span>get_layer_stats<span class="w"> </span>--help<span class="w">        </span><span class="c1"># one tool&#39;s description and flags</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">6464</span><span class="w"> </span>get_layer_stats<span class="w"> </span>--layers<span class="w"> </span>conv1<span class="w"> </span><span class="nb">fc</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">6464</span><span class="w"> </span>configure_debug_checks<span class="w"> </span>--interval_batches<span class="w"> </span><span class="m">1</span>
+nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m">6464</span><span class="w"> </span>render_layer<span class="w"> </span>--layers<span class="w"> </span>conv1<span class="w"> </span>--out<span class="w"> </span>shots
 </code></pre></div>
-<p>Results are printed as JSON. The <code>render_*</code> tools write their pictures as PNG files to <code>--out</code> (default <code>.nansense-cli/</code>) and print the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code.</p>
+<p>Most tools print JSON results. The <code>render_*</code> tools print a descriptive note and any additional JSON details; the CLI saves their pictures as PNG files under <code>--out</code> (default <code>.nansense-cli/</code>) and prints the paths, so the agent opens only the ones it needs. A tool error goes to stderr with a non-zero exit code. That includes a refusal, such as stepping a run that has finished; the message says why.</p>
 <p>To turn agent access off, pass <code>mcp=False</code> to <a class="autorefs autorefs-internal" title="nansense.serve" href="../api/#nansense.serve"><code>serve</code></a>.</p>
 <div class="admonition note">
 <p class="admonition-title">It listens on localhost</p>
@@ -808,6 +871,10 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 <td>Activation and gradient statistics for the last captured batch, for any layer</td>
 </tr>
 <tr>
+<td><code>rank_layers</code></td>
+<td>Top layers from the last captured batch, ranked by activation or gradient std, abs max, NaN/Inf share, or dead-channel share</td>
+</tr>
+<tr>
 <td><code>get_stats_history</code></td>
 <td>One layer's statistics per epoch — the trend across the run</td>
 </tr>
@@ -817,7 +884,7 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 </tr>
 <tr>
 <td><code>step</code>, <code>run</code>, <code>run_until</code>, <code>pause</code></td>
-<td>The top bar's run controls — including detach, as <code>run --detach</code></td>
+<td>The top bar's run controls — including detach, as <code>run --detach</code>, and <code>step --count N</code> for N batches (counts above 1 require a known phase length and must stay within that phase)</td>
 </tr>
 <tr>
 <td><code>refresh</code></td>
@@ -831,11 +898,21 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 <td><code>configure_debug_checks</code>, <code>silence_debug_check</code></td>
 <td>Tune the numerical-error checks</td>
 </tr>
+<tr>
+<td><code>get_weight_stats</code></td>
+<td>A layer's parameters, their gradients, and the optimizer state moving them</td>
+</tr>
+<tr>
+<td><code>get_metrics</code></td>
+<td>Custom scalar metrics registered with <code>watch_metric</code></td>
+</tr>
+<tr>
+<td><code>get_settings</code>, <code>set_update_frequency</code>, <code>set_watch_performance</code></td>
+<td>The settings dialog</td>
+</tr>
 </tbody>
 </table>
-<p>| <code>get_weight_stats</code> | A layer's parameters, their gradients, and the optimizer state moving them |
-| <code>get_metrics</code> | Custom scalar metrics the training script registered with <code>watch_metric</code> |
-| <code>get_settings</code>, <code>set_update_frequency</code>, <code>set_watch_performance</code> | The settings dialog |</p>
+<p>Run controls return a short status; <code>get_status</code> has the full view. Filter custom metrics with <code>--metrics</code>, <code>--phase</code> and <code>--layers</code>; <code>--last N</code> keeps each series' newest N points.</p>
 <p>Statistics come from two places, and the distinction matters when you read the agent's reasoning. <code>get_layer_stats</code> reads the last captured batch and covers <strong>any</strong> layer. <code>get_stats_history</code> reads the running accumulators, which only cover <strong>watched</strong> layers and only while collection is on (it is off by default) — so the agent watches a layer, turns collection on with <code>set_stats_scope</code>, lets a few epochs run, and then asks for the trend. Ask too early and the tool names which of the three is missing rather than returning an empty series.</p>
 <h2 id="what-the-agent-can-see">What the agent can see<a class="headerlink" href="#what-the-agent-can-see" title="Permanent link">&para;</a></h2>
 <p>The <code>render_*</code> tools return the views as pictures — the same ones the browser draws, rendered server-side and saved as PNG files the agent looks at directly.</p>
@@ -849,7 +926,7 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 <tbody>
 <tr>
 <td><code>render_layer</code></td>
-<td>Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes. <code>average</code> collapses each strip to one mean tile, <code>values="abs"</code>/<code>"square"</code> shows magnitude and <code>background</code> draws the input behind spatial tiles, matching the page's render options</td>
+<td>Per-channel activation and gradient strips: red positive, blue negative, NaN/Inf as transparent holes. <code>average</code> collapses each strip to one mean tile, <code>values="abs"</code>/<code>"square"</code> shows magnitude, <code>background</code> draws the input behind spatial tiles and <code>size</code> sets the tile size, matching the page's render options. <code>first_channel</code>/<code>channel_count</code> select a window of channel tiles while keeping the full strip's colour scale; single-tile strips stay whole. Captured custom tensors from <code>watch_layer_tensor</code> are drawn as extra rows, except in probe views</td>
 </tr>
 <tr>
 <td><code>render_input</code></td>
@@ -857,11 +934,11 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 </tr>
 <tr>
 <td><code>render_weights</code></td>
-<td>A layer's kernels, gradients and optimizer state, plus the live learning rate</td>
+<td>A layer's kernels, gradients, optimizer state and custom tensors from <code>watch_weight_tensor</code>, plus the live learning rate</td>
 </tr>
 <tr>
 <td><code>render_histogram</code></td>
-<td>Value distributions of watched layers, over the signed-log bins</td>
+<td>Value distributions of watched layers, over the signed-log bins. <code>bands</code> marks the dtype's subnormal/near-overflow edges where visible, and <code>current_batch</code> draws the last captured batch for any layer with captured data, matching the stats page's options (<code>phase</code> is ignored)</td>
 </tr>
 <tr>
 <td><code>render_extreme_patches</code></td>
@@ -875,6 +952,9 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 </table>
 <p>This is worth its tokens when the numbers say <em>that</em> something is wrong but not <em>where</em>. A layer's mean and standard deviation look healthy while one channel of sixty-four is dead; the strip shows that at a glance. A conv filter that has collapsed to noise, an activation saturating along one edge of the image, a gradient histogram with a spike in the overflow bin — all are shapes, not scalars.</p>
 <p>Pictures are capped at 1568 pixels on the longest side and downscaled past it, with a note saying so, since a wide layer would otherwise arrive as an unreadably large image.</p>
+<h3 id="raw-tensors">Raw tensors<a class="headerlink" href="#raw-tensors" title="Permanent link">&para;</a></h3>
+<p>When neither statistics nor pictures answer the question, <code>export_tensors --layers conv1 fc</code> returns the latest captured batch's tensors as one <code>.pt</code> file: each layer's activation and parameters, with available gradients, optimizer state, numeric optimizer hyperparameters and custom tensors. The CLI saves it under <code>--out</code> and prints the path alongside a JSON manifest of shapes, dtypes and batch position. <code>--no-weights</code> exports only activations, their gradients and custom layer tensors; <code>--no-activations</code> exports only parameters and their associated data.</p>
+<p>The agent loads the file with <code>torch.load(path, weights_only=True)</code> and analyses it with its own scripts. Tensors include the full batch and every channel, on CPU, with each tensor's captured dtype preserved. Missing entries are omitted; optimizer state and hyperparameters require an optimizer passed to <code>start</code>. The server writes no file. Each export is capped at 256 MiB of tensor data, excluding file overhead; select fewer layers or disable activations or weights for a smaller export.</p>
 <h2 id="what-the-agent-can-try">What the agent can try<a class="headerlink" href="#what-the-agent-can-try" title="Permanent link">&para;</a></h2>
 <p>Reading a paused run is one thing; the rest of the UI is about <em>interrogating</em> it.</p>
 <table>
@@ -890,6 +970,10 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 <td>Restart at an earlier epoch, with the model, optimizer and scheduler restored</td>
 </tr>
 <tr>
+<td><code>get_hyperparameters</code>, <code>set_hyperparameters</code></td>
+<td>Read the optimizer's numeric settings; change them while paused, for one parameter group or all groups</td>
+</tr>
+<tr>
 <td><code>pin_batch</code>, <code>unpin_batch</code>, <code>set_probe_mode</code>, <code>get_probe_status</code></td>
 <td>Re-run the model on one fixed input at every capture</td>
 </tr>
@@ -899,11 +983,15 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 </tr>
 <tr>
 <td><code>list_experiments</code>, <code>run_experiment</code>, <code>get_experiment_result</code>, <code>render_experiment</code>, <code>cancel_experiment</code></td>
-<td>Deep dream and the Captum attributions — <code>run_experiment --video</code> records a dream's whole ascent to MP4</td>
+<td>Deep dream, Captum attributions and the training script's <a href="../extensions/">custom experiments</a> — <code>run_experiment --video</code> records deep dream or streamed custom results to MP4</td>
 </tr>
 <tr>
 <td><code>set_auto_run_experiments</code></td>
 <td>Stop open experiment pages re-running on the thread you need</td>
+</tr>
+<tr>
+<td>Custom tools, <code>get_tool_result</code></td>
+<td>Call functions registered with <a href="../extensions/#tools"><code>session.tool</code></a>, listed by <code>tools</code>; poll queued or running calls with <code>get_tool_result --seq N</code></td>
 </tr>
 <tr>
 <td><code>start_recording</code>, <code>stop_recording</code>, <code>discard_recording</code>, <code>list_recordings</code></td>
@@ -916,6 +1004,8 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 </tbody>
 </table>
 <p><strong>Time travel is the one that changes how debugging goes.</strong> An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with <code>configure_debug_checks --interval_batches 1</code> and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by <code>session.epochs()</code> with <code>session.restore_point()</code>; <code>get_time_travel_status</code> says whether yours is.</p>
+<p><strong>Combine time travel with a hyperparameter change to test a fix.</strong> Call <code>time_travel --epoch 3</code>, then <code>set_hyperparameters --values '{"lr": 0.0001}'</code> to set every parameter group's learning rate to 0.0001 before resuming epoch 3. Travel first: the jump restores the checkpoint's hyperparameters and active learning-rate multipliers. <code>get_hyperparameters</code> identifies an attached scheduler and explains how it may change or replace the edited learning rate at later scheduler steps.</p>
+<p>Add <code>--rescale_schedule</code> to scale future learning rates while keeping the schedule's shape. This requires a scheduler passed to <code>start</code> and an <code>lr</code> value. For each targeted group, the multiplier is new <code>lr</code> ÷ the schedule's current, unscaled <code>lr</code>, applied after every later scheduler step. <code>get_hyperparameters</code> reports active multipliers as <code>lr_multiplier</code> alongside the unscaled <code>scheduled_lr</code>. Set <code>lr</code> to that group's <code>scheduled_lr</code> with the same flag to end its multiplier. Only <code>lr</code> is rescaled; schedulers still control any momentum or betas they cycle.</p>
 <p><strong>Pin inputs for fair comparisons.</strong> Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use <code>set_probe_mode --mode eval</code> to check evaluation behavior, including BatchNorm's running statistics.</p>
 <p><strong>Experiments run on the paused training thread</strong>, so pause first, or the request queues until the next pause. There is a wall-clock ceiling on each run, and <code>run_experiment</code> returns statistics while <code>render_experiment</code> draws the result. A result you poll before it exists is not simply missing: <code>get_experiment_result</code> reports the request's <code>stage</code> — <code>running</code>, <code>queued</code> (with <code>queued_ahead</code>), or <code>absent</code> — so waiting longer and re-requesting are told apart.</p>
 <p>Experiment parameters are validated before queuing or replacing a recording’s auto-run. Invalid types and non-finite numbers return an error without changing the existing request. Unknown parameter keys are reported as ignored.</p>
@@ -933,6 +1023,7 @@ nansense-cli<span class="w"> </span>--port<span class="w"> </span><span class="m
 <p><strong>Two positions.</strong> <code>live_position</code> is where training is now; <code>snapshot_position</code> is the batch the statistics describe. They're identical while paused and diverge once the run advances freely — the tools report both so the agent doesn't read stale numbers as current.</p>
 <p><strong>Non-finite values are explicit.</strong> Since JSON has no NaN literal, tools return <code>"nan"</code>, <code>"inf"</code>, and <code>"-inf"</code> as strings. Statistics describe finite values; <code>non_finite_count</code> reports the rest.</p>
 <p><strong>Long steps don't hang.</strong> A <code>step</code> over a slow epoch returns after a timeout with a note that the run is still going; the command stays in effect and the agent polls <code>get_status</code>.</p>
+<p><strong>A finished run keeps serving.</strong> After training ends, the page stays up for post-mortem browsing, keeping the process alive. Press Ctrl-C or call <code>shutdown</code> from the agent to stop the server. <code>shutdown</code> allows the process to exit once the training script has ended; it is refused while training is still live or the session is locked.</p>
 <p><strong>Locked sessions refuse.</strong> On a <a href="../playground/">locked</a> demo session the control tools return an explicit refusal rather than silently doing nothing, so an agent can't loop forever stepping a run that never moves. Inspection keeps working.</p>
 
 

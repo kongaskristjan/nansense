@@ -46,7 +46,7 @@ Distributed (DDP) runs need no special wiring: call `start()` on every rank (a `
 serve(
     session: Session,
     *,
-    port: int = 8080,
+    port: int = 6464,
     host: str = "127.0.0.1",
     log_level: str = "warning",
     open_browser: bool = True,
@@ -61,7 +61,7 @@ serve(
 
 Start the NiceGUI app on a background thread and return that thread.
 
-`port` / `host` pick the bind address (default `127.0.0.1:8080`). `log_level` is uvicorn's log level — `"warning"` by default, so routine request logging stays out of the training console.
+`port` / `host` pick the bind address (default `127.0.0.1:6464`). `log_level` is uvicorn's log level — `"warning"` by default, so routine request logging stays out of the training console.
 
 Returns `None` without starting anything when `session` is disabled (`nansense.start(..., enabled=False)`), so a training script can call `serve()` unconditionally and pay nothing when the UI is turned off — and likewise on the non-zero ranks of a distributed run, where the UI lives on rank 0.
 
@@ -122,6 +122,14 @@ instrument_errors: dict[str, str]
 ```
 
 `instrument name -> error` for instruments disabled by a failure.
+
+### tool_specs
+
+```
+tool_specs: dict[str, ToolSpec]
+```
+
+Registered tools keyed by name; only `public=True` tools are included when the session is locked.
 
 ### batches
 
@@ -243,7 +251,7 @@ Lock run control and global settings for a shared demo deployment.
 
 Intended for a publicly hosted playground where many anonymous visitors share one session. Once locked:
 
-- the run-control methods (`stop`, every `step_*`, `detach`), `request_time_travel`, `watch`/`unwatch`, the probe surface (`pin_current_batch`, `unpin_batch`, `add_perturbation`, `clear_perturbations`, `set_probe_mode` — all shared state every visitor sees), and the global settings (`set_stats_scope`, `set_update_frequency`, `set_watch_performance`, `set_debug_settings`, `disable_debug_check`, `set_auto_run_experiments`, `set_experiment_defaults`) become no-ops (`request_time_travel` raises `TimeTravelError`, so the UI can show why);
+- the run-control methods (`stop`, every `step_*`, `detach`), `request_time_travel`, `watch`/`unwatch`, the probe surface (`pin_current_batch`, `unpin_batch`, `add_perturbation`, `clear_perturbations`, `set_probe_mode` — all shared state every visitor sees), and the global settings (`set_stats_scope`, `set_update_frequency`, `set_watch_performance`, `set_debug_settings`, `disable_debug_check`, `set_auto_run_experiments`, `set_experiment_defaults`) become no-ops (`request_time_travel` raises `TimeTravelError` and `set_hyperparameters` raises `ValueError`, so the UI can show why);
 - the stats scope is forced to `ALL` — every layer collects, so the UI's per-tab show/hide never touches shared state;
 - experiment requests still run, with their parameters clamped and the queue depth capped (see `nansense.experiments`);
 - registering instruments (`watch_metric`, `watch_layer_tensor`, `watch_weight_tensor`) raises — register them, like every other host-script setting, *before* locking.
@@ -368,6 +376,94 @@ Frozen view of the custom scalar-metric series (see `watch_metric`).
 
 The GRAPHS view's data source for the custom-metric plots; safe to call from any thread. Pass `layers` to restrict the copy.
 
+### experiment
+
+```
+experiment(
+    name: str,
+    *,
+    label: str | None = None,
+    summary: str = "",
+    description: str = "",
+    params: Sequence[ExperimentParam] = (),
+    layers: Literal["any", "modules"] = "any",
+    mode: ModelMode = "eval",
+    locked_limits: Mapping[str, float] | None = None,
+) -> Callable[[ExperimentFn], ExperimentFn]
+```
+
+Register a custom experiment kind, used as a decorator:
+
+```
+@session.experiment(
+    "ablate_channels",
+    params=[nansense.ExperimentParam("top", "Channels to list", "int", default=10)],
+)
+def ablate(ctx: nansense.ExperimentContext) -> nansense.ExperimentOutput:
+    ...
+```
+
+The kind joins the built-ins everywhere: the experiment page's dropdown (with a form built from `params`), `list_experiments` and `run_experiment` for agents, queuing, cancelling and recording. The function runs on the training thread between batches, while paused or at a snapshot capture for Live experiments. It receives an `ExperimentContext` (the model, the chosen layer, the knob values, the batch), and returns an `ExperimentOutput` — an image, an attribution, a table, scalars or a note — or yields several to stream progress. Afterwards, training flags, existing buffers, PyTorch RNG state, existing parameter values and their `.grad` are restored. Keep the model structure intact; optimizer state and other side effects are not restored. An exception in the function publishes an error result with its type, message and traceback location.
+
+`label` is the dropdown text (default: `name`); `summary` and `description` default to the docstring's first line and the whole docstring. `layers="modules"` restricts the kind to layers backed by an `nn.Module`. `mode` sets the model's training flags ("eval", "train" or "unchanged"); it does not disable gradients. A locked session (a shared demo) offers the kind only when `locked_limits` is given; it caps numeric knobs there, e.g. `{"top": 20}` (`{}` offers it uncapped).
+
+Registration adds no per-batch callbacks. Raises `ValueError` for an invalid or taken name, an invalid knob, or an unsupported `layers` or `mode`; `TypeError` if a knob is not an `ExperimentParam`; and `RuntimeError` when registering on a locked session. A disabled session (`enabled=False`) returns the function unchanged.
+
+### tool
+
+```
+tool(
+    name: str | None = None,
+    *,
+    description: str | None = None,
+    on_training_thread: bool = True,
+    mode: ModelMode = "eval",
+    timeout: float = 60.0,
+    public: bool = False,
+) -> Callable[[ToolFn], ToolFn]
+```
+
+Register a custom tool for agents and the UI, used as a decorator:
+
+```
+@session.tool()
+def confusion(ctx: nansense.ToolContext, batches: int = 20) -> dict:
+    """Confusion matrix on the validation set."""
+    ...
+```
+
+Listed by `nansense-cli tools` under `name` (default: the function's name). The docstring, or `description` override, supplies CLI help; arguments become flags and fields on the UI's Tools page. The first parameter receives a `ToolContext`. Use argument types with a JSON schema, such as `int`, `float`, `bool`, `str`, `Literal[...]`, lists of these, or `X | None`. `Annotated[int, pydantic.Field(description=..., ge=...)]` adds help text and validation. Parameters without defaults are required.
+
+By default, calls run on the training thread while paused, in evaluation mode. `mode` also accepts `"train"` and `"unchanged"`. Training flags, existing buffers, parameter values, `.grad` and PyTorch RNG state for CPU and the model's device are restored afterwards. Keep the model structure intact; optimizer state and other side effects are not restored. With `on_training_thread=False`, calls start on a worker thread without waiting for a pause. Read only `ctx.snapshot` and `ctx.inputs` (CPU tensors); do not access the live model or call `ctx.forward()` or `ctx.activation()`.
+
+`timeout` defaults to 60 seconds from the start of execution. After that, `ctx.should_abort()` returns true; check it in long loops. Stopping is cooperative. The MCP call waits up to `timeout + 1` seconds, capped at 300, including queue time. If unfinished, it returns `seq` and `stage`; poll `get_tool_result` with that `seq`. Returning a pending status does not cancel the call.
+
+Return JSON-compatible values, tensors with at most 10,000 elements, or a `nansense.Table`. Tensors become arrays or scalars; tables become objects with `columns` and `rows`. Dicts become the top-level JSON object; other values are wrapped in `{"result": ...}`. Exceptions and dicts with a top-level `error` key become MCP tool errors. Locked sessions allow only `public=True` tools; register before locking. A disabled session returns the function unchanged.
+
+Raises `ValueError` for invalid registration options, duplicate names or argument types without a JSON schema, and `RuntimeError` if the session is locked.
+
+### request_tool
+
+```
+request_tool(
+    name: str, arguments: Mapping[str, object]
+) -> int
+```
+
+Request custom tool `name` and return its call sequence number.
+
+Training-thread calls queue for execution while paused; worker-thread calls start without waiting for a pause. This method does not wait for completion. Use `tool_call(seq)` to check the status and result. Raises `ValueError` if the tool is unavailable or arguments are invalid.
+
+### tool_call
+
+```
+tool_call(seq: int) -> ToolCall
+```
+
+Return call `seq`'s status: `queued`, `running`, `done` or `absent`.
+
+A completed call has a JSON-ready `value` or an `error`. Up to 16 recent results are retained; `absent` means the call was never requested or is no longer retained.
+
 ## PyTorch Lightning integration
 
 ## nansense.lightning.NansenseCallback
@@ -379,6 +475,8 @@ Drive a NaNsense session from a Lightning `Trainer`.
 The session is created when `fit` starts (optimizers exist by then) and closed when it ends — the UI stays up for post-mortem browsing, exactly like a hand-written loop. Pass `model="net"` (an attribute path inside the LightningModule) to point NaNsense at the actual network; this is recommended whenever the module wraps its layers in a submodule, both for fx tracing and so input capture sees the real forward signature.
 
 `port` / `host` / `open_browser` / `enabled` / `input_mean` / `input_std` / `input_transform` mean the same as on `nansense.start`; the UI comes up once `fit` begins.
+
+`on_session(session)` runs once, right after the session is created — the place to register instruments (`session.watch_metric`, …), custom experiments (`session.experiment`) and tools (`session.tool`), which need the session and so cannot be registered before `fit`.
 
 Supported out of the box: automatic optimization, epoch-boundary validation (including `check_val_every_n_epoch > 1`), sanity-check skipping, and `enabled=False` as the zero-overhead off switch. Mid-epoch validation (`val_check_interval < 1.0` or step-based) is rejected with a clear error, and iterable-style dataloaders without a length are not supported — NaNsense declares the schedule up-front.
 
@@ -480,6 +578,8 @@ All tensor dicts are independent CPU clones taken at snapshot time, so the snaps
 `position` is where the batch sat in the run. `activations` / `activation_gradients` are keyed by watched-layer name (the names shown in the architecture graph); `weights` / `weight_gradients` by parameter name, matching `model.named_parameters()`.
 
 `optimizer_state` / `optimizer_hyperparams` are populated only when the session was given an optimizer at `start()`; otherwise they stay empty. State entries are keyed `param name -> state key -> tensor` (scalar entries like Adam's `step` become 0-dim tensors); hyperparams are the numeric knobs of the parameter's group (`lr`, `momentum`, ...), read at the same instant — so a scheduler-driven `lr` is the batch's actual one.
+
+The one exception to immutability: `Session.set_hyperparameters` writes its new values into `optimizer_hyperparams` in place, so a paused view shows the values the next optimizer step will use.
 
 `custom_activations` / `custom_weight_tensors` carry the tensor instruments' outputs (see `Session.watch_layer_tensor` / `watch_weight_tensor`): activation-shaped tensors keyed `layer -> instrument name`, weight-shaped ones `param -> instrument name`. Empty without registered instruments (or when nothing collects).
 
@@ -804,3 +904,73 @@ An immutable record of one detected numerical error.
 Per-layer fractions for one detected error (a row in the dialog table).
 
 `layer` names the affected layer, as shown in the architecture graph. `nan` / `inf` are fractions of *element count*; `underflow` / `overflow` are fractions of the layer's summed `|grad|`. All in `[0, 1]`. `dtype` is the gradient dtype the under/overflow band was measured against (its `finfo.tiny` / `finfo.max` are the band edges), or `None` when no floating-point gradient was scanned for the layer.
+
+## Custom experiments and tools
+
+See the [Custom experiments & tools guide](https://kongaskristjan.github.io/nansense/dev/extensions/index.md) for usage. Register experiments with `Session.experiment` and tools with `Session.tool` above.
+
+## nansense.ExperimentParam
+
+One configurable knob shared by the experiment page and MCP tools.
+
+`key` names the entry in the request's `params`; `label` and `tooltip` describe its form widget. `kind` is "int", "float", "bool" or "select". `default` is used when the key is omitted. For a select, `options` maps values to labels. `minimum` sets a numeric lower bound; `step` sets the increment for float widgets (integer widgets step by 1).
+
+## nansense.ExperimentContext
+
+Bases: `PauseContext`
+
+A `PauseContext` plus the request: the chosen `layer` and the validated knob values in `params`, keyed by `ExperimentParam.key`.
+
+## nansense.PauseContext
+
+The model and captured inputs handed to user code between batches.
+
+`inputs` are the last snapshot's model inputs, moved to `device`, in the model's argument order. `batch_item` is the current loader item (targets included), available while its batch context publishes or pauses. It is `None` outside that context or when no loader item was supplied.
+
+### should_abort
+
+```
+should_abort() -> bool
+```
+
+Return whether cancellation, the time limit, or a resume, rewind or close request requires the run to stop. Check it inside long loops; stopping is cooperative.
+
+### forward
+
+```
+forward(
+    *inputs: Tensor, edit: LayerEdit | None = None
+) -> object
+```
+
+Run the model on `inputs` (default: `self.inputs`).
+
+`edit(layer, activation)` receives tensor outputs as they are produced: graph nodes when the model is traced, named modules otherwise. Return a tensor to replace that output for the rest of the forward (ablation, activation patching), or `None` to keep it.
+
+### activation
+
+```
+activation(layer: str, *inputs: Tensor) -> Tensor
+```
+
+Rerun the model and return `layer`'s tensor output for `inputs` (default: `self.inputs`). Its autograd graph is preserved when gradients are enabled.
+
+## nansense.ExperimentOutput
+
+What a custom experiment returns (or yields, to stream progress).
+
+Set at least one payload. `image` is an input-space batch shown like the model's input (denormalized); `attribution` is a signed per-sample map shown with the diverging colormap, beside `reference` (the inputs it explains). `table`, `scalars` (headline numbers) and `note` (free text) show as numbers and text. `step` / `total_steps` label streamed progress; by default each yield counts as one step. Each streamed output publishes when the next arrives; the final one publishes after model restoration.
+
+## nansense.ToolContext
+
+Bases: `PauseContext`
+
+Context for a custom tool, with the model, captured inputs and snapshot.
+
+Inherits `PauseContext`'s fields and methods. `snapshot` is the latest published `BatchSnapshot` when execution starts, with captured tensors on CPU, or `None` before the first capture.
+
+Training-thread tools receive inputs on the model's device and the current `batch_item`, when available. Worker-thread tools receive CPU inputs and `batch_item=None`; read only `snapshot` and `inputs`, without accessing the live model or calling `forward()` or `activation()`.
+
+## nansense.Table
+
+A table of numbers or text an experiment returns: `columns` headers and `rows` of cells, one cell per column. Any sequences work; they are stored as tuples.

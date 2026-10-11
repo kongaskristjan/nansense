@@ -579,6 +579,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../extensions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom experiments & tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../api/" class="md-nav__link">
         
   
@@ -678,7 +705,7 @@ git<span class="w"> </span>clone<span class="w"> </span>https://github.com/konga
 <span class="nb">cd</span><span class="w"> </span>nansense
 
 <span class="c1"># --group: cpu | cuda (NVIDIA) | cuda-legacy (pre-Turing NVIDIA) | rocm (AMD)</span>
-uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/standard/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">6464</span>
 </code></pre></div>
 <p><code>--group cpu</code> works on any machine. For a GPU build, use the matching group:</p>
 <table>
@@ -709,12 +736,12 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
 </table>
 <p>The other bundled examples run the same way:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Other examples</span>
-uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/game_of_life/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
-uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/audio_keywords/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
-uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/depth_make3d/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/game_of_life/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">6464</span>
+uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/audio_keywords/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">6464</span>
+uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/depth_make3d/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">6464</span>
 
 <span class="c1"># Multiple model inputs</span>
-uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/multimodal/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">8080</span>
+uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </span>cpu<span class="w"> </span>examples/multimodal/main.py<span class="w"> </span>--nansense-port<span class="w"> </span><span class="m">6464</span>
 </code></pre></div>
 <p>A browser tab opens and training pauses on the first batch. Use the top bar to run or step through training; see the <a href="../ui/">UI guide</a>.</p>
 <div class="admonition note">
@@ -735,7 +762,7 @@ uv<span class="w"> </span>run<span class="w"> </span>--group<span class="w"> </s
 <p>Wiring NaNsense into a training loop is a few lines:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">nansense</span>
 
-<span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">)</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">6464</span><span class="p">)</span>
 <span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="n">session</span><span class="o">.</span><span class="n">epochs</span><span class="p">(</span><span class="mi">50</span><span class="p">):</span>
     <span class="k">with</span> <span class="n">session</span><span class="o">.</span><span class="n">restore_point</span><span class="p">():</span>
         <span class="k">for</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">targets</span> <span class="ow">in</span> <span class="n">session</span><span class="o">.</span><span class="n">batches</span><span class="p">(</span><span class="n">train_dl</span><span class="p">,</span> <span class="n">phase</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">):</span>

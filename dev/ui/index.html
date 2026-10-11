@@ -555,6 +555,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-tools-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tools page
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#numerical-debugging" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -626,6 +637,33 @@
     
   
     Custom metrics & tensors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../extensions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom experiments & tools
   
 
     
@@ -758,6 +796,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-tools-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tools page
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#numerical-debugging" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -811,6 +860,7 @@
 <p>The left pane shows the model as a clickable architecture graph. Click a node to <strong>watch</strong> that layer: its activations and gradients appear as a card. Watched views refresh on every pause and, while training runs, on the <em>Update frequency</em> cadence.</p>
 <p>Running statistics (histograms, min/max galleries, per-epoch graphs) accumulate for the watched layers only while <strong>stats collection</strong> is on — the stats button in the top bar, off by default. Collecting slows down training and consumes memory, so turn it on when you need the stats and watch only a few layers at a time.</p>
 <p>Each card renders one strip per tensor: a row of per-channel images on a shared diverging blue-white-red scale. From the card you can jump to the layer's <a href="#the-stats-page">stats view</a>, <a href="#the-weights-page">weights view</a>, or <a href="#the-experiment-page">experiment page</a>.</p>
+<p>The card's download button saves the layer's activation, available gradient and custom tensors from the latest captured batch as a <code>.pt</code> file — full batch, every channel, with each tensor's dtype preserved. Load it with <code>torch.load(path, weights_only=True)</code> for analysis in your own scripts. The file holds the training batch even while the page shows a pinned or perturbed input, and is limited to 256 MiB of tensor data.</p>
 <h2 id="the-input-panel">The input panel<a class="headerlink" href="#the-input-panel" title="Permanent link">&para;</a></h2>
 <p>The right sidebar chooses the input shown throughout the page. For a model with several inputs, use the <strong>Input</strong> menu; use <strong>Sample</strong> to move through the current batch. See <a href="../wiring/#displaying-inputs-correctly">Displaying inputs correctly</a> for non-RGB and flat inputs.</p>
 <p>Views follow the live training batch by default. <strong>Pin batch</strong> keeps the current batch visible as training advances. <strong>Forward mode</strong> controls whether reruns use the model's current mode, evaluation mode, or training mode.</p>
@@ -818,7 +868,7 @@
 <p><strong>Render options</strong> change how every strip on the page is drawn. <strong>Size</strong> sets how large every layer's tiles are shown, from thumbnails for scanning a wide layer to large tiles for reading a single feature map pixel by pixel. <strong>Input background</strong> draws the input image, in light gray, behind every feature map that lines up with it (convolutional maps, and transformer tokens laid back out on their patch grid): near-zero values stay white so the picture shows through, and strong responses tint it red or blue — so you can see <em>where</em> in the image a channel fires. Flat (1-D) strips are unchanged. <strong>Average</strong> collapses each strip's channels into a single mean image, which is how you read the <em>shape</em> of a wide layer's response without scrolling a row of sixty-four tiles. <strong>Abs</strong> and <strong>Square</strong> drop the sign first, so the strip shows magnitude on a sequential 0..max scale — squaring pulls the loudest features further out of the quiet ones. With both on, the transform happens before the mean, so channels that cancel out no longer average away to nothing. The options are per browser tab, so they work in a <a href="../playground/">shared playground</a> too.</p>
 <h2 id="the-stats-page">The stats page<a class="headerlink" href="#the-stats-page" title="Permanent link">&para;</a></h2>
 <p>Open a watched layer's <strong>stats view</strong> for a closer look at its distributions over the epoch. The page has three views, switchable per layer:</p>
-<p><strong>Histogram</strong> leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A <strong>Per channel</strong> switch breaks the histogram down to one row per channel — the quickest way to spot <a href="../showcase/#investigate-dead-neurons">dead neurons</a>. A <strong>Show subnormal/overflow</strong> checkbox marks the dtype-aware band edges where fp16 gradients <a href="../showcase/#spot-gradient-underflow">underflow</a>; it is pre-checked when a numerical warning is active.</p>
+<p><strong>Histogram</strong> leads with a statistics table per phase (activations and gradients side by side), above histograms of the layer's activation and gradient values over the epoch. A <strong>Per channel</strong> switch breaks the histogram down to one row per channel — the quickest way to spot <a href="../showcase/#investigate-dead-neurons">dead neurons</a>. A <strong>Show subnormal/overflow</strong> checkbox marks the dtype-aware band edges where fp16 gradients <a href="../showcase/#spot-gradient-underflow">underflow</a>; it is pre-checked when a numerical warning is active. The x-axis is trimmed to keep outliers from squashing the plot; when at least 1% of values fall outside the visible range, a note under the plot reports the percentage. <strong>Full range</strong> fits the x-axis to every populated bin.</p>
 <p><strong>Min/max</strong> is a gallery of the input patches that drove each channel to its most extreme responses — see the <a href="../showcase/#minmax-activation-patches">showcase</a>.</p>
 <p><strong>Graphs</strong> plots per-epoch statistics (mean, std, median, min, max, plus a dead-channel count for activations) against the epoch number, one line figure for activations and one for gradients, with the legend as the stat selector. Below them, a <strong>Weights</strong> section adds one figure per weight tensor, sampled once per epoch — handy for watching weight drift across a whole run.</p>
 <p>Choose <strong>Current batch</strong> in the Phase menu to inspect the latest capture instead of statistics collected across an epoch. This view is available for any layer.</p>
@@ -826,14 +876,22 @@
 <p>The settings dialog can also switch collection between none (the default), the watched layers, or every layer. Under "every layer", showing and hiding cards on the main page is per-tab and doesn't affect what is collected.</p>
 <h2 id="the-weights-page">The weights page<a class="headerlink" href="#the-weights-page" title="Permanent link">&para;</a></h2>
 <p>Every layer with parameters has a <strong>weights view</strong>. Each parameter gets a panel rendering the weight tensor, its gradient, and — when the session was given an optimizer — one strip per tensor-valued optimizer-state entry (momentum buffers, Adam moments; 0-dim entries like Adam's <code>step</code> join a scalar line below), plus the parameter group's live hyperparameters such as the current learning rate.</p>
-<p>Use the axis controls to lay out convolution kernels, matrices, or embeddings. <strong>Weight graphs</strong> opens the layer's per-epoch history.</p>
+<p>While training is paused, edit a numeric hyperparameter such as learning rate, weight decay, momentum or epsilon, then press Enter or leave the field to apply it. The change affects the whole parameter group from the next optimizer step; the tooltip shows how many model parameters share it. An edited field stays tinted until you restore the value from before its first edit, shown in the tooltip, or time travel undoes that edit.</p>
+<p>Numeric tuples are edited one element at a time: Adam's <code>betas</code> appear as <code>beta1</code> and <code>beta2</code>, each at least 0 and below 1, and the tooltip names the underlying setting, such as <code>betas[0]</code>.</p>
+<p>By default, schedulers keep adjusting the learning rate after an edit. <code>StepLR</code>, <code>ExponentialLR</code>, <code>CosineAnnealingLR</code> and <code>ReduceLROnPlateau</code> continue from your value; <code>LambdaLR</code>, <code>OneCycleLR</code> and <code>CyclicLR</code> recompute it from their own schedule and replace it at their next step. Time travel restores the checkpoint's hyperparameters, so to replay an epoch with a different learning rate, travel back first, edit, then resume training.</p>
+<p>To scale future learning rates while keeping the schedule's shape, check <strong>scale schedule</strong> next to <code>lr</code> before editing it. This requires a scheduler passed to <code>start</code>. The edit sets a multiplier — new <code>lr</code> ÷ the schedule's current, unscaled <code>lr</code> — applied after every later scheduler step. A <code>OneCycleLR</code> warm-up and decay, for example, continue with all learning rates scaled by that factor.</p>
+<p>An active multiplier appears as an amber <code>×factor</code> next to the field. Click it while paused to remove the multiplier and restore the schedule's current value, or enter that value with <strong>scale schedule</strong> checked. Time travel restores the multipliers in force at the checkpoint. Only <code>lr</code> is rescaled; schedulers still control any momentum or betas they cycle.</p>
+<p>Use the axis controls to lay out convolution kernels, matrices, or embeddings. <strong>Weight graphs</strong> opens the layer's per-epoch history. <strong>Download</strong> saves the layer's parameters with available gradients, optimizer state, numeric optimizer hyperparameters and custom weight tensors as a <code>.pt</code> file. Load it with <code>torch.load(path, weights_only=True)</code>; the same 256 MiB limit on tensor data applies.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Weight <em>gradients</em> are read when a batch exits, so keep <code>optimizer.zero_grad()</code> at the start of your batch body — zeroing after <code>step()</code> would leave the gradient views empty (see the <a href="../wiring/#wire-it-into-your-loop-raw-pytorch">Wiring guide</a>).</p>
 </div>
 <h2 id="the-experiment-page">The experiment page<a class="headerlink" href="#the-experiment-page" title="Permanent link">&para;</a></h2>
-<p>Each layer card has an <strong>Experiment</strong> button. On the experiment page, pick a method — deep dream, or a Captum attribution: Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion — set its parameters, and run it on the layer. Experiments run between batches, so training must be paused; results show one card per input sample.</p>
-<p>Turn on <strong>Live</strong> to rerun the experiment as training advances.</p>
+<p>Each layer card has an <strong>Experiment</strong> button. On the experiment page, pick a method — deep dream, a Captum attribution (Grad-CAM, Neuron Gradient, Neuron Integrated Gradients, Occlusion), or one of the training script's own <a href="../extensions/">custom experiments</a> — set its parameters, and run it on the layer. Pause training to run an experiment manually. Attribution results show one card per input sample; custom experiments can also show tables, headline numbers, images or text.</p>
+<p>Turn on <strong>Live</strong> to rerun the experiment at each capture as training advances. Runs happen on the training thread between batches.</p>
+<h2 id="the-tools-page">The tools page<a class="headerlink" href="#the-tools-page" title="Permanent link">&para;</a></h2>
+<p>When <a href="../extensions/#tools">custom tools</a> are available, the main page's top bar shows a tools icon with the tooltip <strong>Custom tools</strong>. Open it, set a tool's arguments, and click <strong>Run</strong> on its card. List fields accept a JSON array or comma-separated values. Tables returned directly or as fields of a result object appear as sortable tables; remaining data appears as JSON. A tool that returns <code>None</code> shows no result output.</p>
+<p>By default, tools run on the training thread while training is paused. If training is running, click <strong>Stop</strong> to let queued calls run. Tools registered with <code>on_training_thread=False</code> start on a worker thread without waiting for a pause. Locked sessions show only tools registered with <code>public=True</code>.</p>
 <h2 id="numerical-debugging">Numerical debugging<a class="headerlink" href="#numerical-debugging" title="Permanent link">&para;</a></h2>
 <p>Every few batches (configurable in the settings dialog), NaNsense scans activations and gradients for NaNs, infinities, and the subnormal/overflow band of the tensor's dtype. When a meaningful share of a layer's gradient magnitude lands there, training pauses with a warning banner; the dialog's per-layer rows link to the histogram view with the band edges drawn in.</p>
 <h2 id="recording-videos-and-snapshots">Recording videos and snapshots<a class="headerlink" href="#recording-videos-and-snapshots" title="Permanent link">&para;</a></h2>

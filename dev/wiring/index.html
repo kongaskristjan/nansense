@@ -640,6 +640,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../extensions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom experiments & tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../api/" class="md-nav__link">
         
   
@@ -803,7 +830,7 @@
 
 <span class="c1"># Setup UI. The schedule is discovered as you train (phase names and batch</span>
 <span class="c1"># counts are learned from the loop below); no need to declare them up front.</span>
-<span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">nansense</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">6464</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
 <span class="c1"># Time travel needs an epoch cache. `session.epochs(50)` iterates like</span>
 <span class="c1"># `range(50)` but checkpoints each epoch start; wrap each iteration&#39;s body in</span>
@@ -847,14 +874,14 @@
 <span class="n">datamodule</span> <span class="o">=</span> <span class="o">...</span>
 
 <span class="c1"># `model=&quot;net&quot;` is the attribute path to the network inside your LightningModule, e.g. module.net</span>
-<span class="n">callback</span> <span class="o">=</span> <span class="n">NansenseCallback</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;net&quot;</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">callback</span> <span class="o">=</span> <span class="n">NansenseCallback</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="mi">6464</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;net&quot;</span><span class="p">,</span> <span class="n">enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
 <span class="c1"># Time travel consumes the running fit, so the trainer comes from a factory:</span>
 <span class="c1"># fit_with_time_travel builds a fresh Trainer for each jump-and-replay attempt.</span>
 <span class="n">trainer_factory</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">L</span><span class="o">.</span><span class="n">Trainer</span><span class="p">(</span><span class="n">max_epochs</span><span class="o">=</span><span class="mi">50</span><span class="p">)</span>
 <span class="n">fit_with_time_travel</span><span class="p">(</span><span class="n">trainer_factory</span><span class="p">,</span> <span class="n">module</span><span class="p">,</span> <span class="n">datamodule</span><span class="o">=</span><span class="n">datamodule</span><span class="p">,</span> <span class="n">callback</span><span class="o">=</span><span class="n">callback</span><span class="p">)</span>
 </code></pre></div>
-<p>Attach a <a href="../api/#nansense.lightning.NansenseCallback"><code>NansenseCallback(model="&lt;attr path to the network&gt;", ...)</code></a> to your trainer and run the fit through <a href="../api/#nansense.lightning.fit_with_time_travel"><code>fit_with_time_travel</code></a>, which owns the jump-and-replay loop. The callback accepts the same <code>port</code> / <code>host</code> / <code>open_browser</code> / <code>enabled</code> / <code>input_mean</code> / <code>input_std</code> / <code>input_transform</code> arguments as <code>start</code>.</p>
+<p>Attach a <a href="../api/#nansense.lightning.NansenseCallback"><code>NansenseCallback(model="&lt;attr path to the network&gt;", ...)</code></a> to your trainer and run the fit through <a href="../api/#nansense.lightning.fit_with_time_travel"><code>fit_with_time_travel</code></a>, which owns the jump-and-replay loop. The callback accepts the same <code>port</code> / <code>host</code> / <code>open_browser</code> / <code>enabled</code> / <code>input_mean</code> / <code>input_std</code> / <code>input_transform</code> arguments as <code>start</code>. The session only exists once <code>fit</code> starts, so register <a href="../instruments/">instruments</a>, <a href="../extensions/">custom experiments and tools</a> in <code>on_session</code>, which the callback calls once with the new session: <code>NansenseCallback(..., on_session=register)</code>.</p>
 <h2 id="displaying-inputs-correctly">Displaying inputs correctly<a class="headerlink" href="#displaying-inputs-correctly" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>input_mean</code> / <code>input_std</code>: the input normalization, so images display in their original colors.</li>
