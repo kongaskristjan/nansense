@@ -842,22 +842,18 @@ def experiment_catalog_view(session: Session) -> dict[str, Any]:
     modules = set(dict(session.model.named_modules()))
     defaults = session.experiment_defaults
     kinds: list[dict[str, Any]] = []
-    for kind, title in experiments.available_experiment_kinds().items():
-        summary, detail = experiments.EXPERIMENT_DESCRIPTIONS.get(kind, ("", ""))
-        needs_module = kind in experiments._MODULE_KINDS or not session.fx_traced
+    for spec in session.experiment_specs.values():
+        needs_module = spec.needs_module or not session.fx_traced
         kinds.append(
             {
-                "kind": kind,
-                "title": title,
-                "summary": summary,
-                "description": detail,
+                "kind": spec.name,
+                "title": spec.label,
+                "summary": spec.summary,
+                "description": spec.description,
                 "layers": [
                     name for name in layers if not needs_module or name in modules
                 ],
-                "params": [
-                    _param_spec_view(spec, defaults)
-                    for spec in experiments.EXPERIMENT_PARAMS[kind]
-                ],
+                "params": [_param_spec_view(param, defaults) for param in spec.params],
             }
         )
     return {

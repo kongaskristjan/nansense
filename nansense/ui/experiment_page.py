@@ -8,11 +8,9 @@ from nicegui import ui
 
 from nansense.contracts.recording import ExperimentView
 from nansense.experiments import (
-    EXPERIMENT_DESCRIPTIONS,
-    EXPERIMENT_KINDS,
     ExperimentQueueState,
     ExperimentResult,
-    available_experiment_kinds,
+    kind_label,
     layer_available,
 )
 from nansense.recording import RecordedView
@@ -47,13 +45,13 @@ from nansense.ui.top_bar import (
 from nansense.ui.tour import add_tour, experiment_tour_steps
 
 
-def _experiment_status(result: ExperimentResult) -> str:
+def _experiment_status(title: str, result: ExperimentResult) -> str:
     state = "running"
     if result.done:
         state = "stopped early" if result.step < result.total_steps else "done"
     if result.error is not None:
         state = "failed"
-    text = f"{EXPERIMENT_KINDS.get(result.kind, result.kind)} — {state}"
+    text = f"{title} — {state}"
     if result.total_steps > 1:
         text += f" · step {result.step}/{result.total_steps}"
     if result.objective is not None:
@@ -95,7 +93,7 @@ def _idle_chip(auto_run: bool, locked: bool) -> _StatusChip:
 
 
 def _pending_chip(
-    kind: str,
+    title: str,
     queue: ExperimentQueueState,
     *,
     training_running: bool,
@@ -112,7 +110,6 @@ def _pending_chip(
     the slow wait, so it names the controls that cut it short — unlocked
     only, a locked session has none (`_run_tooltip`).
     """
-    title = EXPERIMENT_KINDS.get(kind, kind)
     if queue.stage == "running":
         return _StatusChip("running", None, f"{title} — running…")
     if queue.stage == "absent":
@@ -135,9 +132,9 @@ def _pending_chip(
     return _StatusChip("running", None, f"{title} — starting…")
 
 
-def _result_chip(result: ExperimentResult) -> _StatusChip:
+def _result_chip(title: str, result: ExperimentResult) -> _StatusChip:
     """The pill for a published result: still streaming, or its outcome."""
-    text = _experiment_status(result)
+    text = _experiment_status(title, result)
     if result.error is not None:
         return _StatusChip("failed", "error", text)
     if not result.done:
@@ -228,7 +225,9 @@ class _ExperimentPage:
         kind = self.state.kind
         return RecordedView(
             key=self.record_key(),
-            label=f"Experiment · {EXPERIMENT_KINDS.get(kind, kind)} · {self.state.layer}",
+            label=(
+                f"Experiment · {kind_label(self.session, kind)} · {self.state.layer}"
+            ),
             config=ExperimentView(
                 layer=self.state.layer,
                 seq=self.state.my_seq,
@@ -252,7 +251,7 @@ class _ExperimentPage:
             old_layer, available = switched
             _defer_value_write(lambda: self.layer_select.set_value(available))
             ui.notify(
-                f"{EXPERIMENT_KINDS[self.state.kind]} can't run on {old_layer} — switched to {available}",
+                f"{kind_label(self.session, self.state.kind)} can't run on {old_layer} — switched to {available}",
                 type="info",
             )
         self.form.rebuild_params()
@@ -270,7 +269,7 @@ class _ExperimentPage:
         if not self.controller.select_layer(str(value)):
             _defer_value_write(lambda: self.layer_select.set_value(self.state.layer))
             ui.notify(
-                f"{EXPERIMENT_KINDS[self.state.kind]} can't run on {value}",
+                f"{kind_label(self.session, self.state.kind)} can't run on {value}",
                 type="warning",
             )
             return
@@ -317,9 +316,9 @@ class _ExperimentPage:
         self.layer_select.update()
 
     def update_description(self) -> None:
-        short, long = EXPERIMENT_DESCRIPTIONS.get(self.state.kind, ("", ""))
-        self.description_label.text = long
-        self.kind_tooltip.set_text(short)
+        spec = self.session.experiment_spec(self.state.kind)
+        self.description_label.text = spec.description
+        self.kind_tooltip.set_text(spec.summary)
 
     def update_controls(self, *, running: bool) -> None:
         run_ok = (
@@ -365,14 +364,16 @@ class _ExperimentPage:
             if self.state.last_result is None:
                 self.status_pill.show(
                     _pending_chip(
-                        self.state.kind,
+                        kind_label(self.session, self.state.kind),
                         self.session.experiment_queue_state(self.state.my_seq),
                         training_running=self.session.is_running,
                         locked=self.session.locked,
                     )
                 )
             return
-        self.status_pill.show(_result_chip(result))
+        self.status_pill.show(
+            _result_chip(kind_label(self.session, result.kind), result)
+        )
         self.error_label.text = result.error or ""
         if result is not self.state.last_result:
             self.state.last_result = result
@@ -415,7 +416,10 @@ class _ExperimentPage:
             ui.separator()
             self.kind_select = (
                 ui.select(
-                    available_experiment_kinds(),
+                    {
+                        name: spec.label
+                        for name, spec in self.session.experiment_specs.items()
+                    },
                     label="Experiment",
                     value=self.state.kind,
                     on_change=self.on_kind_change,

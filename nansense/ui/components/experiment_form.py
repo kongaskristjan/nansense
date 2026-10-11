@@ -9,7 +9,7 @@ from nicegui.elements.mixins.disableable_element import DisableableElement
 from nicegui.elements.mixins.value_element import ValueElement
 
 from nansense.contracts.experiments import DEFAULT_BATCH
-from nansense.experiments import EXPERIMENT_PARAMS, ExperimentParam
+from nansense.experiments import ExperimentParam
 from nansense.session import BatchSnapshot, Session
 from nansense.ui.common import _defer_value_write, _set_controls_enabled
 from nansense.ui.controllers.experiment import ExperimentState
@@ -54,9 +54,12 @@ class ExperimentForm:
             "text-xs text-red-600 whitespace-normal leading-snug"
         )
 
+    def _specs(self) -> tuple[ExperimentParam, ...]:
+        return self.session.experiment_spec(self.state.kind).params
+
     def collect_params(self) -> dict[str, object]:
         params: dict[str, object] = {"mean": self.mean, "std": self.std}
-        for spec in EXPERIMENT_PARAMS[self.state.kind]:
+        for spec in self._specs():
             value: object = getattr(self.widgets.get(spec.key), "value", None)
             if spec.kind in ("int", "float"):
                 # `run` blocks the call while a numeric field is empty; the
@@ -105,7 +108,7 @@ class ExperimentForm:
         """Labels of numeric params whose widget holds no usable number — an
         empty or non-numeric field reads back from NiceGUI as None."""
         invalid: list[str] = []
-        for spec in EXPERIMENT_PARAMS[self.state.kind]:
+        for spec in self._specs():
             if spec.kind not in ("int", "float"):
                 continue
             value = getattr(self.widgets.get(spec.key), "value", None)
@@ -136,7 +139,7 @@ class ExperimentForm:
         self.widgets.clear()
         self.params_pane.clear()
         with self.params_pane:
-            for spec in EXPERIMENT_PARAMS[self.state.kind]:
+            for spec in self._specs():
                 initial = self.state.values.get(spec.key, spec.default)
                 if spec.kind == "bool":
                     widget: ValueElement = ui.switch(

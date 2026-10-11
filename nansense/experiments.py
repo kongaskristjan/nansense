@@ -48,7 +48,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -60,7 +60,6 @@ from nansense.capture import _CaptureInterpreter
 from nansense.contracts.experiments import (
     LOCKED_PARAM_LIMITS,
     DreamParams,
-    ExperimentKind,
     ExperimentParams,
     GradCamParams,
     NeuronGradientParams,
@@ -68,7 +67,6 @@ from nansense.contracts.experiments import (
     OcclusionParams,
     default_params,
     parse_params,
-    resolve_params,
 )
 from nansense.params import float_tuple
 from nansense.probe import isolated_model
@@ -76,21 +74,6 @@ from nansense.probe import isolated_model
 if TYPE_CHECKING:
     from nansense.recording import ExperimentClip
     from nansense.session import Session
-
-EXPERIMENT_KINDS: dict[str, str] = {
-    "deep_dream": "Deep Dream",
-    "gradcam": "Grad-CAM (Captum)",
-    "neuron_gradient": "Neuron Gradient (Captum)",
-    "neuron_ig": "Neuron Integrated Gradients (Captum)",
-    "occlusion": "Occlusion (Captum)",
-}
-
-# Kinds whose Captum attribution targets the layer's `nn.Module` object
-# directly (Grad-CAM's localization layer, the neuron methods' layer). An fx
-# intermediate (relu/add/…) has no module to hand Captum, so these are
-# unavailable there. Deep dream and the retargeted occlusion read the
-# activation through the fx interpreter, so they accept any captured layer.
-_MODULE_KINDS = frozenset({"gradcam", "neuron_gradient", "neuron_ig"})
 
 # How many intermediate publishes a deep-dream run spreads over its steps.
 # The starting image publishes as step 0 on top of these, so a run streams
@@ -117,6 +100,35 @@ class ExperimentParam:
     minimum: float | None = None
     step: float | None = None
     tooltip: str = ""
+
+
+ExperimentRunner = Callable[
+    ["Session", "ExperimentRequest", Callable[[], bool]], Iterator["ExperimentResult"]
+]
+
+
+@dataclass(frozen=True)
+class ExperimentSpec:
+    """One experiment kind: how the front-ends describe it, and how it runs.
+
+    The session's registry (`Session.experiment_specs`) holds one per kind,
+    the built-ins first. The page's kind dropdown, its parameter form and the
+    MCP `list_experiments` / `run_experiment` tools all read it, so a kind is
+    described in exactly one place.
+
+    `needs_module` kinds only accept layers backed by an `nn.Module`.
+    `parse` validates one request's raw form values into the immutable params
+    the runner reads, raising `ValueError` before anything is queued.
+    """
+
+    name: str
+    label: str
+    summary: str
+    description: str
+    params: tuple[ExperimentParam, ...]
+    runner: ExperimentRunner
+    parse: Callable[[Mapping[str, object], bool], ExperimentParams]
+    needs_module: bool = False
 
 
 # Shared knobs reused across kinds. A param is shared *by key*, so its value
@@ -217,7 +229,7 @@ _ALL_STEPS_PARAM = ExperimentParam(
 # then the method-specific knobs (point 1). The Layer selector is rendered
 # above this list (point 2). Deep dream's Sample knob only shows when starting
 # from the current batch (toggled in `rebuild_params`).
-EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
+_BUILTIN_PARAMS: dict[str, list[ExperimentParam]] = {
     "deep_dream": [
         _CHANNELS_PARAM,
         _START_PARAM,
@@ -254,25 +266,20 @@ EXPERIMENT_PARAMS: dict[str, list[ExperimentParam]] = {
 }
 
 
-for _kind, _specs in EXPERIMENT_PARAMS.items():
-    _defaults = default_params(_kind)
-    EXPERIMENT_PARAMS[_kind] = [
-        replace(spec, default=_defaults[spec.key]) for spec in _specs
-    ]
-
-
-def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
+def default_param_values(
+    specs: Iterable[ExperimentSpec], overrides: Mapping[str, object]
+) -> dict[str, object]:
     """Every kind's per-key defaults, with session overrides applied.
 
     `overrides` is `Session.experiment_defaults` — e.g. a hosted playground
     seeds cheaper deep-dream defaults; anything not overridden keeps its
-    `ExperimentParam.default`.
+    `ExperimentParam.default`. A key shared by several kinds takes the first
+    kind's default.
     """
     values: dict[str, object] = {}
-    for kind, specs in EXPERIMENT_PARAMS.items():
-        resolved, _ = resolve_params(kind, {}, overrides)
-        for spec in specs:
-            values.setdefault(spec.key, resolved[spec.key])
+    for spec in specs:
+        for param in spec.params:
+            values.setdefault(param.key, overrides.get(param.key, param.default))
     return values
 
 
@@ -280,7 +287,7 @@ def default_param_values(overrides: dict[str, object]) -> dict[str, object]:
 # as the dropdown's tooltip and the second at the bottom of its left pane;
 # the MCP server returns both from `list_experiments`, which is the only
 # way an agent learns what these methods actually do.
-EXPERIMENT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
+_BUILTIN_DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "deep_dream": (
         "Synthesize one input per channel that maximally excites it.",
         "Deep Dream runs gradient ascent on the input to maximize each of the "
@@ -315,13 +322,22 @@ EXPERIMENT_DESCRIPTIONS: dict[str, tuple[str, str]] = {
 }
 
 
-def available_experiment_kinds() -> dict[str, str]:
-    """Experiment kinds the UI should offer.
+def resolve_params(
+    spec: ExperimentSpec,
+    overrides: Mapping[str, object],
+    defaults: Mapping[str, object],
+) -> tuple[dict[str, object], list[str]]:
+    """`spec`'s knobs with session `defaults`, then `overrides`, applied —
+    plus the override keys this kind does not take."""
+    values = {param.key: defaults.get(param.key, param.default) for param in spec.params}
+    values.update({k: v for k, v in overrides.items() if k in values})
+    return values, [k for k in overrides if k not in values]
 
-    captum is a standard dependency, so every kind (deep dream and the four
-    Captum attributions) is always offered.
-    """
-    return dict(EXPERIMENT_KINDS)
+
+def kind_label(session: Session, kind: str) -> str:
+    """Display name of experiment `kind` (the kind itself if unregistered)."""
+    spec = session.experiment_specs.get(kind)
+    return kind if spec is None else spec.label
 
 
 def layer_available(session: Session, layer: str, kind: str) -> bool:
@@ -333,7 +349,7 @@ def layer_available(session: Session, layer: str, kind: str) -> bool:
     in the hook fallback (no fx graph) the only thing to hook is a named
     module, so there every kind needs one.
     """
-    if kind in _MODULE_KINDS or not session.fx_traced:
+    if session.experiment_spec(kind).needs_module or not session.fx_traced:
         return layer in dict(session.model.named_modules())
     return True
 
@@ -348,7 +364,7 @@ class ExperimentRequest:
     video: bool = False
 
     @property
-    def kind(self) -> ExperimentKind:
+    def kind(self) -> str:
         return self.params.kind
 
 
@@ -406,12 +422,9 @@ def run(
     should_abort: Callable[[], bool],
 ) -> Iterator[ExperimentResult]:
     """Drive one experiment, yielding progress until done (training thread)."""
-    if request.kind == "deep_dream":
-        yield from _run_deep_dream(session, request, should_abort)
-    elif request.kind in ("gradcam", "neuron_gradient", "neuron_ig", "occlusion"):
-        yield from _run_captum(session, request, should_abort)
-    else:
-        yield _error(request, f"unknown experiment kind {request.kind!r}")
+    yield from session.experiment_spec(request.kind).runner(
+        session, request, should_abort
+    )
 
 
 # --- Request queue and lifecycle (driven by the Session) -------------------
@@ -839,10 +852,10 @@ def _run_captum(
         yield x0
         return
     module: nn.Module | None = dict(session.model.named_modules()).get(request.layer)
-    if request.kind in _MODULE_KINDS and module is None:
+    if not isinstance(p, OcclusionParams) and module is None:
         yield _error(
             request,
-            f"{EXPERIMENT_KINDS[request.kind]} needs an nn.Module layer; "
+            f"{session.experiment_spec(request.kind).label} needs an nn.Module layer; "
             f"{request.layer!r} is an fx intermediate — pick the producing "
             "module instead",
         )
@@ -906,6 +919,54 @@ def _run_captum(
     )
 
 
+def _builtin_spec(
+    name: str, label: str, runner: ExperimentRunner, *, needs_module: bool = False
+) -> ExperimentSpec:
+    defaults = default_params(name)
+    summary, description = _BUILTIN_DESCRIPTIONS[name]
+    return ExperimentSpec(
+        name=name,
+        label=label,
+        summary=summary,
+        description=description,
+        params=tuple(
+            replace(spec, default=defaults[spec.key]) for spec in _BUILTIN_PARAMS[name]
+        ),
+        runner=runner,
+        parse=lambda values, locked: parse_params(name, values, locked=locked),
+        needs_module=needs_module,
+    )
+
+
+# Grad-CAM and the neuron methods hand Captum the layer's `nn.Module` object
+# directly (Grad-CAM's localization layer, the neuron methods' layer). An fx
+# intermediate (relu/add/…) has no module to hand Captum, so these are
+# unavailable there. Deep dream and the retargeted occlusion read the
+# activation through the fx interpreter, so they accept any captured layer.
+BUILTIN_EXPERIMENTS: dict[str, ExperimentSpec] = {
+    spec.name: spec
+    for spec in (
+        _builtin_spec("deep_dream", "Deep Dream", _run_deep_dream),
+        _builtin_spec(
+            "gradcam", "Grad-CAM (Captum)", _run_captum, needs_module=True
+        ),
+        _builtin_spec(
+            "neuron_gradient",
+            "Neuron Gradient (Captum)",
+            _run_captum,
+            needs_module=True,
+        ),
+        _builtin_spec(
+            "neuron_ig",
+            "Neuron Integrated Gradients (Captum)",
+            _run_captum,
+            needs_module=True,
+        ),
+        _builtin_spec("occlusion", "Occlusion (Captum)", _run_captum),
+    )
+}
+
+
 class ExperimentManager:
     """Own experiment queues, cancellation, auto registrations, and result eviction."""
 
@@ -934,6 +995,24 @@ class ExperimentManager:
         self._auto: dict[str, _AutoExperiment] = {}
         self._auto_run = True
         self._defaults: dict[str, object] = {}
+        self._specs = dict(BUILTIN_EXPERIMENTS)
+
+    @property
+    def specs(self) -> dict[str, ExperimentSpec]:
+        with self._cv:
+            return dict(self._specs)
+
+    def spec(self, kind: str) -> ExperimentSpec:
+        with self._cv:
+            spec = self._specs.get(kind)
+        if spec is None:
+            raise ValueError(f"unknown experiment kind {kind!r}")
+        return spec
+
+    def parse(
+        self, kind: str, values: Mapping[str, object], *, locked: bool
+    ) -> ExperimentParams:
+        return self.spec(kind).parse(values, locked)
 
     @property
     def result(self) -> ExperimentResult | None:

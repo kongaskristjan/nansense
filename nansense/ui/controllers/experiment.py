@@ -38,7 +38,11 @@ class ExperimentController:
         self.session = session
         self.layers = tuple(layers)
         self.state = ExperimentState(layer=layer)
-        self.state.values.update(default_param_values(session.experiment_defaults))
+        self.state.values.update(
+            default_param_values(
+                session.experiment_specs.values(), session.experiment_defaults
+            )
+        )
         self.key = f"experiment-page-{uuid4().hex}"
 
     @property

@@ -7,9 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from typing import ClassVar, Literal
 
-ExperimentKind = Literal[
-    "deep_dream", "gradcam", "neuron_gradient", "neuron_ig", "occlusion"
-]
 DEFAULT_BATCH = 8
 LOCKED_PARAM_LIMITS = {"steps": 300, "channels": 8, "batch": 8, "ig_steps": 64}
 

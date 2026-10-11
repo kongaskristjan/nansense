@@ -65,7 +65,6 @@ from nansense.mcp_images import (
     weights_image,
 )
 from nansense.mcp_view_specs import (
-    ExperimentKind,
     ExperimentSnapshotSpec,
     HistogramsViewSpec,
     LayersViewSpec,
@@ -1767,11 +1766,12 @@ def build_server(
     @server.tool()
     async def run_experiment(
         kind: Annotated[
-            ExperimentKind,
+            str,
             pydantic.Field(
                 description=(
-                    "Which experiment to run; list_experiments describes each "
-                    "one and the layers it accepts."
+                    "Which experiment to run, e.g. 'deep_dream' or 'gradcam'; "
+                    "list_experiments names every kind, the training script's "
+                    "own included, and the layers each accepts."
                 )
             ),
         ],
@@ -2162,7 +2162,7 @@ def _experiment_params(
     them to clamp and denormalize into input space.
     """
     params, unknown = experiments.resolve_params(
-        kind, overrides or {}, session.experiment_defaults
+        session.experiment_spec(kind), overrides or {}, session.experiment_defaults
     )
     mean, std = display.stats(input_name)
     params["mean"] = mean
@@ -2213,10 +2213,10 @@ async def _run_experiment(
         return _lost_refusal(
             session, "no experiment can run (they execute on that thread)"
         )
-    if kind not in experiments.EXPERIMENT_KINDS:
+    if kind not in session.experiment_specs:
         return {
             "error": f"Unknown experiment kind {kind!r}.",
-            "known_kinds": sorted(experiments.EXPERIMENT_KINDS),
+            "known_kinds": sorted(session.experiment_specs),
         }
     if layer not in set(session.layer_names):
         return {
@@ -2396,6 +2396,11 @@ def _recorded_view(
     # "experiment": the page keeps its request alive across updates with an
     # auto experiment so each frame is a fresh rerun of the *same* seq (deep
     # dream then redraws the same seeded noise); do the same here.
+    if spec.kind not in session.experiment_specs:
+        return {
+            "error": f"Unknown experiment kind {spec.kind!r}.",
+            "known_kinds": sorted(session.experiment_specs),
+        }
     if not experiments.layer_available(session, spec.layer, spec.kind):
         return {
             "error": f"{spec.kind} cannot run on {spec.layer!r}; see list_experiments."
@@ -2427,7 +2432,9 @@ def _recorded_view(
     session.pin_auto_experiment(key)
     return RecordedView(
         key=key,
-        label=f"Experiment · {experiments.EXPERIMENT_KINDS[spec.kind]} · {spec.layer}",
+        label=(
+            f"Experiment · {experiments.kind_label(session, spec.kind)} · {spec.layer}"
+        ),
         config=ExperimentView(
             layer=spec.layer,
             seq=seq,
@@ -2510,7 +2517,7 @@ def _snapshot_view(
             "hint": "run_experiment publishes one; its seq names it here.",
         }
     mean, std = display.stats(input_name)
-    kind_label = experiments.EXPERIMENT_KINDS.get(result.kind, result.kind)
+    kind_label = experiments.kind_label(session, result.kind)
     return RecordedView(
         key=f"experiment:{result.layer}",
         label=f"Experiment · {kind_label} · {result.layer}",

@@ -17,12 +17,6 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
-#: The keys of `experiments.EXPERIMENT_KINDS`, as a type. Shared with
-#: `run_experiment`'s own `kind` so the two cannot drift apart.
-ExperimentKind = Literal[
-    "deep_dream", "gradcam", "neuron_gradient", "neuron_ig", "occlusion"
-]
-
 _OVERLAY_DOC = (
     "Blend the attribution over the input it explains instead of drawing it "
     "alongside. Inert for deep dream, which synthesizes an input."
@@ -125,10 +119,10 @@ class ExperimentRecordingSpec(BaseModel):
         description="Selects this variant: an experiment re-run once per frame.",
     )
     layer: str = Field(description="Layer to run the experiment on.")
-    kind: ExperimentKind = Field(
+    kind: str = Field(
         description=(
-            "Experiment to re-run for every frame; `list_experiments` describes "
-            "each one."
+            "Experiment to re-run for every frame, e.g. 'deep_dream'; "
+            "`list_experiments` names and describes every kind."
         )
     )
     params: dict[str, Any] | None = Field(

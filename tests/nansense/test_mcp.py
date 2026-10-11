@@ -501,26 +501,6 @@ def test_the_view_argument_publishes_one_variant_per_view(
     _run(go())
 
 
-def test_a_recording_experiment_variant_pins_the_experiment_kinds() -> None:
-    """`start_recording`'s `kind` is the same enum `run_experiment` takes."""
-    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
-
-    async def go() -> None:
-        async with Client(build_server(session, mermaid="graph TD")) as client:
-            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-            schema = tools["start_recording"].input_schema
-            mapping = schema["properties"]["view"]["discriminator"]["mapping"]
-            variant = schema["$defs"][mapping["experiment"].rsplit("/", 1)[-1]]
-            kinds = variant["properties"]["kind"]["enum"]
-            assert (
-                kinds
-                == tools["run_experiment"].input_schema["properties"]["kind"]["enum"]
-            )
-            assert set(kinds) == set(experiments.EXPERIMENT_KINDS)
-
-    _run(go())
-
-
 def test_render_layer_offers_the_recorded_render_options() -> None:
     """`render_layer` and the recorded `layers` view take the same render
     options, so an agent can draw what a recording would freeze."""

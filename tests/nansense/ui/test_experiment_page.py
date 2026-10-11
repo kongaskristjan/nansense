@@ -94,7 +94,7 @@ def test_pending_chip_names_the_run_controls_only_when_there_are_some(
     from nansense.ui.experiment_page import _pending_chip
 
     chip = _pending_chip(
-        "deep_dream",
+        "Deep Dream",
         ExperimentQueueState("queued", 0),
         training_running=True,
         locked=locked,
@@ -120,7 +120,7 @@ def test_pending_chip_spins_through_the_waits_that_resolve_themselves(
     from nansense.ui.experiment_page import _pending_chip
 
     chip = _pending_chip(
-        "deep_dream",
+        "Deep Dream",
         ExperimentQueueState(stage, ahead),
         training_running=False,
         locked=True,
@@ -136,7 +136,7 @@ def test_pending_chip_reports_a_request_that_never_ran() -> None:
     from nansense.ui.experiment_page import _pending_chip
 
     chip = _pending_chip(
-        "occlusion",
+        "Occlusion (Captum)",
         ExperimentQueueState("absent"),
         training_running=False,
         locked=False,
@@ -160,6 +160,7 @@ def test_result_chip_tone_follows_the_outcome(
     from nansense.ui.experiment_page import _result_chip
 
     chip = _result_chip(
+        "Deep Dream",
         ExperimentResult(
             seq=1,
             kind="deep_dream",
@@ -186,7 +187,7 @@ def test_every_chip_the_page_builds_has_a_defined_tone() -> None:
     chips = [_idle_chip(auto_run, locked) for auto_run in flags for locked in flags]
     chips += [
         _pending_chip(
-            "deep_dream",
+            "Deep Dream",
             ExperimentQueueState(stage, ahead),
             training_running=running,
             locked=locked,
@@ -197,6 +198,7 @@ def test_every_chip_the_page_builds_has_a_defined_tone() -> None:
     ]
     chips += [
         _result_chip(
+            "Deep Dream",
             ExperimentResult(
                 seq=1,
                 kind="deep_dream",

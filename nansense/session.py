@@ -67,6 +67,7 @@ from nansense.experiments import (
     ExperimentQueueState,
     ExperimentRequest,
     ExperimentResult,
+    ExperimentSpec,
 )
 from nansense.input_config import InputTransform, MeanStd
 from nansense.instruments import (
@@ -1301,6 +1302,16 @@ class Session:
         return self._probes.wait(after_count=after_count, timeout=timeout, client=client)
 
     @property
+    def experiment_specs(self) -> dict[str, ExperimentSpec]:
+        """Every experiment kind this session offers, keyed by name, built-ins
+        first — what the experiment page and `list_experiments` list."""
+        return self._experiments.specs
+
+    def experiment_spec(self, kind: str) -> ExperimentSpec:
+        """The registered experiment `kind`; `ValueError` if there is none."""
+        return self._experiments.spec(kind)
+
+    @property
     def experiment_result(self) -> ExperimentResult | None:
         """The latest experiment progress/outcome (lock-free read, like
         `snapshot`): a frozen dataclass of CPU tensors, or `None` before the
@@ -1355,7 +1366,7 @@ class Session:
         numbers before changing the queue. Numeric floors and demo caps apply.
         """
         with self._cv:
-            validated = experiments.parse_params(kind, params, locked=self._locked)
+            validated = self._experiments.parse(kind, params, locked=self._locked)
             return self._experiments.request_experiment(
                 layer=layer, params=validated, video=video
             )
@@ -1658,7 +1669,7 @@ class Session:
         before replacing the registration, as in `request_experiment`.
         """
         with self._cv:
-            validated = experiments.parse_params(kind, params, locked=self._locked)
+            validated = self._experiments.parse(kind, params, locked=self._locked)
             return self._experiments.register_auto_experiment(
                 key, layer=layer, params=validated
             )

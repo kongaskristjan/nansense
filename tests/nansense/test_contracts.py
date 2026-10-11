@@ -5,18 +5,18 @@ from dataclasses import fields
 import pytest
 
 from nansense.contracts.experiments import DreamParams, parse_params, resolve_params
-from nansense.experiments import EXPERIMENT_PARAMS
+from nansense.experiments import BUILTIN_EXPERIMENTS
 from tests.nansense.helpers import make_session
 
 
-@pytest.mark.parametrize("kind", list(EXPERIMENT_PARAMS))
+@pytest.mark.parametrize("kind", list(BUILTIN_EXPERIMENTS))
 def test_form_schema_matches_the_typed_request(kind: str) -> None:
     params = parse_params(kind, {})
     assert params.kind == kind
     assert {f.name for f in fields(params)} - {"mean", "std"} == {
-        spec.key for spec in EXPERIMENT_PARAMS[kind]
+        spec.key for spec in BUILTIN_EXPERIMENTS[kind].params
     }
-    for spec in EXPERIMENT_PARAMS[kind]:
+    for spec in BUILTIN_EXPERIMENTS[kind].params:
         assert getattr(params, spec.key) == spec.default
 
 

@@ -18,12 +18,11 @@ import nansense
 import nansense.recording
 from nansense import experiments
 from nansense.experiments import (
-    EXPERIMENT_KINDS,
+    BUILTIN_EXPERIMENTS,
     ExperimentQueueState,
     ExperimentResult,
     _value_bounds,
     _zoom_in,
-    available_experiment_kinds,
 )
 from nansense.recording import RecordingManager
 from nansense.session import Session
@@ -457,7 +456,7 @@ def test_deep_dream_step_zero_reports_the_objective_it_starts_from() -> None:
 
 
 def test_all_steps_is_a_declared_deep_dream_knob() -> None:
-    specs = {s.key: s for s in experiments.EXPERIMENT_PARAMS["deep_dream"]}
+    specs = {s.key: s for s in BUILTIN_EXPERIMENTS["deep_dream"].params}
     assert specs["all_steps"].kind == "bool"
     assert specs["all_steps"].default is False
 
@@ -887,29 +886,28 @@ def test_zoom_in_keeps_shape(size: int, zoom: float, changes: bool) -> None:
     assert torch.equal(zoomed, x) != changes
 
 
-def test_available_kinds_offers_everything() -> None:
-    assert available_experiment_kinds() == EXPERIMENT_KINDS
+def test_session_offers_every_builtin_kind() -> None:
+    session = nansense.start(nn.Linear(2, 2), epochs=1, phases={"train": 1})
+    assert list(session.experiment_specs) == list(BUILTIN_EXPERIMENTS)
+    with pytest.raises(ValueError, match="unknown experiment kind"):
+        session.experiment_spec("nope")
 
 
 def test_experiment_params_cover_every_kind() -> None:
-    from nansense.experiments import EXPERIMENT_KINDS, EXPERIMENT_PARAMS
-
-    assert set(EXPERIMENT_PARAMS) == set(EXPERIMENT_KINDS)
-    for kind, specs in EXPERIMENT_PARAMS.items():
-        assert specs, kind  # every experiment exposes at least one knob
-        for spec in specs:
-            assert spec.kind in ("int", "float", "bool", "select"), spec.key
-            if spec.kind == "select":
-                assert spec.options and spec.default in spec.options, spec.key
-            if spec.kind in ("int", "float"):
-                assert isinstance(spec.default, (int, float)), spec.key
+    for kind, spec in BUILTIN_EXPERIMENTS.items():
+        assert spec.params, kind  # every experiment exposes at least one knob
+        assert spec.summary and spec.description, kind
+        for param in spec.params:
+            assert param.kind in ("int", "float", "bool", "select"), param.key
+            if param.kind == "select":
+                assert param.options and param.default in param.options, param.key
+            if param.kind in ("int", "float"):
+                assert isinstance(param.default, (int, float)), param.key
 
 
 def test_experiment_param_order_targeting_then_inputs() -> None:
-    from nansense.experiments import EXPERIMENT_PARAMS
-
-    for kind, specs in EXPERIMENT_PARAMS.items():
-        keys = [s.key for s in specs]
+    for kind, spec in BUILTIN_EXPERIMENTS.items():
+        keys = [p.key for p in spec.params]
         if kind == "deep_dream":
             # Channels first; Start from with Sample directly below it (Sample's
             # visibility follows Start). Minimize sits directly above Clamp.
@@ -924,33 +922,26 @@ def test_experiment_param_order_targeting_then_inputs() -> None:
 
 
 def test_deep_dream_exposes_minimize_toggle() -> None:
-    from nansense.experiments import EXPERIMENT_PARAMS
-
-    specs = {s.key: s for s in EXPERIMENT_PARAMS["deep_dream"]}
+    specs = {s.key: s for s in BUILTIN_EXPERIMENTS["deep_dream"].params}
     assert "minimize" in specs
     minimize = specs["minimize"]
     assert minimize.kind == "bool" and minimize.default is False
 
 
-def testdefault_param_values_apply_session_overrides() -> None:
-    from nansense.experiments import EXPERIMENT_PARAMS, default_param_values
+def test_default_param_values_apply_session_overrides() -> None:
+    from nansense.experiments import default_param_values
 
-    plain = default_param_values({})
+    specs = BUILTIN_EXPERIMENTS.values()
+    plain = default_param_values(specs, {})
     assert plain["steps"] == 300 and plain["channels"] == 8
-    seeded = default_param_values({"steps": 150, "channels": 4})
+    seeded = default_param_values(specs, {"steps": 150, "channels": 4})
     assert seeded["steps"] == 150 and seeded["channels"] == 4
     # Everything not overridden keeps its built-in default, and every knob
     # of every kind gets a value.
     assert seeded["lr"] == plain["lr"]
-    every_key = {s.key for specs in EXPERIMENT_PARAMS.values() for s in specs}
+    every_key = {p.key for spec in specs for p in spec.params}
     assert set(seeded) == every_key
 
 
-def test_experiment_descriptions_cover_every_kind() -> None:
-    from nansense.experiments import EXPERIMENT_DESCRIPTIONS, EXPERIMENT_KINDS
-
-    assert set(EXPERIMENT_DESCRIPTIONS) == set(EXPERIMENT_KINDS)
-    for short, long in EXPERIMENT_DESCRIPTIONS.values():
-        assert short and long  # both a tooltip and a pane description
-    # Neuron Gradient calls out its grainy maps (point 4).
-    assert "grain" in EXPERIMENT_DESCRIPTIONS["neuron_gradient"][1].lower()
+def test_neuron_gradient_description_calls_out_grainy_maps() -> None:
+    assert "grain" in BUILTIN_EXPERIMENTS["neuron_gradient"].description.lower()

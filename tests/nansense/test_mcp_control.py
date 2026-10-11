@@ -431,18 +431,13 @@ def test_an_unknown_layer_is_refused_before_the_request_is_armed() -> None:
 
 
 def test_an_unknown_experiment_kind_never_reaches_the_session() -> None:
-    """`kind` is an enum in the tool schema, so the SDK rejects a bad one before
-    the handler runs — the agent gets the valid values back with the error."""
-
-    async def go() -> Any:
-        async with Client(build_server(session)) as client:
-            return await client.call_tool(
-                "run_experiment", {"kind": "nope", "layer": "conv"}
-            )
-
+    """The kinds are the session's own registry, so the handler refuses a bad
+    one before queuing anything — and names the valid ones."""
     with paused_session(TinyClassifier(), _image_step) as session:
-        result = _run(go())
-        assert result.is_error, result.content
+        view = _call(session, "run_experiment", {"kind": "nope", "layer": "conv"})
+        assert "Unknown experiment kind" in view["error"]
+        assert "deep_dream" in view["known_kinds"]
+        assert not session.experiment_pending
 
 
 def test_an_experiment_result_that_was_never_published_says_so() -> None:

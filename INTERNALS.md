@@ -933,8 +933,17 @@ critical section, so cancellation cannot lose a request between those steps. Res
 (`experiment_result`), so concurrent tabs each poll their own run without
 overwriting each other.
 
+**Kind registry.** Every kind is an `ExperimentSpec` (name, label, summary,
+description, its `ExperimentParam` knobs, a `runner`, a `parse` validator and
+`needs_module`). `BUILTIN_EXPERIMENTS` holds the five built-ins; each
+`ExperimentManager` copies it into its own registry, which
+`Session.experiment_specs` / `experiment_spec(kind)` expose. `experiments.run`
+dispatches through the spec's runner, and the page's dropdown and form, the
+MCP catalog and `run_experiment`'s validation all read the same registry — so
+the tool schemas take `kind` as a plain string rather than a closed enum.
+
 `contracts/experiments.py` defines immutable parameter variants for each
-experiment. Session validates public dictionary inputs before changing queue
+built-in experiment. Session validates public dictionary inputs before changing queue
 or registration state; runners consume typed fields. UI and MCP defaults
 share the same resolution function and typed defaults. Invalid values raise
 `ValueError` at the Python boundary and become visible errors in UI/MCP.
@@ -1007,7 +1016,7 @@ knob publishes every step instead, which is what a recorded run needs to
 replay the ascent frame by frame instead of in twenty jumps.
 
 **Recorded runs.** `ExperimentRequest.video` (a field, not an
-`EXPERIMENT_PARAMS` knob: it changes how progress is *delivered*, not what
+`ExperimentParam` knob: it changes how progress is *delivered*, not what
 the run computes) has `run_experiment_guarded` draw every published result
 into a `recording.ExperimentClip` as it arrives, and attach the finished
 file's path to the run's *final* `ExperimentResult` — so a poller learns
@@ -1026,8 +1035,8 @@ unbounded work a shared demo caps.
 
 **Captum** (`_run_captum`) runs the *unpatched* model inside the isolation
 scope (experiments only execute between batches). captum is a standard
-dependency, so `captum.attr` is imported at module load and
-`available_experiment_kinds()` always offers all four attribution methods.
+dependency, so `captum.attr` is imported at module load and all four
+attribution methods are always registered.
 Like deep dream, the Captum methods run on a *batch* (`_captum_input`: the
 first `batch` samples of the live input) and publish one attribution per
 sample. Grad-CAM and the neuron methods need the layer's `nn.Module`; fx
@@ -1049,7 +1058,7 @@ carry a `disable` flag (`_patched_update_options` reassigns
 graying out layers the current kind can't run; switching to a shorter layer
 clips the channel selectors (deep dream's Channels count to the channel
 count, Captum's Channel index to one less). The rest of each kind's knobs are
-declared in `experiments.EXPERIMENT_PARAMS` (`ExperimentParam` specs rendered as
+declared on its `ExperimentSpec.params` (`ExperimentParam` specs rendered as
 number/switch/select widgets) ordered, for deep dream, Channels → Start from →
 Sample → method knobs (Publish every step follows Steps, the cadence belonging
 with the count; Minimize sits just above Clamp; Sample shows only for the
