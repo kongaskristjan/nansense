@@ -315,7 +315,7 @@ def test_probe_status_of_an_idle_session_points_at_the_way_in() -> None:
     with paused_session(TinyNet()) as session:
         view = probe_view(session)
         assert view["active"] is False
-        assert "pin_batch()" in view["hint"]
+        assert "`pin_batch`" in view["hint"]
 
 
 # --- experiments ------------------------------------------------------

@@ -352,14 +352,14 @@ def test_rendering_before_the_first_capture_explains_itself() -> None:
     session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
     rendered = layer_image(session, layers=["fc1"], display=_DISPLAY)
     assert rendered.png is None
-    assert "pause()" in rendered.note and "refresh()" in rendered.note
+    assert "`pause`" in rendered.note and "`refresh`" in rendered.note
 
 
 @pytest.mark.parametrize(
     ("watched", "scope", "expected"),
     [
-        (False, "watched", "watch_layers(['fc1'])"),
-        (True, "none", "set_stats_scope('watched')"),
+        (False, "watched", "watch_layers --layers fc1"),
+        (True, "none", "set_stats_scope --scope watched"),
         (True, "watched", "step or run"),
     ],
 )

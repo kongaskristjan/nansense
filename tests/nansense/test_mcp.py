@@ -322,8 +322,8 @@ def test_layer_stats_carry_the_channel_through_to_both_streams() -> None:
 @pytest.mark.parametrize(
     ("watched", "scope", "expected"),
     [
-        (False, "watched", "watch_layers(['fc1'])"),
-        (True, "none", "set_stats_scope('watched')"),
+        (False, "watched", "watch_layers --layers fc1"),
+        (True, "none", "set_stats_scope --scope watched"),
         (True, "watched", "step or run"),
     ],
 )

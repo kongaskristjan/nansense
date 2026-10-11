@@ -172,7 +172,7 @@ Statistics come from two places. `get_layer_stats` reads the last captured
 batch and works for any layer. `get_stats_history` reads the running
 accumulators for the epoch-by-epoch trend, which only cover layers that are
 being watched *while collection is on* — collection is off by default, so
-call `watch_layers` and `set_stats_scope("watched")` first.
+call `watch_layers --layers <layer>` and `set_stats_scope --scope watched` first.
 
 The `render_*` tools return the same views as pictures — the strips, weight
 maps, histograms and patch grids the browser draws. Statistics tell you how
@@ -996,7 +996,7 @@ def build_server(
                     "Which grids to draw — the `*_pixel` pair ranks samples by "
                     "a single activation, the `*_average` pair by the "
                     "channel's mean and needs "
-                    "set_watch_performance(average_patches=True); omit for all "
+                    "`set_watch_performance --average_patches`; omit for all "
                     "four."
                 )
             ),
@@ -1017,7 +1017,7 @@ def build_server(
         one that shows a channel responding to nothing at all. Needs a watched
         layer and an image-like input. `heatmap` blends the channel's activation
         map over each patch; the `*_average` grids need
-        `set_watch_performance(average_patches=True)`.
+        `set_watch_performance --average_patches`.
         """
         return image_reply(
             await asyncio.to_thread(
@@ -1057,7 +1057,7 @@ def build_server(
             pydantic.Field(
                 description=(
                     "A histogram value from "
-                    "get_layer_stats(include_histogram=True) or "
+                    "`get_layer_stats --layers <layer> --include_histogram` or "
                     "render_histogram; it is snapped to the bin it came from."
                 )
             ),
@@ -1088,7 +1088,8 @@ def build_server(
         in the overflow bin" to "these three inputs cause it".
 
         Pass a value straight from the `histogram` pairs of
-        `get_layer_stats(include_histogram=True)` (or `render_histogram`); it
+        `get_layer_stats --layers <layer> --include_histogram` (or
+        `render_histogram`); it
         is snapped to the bin it came from. Sampled from the last captured
         batch only — the one whose activations and input still exist — while
         the bar itself may count a whole epoch.
@@ -1387,7 +1388,7 @@ def build_server(
 
         Needed only for `get_stats_history`; `get_layer_stats` reads any layer
         without watching. Collection is off by default — turn it on with
-        `set_stats_scope("watched")` (or "all") or nothing accumulates.
+        `set_stats_scope --scope watched` (or `all`) or nothing accumulates.
         Collecting makes every batch pay capture cost, so watch the layers you
         are investigating rather than all of them.
         """
@@ -2092,7 +2093,7 @@ def build_server(
                 description=(
                     "How long to wait for the run to finish before returning "
                     "its progress so far; the run continues, and "
-                    "get_experiment_result(seq) has the outcome."
+                    "`get_experiment_result --seq <seq>` has the outcome."
                 )
             ),
         ] = 120.0,
@@ -2490,7 +2491,7 @@ async def _probe_result(
     if expected and session.is_running:
         view["waiting"] = (
             "Training is advancing, so the probe will run at the next capture "
-            "rather than now. Call pause() to run it immediately."
+            "rather than now. Call `pause` to run it immediately."
         )
     return view
 
@@ -2629,10 +2630,11 @@ async def _run_experiment(
     if not finished:
         view["waiting"] = (
             "Training was still running, so the experiment is queued until the "
-            "next pause. Call pause(), then get_experiment_result."
+            f"next pause. Call `pause`, then `get_experiment_result --seq {seq}`."
             if running
-            else "Did not finish within the timeout. Poll get_experiment_result "
-            f"with seq {seq}, or cancel_experiment({seq})."
+            else "Did not finish within the timeout. Poll "
+            f"`get_experiment_result --seq {seq}`, or "
+            f"`cancel_experiment --seq {seq}`."
         )
     return view
 

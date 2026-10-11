@@ -122,8 +122,8 @@ def _no_snapshot() -> RenderedImage:
     return RenderedImage(
         None,
         "No batch has been captured yet, so there is nothing to draw. A session "
-        "pauses on its first batch; if training is running free, call pause() "
-        "or refresh() first.",
+        "pauses on its first batch; if training is running free, call `pause` "
+        "or `refresh` first.",
     )
 
 
@@ -651,7 +651,7 @@ def patches_image(
         return RenderedImage(
             None,
             f"No running statistics for {layer!r}. The patch grids come from the "
-            f"watch accumulators: call watch_layers(['{layer}']) and let training "
+            f"watch accumulators: call `watch_layers --layers {layer}` and let training "
             "advance at least one batch.",
         )
     chosen = phase if phase is not None else (default_phase(session, [layer]) or "")
@@ -676,7 +676,7 @@ def patches_image(
             None,
             f"No patch grids for {layer!r} in phase {chosen!r}. Grids need an "
             "image-like input to crop from, and the average grids also need "
-            "set_watch_performance(average_patches=True). Phases with data: "
+            "`set_watch_performance --average_patches`. Phases with data: "
             f"{available}.",
         )
     note = (
@@ -843,7 +843,7 @@ def experiment_image(
             return RenderedImage(
                 None,
                 note + f" This result is a {result.payload}, not a picture; "
-                "get_experiment_result(seq) returns it.",
+                f"`get_experiment_result --seq {result.seq}` returns it.",
             )
         return RenderedImage(None, note + " Nothing renderable in this result.")
     return RenderedImage(png, note + caveat)

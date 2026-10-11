@@ -139,8 +139,8 @@ def _state_hint(session: Session) -> str | None:
     if session.is_running:
         return (
             "Training is advancing, so the statistics below describe the last "
-            "captured batch, not the live one. Call pause() to stop on the next "
-            "batch, or refresh() to publish a fresh snapshot without pausing."
+            "captured batch, not the live one. Call `pause` to stop on the next "
+            "batch, or `refresh` to publish a fresh snapshot without pausing."
         )
     return None
 
@@ -420,7 +420,7 @@ def layer_stats_view(
             "error": "No batch has been captured yet.",
             "hint": (
                 "A session pauses on its first batch; if training is running "
-                "free, call pause() or refresh() first."
+                "free, call `pause` or `refresh` first."
             ),
         }
     known = set(session.layer_names)
@@ -668,10 +668,11 @@ def stats_gap_hint(session: Session, layers: Iterable[str]) -> str:
     if session.stats_scope is not StatsScope.ALL:
         unwatched = [name for name in names if name not in session.watched_layers]
         if unwatched:
-            fixes.append(f"call watch_layers({unwatched!r})")
+            fixes.append(f"call `watch_layers --layers {' '.join(unwatched)}`")
     if not session.stats_collecting:
         fixes.append(
-            "turn collection on with set_stats_scope('watched') (it is 'none', "
+            "turn collection on with `set_stats_scope --scope watched` (it is "
+            "'none', "
             "which collects nothing; 'all' covers every layer)"
         )
     if not fixes:
@@ -921,7 +922,7 @@ def weight_stats_view(
             "error": "No batch has been captured yet.",
             "hint": (
                 "A session pauses on its first batch; if training is running "
-                "free, call pause() or refresh() first."
+                "free, call `pause` or `refresh` first."
             ),
         }
     available = session.layer_weights.get(layer, [])
@@ -1088,14 +1089,14 @@ def probe_view(session: Session) -> dict[str, Any]:
             if session.probe_error is not None
             else (
                 "Probing is set up but has produced no result yet — probes run "
-                "on the training thread, so pause() or step() to get one."
+                "on the training thread, so `pause` or `step` to get one."
                 if session.is_pinned
                 or perturbations
                 or session.probe_mode != "unchanged"
                 else (
-                    "No probe is running. pin_batch() holds the current input "
+                    "No probe is running. `pin_batch` holds the current input "
                     "and re-runs the model on it at every capture; "
-                    "set_probe_mode('eval') activates one without pinning."
+                    "`set_probe_mode --mode eval` activates one without pinning."
                 )
             )
         )
@@ -1251,7 +1252,7 @@ def experiment_result_view(
     if result.note:
         view["note"] = result.note
     if result.image is not None or result.attribution is not None:
-        view["hint"] = "render_experiment(seq) draws this result."
+        view["hint"] = f"`render_experiment --seq {result.seq}` draws this result."
     if result.video is not None:
         # Imported here, not at module scope: `nansense.recording` pulls in the
         # video encoder for a constant this view only sometimes needs.
@@ -1450,7 +1451,7 @@ def debug_view(session: Session) -> dict[str, Any]:
         if not settings.any_check():
             view["hint"] = (
                 "No checks are running — enable them with "
-                "set_debug_settings(enabled=True)."
+                "`configure_debug_checks --enabled`."
             )
         return view
     columns = debugger.columns(error)
