@@ -367,6 +367,41 @@ def test_running_a_deep_dream_returns_its_result() -> None:
         assert "video" not in view
 
 
+def test_a_table_result_travels_as_json_and_says_it_is_no_picture() -> None:
+    from nansense.experiments import ExperimentResult, Table
+
+    session = nansense.start(TinyNet(), epochs=1, phases={"train": 1})
+    session._experiments._publish_experiment(
+        ExperimentResult(
+            seq=7,
+            kind="ablate",
+            layer="fc1",
+            step=1,
+            total_steps=1,
+            done=True,
+            table=Table(("channel", "drop"), ((0, 0.25), (1, float("nan")))),
+            scalars={"baseline": 0.5},
+            note="zeroed one channel at a time",
+        )
+    )
+    view = _call(session, "get_experiment_result", {"seq": 7})
+    assert view["produced"] == "table"
+    assert view["table"]["rows"] == [
+        {"channel": 0, "drop": 0.25},
+        {"channel": 1, "drop": "nan"},
+    ]
+    assert view["scalars"] == {"baseline": 0.5}
+    assert view["note"] == "zeroed one channel at a time"
+
+    async def render() -> Any:
+        async with Client(build_server(session)) as client:
+            return await client.call_tool("render_experiment", {"seq": 7})
+
+    content = _run(render()).content
+    assert len(content) == 1 and isinstance(content[0], TextContent)
+    assert "get_experiment_result" in content[0].text
+
+
 def test_a_recorded_deep_dream_returns_the_video_of_its_ascent(
     tmp_path: Path,
 ) -> None:

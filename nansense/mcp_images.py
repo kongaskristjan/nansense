@@ -648,6 +648,12 @@ def experiment_image(
     if result.error is not None:
         note += f" Error: {result.error}"
     if png is None:
+        if result.payload in ("table", "scalars", "note"):
+            return RenderedImage(
+                None,
+                note + f" This result is a {result.payload}, not a picture; "
+                "get_experiment_result(seq) returns it.",
+            )
         return RenderedImage(None, note + " Nothing renderable in this result.")
     return RenderedImage(png, note + caveat)
 

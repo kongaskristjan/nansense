@@ -48,8 +48,8 @@ from __future__ import annotations
 import threading
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -368,16 +368,41 @@ class ExperimentRequest:
         return self.params.kind
 
 
+TableCell = float | int | str
+
+
+@dataclass(frozen=True)
+class Table:
+    """A table of numbers or text an experiment returns: `columns` headers and
+    `rows` of cells, one cell per column. Any sequences work; they are stored
+    as tuples."""
+
+    columns: Sequence[str]
+    rows: Sequence[Sequence[TableCell]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "columns", tuple(str(c) for c in self.columns))
+        object.__setattr__(self, "rows", tuple(tuple(row) for row in self.rows))
+        for row in self.rows:
+            if len(row) != len(self.columns):
+                raise ValueError(
+                    f"table row {row!r} has {len(row)} cells for "
+                    f"{len(self.columns)} columns"
+                )
+
+
 @dataclass(frozen=True)
 class ExperimentResult:
     """A progress snapshot or final outcome, fully resident on CPU.
 
     `done=False` results stream progress (deep dream publishes its evolving
     image); the final yield has `done=True` — also when aborted early, in
-    which case `step < total_steps`. Exactly one of `image` (input-space,
-    shown denormalized) or `attribution` (signed, shown with the diverging
-    colormap) is set on success; `reference` carries the input batch the
-    experiment started from.
+    which case `step < total_steps`. A successful result carries at least one
+    payload: `image` (input-space, shown denormalized), `attribution` (signed,
+    shown with the diverging colormap), a `table`, headline `scalars`, or a
+    free-text `note`; `reference` carries the input batch the experiment
+    started from. The built-in kinds set exactly one of `image` or
+    `attribution`.
 
     `video` is set on the final result of a run that asked for one
     (`ExperimentRequest.video`): the MP4 of every progress snapshot above,
@@ -397,6 +422,22 @@ class ExperimentResult:
     reference: Tensor | None = None
     objective: float | None = None
     video: str | None = None
+    table: Table | None = None
+    scalars: Mapping[str, float] = field(default_factory=dict)
+    note: str | None = None
+
+    @property
+    def payload(self) -> str | None:
+        """The main thing this result shows, for status lines and the MCP view."""
+        if self.image is not None:
+            return "image"
+        if self.attribution is not None:
+            return "attribution"
+        if self.table is not None:
+            return "table"
+        if self.scalars:
+            return "scalars"
+        return "note" if self.note else None
 
 
 @dataclass(frozen=True)

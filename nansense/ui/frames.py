@@ -472,6 +472,7 @@ def experiment_result_frame(
     # overlay purple, a deep-dream channel image neutral
     # (`theme.CAPTION_COLORS`).
     sections: list[_Section] = [Section(status, None)]
+    sections += [Section(line, None) for line in _text_payload_lines(result)]
     if result.image is not None:
         sections.append(
             Section(
@@ -505,6 +506,31 @@ def experiment_result_frame(
             )
         )
     return stack_sections(sections, require_image=require_image)
+
+
+# Rows of a result table a frame lists as text; the page shows the whole table.
+_FRAME_TABLE_ROWS = 10
+
+
+def _text_payload_lines(result: ExperimentResult) -> list[str]:
+    """A result's scalars, note and leading table rows, one text line each."""
+    lines: list[str] = []
+    if result.scalars:
+        lines.append(
+            " · ".join(f"{key} {value:.4g}" for key, value in result.scalars.items())
+        )
+    if result.note:
+        lines.append(result.note)
+    if result.table is not None:
+        lines.append(" | ".join(result.table.columns))
+        for row in result.table.rows[:_FRAME_TABLE_ROWS]:
+            lines.append(
+                " | ".join(f"{c:.4g}" if isinstance(c, float) else str(c) for c in row)
+            )
+        hidden = len(result.table.rows) - _FRAME_TABLE_ROWS
+        if hidden > 0:
+            lines.append(f"… {hidden} more rows")
+    return lines
 
 
 def _overlay_section(

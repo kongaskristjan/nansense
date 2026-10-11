@@ -945,3 +945,11 @@ def test_default_param_values_apply_session_overrides() -> None:
 
 def test_neuron_gradient_description_calls_out_grainy_maps() -> None:
     assert "grain" in BUILTIN_EXPERIMENTS["neuron_gradient"].description.lower()
+
+
+def test_a_table_row_must_fill_every_column() -> None:
+    from nansense.experiments import Table
+
+    assert Table(["a", "b"], [[1, "x"]]).rows == ((1, "x"),)
+    with pytest.raises(ValueError, match="2 columns"):
+        Table(("a", "b"), ((1,),))

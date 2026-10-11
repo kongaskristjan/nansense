@@ -946,6 +946,14 @@ dispatches through the spec's runner, and the page's dropdown and form, the
 MCP catalog and `run_experiment`'s validation all read the same registry — so
 the tool schemas take `kind` as a plain string rather than a closed enum.
 
+**Result payloads.** An `ExperimentResult` carries an `image`, an
+`attribution`, a `Table`, headline `scalars` or a `note` (`payload` names the
+main one). The page renders tables as a sortable `ui.table` and scalars as a
+stat row; `get_experiment_result` returns them as JSON (tables cut to 200
+rows), `render_experiment` points a picture-less result there, and composed
+frames (snapshots, recordings) list the scalars, note and first table rows as
+text lines.
+
 `contracts/experiments.py` defines immutable parameter variants for each
 built-in experiment. Session validates public dictionary inputs before changing queue
 or registration state; runners consume typed fields. UI and MCP defaults

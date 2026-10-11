@@ -929,6 +929,27 @@ def experiment_catalog_view(session: Session) -> dict[str, Any]:
     }
 
 
+# Rows of a result table returned inline; a longer table is cut, and says so.
+_TABLE_ROWS_SHOWN = 200
+
+
+def _table_view(table: experiments.Table) -> dict[str, Any]:
+    rows = [
+        {
+            column: _num(cell) if isinstance(cell, float) else cell
+            for column, cell in zip(table.columns, row, strict=True)
+        }
+        for row in table.rows[:_TABLE_ROWS_SHOWN]
+    ]
+    view: dict[str, Any] = {"columns": list(table.columns), "rows": rows}
+    if len(table.rows) > _TABLE_ROWS_SHOWN:
+        view["truncated"] = (
+            f"First {_TABLE_ROWS_SHOWN} of {len(table.rows)} rows; the page "
+            "shows them all."
+        )
+    return view
+
+
 def experiment_result_view(
     session: Session, *, seq: int
 ) -> dict[str, Any]:
@@ -965,13 +986,7 @@ def experiment_result_view(
         "step": result.step,
         "total_steps": result.total_steps,
         "done": result.done,
-        "produced": (
-            "image"
-            if result.image is not None
-            else "attribution"
-            if result.attribution is not None
-            else None
-        ),
+        "produced": result.payload,
     }
     if result.objective is not None:
         view["objective"] = _num(result.objective)
@@ -986,7 +1001,14 @@ def experiment_result_view(
         view["attribution"] = _tensor_summary(result.attribution)
     if result.image is not None:
         view["image"] = _tensor_summary(result.image)
-    view["hint"] = "render_experiment(seq) draws this result."
+    if result.scalars:
+        view["scalars"] = {key: _num(value) for key, value in result.scalars.items()}
+    if result.table is not None:
+        view["table"] = _table_view(result.table)
+    if result.note:
+        view["note"] = result.note
+    if result.image is not None or result.attribution is not None:
+        view["hint"] = "render_experiment(seq) draws this result."
     if result.video is not None:
         # Imported here, not at module scope: `nansense.recording` pulls in the
         # video encoder for a constant this view only sometimes needs.

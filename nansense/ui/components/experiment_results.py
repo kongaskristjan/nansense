@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from nicegui import ui
 from torch import Tensor
 
-from nansense.experiments import ExperimentResult
+from nansense.experiments import ExperimentResult, Table
 from nansense.ui.common import _b64_img_src, _label_bar_html, _strip_html
 from nansense.ui.render import (
     INPUT_IMAGE_SIZE,
@@ -81,10 +81,36 @@ class ExperimentResults:
         self.overlay = overlay
         self.container.clear()
         with self.container:
+            if result.scalars:
+                self._render_scalars(result.scalars)
+            if result.note:
+                ui.label(result.note).classes(
+                    "text-sm text-slate-700 whitespace-pre-wrap"
+                )
+            if result.table is not None:
+                self._render_table(result.table)
             if result.image is not None:
                 self._render_image_row(result.reference, result.image)
             elif result.attribution is not None:
                 self._render_attribution_cards(result)
+
+    def _render_scalars(self, scalars: Mapping[str, float]) -> None:
+        with ui.row().classes("gap-3 w-full"):
+            for key, value in scalars.items():
+                with ui.card().classes("px-3 py-2 gap-0"):
+                    ui.label(key).classes("text-xs text-slate-500")
+                    ui.label(f"{value:.4g}").classes("font-mono text-lg font-bold")
+
+    def _render_table(self, table: Table) -> None:
+        keys = [f"c{i}" for i in range(len(table.columns))]
+        ui.table(
+            columns=[
+                {"name": key, "label": column, "field": key, "sortable": True}
+                for key, column in zip(keys, table.columns, strict=True)
+            ],
+            rows=[dict(zip(keys, row, strict=True)) for row in table.rows],
+            pagination=25,
+        ).props("dense flat bordered").classes("w-full")
 
     def _render_image_row(self, reference: Tensor | None, image: Tensor) -> None:
         # One card, one horizontal row: the shared input (current-batch start
