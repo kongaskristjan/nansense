@@ -180,7 +180,8 @@ def test_rescaled_schedule_under_lightning(tmp_path: Path) -> None:
 def test_disabled_callback_is_inert(tmp_path: Path) -> None:
     seed_everything(0)
     module = BoringModule()
-    callback = NansenseCallback(enabled=False)
+    seen: list[Session] = []
+    callback = NansenseCallback(enabled=False, on_session=seen.append)
     trainer = _make_trainer(tmp_path, max_epochs=1, callbacks=[callback])
     # Runs straight through: no pause, no captures, nothing to drive.
     trainer.fit(module, train_dataloaders=_loader(shuffle=False))
@@ -188,6 +189,7 @@ def test_disabled_callback_is_inert(tmp_path: Path) -> None:
     assert session is not None
     assert not session.enabled
     assert session.snapshot is None
+    assert seen == [session]  # the registration hook ran once, with it
 
     with pytest.raises(RuntimeError, match="fresh NansenseCallback"):
         fit_with_time_travel(

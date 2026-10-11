@@ -81,6 +81,11 @@ class NansenseCallback(Callback):
     `input_std` / `input_transform` mean the same as on `nansense.start`;
     the UI comes up once `fit` begins.
 
+    `on_session(session)` runs once, right after the session is created —
+    the place to register instruments (`session.watch_metric`, …), custom
+    experiments (`session.experiment`) and tools (`session.tool`), which need
+    the session and so cannot be registered before `fit`.
+
     Supported out of the box: automatic optimization, epoch-boundary
     validation (including `check_val_every_n_epoch > 1`), sanity-check
     skipping, and `enabled=False` as the zero-overhead off switch. Mid-epoch
@@ -100,8 +105,10 @@ class NansenseCallback(Callback):
         input_std: MeanStd | dict[str, MeanStd] | None = None,
         input_transform: InputTransform | dict[str, InputTransform] | None = None,
         enabled: bool = True,
+        on_session: Callable[[Session], None] | None = None,
     ) -> None:
         self._port = port
+        self._on_session = on_session
         self._host = host
         self._open_browser = open_browser
         self._model_attr = model
@@ -158,6 +165,8 @@ class NansenseCallback(Callback):
         )
         if self._restorer is not None:
             self._session.attach_restorer(self._restorer)
+        if self._on_session is not None:
+            self._on_session(self._session)
         self._save_epoch_zero(trainer)
 
     def _save_epoch_zero(self, trainer: Trainer) -> None:

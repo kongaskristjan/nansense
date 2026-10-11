@@ -1509,7 +1509,8 @@ clear `.grad`. Sanity-check val batches are skipped
 (`trainer.sanity_checking`); `on_exception` closes an open context without
 publishing. The session is created once in `on_fit_start` (optimizers are
 configured by then; a time-travel re-fit reuses it) with a placeholder
-schedule; the real per-phase batch counts are re-declared at every
+schedule, and handed once to the `on_session` hook — where Lightning users
+register instruments, custom experiments and tools; the real per-phase batch counts are re-declared at every
 `on_train_epoch_start` (and `on_validation_epoch_start`, for counts that
 were unknown at epoch start) via `set_schedule` — per-epoch re-declaration
 is also what models `check_val_every_n_epoch > 1` runs, where epochs

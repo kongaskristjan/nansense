@@ -79,7 +79,7 @@ trainer_factory = lambda: L.Trainer(max_epochs=50)
 fit_with_time_travel(trainer_factory, module, datamodule=datamodule, callback=callback)
 ```
 
-Attach a [`NansenseCallback(model="<attr path to the network>", ...)`](api.md#nansense.lightning.NansenseCallback) to your trainer and run the fit through [`fit_with_time_travel`](api.md#nansense.lightning.fit_with_time_travel), which owns the jump-and-replay loop. The callback accepts the same `port` / `host` / `open_browser` / `enabled` / `input_mean` / `input_std` / `input_transform` arguments as `start`.
+Attach a [`NansenseCallback(model="<attr path to the network>", ...)`](api.md#nansense.lightning.NansenseCallback) to your trainer and run the fit through [`fit_with_time_travel`](api.md#nansense.lightning.fit_with_time_travel), which owns the jump-and-replay loop. The callback accepts the same `port` / `host` / `open_browser` / `enabled` / `input_mean` / `input_std` / `input_transform` arguments as `start`. The session only exists once `fit` starts, so register [instruments](instruments.md), [custom experiments and tools](extensions.md) in `on_session`, which the callback calls once with the new session: `NansenseCallback(..., on_session=register)`.
 
 ## Displaying inputs correctly
 

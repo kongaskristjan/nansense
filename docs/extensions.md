@@ -94,6 +94,7 @@ To stream progress, write a generator that yields several outputs. Each output p
 - **Run errors become results.** An exception in the function publishes an error result with its type, message and traceback file and line. It does not stop training or unregister the experiment. Registration and invalid requests still raise errors.
 - **Registration adds no per-batch callbacks.** Your code only runs when an experiment is requested, manually or through **Live**.
 - `layers="modules"` limits the experiment to layers backed by an `nn.Module`, such as `conv1`. Other layers, such as a functional `relu`, cannot run it.
+- **PyTorch Lightning.** Register in `NansenseCallback(on_session=...)`, which runs once the session exists.
 - **Locked sessions.** A locked session (a shared demo) hides custom experiments unless they are registered with `locked_limits`, e.g. `{"top": 32}`. Those caps clamp numeric knobs there; `{}` offers the experiment uncapped. Register before `session.lock()`.
 - **Distributed runs.** Under DDP the experiment runs on the leader rank only, against its own shard of the batch.
 
