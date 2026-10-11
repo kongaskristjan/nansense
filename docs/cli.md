@@ -15,14 +15,18 @@ uv run --group cpu examples/standard/main.py --nansense-port 8080
 The startup banner prints the command an agent starts from:
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ NaNsense UI is running at:                                   │
-│ http://127.0.0.1:8080                                        │
-│                                                              │
-│ Debug this run from a coding agent:                          │
-│ nansense-cli --port 8080 tools                               │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ NaNsense UI is running at:                                           │
+│ http://127.0.0.1:8080                                                │
+│                                                                      │
+│ Debug this run from a coding agent:                                  │
+│ /home/you/project/.venv/bin/python -m nansense_cli --port 8080 tools │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+The banner uses the run's own Python when `nansense-cli` is not on `PATH` or is found only inside the run's virtual environment (as under `uv run`). That command works without activating the environment in the agent's shell. When `nansense-cli` is found on `PATH` outside that environment, the banner prints just `nansense-cli`. The examples below use the short name.
+
+The banner appears once the endpoint accepts connections. An agent that launched the run in the background can wait for the banner, or pass `--wait 60` to its first command to wait up to 60 seconds for the server to accept connections.
 
 If the agent started the run itself, it reads this line from the output. Otherwise, tell it which port to use: *"Debug my training run with `nansense-cli --port 8080`."* Nothing needs to be registered, so several agents can each debug their own run on its own port at the same time.
 

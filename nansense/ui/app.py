@@ -34,12 +34,15 @@ decoupled from the heavier strip rendering.
 from __future__ import annotations
 
 import logging
+import shlex
 import shutil
 import signal
+import sys
 import threading
 import time
 import warnings
 import webbrowser
+from pathlib import Path
 from types import FrameType
 from typing import NamedTuple, Protocol, TextIO
 
@@ -155,7 +158,25 @@ def _agent_command(host: str, port: int) -> str:
     """The `nansense-cli` call that starts an agent off on this run."""
     shown = _shown_host(host)
     flags = "" if shown == "127.0.0.1" else f" --host {shown}"
-    return f"nansense-cli{flags} --port {port} tools"
+    return f"{_cli_invocation()}{flags} --port {port} tools"
+
+
+def _cli_invocation() -> str:
+    """`nansense-cli`, spelled so that it works as printed from any shell.
+
+    The bare name is only on `PATH` here because the run's virtual environment
+    is (`uv run` puts its `bin/` first), and an agent's own shell usually has
+    no such environment active. So a script found only inside the running
+    environment is spelled through that environment's Python instead — which
+    also survives a relocated venv whose `bin/` shebangs are stale.
+    """
+    found = shutil.which("nansense-cli")
+    in_venv = sys.prefix != sys.base_prefix
+    if found is not None and not (
+        in_venv and Path(found).resolve().is_relative_to(Path(sys.prefix).resolve())
+    ):
+        return "nansense-cli"
+    return f"{shlex.quote(sys.executable)} -m nansense_cli"
 
 
 class _BoxChars(NamedTuple):

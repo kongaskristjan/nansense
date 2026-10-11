@@ -1730,6 +1730,14 @@ another session already holds the port, uvicorn's bind raises, it logs the
 flips — the announcer sees the dead thread (or times out), prints nothing and
 opens nothing. No banner promises a URL we don't own, and no tab races to a page
 served by the *other* session. `0.0.0.0`/`::` are shown (and opened) as loopback.
+Since `started` flips only after the app's lifespan (the MCP session manager
+included) has started, the banner doubles as the agent's readiness signal. Its
+agent command (`_cli_invocation`) is the bare `nansense-cli` only when that
+script is found on `PATH` outside the run's own virtual environment; if it
+is missing or found only in the venv (`uv run` prepends its `bin/`), it is spelled
+`<sys.executable> -m nansense_cli`, which works from an agent's shell and
+survives stale venv shebangs.
+
 
 **Main page.** One `_LayerView` card per layer, but a card is visible only
 while its layer is in the page's **shown** set. In the default `watched`
@@ -2104,7 +2112,8 @@ therefore always the MCP surface's own, and parity needs no maintenance. The
 server's `instructions` double as the `tools` guide. Image blocks are decoded
 to PNG files under `--out` and only their paths printed. A socket probe runs
 before connecting, since the SDK reports a refused connection as a nested
-exception group.
+exception group; `--wait SECONDS` repeats that probe for up to the given
+time while the server starts, useful for an agent that just launched the run.
 It lives outside `nansense` because importing that package pulls in torch and
 NiceGUI — about 2 s on every command, against 0.6 s for the MCP client alone —
 so it duplicates the `/mcp` path rather than import it (a test pins the two

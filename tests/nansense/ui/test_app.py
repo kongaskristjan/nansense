@@ -10,6 +10,7 @@ import sys
 import threading
 import warnings
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from types import FrameType
 
 import pytest
@@ -174,8 +175,40 @@ def test_format_box_never_shrinks_below_content() -> None:
         ("192.168.1.5", "nansense-cli --host 192.168.1.5 --port 8080 tools"),
     ],
 )
-def test_agent_command_addresses_the_run(host: str, command: str) -> None:
+def test_agent_command_addresses_the_run(
+    monkeypatch: pytest.MonkeyPatch, host: str, command: str
+) -> None:
+    monkeypatch.setattr(app, "_cli_invocation", lambda: "nansense-cli")
     assert _agent_command(host, 8080) == command
+
+
+@pytest.mark.parametrize(
+    ("script", "in_venv", "expected"),
+    [
+        ("/usr/local/bin/nansense-cli", False, "nansense-cli"),
+        ("/opt/tools/bin/nansense-cli", True, "nansense-cli"),
+        # Reachable only because the run's own environment is on PATH.
+        ("{prefix}/bin/nansense-cli", True, "{python} -m nansense_cli"),
+        (None, False, "{python} -m nansense_cli"),
+    ],
+)
+def test_cli_invocation_works_outside_the_runs_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    script: str | None,
+    in_venv: bool,
+    expected: str,
+) -> None:
+    prefix = tmp_path / "venv"
+    python = str(prefix / "bin" / "python")
+    monkeypatch.setattr(app.sys, "prefix", str(prefix))
+    monkeypatch.setattr(
+        app.sys, "base_prefix", "/usr" if in_venv else str(prefix)
+    )
+    monkeypatch.setattr(app.sys, "executable", python)
+    found = None if script is None else script.format(prefix=prefix)
+    monkeypatch.setattr(app.shutil, "which", lambda _name: found)
+    assert app._cli_invocation() == expected.format(python=python)
 
 
 @pytest.mark.parametrize("encoding, corner", [("utf-8", "┌"), ("cp1252", "+")])

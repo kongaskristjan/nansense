@@ -195,6 +195,19 @@ def test_nothing_serving_names_the_port_even_when_given_after_the_tool(
     assert f"nothing is serving on 127.0.0.1:{port}" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(("wait", "expected"), [(0.0, False), (60.0, True)])
+def test_wait_retries_until_the_run_serves(
+    monkeypatch: pytest.MonkeyPatch, wait: float, expected: bool
+) -> None:
+    """`--wait` covers the gap between launching a run and its banner."""
+    import nansense_cli
+
+    answers = iter([False, False, True])
+    monkeypatch.setattr(nansense_cli, "_serving", lambda _h, _p: next(answers))
+    monkeypatch.setattr(nansense_cli.time, "sleep", lambda _s: None)
+    assert nansense_cli._await_serving("127.0.0.1", 1, wait) is expected
+
+
 def test_importing_the_cli_skips_nansense_and_torch() -> None:
     """The point of living outside the package: seconds off every command."""
     code = (

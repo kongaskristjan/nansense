@@ -28,6 +28,7 @@ import inspect
 import json
 import socket
 import sys
+import time
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -50,10 +51,11 @@ _PROG = "nansense-cli"
 # `nansense.mcp_server.DEFAULT_MCP_PATH`, which this must not import.
 MCP_PATH = "/mcp"
 _SCALARS: dict[str, type] = {"integer": int, "number": float, "string": str}
+_WAIT_POLL_SECONDS = 0.25
 
 
 def _common_options(defaults: bool) -> argparse.ArgumentParser:
-    """`--host` / `--port` / `--out`, accepted before or after the command.
+    """`--host` / `--port` / `--out` / `--wait`, accepted before or after the command.
 
     The copy a tool parser inherits suppresses its defaults, so a flag given
     only before the command is not reset by the second parse.
@@ -73,6 +75,13 @@ def _common_options(defaults: bool) -> argparse.ArgumentParser:
         help=(
             "Directory for returned files (render_* PNGs and export_tensors "
             ".pt files; default .nansense-cli)."
+        ),
+    )
+    parser.add_argument(
+        "--wait", type=float, metavar="SECONDS", default=0.0 if defaults else keep,
+        help=(
+            "Wait up to SECONDS for the server to accept connections, e.g. "
+            "right after launching the run (default 0: fail at once)."
         ),
     )
     return parser
@@ -252,8 +261,8 @@ async def run(
         except SystemExit as exit:  # --help, or a bad flag
             return int(exit.code or 0)
         out = arguments.pop("out", top.out)
-        arguments.pop("host", None)
-        arguments.pop("port", None)
+        for option in ("host", "port", "wait"):
+            arguments.pop(option, None)
         result = await client.call_tool(tool.name, arguments)
         return print_result(result, tool.name, out)
 
@@ -263,6 +272,21 @@ def _serving(host: str, port: int) -> bool:
         socket.create_connection((host, port), timeout=2).close()
     except OSError:
         return False
+    return True
+
+
+def _await_serving(host: str, port: int, wait: float) -> bool:
+    """Whether the run serves, retrying for up to `wait` seconds.
+
+    The run prints its banner only once the endpoint accepts connections, so
+    an agent that launched it can either watch for the banner or pass
+    `--wait` and let the first command block until then.
+    """
+    deadline = time.monotonic() + max(0.0, wait)
+    while not _serving(host, port):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_WAIT_POLL_SECONDS)
     return True
 
 
@@ -276,11 +300,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     late, _ = _common_options(defaults=False).parse_known_args(args.rest)
     for key, value in vars(late).items():
         setattr(args, key, value)
-    if not _serving(args.host, args.port):
+    if not _await_serving(args.host, args.port, args.wait):
+        waited = f" after waiting {args.wait:g}s" if args.wait > 0 else ""
         print(
-            f"{_PROG}: nothing is serving on {args.host}:{args.port}. Start the "
-            "training run with NaNsense enabled, and pass its --nansense-port "
-            "as --port.",
+            f"{_PROG}: nothing is serving on {args.host}:{args.port}{waited}. "
+            "Start the training run with NaNsense enabled, and pass its "
+            "--nansense-port as --port (use --wait SECONDS to wait for startup).",
             file=sys.stderr,
         )
         return 2
