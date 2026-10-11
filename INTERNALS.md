@@ -1786,6 +1786,17 @@ main thread (`signal.signal` is an error there, and `serve` may be called from
 a worker) and when SIGINT is `SIG_IGN`, which is a program explicitly asking
 for Ctrl-C to do nothing.
 
+Outliving the main thread has a second trap. `threading._shutdown()` runs its
+registered callbacks *before* joining non-daemon threads, and one of them is
+`concurrent.futures`' exit hook: it retires every `ThreadPoolExecutor`,
+including asyncio's default executor behind `asyncio.to_thread`, and refuses new
+ones. The page kept serving, but every MCP tool that offloads work failed with
+"cannot schedule new futures after shutdown". `_hold_shutdown_while_serving`
+registers a callback of its own that joins the server thread. These callbacks run
+in reverse order, so it runs first and the pools stay alive until Ctrl-C or the
+`shutdown` tool ends the server. A Ctrl-C during that wait is caught there,
+and a second one sets `force_exit` so uvicorn stops waiting on open connections.
+
 `serve()` no-ops on non-leader ranks and on a disabled session. Once the
 server thread is launched, a second **daemon** thread (`_announce_when_ready`)
 waits for `server.started` before doing anything user-facing: on a clean bind it

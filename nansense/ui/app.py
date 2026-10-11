@@ -297,9 +297,54 @@ def _announce_when_ready(
 
 class _Stoppable(Protocol):
     """The slice of `uvicorn.Server` the SIGINT handler writes — the flag its
-    serve loop polls to begin an orderly shutdown."""
+    serve loop polls to begin an orderly shutdown, and the one that skips
+    waiting for open connections."""
 
     should_exit: bool
+    force_exit: bool
+
+
+def _hold_shutdown_while_serving(
+    server: _Stoppable, thread: threading.Thread
+) -> None:
+    """Keep the interpreter's thread pools alive while the page outlives training.
+
+    When the training script's main thread returns, `threading._shutdown()`
+    first runs its registered callbacks and only then joins the non-daemon
+    UI thread. One of those callbacks is `concurrent.futures`' exit hook,
+    which retires every `ThreadPoolExecutor` — asyncio's default executor
+    behind `asyncio.to_thread` included — and refuses new ones. The server
+    kept serving the post-mortem page, but every MCP tool that offloads work
+    then failed with "cannot schedule new futures after shutdown".
+
+    The callbacks run in reverse registration order, so one registered here
+    (long after `concurrent.futures` was imported) runs first: it waits for
+    the server thread to end — Ctrl-C or the `shutdown` tool — before the
+    pools are retired. A Ctrl-C while waiting asks the server to stop (the
+    SIGINT handler already did) and a second one stops waiting on open
+    connections.
+    """
+
+    def wait_for_server() -> None:
+        interrupts = 0
+        while thread.is_alive():
+            try:
+                thread.join()
+            except KeyboardInterrupt:
+                interrupts += 1
+                server.should_exit = True
+                server.force_exit = interrupts > 1
+
+    # Private, but it is the hook `concurrent.futures` itself relies on; an
+    # interpreter already shutting down refuses it, and then there is
+    # nothing left to protect.
+    register = getattr(threading, "_register_atexit", None)
+    if register is None:
+        return
+    try:
+        register(wait_for_server)
+    except RuntimeError:
+        pass
 
 
 def _stop_server_on_sigint(server: _Stoppable) -> None:
@@ -481,6 +526,7 @@ def serve(
     thread = threading.Thread(target=server.run, name="nansense-ui", daemon=False)
     thread.start()
     _stop_server_on_sigint(server)
+    _hold_shutdown_while_serving(server, thread)
 
     url = _display_url(host, port)
     threading.Thread(

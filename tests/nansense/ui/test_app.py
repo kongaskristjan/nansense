@@ -6,7 +6,9 @@ import inspect
 import io
 import logging
 import signal
+import subprocess
 import sys
+import textwrap
 import threading
 import warnings
 from collections.abc import Callable, Iterator
@@ -228,10 +230,11 @@ def test_announce_prints_a_box_the_console_can_encode(
 
 
 class _FakeStoppable:
-    """Stands in for a uvicorn server; only `should_exit` is ever written."""
+    """Stands in for a uvicorn server; only its exit flags are ever written."""
 
     def __init__(self) -> None:
         self.should_exit = False
+        self.force_exit = False
 
 
 def _installed_sigint_handler() -> Callable[[int, FrameType | None], object]:
@@ -322,6 +325,44 @@ def test_serve_installs_the_sigint_shutdown(
     assert thread is not None
     thread.join(timeout=10)
     assert signal.getsignal(signal.SIGINT) is not signal.default_int_handler
+
+
+def test_thread_pools_outlive_the_main_thread_while_serving() -> None:
+    """The post-mortem page is served after the script's main thread returns;
+    `asyncio.to_thread` must still work then, or every offloading MCP tool
+    fails with "cannot schedule new futures after shutdown". Run in a child
+    process because only a real interpreter shutdown retires the pools."""
+    script = """
+        import asyncio, threading
+        from nansense.ui.app import _hold_shutdown_while_serving
+
+        class Server:
+            should_exit = False
+            force_exit = False
+
+        warmed, shutting_down = threading.Event(), threading.Event()
+
+        async def serve():
+            await asyncio.to_thread(warmed.set)  # creates the default executor
+            await asyncio.to_thread(shutting_down.wait)
+            print(await asyncio.to_thread(lambda: "served after main returned"))
+
+        thread = threading.Thread(target=asyncio.run, args=(serve(),))
+        thread.start()
+        warmed.wait()
+        _hold_shutdown_while_serving(Server(), thread)
+        # Registered last, so it runs first once the main thread returns.
+        threading._register_atexit(shutting_down.set)
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "served after main returned" in result.stdout
 
 
 class _FakeServer:
