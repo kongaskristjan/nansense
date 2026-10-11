@@ -528,6 +528,11 @@ def build_server(
         Reads the running accumulators, so it only covers layers the current
         stats scope collects: call `watch_layers` first (or `set_stats_scope`
         with "all"). Restrict to one phase with `phase`, e.g. "train".
+
+        A point marked `partial` is the phase and epoch training is in now: it
+        covers only the batches folded in so far, so compare it to whole epochs
+        with care. A phase without a backward pass (validation, say) has
+        gradient points with a count of 0, and their note says so.
         """
         return await asyncio.to_thread(
             stats_history_view, session, layer=layer, phase=phase

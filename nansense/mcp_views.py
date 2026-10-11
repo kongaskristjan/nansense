@@ -475,16 +475,41 @@ def default_phase(session: Session, layers: Iterable[str]) -> str | None:
     return available[-1]
 
 
+def _empty_point_note(stats: TensorStatsSnapshot, kind: str) -> str:
+    """Why an epoch's bucket has no finite values: none seen, or all non-finite.
+
+    The histogram counts every value, finite or not, so it tells the two
+    apart; a collapsed older epoch has lost it and can only say either.
+    """
+    seen = None if stats.hist is None else sum(stats.hist)
+    if seen == 0:
+        return (
+            "no gradients captured in this epoch (e.g. this phase ran no "
+            "backward pass)"
+            if kind == "gradients"
+            else "no values captured in this epoch"
+        )
+    if seen is None:
+        return "no finite values in this epoch (none captured, or all NaN or ±Inf)"
+    return "no finite values in this epoch (all NaN or ±Inf)"
+
+
 def _history_point(
-    epoch: int, stats: TensorStatsSnapshot
+    epoch: int,
+    stats: TensorStatsSnapshot,
+    *,
+    kind: str = "activations",
+    partial: bool = False,
 ) -> dict[str, Any]:
     point: dict[str, Any] = {"epoch": epoch, "count": stats.n}
+    if partial:
+        point["partial"] = True
     if stats.n == 0:
         # With nothing finite the accumulator's scalars are its ±inf
         # placeholders, which would come out as `min` above `max` and a
         # fabricated `std` of 0 — for exactly the epoch a reader most needs to
         # understand. Say what happened instead.
-        point["note"] = "no finite values in this epoch (all NaN or ±Inf)"
+        point["note"] = _empty_point_note(stats, kind)
         return point
     point.update(
         {
@@ -531,6 +556,19 @@ def stats_gap_hint(session: Session, layers: Iterable[str]) -> str:
         + " and ".join(fixes)
         + "."
     )
+
+
+def _in_progress(session: Session, phase: str, epoch: int) -> bool:
+    """Whether `phase` of `epoch` is still being folded into its bucket.
+
+    True at the live position in an open session, unless training is paused
+    on that phase's last batch — a pause comes after the batch's statistics
+    were folded in.
+    """
+    live = session.live_position
+    if session.closed or live is None or (live.phase, live.epoch) != (phase, epoch):
+        return False
+    return session.is_running or not live.is_last_in_phase
 
 
 def _history_channel_cap(
@@ -592,12 +630,16 @@ def stats_history_view(
         if not buckets:
             continue
         history[name] = {
-            "activations": [
-                _history_point(bucket.epoch, bucket.activations) for bucket in buckets
-            ],
-            "gradients": [
-                _history_point(bucket.epoch, bucket.gradients) for bucket in buckets
-            ],
+            kind: [
+                _history_point(
+                    bucket.epoch,
+                    getattr(bucket, kind),
+                    kind=kind,
+                    partial=_in_progress(session, name, bucket.epoch),
+                )
+                for bucket in buckets
+            ]
+            for kind in ("activations", "gradients")
         }
     view: dict[str, Any] = {
         "layer": layer,

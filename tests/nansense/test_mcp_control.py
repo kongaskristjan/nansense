@@ -39,6 +39,7 @@ from nansense.mcp_views import (
 )
 from nansense.recording import RecordingManager
 from nansense.session import Mode, Session
+from nansense.watch import N_BINS
 
 from .helpers import (
     TinyNet,
@@ -1067,19 +1068,30 @@ def test_an_all_unknown_parameter_request_does_not_blame_the_optimizer() -> None
         assert "optimizer_note" not in view
 
 
-def test_an_all_nonfinite_epoch_does_not_report_min_above_max() -> None:
+@pytest.mark.parametrize(
+    ("hist", "kind", "expected"),
+    [
+        ((0,) * N_BINS, "gradients", "no backward pass"),
+        ((0,) * (N_BINS - 1) + (4,), "gradients", "(all NaN or ±Inf)"),
+        (None, "activations", "or all NaN"),
+    ],
+)
+def test_an_epoch_with_nothing_finite_says_why(
+    hist: tuple[int, ...] | None, kind: str, expected: str
+) -> None:
     """With nothing finite the accumulator holds its ±inf placeholders; passing
-    them through gives `min` above `max` and a fabricated std of 0."""
+    them through gives `min` above `max` and a fabricated std of 0. And "no
+    backward pass" (validation) must not read as a diverged gradient."""
     from nansense.mcp_views import _history_point
     from nansense.watch import TensorStatsSnapshot
 
     # The accumulator's own empty state: ±inf placeholders for min/max.
     empty = TensorStatsSnapshot(
-        n=0, sum=0.0, sum_sq=0.0, min=float("inf"), max=float("-inf"), hist=None
+        n=0, sum=0.0, sum_sq=0.0, min=float("inf"), max=float("-inf"), hist=hist
     )
-    point = _history_point(3, empty)
+    point = _history_point(3, empty, kind=kind)
     assert point == {"epoch": 3, "count": 0, "note": point["note"]}
-    assert "all NaN" in point["note"]
+    assert expected in point["note"]
 
 
 def test_the_default_phase_is_the_one_training_is_in() -> None:

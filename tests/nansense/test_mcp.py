@@ -328,13 +328,15 @@ def test_stats_history_names_the_reason_nothing_is_collected(
 def test_stats_history_returns_per_epoch_series_for_a_watched_layer() -> None:
     with paused_session(TinyNet(), epochs=2, phases={"train": 2}) as session:
         assert session.watch("fc1")
-        # Four batches in the schedule and we are parked on the first, so three
-        # steps carry the run into its second epoch.
-        for _ in range(3):
+        # Two batches per epoch and we are parked on the first, so two steps
+        # carry the run onto the first batch of its second epoch.
+        for _ in range(2):
             _step_and_wait(session)
         view = stats_history_view(session, layer="fc1", phase="train")
         points = view["history"]["train"]["activations"]
         assert [point["epoch"] for point in points] == [0, 1]
+        # Epoch 1 has folded in one of its two batches so far.
+        assert [point.get("partial", False) for point in points] == [False, True]
         assert view["phases_with_data"] == ["train"]
         assert all(point["count"] > 0 for point in points)
 
