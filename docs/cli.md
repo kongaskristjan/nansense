@@ -57,6 +57,7 @@ Ask in plain language — "why has my loss stopped falling?" — and the agent w
 | `get_status` | Where the run sits: paused or running, position, watched layers, any numerical warning |
 | `get_architecture` | Layer names, hyperparameters and the compute graph |
 | `get_layer_stats` | Activation and gradient statistics for the last captured batch, for any layer |
+| `rank_layers` | Top layers from the last captured batch, ranked by activation or gradient std, abs max, NaN/Inf share, or dead-channel share |
 | `get_stats_history` | One layer's statistics per epoch — the trend across the run |
 | `get_debug_report` | Which layers produced NaN/Inf or collapsing gradients, with per-layer percentages |
 | `step`, `run`, `run_until`, `pause` | The top bar's run controls — including detach, as `run --detach` |

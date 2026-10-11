@@ -25,8 +25,8 @@ Three conventions the agent-facing output depends on:
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import Any, Literal
 
 import torch
 
@@ -325,7 +325,7 @@ def tensor_stats_view(
     under the caller.
     """
     finite = stats.n
-    channels = int(shape[1]) if shape is not None and len(shape) >= 2 else None
+    channels = None if shape is None or len(shape) < 2 else int(shape[1])
     # `hist` counts every value, including the non-finite ones (NaN in the zero
     # band, ±Inf in the end bins); it is `None` only for a collapsed older
     # epoch, where the total is genuinely unknown.
@@ -446,6 +446,108 @@ def layer_stats_view(
         view["hint"] = "Call get_architecture for the valid layer names."
     if no_data:
         view["layers_without_data"] = no_data
+    return view
+
+
+def _abs_max(stats: TensorStatsSnapshot) -> float | None:
+    return max(abs(stats.min), abs(stats.max)) if stats.n > 0 else None
+
+
+def _dead_fraction(stats: TensorStatsSnapshot) -> float | None:
+    dead, rows = stats.dead_channel_count, stats.channel_hists
+    return None if dead is None or not rows else dead / len(rows)
+
+
+def _non_finite_fraction(stats: TensorStatsSnapshot) -> float | None:
+    total = None if stats.hist is None else sum(stats.hist)
+    return (total - stats.n) / total if total else None
+
+
+RankMetric = Literal[
+    "gradient_std",
+    "gradient_abs_max",
+    "gradient_non_finite_fraction",
+    "activation_std",
+    "activation_abs_max",
+    "activation_non_finite_fraction",
+    "dead_channel_fraction",
+]
+
+# Each ranking metric: the stream it reads, and the scalar it ranks by
+# (`None` when the stream has nothing to measure, e.g. no backward pass).
+_RANK_METRICS: dict[str, tuple[str, Callable[[TensorStatsSnapshot], float | None]]] = {
+    "gradient_std": ("gradients", lambda s: s.std if s.n > 0 else None),
+    "gradient_abs_max": ("gradients", _abs_max),
+    "gradient_non_finite_fraction": ("gradients", _non_finite_fraction),
+    "activation_std": ("activations", lambda s: s.std if s.n > 0 else None),
+    "activation_abs_max": ("activations", _abs_max),
+    "activation_non_finite_fraction": ("activations", _non_finite_fraction),
+    "dead_channel_fraction": ("activations", _dead_fraction),
+}
+
+
+def layer_ranking_view(
+    session: Session, *, by: RankMetric, top: int = 10, ascending: bool = False
+) -> dict[str, Any]:
+    """Top layers of the last captured batch, ranked by one statistic.
+
+    Avoids fetching and sorting detailed `get_layer_stats` results for a
+    whole model. Each row carries the ranked value plus the few scalars
+    needed to read it.
+    """
+    snapshot = session.snapshot
+    if snapshot is None:
+        return {
+            "error": "No batch has been captured yet.",
+            "hint": (
+                "A session pauses on its first batch; if training is running "
+                "free, call pause or refresh first."
+            ),
+        }
+    inputs = set(session.input_names)
+    layers = [name for name in session.layer_names if name not in inputs]
+    stats = session.current_batch_stats(layers=layers, include_patches=False)
+    position = snapshot.position
+    stream, measure = _RANK_METRICS[by]
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    unmeasured: list[str] = []
+    for name in layers:
+        layer_stats = stats.stats.get((name, position.phase, position.epoch))
+        value = None
+        if layer_stats is not None:
+            value = measure(getattr(layer_stats, stream))
+        if value is None or not math.isfinite(value):
+            unmeasured.append(name)
+            continue
+        assert layer_stats is not None
+        activations, gradients = layer_stats.activations, layer_stats.gradients
+        row: dict[str, Any] = {"layer": name, by: _num(value)}
+        row["activation_std"] = _num(activations.std) if activations.n else None
+        row["gradient_std"] = _num(gradients.std) if gradients.n else None
+        row["gradient_abs_max"] = _num(_abs_max(gradients))
+        if activations.channel_hists is not None:
+            row["dead_channels"] = activations.dead_channel_count
+            row["channels_tracked"] = len(activations.channel_hists)
+        ranked.append((value, row))
+    ranked.sort(key=lambda pair: pair[0], reverse=not ascending)
+    top = max(top, 1)
+    view: dict[str, Any] = {
+        "position": position_view(position, schedule=session.schedule),
+        "ranked_by": by,
+        "order": "ascending" if ascending else "descending",
+        "layers": [row for _, row in ranked[:top]],
+        "ranked_count": len(ranked),
+    }
+    if len(ranked) > top:
+        view["omitted"] = len(ranked) - top
+    if unmeasured:
+        view["layers_without_value"] = unmeasured
+    if not ranked and stream == "gradients":
+        view["hint"] = (
+            "No layer has a usable value for this gradient metric. If the "
+            "phase has no backward pass (validation, say), step to a training "
+            "batch first."
+        )
     return view
 
 

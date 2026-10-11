@@ -84,12 +84,14 @@ from nansense.mcp_view_specs import (
     WeightsViewSpec,
 )
 from nansense.mcp_views import (
+    RankMetric,
     architecture_view,
     debug_view,
     default_phase,
     experiment_catalog_view,
     experiment_result_view,
     hyperparameters_view,
+    layer_ranking_view,
     layer_stats_view,
     metrics_view,
     probe_view,
@@ -156,9 +158,10 @@ training loop between batches and exposes what every layer is doing: its
 activations, its gradients, and statistics over both.
 
 Typical loop: `get_status` to see where the run sits, `get_architecture` once
-for the layer names, then `get_layer_stats` on the layers you suspect, and
-`step` to advance. `get_debug_report` is the fastest first move when training
-diverges — it names the layers where NaN/Inf or subnormal gradients appeared.
+for the layer names, then `rank_layers` to compare layers by one statistic,
+`get_layer_stats` on the layers you suspect, and `step` to advance.
+`get_debug_report` is the fastest first move when training diverges — it
+names the layers where NaN/Inf or subnormal gradients appeared.
 
 Two positions matter and are reported separately: `live_position` is where
 training is now, `snapshot_position` is the batch the statistics describe.
@@ -500,6 +503,49 @@ def build_server(
             layers=layers,
             include_histogram=include_histogram,
             channel=channel,
+        )
+
+    @server.tool()
+    async def rank_layers(
+        by: Annotated[
+            RankMetric,
+            pydantic.Field(
+                description=(
+                    "Statistic to rank by: a stream's finite-value std or abs "
+                    "max (gradient flow, activation scale), its NaN/Inf share, "
+                    "or the dead share of the tracked activation channels."
+                )
+            ),
+        ],
+        top: Annotated[
+            int,
+            pydantic.Field(
+                description="Maximum layers to return (at least 1 is returned)."
+            ),
+        ] = 10,
+        ascending: Annotated[
+            bool,
+            pydantic.Field(
+                description=(
+                    "True puts the smallest values first (e.g. vanishing "
+                    "gradients with gradient_std); the default puts the "
+                    "largest first."
+                )
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
+        """Top layers ranked by one statistic of the last captured batch.
+
+        The one-call way to find the worst layers: `by="gradient_std"` with
+        `ascending` lists where gradients are smallest, without it where they
+        are largest. Model inputs are not ranked. Each row carries the ranked
+        value plus the activation and gradient std and the gradient abs max;
+        follow up on a layer with `get_layer_stats`. Layers without a usable
+        value for the chosen statistic (no finite gradients, say) are listed
+        under `layers_without_value`.
+        """
+        return await asyncio.to_thread(
+            layer_ranking_view, session, by=by, top=top, ascending=ascending
         )
 
     @server.tool()

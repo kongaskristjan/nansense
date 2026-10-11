@@ -291,6 +291,22 @@ def test_diverged_stats_still_report_their_channels() -> None:
     assert value == pytest.approx(bin_midpoint(N_BINS - 1), rel=1e-5)
 
 
+@pytest.mark.parametrize("ascending", [False, True])
+def test_rank_layers_orders_the_whole_model_by_one_statistic(ascending: bool) -> None:
+    with paused_session(TinyNet()) as session:
+        view = _call(
+            session,
+            "rank_layers",
+            {"by": "gradient_std", "top": 2, "ascending": ascending},
+        )
+        values = [row["gradient_std"] for row in view["layers"]]
+        assert len(values) == 2
+        assert values == sorted(values, reverse=not ascending)
+        # fc1, relu, fc2: the third is cut by `top`; the input is never ranked.
+        assert (view["ranked_count"], view["omitted"]) == (3, 1)
+        assert "x" not in view.get("layers_without_value", [])
+
+
 def test_layer_stats_carry_the_channel_through_to_both_streams() -> None:
     with paused_session(TinyNet()) as session:
         view = layer_stats_view(session, layers=["fc1"], channel=0)
