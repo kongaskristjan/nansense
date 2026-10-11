@@ -40,7 +40,7 @@ from nansense.mcp_images import (
 )
 from nansense.mcp_server import build_server
 from nansense.session import Session
-from nansense.ui.frames import PanelAxes, WeightPanel
+from nansense.ui.frames import PanelAxes, WeightPanel, _wrap_parts
 
 from .helpers import TinyNet, paused_session
 
@@ -572,3 +572,13 @@ def test_bin_samples_without_image_crops_say_so() -> None:
         assert values  # the numbers still come back
         assert rendered.png is None
         assert "not image-like" in rendered.note
+
+
+def test_weights_scalar_line_wraps_instead_of_running_off_the_frame() -> None:
+    parts = ["step = 33", "eps = 1e-08", "lr = 0.0002 (was 0.001)", "weight_decay = 0.05"]
+    lines = _wrap_parts(parts, width=40)
+    assert lines == [
+        "step = 33  ·  eps = 1e-08",
+        "lr = 0.0002 (was 0.001)",
+        "weight_decay = 0.05",
+    ]

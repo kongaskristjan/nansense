@@ -22,6 +22,7 @@ from nansense.ui.common import (
 )
 from nansense.ui.export import start_download
 from nansense.ui.histograms import _format_stat
+from nansense.ui.hyperparam_fields import HYPERPARAM_CSS, HyperparameterFields
 from nansense.ui.render import default_weight_dims, dims_from_roles, render_weight
 from nansense.ui.share import _add_share_button
 from nansense.ui.static import _STRIP_MARKER_CSS
@@ -114,6 +115,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
     title = f"Weights · {layer}" if layer else "Weights"
     _page_scaffold(title)
     ui.add_head_html(_STRIP_MARKER_CSS)
+    ui.add_head_html(HYPERPARAM_CSS)
     add_tour("weights", weights_tour_steps(), locked=session.locked)
 
     weight_names = session.layer_weights.get(layer, [])
@@ -208,6 +210,7 @@ def _build_weights_page(session: Session, layer: str) -> None:
         frozen = session.recording.is_recording(record_key)
         for panel in panels:
             panel.set_frozen(frozen)
+            panel.hyperparams.sync()
         snap = session.snapshot
         if snap is None:
             return
@@ -235,7 +238,6 @@ def _compute_snapshot_renders(
             snap.weights,
             snap.weight_gradients,
             optimizer_state=snap.optimizer_state,
-            optimizer_hyperparams=snap.optimizer_hyperparams,
             custom_tensors=snap.custom_weight_tensors.get(panel.name),
         )
         for panel in panels
@@ -299,7 +301,6 @@ class _WeightPanel:
         self._weights: dict[str, Tensor] | None = None
         self._gradients: dict[str, Tensor] | None = None
         self._opt_state: dict[str, dict[str, Tensor]] = {}
-        self._opt_hparams: dict[str, dict[str, float]] = {}
         self._custom: dict[str, Tensor] = {}
         self._role_selects: list[ui.select] = []
         self._index_numbers: dict[int, ui.number] = {}
@@ -391,12 +392,16 @@ class _WeightPanel:
                     self._custom_container = ui.element("div").classes(
                         "w-full"
                     )
-            # Scalar optimizer values: 0-dim state entries (Adam's `step`) and
-            # the param group's numeric hyperparameters (`lr`, …).
-            self._opt_scalars = ui.label("").classes(
+            # Scalar optimizer values: 0-dim state entries (Adam's `step`) as
+            # text, then the param group's hyperparameters (`lr`, …) as inputs
+            # that can be edited while paused.
+            with ui.row().classes(
+                "items-center gap-x-4 gap-y-1 flex-wrap "
                 "text-xs text-slate-500 font-mono"
-            )
-            self._opt_scalars.set_visibility(False)
+            ):
+                self._opt_scalars = ui.label("")
+                self._opt_scalars.set_visibility(False)
+                self.hyperparams = HyperparameterFields(session, name)
         self._sync_index_visibility()
 
     @property
@@ -462,7 +467,6 @@ class _WeightPanel:
         gradients: dict[str, Tensor],
         *,
         optimizer_state: dict[str, dict[str, Tensor]],
-        optimizer_hyperparams: dict[str, dict[str, float]],
         custom_tensors: dict[str, Tensor] | None = None,
     ) -> None:
         """Display weight, gradient, and optimizer values (snapshot or live).
@@ -476,7 +480,6 @@ class _WeightPanel:
                 weights,
                 gradients,
                 optimizer_state=optimizer_state,
-                optimizer_hyperparams=optimizer_hyperparams,
                 custom_tensors=custom_tensors,
             )
         )
@@ -487,7 +490,6 @@ class _WeightPanel:
         gradients: dict[str, Tensor],
         *,
         optimizer_state: dict[str, dict[str, Tensor]],
-        optimizer_hyperparams: dict[str, dict[str, float]],
         custom_tensors: dict[str, Tensor] | None = None,
     ) -> _PanelRender:
         """Render the panel's strips to HTML — pure, safe to run in a thread.
@@ -502,7 +504,6 @@ class _WeightPanel:
         self._weights = weights
         self._gradients = gradients
         self._opt_state = optimizer_state
-        self._opt_hparams = optimizer_hyperparams
         self._custom = custom_tensors or {}
         return self._compute_render()
 
@@ -587,9 +588,9 @@ class _WeightPanel:
         Tensor state entries matching the weight's shape (momentum buffers,
         Adam moments) reuse the panel's axis layout; differently-shaped ones
         (e.g. factored second moments) fall back to their own rank's default
-        axes. 0-dim entries (Adam's `step`) join the group hyperparameters
-        (`lr`, …) on a single scalar line. With no optimizer attached both
-        stay empty, leaving the panel exactly as before. Returns the
+        axes. 0-dim entries (Adam's `step`) go on a scalar line, next to the
+        hyperparameter inputs (`HyperparameterFields`). With no optimizer
+        attached both stay empty, leaving the panel exactly as before. Returns the
         `(marker label, strip HTML)` pairs and the scalar-line text; building
         the elements is `apply_render`'s job, back on the event loop.
         """
@@ -616,10 +617,6 @@ class _WeightPanel:
             if strip is None:
                 continue
             opt_strips.append((key.upper(), _strip_html(strip)))
-        scalar_parts += [
-            f"{key} = {_format_stat(value)}"
-            for key, value in sorted(self._opt_hparams.get(self.name, {}).items())
-        ]
         return opt_strips, "  ·  ".join(scalar_parts)
 
     def apply_render(self, render: _PanelRender) -> None:

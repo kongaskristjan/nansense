@@ -245,6 +245,22 @@ def main_frame(
     return stack_sections(sections, require_image=require_image)
 
 
+# Characters per scalar line under a weights frame's strips: the frame is only
+# as wide as its strips, which a small kernel keeps narrow.
+_SCALAR_LINE_CHARS = 40
+
+
+def _wrap_parts(parts: list[str], width: int = _SCALAR_LINE_CHARS) -> list[str]:
+    """Join `key = value` parts with " · " into lines of about `width` chars."""
+    lines: list[str] = []
+    for part in parts:
+        if lines and len(lines[-1]) + len(part) + 5 <= width:
+            lines[-1] += "  ·  " + part
+        else:
+            lines.append(part)
+    return lines
+
+
 def weights_frame(
     session: Session,
     *,
@@ -256,12 +272,16 @@ def weights_frame(
     Optimizer state whose shape matches the parameter is drawn under the same
     axis layout; state of a different shape falls back to its own default
     layout, and scalar state (Adam's `step`) joins the hyperparameters on a
-    text line, exactly as the page shows them.
+    text line; a hyperparameter changed from NaNsense also says what it was.
     """
     snap = session.snapshot
     if snap is None:
         return None
     sections: list[_Section] = []
+    groups = session.optimizer_group_indices()
+    edited: dict[tuple[int | None, str], float] = {
+        (e.group, e.key): e.original for e in session.hyperparameter_edits
+    }
     for panel in panels:
         tensor = snap.weights.get(panel.name)
         if tensor is None:
@@ -313,12 +333,14 @@ def weights_frame(
                     key.upper(), strip_image(strip, show_labels=False), OPTIMIZER
                 )
             )
-        scalar_parts += [
-            f"{key} = {value:.4g}"
-            for key, value in sorted(snap.optimizer_hyperparams.get(panel.name, {}).items())
-        ]
-        if scalar_parts:
-            sections.append(Section("  ·  ".join(scalar_parts), None))
+        group = groups.get(panel.name)
+        for key, value in sorted(snap.optimizer_hyperparams.get(panel.name, {}).items()):
+            original = edited.get((group, key))
+            scalar_parts.append(
+                f"{key} = {value:.4g}"
+                + ("" if original is None else f" (was {original:.4g})")
+            )
+        sections += [Section(line, None) for line in _wrap_parts(scalar_parts)]
     sections.insert(0, Section(format_position(snap.position), None))
     return stack_sections(sections, require_image=require_image)
 

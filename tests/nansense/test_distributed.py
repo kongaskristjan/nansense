@@ -228,7 +228,10 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
     try:
         model = TinyNet()
         ddp = DistributedDataParallel(model)
-        session = nansense.start(ddp, epochs=1, phases={"train": 2})
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        session = nansense.start(
+            ddp, epochs=1, phases={"train": 2}, optimizer=optimizer
+        )
         # The DDP wrapper is unwrapped: clean names, leader on rank 0 only.
         assert session.model is model
         assert session.layer_names == ["x", "fc1", "relu", "fc2"]
@@ -241,6 +244,10 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
             session.set_update_frequency(unit="batch", n=100)
             assert session.watch("x")
             session.set_stats_scope("watched")
+            # A leader-side hyperparameter edit (what `set_hyperparameters`
+            # does while paused) reaches the followers at the next batch.
+            optimizer.param_groups[0]["lr"] = 0.5
+            session._hparam_version += 1
 
         # Rank-distinguishable data: rank r feeds constant `r + 1`, so the
         # reduced stats are exactly predictable.
@@ -268,9 +275,11 @@ def _ddp_worker(rank: int, world_size: int, init_file: str) -> None:
             assert act.channel_hists is not None and len(act.channel_hists) == 4
             assert all(sum(row) == 2 * 2 * 4 for row in act.channel_hists)
         else:
-            # The follower picked the watched set up from the per-batch
-            # broadcast and accumulated its own shard locally.
+            # The follower picked the watched set and the edited learning
+            # rate up from the per-batch broadcast, and accumulated its own
+            # shard locally.
             assert session.watched_layers == frozenset({"x"})
+            assert optimizer.param_groups[0]["lr"] == 0.5
             local = session._watch_accumulator.snapshot(
                 layers=["x"], include_patches=False
             )

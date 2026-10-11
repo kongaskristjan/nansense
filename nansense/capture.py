@@ -41,6 +41,7 @@ from torch import Tensor, fx, nn
 from torch.optim import Optimizer
 
 from nansense.fx_names import _op_base, friendly_names
+from nansense.hyperparams import numeric_hyperparams
 
 if TYPE_CHECKING:
     from nansense.session import Session
@@ -548,13 +549,7 @@ def current_optimizer_hyperparams(
     names = {id(p): n for n, p in model.named_parameters()}
     result: dict[str, dict[str, float]] = {}
     for group in optimizer.param_groups:
-        numeric = {
-            key: float(value)
-            for key, value in group.items()
-            if key != "params"
-            and isinstance(value, (int, float))
-            and not isinstance(value, bool)
-        }
+        numeric = numeric_hyperparams(group)
         for param in group["params"]:
             name = names.get(id(param))
             if name is not None:

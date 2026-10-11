@@ -79,6 +79,7 @@ from nansense.mcp_views import (
     default_phase,
     experiment_catalog_view,
     experiment_result_view,
+    hyperparameters_view,
     layer_stats_view,
     metrics_view,
     probe_view,
@@ -157,6 +158,10 @@ maps, histograms and patch grids the browser draws. Statistics tell you how
 big a problem is; a picture tells you where in the tensor it lives (one dead
 channel, a saturated edge, a stuck kernel), which is often not visible in a
 mean. Reach for one when the numbers say something is wrong but not what.
+
+To test a fix rather than just diagnose, `set_hyperparameters` changes the
+learning rate (or any numeric optimizer setting) while paused; combined with
+`time_travel` it replays an epoch with the new value.
 """
 
 
@@ -1536,6 +1541,62 @@ def build_server(
         worried about.
         """
         return await asyncio.to_thread(metrics_view, session, layers=layers)
+
+    # ---- Hyperparameters ---------------------------------------------
+
+    @server.tool()
+    async def get_hyperparameters() -> dict[str, Any]:
+        """Read the optimizer's parameter groups and current numeric settings.
+
+        Lists each group's numeric hyperparameters (`lr`, `momentum`,
+        `weight_decay`, ...), its model parameter count, and up to five
+        parameter names. `get_weight_stats` reports each parameter's group.
+        Changes made with `set_hyperparameters` appear under `edited`, with
+        the value from before the first edit. Also identifies an attached
+        scheduler and explains how it may affect an edited learning rate.
+        """
+        return await asyncio.to_thread(hyperparameters_view, session)
+
+    @server.tool()
+    async def set_hyperparameters(
+        values: Annotated[
+            dict[str, float],
+            pydantic.Field(
+                description=(
+                    'New values by key, e.g. {"lr": 0.01, "weight_decay": 0}. '
+                    "Use numeric keys listed by get_hyperparameters; each key "
+                    "must exist in every targeted group. Values must be finite; "
+                    "integer settings require whole numbers."
+                )
+            ),
+        ],
+        group: Annotated[
+            int | None,
+            pydantic.Field(
+                description=(
+                    "Zero-based parameter group index; omit to apply the "
+                    "same values to every group."
+                )
+            ),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Change the optimizer's hyperparameters while training is paused.
+
+        The new values apply to the targeted groups from the next optimizer
+        step. Nothing changes unless the entire request is valid. An active
+        scheduler may later change or replace an edited learning rate.
+        To replay an epoch with a different value, call `time_travel` first,
+        then set the value and resume training: time travel restores the
+        checkpoint's values. Returns the same view as `get_hyperparameters`.
+        """
+        refusal = _settings_refusal(session)
+        if refusal is not None:
+            return refusal
+        try:
+            session.set_hyperparameters(values, group=group)
+        except ValueError as error:
+            return {"error": str(error)}
+        return await asyncio.to_thread(hyperparameters_view, session)
 
     # ---- Time travel -------------------------------------------------
 

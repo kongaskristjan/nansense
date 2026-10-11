@@ -13,12 +13,13 @@ model, but the ranks play different roles:
 Coordination happens at two points, both on the training thread:
 
 1. **Per-batch control broadcast** (`sync_batch_control`, at
-   `_BatchContext.__enter__`). A 4-int tensor from the leader: whether this
+   `_BatchContext.__enter__`). A 5-int tensor from the leader: whether this
    batch's stats get reduced at `__exit__`, the watched-set version, the
-   leader's stats scope, and its armed time-travel target (`jump_epoch`, -1
-   when none). When the version changed since the last broadcast, a follow-up
-   object broadcast carries the watched-layer list — so steady-state batches
-   pay one tiny broadcast. This is also the pacing point: a leader paused in the UI holds
+   leader's stats scope, its armed time-travel target (`jump_epoch`, -1
+   when none), and its hyperparameter-edit version. When a version changed
+   since the last broadcast, a follow-up object broadcast carries the
+   watched-layer list or the leader's per-group hyperparameters — so
+   steady-state batches pay one tiny broadcast. This is also the pacing point: a leader paused in the UI holds
    every follower at its next batch start, mirroring how DDP itself would
    block them in the next gradient all-reduce. A `jump_epoch >= 0` tells
    EVERY rank to raise `TimeTravelJump` at this barrier (see below).
@@ -56,7 +57,8 @@ shared filesystem on multi-node runs; trivially true single-node).
 
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 import torch
@@ -88,6 +90,17 @@ def unwrap_ddp(model: nn.Module) -> nn.Module:
     return model
 
 
+@dataclass(frozen=True)
+class FollowerControl:
+    """What a follower receives from the leader's per-batch control sync."""
+
+    publish: bool
+    watched: list[str] | None
+    scope_idx: int
+    jump_epoch: int
+    hparams: list[dict[str, float]] | None
+
+
 class DistContext:
     """This process's place in the distributed run, plus broadcast state."""
 
@@ -107,6 +120,9 @@ class DistContext:
         # every rank makes identically — the object broadcast below stays
         # collective without the leader knowing any follower's cache state.
         self._synced_version = -1
+        # Same lockstep scheme for hyperparameter edits; both sides start at
+        # the session's initial version (0), so nothing is sent until an edit.
+        self._synced_hparam_version = 0
 
     @property
     def is_leader(self) -> bool:
@@ -120,6 +136,8 @@ class DistContext:
         watched: list[str],
         scope_idx: int,
         jump_epoch: int,
+        hparam_version: int,
+        hparams: Callable[[], list[dict[str, float]]],
     ) -> None:
         """Leader side of the per-batch control sync.
 
@@ -128,9 +146,11 @@ class DistContext:
         `jump_epoch` carries the leader's armed time-travel target (-1 when
         none): a `>= 0` value tells every rank to raise `TimeTravelJump` at
         this same batch-start barrier, before any forward/backward.
+        `hparams` builds the leader's per-group hyperparameters; it is only
+        called (and sent) when `hparam_version` moved since the last batch.
         """
         t = torch.tensor(
-            [int(publish), version, scope_idx, jump_epoch],
+            [int(publish), version, scope_idx, jump_epoch, hparam_version],
             dtype=torch.int64,
             device=self.device,
         )
@@ -138,25 +158,43 @@ class DistContext:
         if version != self._synced_version:
             dist.broadcast_object_list([watched], src=0, device=self.device)
             self._synced_version = version
+        if hparam_version != self._synced_hparam_version:
+            dist.broadcast_object_list([hparams()], src=0, device=self.device)
+            self._synced_hparam_version = hparam_version
 
-    def recv_control(self) -> tuple[bool, list[str] | None, int, int]:
-        """Follower side: (publish, watched-or-None-if-unchanged, scope_idx, jump_epoch).
+    def recv_control(self) -> FollowerControl:
+        """Follower side of the per-batch control sync.
 
         `scope_idx` mirrors the leader's stats scope on every batch.
         `jump_epoch` is the leader's armed time-travel target (-1 when none);
         a `>= 0` value means this rank must raise `TimeTravelJump` at the same
-        barrier, in lockstep with every other rank.
+        barrier, in lockstep with every other rank. `watched` and `hparams`
+        are `None` unless they changed since the last batch.
         """
-        t = torch.zeros(4, dtype=torch.int64, device=self.device)
+        t = torch.zeros(5, dtype=torch.int64, device=self.device)
         dist.broadcast(t, src=0)
-        publish, version, scope_idx, jump_epoch = (int(v) for v in t.cpu().tolist())
+        publish, version, scope_idx, jump_epoch, hparam_version = (
+            int(v) for v in t.cpu().tolist()
+        )
         watched: list[str] | None = None
         if version != self._synced_version:
             obj: list[object] = [None]
             dist.broadcast_object_list(obj, src=0, device=self.device)
             watched = cast(list[str], obj[0])
             self._synced_version = version
-        return bool(publish), watched, scope_idx, jump_epoch
+        hparams: list[dict[str, float]] | None = None
+        if hparam_version != self._synced_hparam_version:
+            obj = [None]
+            dist.broadcast_object_list(obj, src=0, device=self.device)
+            hparams = cast(list[dict[str, float]], obj[0])
+            self._synced_hparam_version = hparam_version
+        return FollowerControl(
+            publish=bool(publish),
+            watched=watched,
+            scope_idx=scope_idx,
+            jump_epoch=jump_epoch,
+            hparams=hparams,
+        )
 
 
 def context() -> DistContext | None:
@@ -213,9 +251,16 @@ def sync_batch_control(
             watched=watched,
             scope_idx=scope_idx,
             jump_epoch=jump_epoch,
+            hparam_version=session._hparam_version,
+            hparams=session._hyperparameter_payload,
         )
         return flag, jump_epoch
-    flag, new_watched, scope_idx, recv_jump = ctx.recv_control()
+    control = ctx.recv_control()
+    flag, new_watched, scope_idx = control.publish, control.watched, control.scope_idx
+    # The leader's hyperparameter edits land before this batch's forward, the
+    # same batch the leader's own (paused-time) edit first applies to.
+    if control.hparams is not None:
+        session._mirror_hyperparameters(control.hparams)
     # Mirror the leader's scope (GIL-atomic read; `set_stats_scope` locks and
     # prunes out-of-scope buckets when narrowing to `watched` — safe here on
     # the training thread, the only accumulator updater).
@@ -234,7 +279,7 @@ def sync_batch_control(
         if collection_scoped:
             for name in removed:
                 session._watch_accumulator.forget_layer(name)
-    return flag, recv_jump
+    return flag, control.jump_epoch
 
 
 def reduce_watch_stats(session: Session) -> None:

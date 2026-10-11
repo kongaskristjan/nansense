@@ -109,6 +109,26 @@ def test_weight_stats_cover_values_gradients_and_optimizer_state() -> None:
         assert weight["optimizer_hyperparameters"]["lr"] == 0.1
 
 
+def test_set_hyperparameters_round_trip() -> None:
+    """The agent's counterpart of the weights page's editable values."""
+    model = TinyNet()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    with paused_session(
+        model, lambda m: optimizer_train_step(m, optimizer), optimizer=optimizer
+    ) as session:
+        bad = _call(session, "set_hyperparameters", {"values": {"lr": -1}})
+        assert "negative" in bad["error"]
+        view = _call(session, "set_hyperparameters", {"values": {"lr": 0.01}})
+        (group,) = view["groups"]
+        assert group["hyperparameters"]["lr"] == 0.01
+        assert group["edited"] == {"lr": {"original": 0.1}}
+        assert optimizer.param_groups[0]["lr"] == 0.01
+        weight = weight_stats_view(session, layer="fc1")["parameters"][0]
+        assert weight["optimizer_param_group"] == 0
+        assert weight["optimizer_hyperparameters"]["lr"] == 0.01
+        assert weight["edited_hyperparameters"] == {"lr": {"original": 0.1}}
+
+
 def test_weight_stats_explain_a_missing_optimizer() -> None:
     """No optimizer state has two very different causes, and an agent that
     reads "empty" as "the optimizer is broken" goes looking for nothing."""

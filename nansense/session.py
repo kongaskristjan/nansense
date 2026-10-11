@@ -60,7 +60,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.hooks import RemovableHandle
 
-from nansense import capture, debugger, distributed, experiments, probe
+from nansense import capture, debugger, distributed, experiments, hyperparams, probe
 from nansense.console import console_print
 from nansense.debugger import DebugError, DebugSettings
 from nansense.experiments import (
@@ -69,6 +69,7 @@ from nansense.experiments import (
     ExperimentResult,
     ExperimentSpec,
 )
+from nansense.hyperparams import HyperparameterEdit
 from nansense.input_config import InputTransform, MeanStd
 from nansense.instruments import (
     InstrumentManager,
@@ -266,6 +267,10 @@ class BatchSnapshot:
     entries like Adam's `step` become 0-dim tensors); hyperparams are the
     numeric knobs of the parameter's group (`lr`, `momentum`, ...), read at
     the same instant — so a scheduler-driven `lr` is the batch's actual one.
+
+    The one exception to immutability: `Session.set_hyperparameters` writes
+    its new values into `optimizer_hyperparams` in place, so a paused view
+    shows the values the next optimizer step will use.
 
     `custom_activations` / `custom_weight_tensors` carry the tensor
     instruments' outputs (see `Session.watch_layer_tensor` /
@@ -468,6 +473,11 @@ class Session:
         self._debug_settings = DebugSettings()
         self._debug_counter = 0
         self._debug_error: DebugError | None = None
+        # Param-group hyperparameters changed from the UI/MCP, one record per
+        # `(group, key)` (replaced, never mutated, so the UI can compare by
+        # identity), and a counter followers sync edits by (`distributed`).
+        self._hparam_edits: tuple[HyperparameterEdit, ...] = ()
+        self._hparam_version = 0
 
     @property
     def schedule(self) -> Schedule:
@@ -1742,6 +1752,103 @@ class Session:
         """
         return capture.current_optimizer_hyperparams(self.model, self._optimizer)
 
+    def optimizer_group_indices(self) -> dict[str, int]:
+        """Map each parameter name to the index of its optimizer param group.
+
+        Empty when no optimizer was passed to `start()`.
+        """
+        return hyperparams.group_indices(self.model, self._optimizer)
+
+    @property
+    def hyperparameter_edits(self) -> tuple[HyperparameterEdit, ...]:
+        """The param-group hyperparameters changed with `set_hyperparameters`.
+
+        One record per `(group, key)`, carrying the value it had before its
+        first edit. Setting a value back to that original drops its record,
+        and so does time travel to an epoch before the first edit (the
+        checkpoint restores the old value).
+        """
+        return self._hparam_edits
+
+    def set_hyperparameters(
+        self, values: Mapping[str, float], *, group: int | None = None
+    ) -> None:
+        """Change optimizer hyperparameters (`lr`, `weight_decay`, ...) while paused.
+
+        `values` maps keys of `optimizer.param_groups[group]` to new values;
+        `group=None` changes every param group. Only plain-numeric entries
+        can change — the ones `current_optimizer_hyperparams` reports. The
+        new values apply from the next optimizer step, and are written to
+        every rank of a distributed run before its next batch.
+
+        This is a plain write into the param group, so an attached scheduler
+        keeps driving the value from there: a chainable one (`StepLR`,
+        `ExponentialLR`, `CosineAnnealingLR`, `ReduceLROnPlateau`) continues
+        from the new value, while one that recomputes from its own schedule
+        (`LambdaLR`, `OneCycleLR`, `CyclicLR`) overwrites it at its next
+        step. Time travel restores the checkpoint's values, so to replay an
+        epoch with a different learning rate, travel first and edit after.
+
+        Raises `ValueError` — with a message fit to display — when the session
+        is locked, has no optimizer, isn't paused, or the request is invalid
+        (unknown group or key, non-finite or negative value, a fraction for
+        an integer knob). Nothing is written unless every entry is valid.
+        """
+        if self._locked:
+            raise ValueError("This session is locked; hyperparameter changes are disabled.")
+        optimizer = self._optimizer
+        if optimizer is None:
+            raise ValueError(
+                "No optimizer is attached. Pass optimizer= to nansense.start() "
+                "to change optimizer hyperparameters."
+            )
+        with self._cv:
+            position = self._live_position
+            if not self._paused or self._closed or position is None:
+                raise ValueError(
+                    "Hyperparameters can only be changed while training is paused."
+                )
+            changes = hyperparams.plan_changes(optimizer, values, group)
+            previous = hyperparams.apply_changes(optimizer, changes)
+            self._hparam_edits = _merge_hparam_edits(
+                self._hparam_edits, changes, previous, position
+            )
+            self._hparam_version += 1
+        self._refresh_snapshot_hyperparams()
+
+    def _refresh_snapshot_hyperparams(self) -> None:
+        """Write the live hyperparameters into the shown snapshot (in place).
+
+        Only existing keys are replaced, so a reader iterating the dict on
+        another thread never sees it change size.
+        """
+        snap = self._snapshot
+        if snap is None:
+            return
+        live = self.current_optimizer_hyperparams()
+        shown = snap.optimizer_hyperparams
+        for name in shown:
+            if name in live:
+                shown[name] = live[name]
+
+    def _hyperparameter_payload(self) -> list[dict[str, float]]:
+        """Every param group's numeric hyperparameters, for followers to mirror."""
+        assert self._optimizer is not None
+        return [hyperparams.numeric_hyperparams(g) for g in self._optimizer.param_groups]
+
+    def _mirror_hyperparameters(self, payload: list[dict[str, float]]) -> None:
+        """Follower side: adopt the leader's hyperparameters (training thread)."""
+        if self._optimizer is None:
+            return
+        hyperparams.apply_changes(
+            self._optimizer,
+            [
+                (index, key, value)
+                for index, values in enumerate(payload)
+                for key, value in values.items()
+            ],
+        )
+
     def request_snapshot(self) -> None:
         """Ask the next batch to publish a snapshot (the UI Refresh button).
 
@@ -1824,8 +1931,8 @@ class Session:
           `set_update_frequency`, `set_watch_performance`,
           `set_debug_settings`, `disable_debug_check`,
           `set_auto_run_experiments`, `set_experiment_defaults`) become
-          no-ops (`request_time_travel` raises `TimeTravelError`, so the UI
-          can show why);
+          no-ops (`request_time_travel` raises `TimeTravelError` and
+          `set_hyperparameters` raises `ValueError`, so the UI can show why);
         - the stats scope is forced to `ALL` — every layer collects, so the
           UI's per-tab show/hide never touches shared state;
         - experiment requests still run, with their parameters clamped and
@@ -2672,6 +2779,11 @@ class Session:
             # The standing numerical-error banner belonged to the abandoned
             # timeline; drop it so the re-run starts clean and can stop afresh.
             self._debug_error = None
+            # The checkpoint restored the values from before any edit made in
+            # `epoch` or later.
+            self._hparam_edits = tuple(
+                e for e in self._hparam_edits if e.position.epoch < epoch
+            )
         self._watch_accumulator.forget_epochs_from(epoch)
         # Custom-metric series from the abandoned timeline are dropped the
         # same way, and stateful instrument callables get their optional
@@ -2800,6 +2912,27 @@ class Session:
         are passed positionally in `input_names` order.
         """
         return capture.capture_forward(self, inputs)
+
+
+def _merge_hparam_edits(
+    edits: tuple[HyperparameterEdit, ...],
+    changes: list[tuple[int, str, float]],
+    previous: list[tuple[int, str, float]],
+    position: BatchPosition,
+) -> tuple[HyperparameterEdit, ...]:
+    """Fold one `set_hyperparameters` call into the edit records.
+
+    A first edit records the value it replaced; setting a key back to that
+    original removes its record.
+    """
+    records = {(e.group, e.key): e for e in edits}
+    for (index, key, value), (_, _, old) in zip(changes, previous, strict=True):
+        record = records.get((index, key))
+        if record is None and value != old:
+            records[(index, key)] = HyperparameterEdit(index, key, old, position)
+        elif record is not None and value == record.original:
+            del records[(index, key)]
+    return tuple(records.values())
 
 
 class _BatchContext:

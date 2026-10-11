@@ -122,7 +122,6 @@ def test_compute_render_produces_strip_html() -> None:
         {panel.name: tensor},
         {panel.name: torch.randn(*panel._shape)},
         optimizer_state={},
-        optimizer_hyperparams={},
     )
     assert render.error is None
     assert render.weight_html
@@ -137,7 +136,6 @@ def test_compute_render_no_gradient_placeholder() -> None:
         {panel.name: torch.randn(*panel._shape)},
         {},
         optimizer_state={},
-        optimizer_hyperparams={},
     )
     assert render.error is None
     assert render.grad_html == _NO_GRADIENT_HTML
@@ -147,7 +145,7 @@ def test_compute_render_missing_weight_is_error() -> None:
     session, _ = make_session()
     panel = _first_weight_panel(session)
     render = panel.compute_render(
-        {}, {}, optimizer_state={}, optimizer_hyperparams={}
+        {}, {}, optimizer_state={}
     )
     assert render.error == "no weights captured yet"
     assert not render.weight_html

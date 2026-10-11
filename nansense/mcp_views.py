@@ -30,7 +30,7 @@ from typing import Any
 
 import torch
 
-from nansense import debugger, experiments, instruments
+from nansense import debugger, experiments, hyperparams, instruments
 from nansense.schedule import BatchPosition, Schedule, format_position
 from nansense.session import Session, StatsScope, lost_loop_reason
 from nansense.watch import (
@@ -617,6 +617,61 @@ def _tensor_summary(tensor: torch.Tensor) -> dict[str, Any]:
     return view
 
 
+# How many of a param group's parameter names the hyperparameters view lists;
+# get_weight_stats names each parameter's group, for the rest.
+_GROUP_PARAMETER_NAMES = 5
+
+
+def _edited_keys(session: Session) -> dict[int, dict[str, Any]]:
+    """Per param group, each edited key's value before its first edit."""
+    edited: dict[int, dict[str, Any]] = {}
+    for edit in session.hyperparameter_edits:
+        edited.setdefault(edit.group, {})[edit.key] = {"original": _num(edit.original)}
+    return edited
+
+
+def hyperparameters_view(session: Session) -> dict[str, Any]:
+    """The optimizer's param groups and their live numeric hyperparameters.
+
+    Marks every value changed from NaNsense with what it was before its first
+    edit, and names an attached scheduler, which keeps driving `lr` after an
+    edit (see `Session.set_hyperparameters`).
+    """
+    optimizer = session.optimizer
+    if optimizer is None:
+        return {
+            "error": "No optimizer is attached to this session.",
+            "hint": "Pass optimizer= to nansense.start() to expose optimizer hyperparameters.",
+        }
+    group_of = session.optimizer_group_indices()
+    edited_keys = _edited_keys(session)
+    groups: list[dict[str, Any]] = []
+    for index, group in enumerate(optimizer.param_groups):
+        names = [name for name, g in group_of.items() if g == index]
+        entry: dict[str, Any] = {
+            "group": index,
+            "parameter_count": len(names),
+            "parameters": names[:_GROUP_PARAMETER_NAMES],
+            "hyperparameters": {
+                key: _num(value)
+                for key, value in sorted(hyperparams.numeric_hyperparams(group).items())
+            },
+        }
+        if index in edited_keys:
+            entry["edited"] = edited_keys[index]
+        groups.append(entry)
+    view: dict[str, Any] = {"optimizer": type(optimizer).__name__, "groups": groups}
+    if session.scheduler is not None:
+        view["scheduler"] = type(session.scheduler).__name__
+        view["scheduler_note"] = (
+            "The scheduler keeps adjusting lr after an edit. StepLR, "
+            "ExponentialLR, CosineAnnealingLR and ReduceLROnPlateau continue "
+            "from the edited value; LambdaLR, OneCycleLR and CyclicLR recompute "
+            "lr from their own schedule and replace it at their next step."
+        )
+    return view
+
+
 def weight_stats_view(
     session: Session, *, layer: str, parameters: Iterable[str] | None = None
 ) -> dict[str, Any]:
@@ -655,6 +710,8 @@ def weight_stats_view(
         }
     requested = list(dict.fromkeys(parameters)) if parameters else list(available)
     unknown = [name for name in requested if name not in available]
+    group_of = session.optimizer_group_indices()
+    edited_keys = _edited_keys(session)
     # A frozen parameter has no gradient and no optimizer state for a reason
     # that has nothing to do with the training loop's timing, and "nothing has
     # run backward yet" would send a reader looking for a bug in their loop.
@@ -696,11 +753,16 @@ def weight_stats_view(
                 )
                 for key, value in sorted(state.items())
             }
-        hyperparams = snapshot.optimizer_hyperparams.get(name, {})
-        if hyperparams:
+        group_hparams = snapshot.optimizer_hyperparams.get(name, {})
+        if group_hparams:
+            group = group_of.get(name)
+            entry["optimizer_param_group"] = group
             entry["optimizer_hyperparameters"] = {
-                key: _num(value) for key, value in sorted(hyperparams.items())
+                key: _num(value) for key, value in sorted(group_hparams.items())
             }
+            edited = edited_keys.get(group, {}) if group is not None else {}
+            if edited:
+                entry["edited_hyperparameters"] = edited
         entries.append(entry)
     view: dict[str, Any] = {
         "layer": layer,

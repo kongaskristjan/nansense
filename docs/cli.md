@@ -96,6 +96,7 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | Tool | What it does |
 | --- | --- |
 | `time_travel`, `get_time_travel_status` | Restart at an earlier epoch, with the model, optimizer and scheduler restored |
+| `get_hyperparameters`, `set_hyperparameters` | Read the optimizer's numeric settings; change them while paused, for one parameter group or all groups |
 | `pin_batch`, `unpin_batch`, `set_probe_mode`, `get_probe_status` | Re-run the model on one fixed input at every capture |
 | `add_perturbation`, `clear_perturbations` | Edit that input and see which layers move |
 | `list_experiments`, `run_experiment`, `get_experiment_result`, `render_experiment`, `cancel_experiment` | Deep dream and the Captum attributions — `run_experiment --video` records a dream's whole ascent to MP4 |
@@ -104,6 +105,8 @@ Reading a paused run is one thing; the rest of the UI is about *interrogating* i
 | `save_snapshot` | Save one still of a view as a PNG file to hand a human, from the same typed `view` |
 
 **Time travel is the one that changes how debugging goes.** An agent that has run past a divergence normally has to restart the script. Instead it can jump back to the epoch before it, this time with `configure_debug_checks --interval_batches 1` and the suspect layers watched — so the second pass sees what the first one missed. It needs the training loop driven by `session.epochs()` with `session.restore_point()`; `get_time_travel_status` says whether yours is.
+
+**Combine time travel with a hyperparameter change to test a fix.** Call `time_travel --epoch 3`, then `set_hyperparameters --values '{"lr": 0.0001}'` to set every parameter group's learning rate to 0.0001 before resuming epoch 3. Travel first: the jump restores the checkpoint's hyperparameters. `get_hyperparameters` identifies an attached scheduler and explains how it may change or replace the edited learning rate at later scheduler steps.
 
 **Pin inputs for fair comparisons.** Normally, both the weights and batch change as you step. Pinning a batch keeps the input fixed, so differences come from the model. Use `set_probe_mode --mode eval` to check evaluation behavior, including BatchNorm's running statistics.
 

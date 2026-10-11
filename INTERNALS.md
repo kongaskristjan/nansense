@@ -755,11 +755,15 @@ watch stats over their own data shard. Two collective touch points, both
 on the training thread:
 
 1. **Per-batch control broadcast** (`sync_batch_control`, at
-   `_BatchContext.__enter__`): a 4-int tensor — "does this batch's
+   `_BatchContext.__enter__`): a 5-int tensor — "does this batch's
    `__exit__` reduce watch stats" (true on the leader's mode captures and
    frequency updates, when anything is collecting), the watched-set
    version, the leader's stats scope (mirrored by followers so every rank
-   accumulates the same buckets), and its armed time-travel target. On a
+   accumulates the same buckets), its armed time-travel target, and its
+   hyperparameter-edit version. On a hyperparameter version change, a
+   follow-up object broadcast carries every param group's numeric
+   hyperparameters, which followers write into their own optimizer before
+   the batch's forward (see "Hyperparameter edits"). On a watched-set
    version change, a follow-up object broadcast carries the
    watched-layer list; followers apply it, dropping buckets of unwatched
    layers exactly like `Session.unwatch` does — under the `watched` scope
@@ -1374,6 +1378,43 @@ travel unavailable at page build (no restorer), the button is rendered
 disabled with the reason as a tooltip on a wrapper div — Quasar suppresses
 pointer events on disabled buttons, so the tooltip can't live on the
 button itself.
+
+## Hyperparameter edits (`nansense.hyperparams`)
+
+`Session.set_hyperparameters(values, group=None)` writes numeric entries of
+`optimizer.param_groups` — the same plain-numeric knobs
+`current_optimizer_hyperparams` reports (`numeric_hyperparams`: no bools, no
+`betas` tuples). It is the backend of the weights page's hyperparameter
+inputs (`ui/hyperparam_fields.py`) and of the `set_hyperparameters` MCP tool.
+
+- **Only while paused.** The write happens under `_cv` with `_paused` set,
+  i.e. while the training thread sits in `_wait_for_proceed` and cannot be
+  inside `optimizer.step()`. A running, finished, locked or optimizer-less
+  session raises `ValueError` (the UI toasts it, the tool returns it).
+  Validation (`plan_changes`) covers the whole request before
+  `apply_changes` writes anything; integer knobs keep their `int` type.
+- **What the views show.** The shown snapshot's `optimizer_hyperparams` is
+  updated in place (value replacement only, so concurrent readers never see
+  the dict resize), so the weights page, `get_weight_stats`,
+  `render_weights` and frozen moments all show the values the next step
+  uses. Plain batches pay nothing: there is no per-batch check.
+- **Edit records.** `hyperparameter_edits` holds one `HyperparameterEdit`
+  per `(group, key)` with the value before its *first* edit (the UI tints
+  the input and names it in the tooltip; the MCP views list it under
+  `edited`). Setting a key back to that original drops its record. The
+  tuple is replaced, never mutated, so the page's tick detects changes by
+  identity. `_rewind_to_epoch(K)` drops records first made in epoch `K` or
+  later — the epoch-`K` checkpoint was written before them, so the restore
+  undid them; earlier edits are inside the checkpoint and stay.
+- **Schedulers** are not adjusted: an edit is a plain write, so a chainable
+  scheduler continues from it and a closed-form one (`LambdaLR`,
+  `OneCycleLR`, `CyclicLR`) overwrites `lr` at its next step. The docs and
+  the tools' `scheduler_note` say so.
+- **DDP.** Each edit bumps `_hparam_version`; the per-batch control
+  broadcast carries it, and on a change the leader sends every group's
+  numeric hyperparameters (`_hyperparameter_payload`), which followers
+  write into their own optimizer (`_mirror_hyperparameters`) before the
+  batch's forward — the batch the leader's edit first applies to.
 
 ## PyTorch Lightning integration (`nansense.lightning`)
 
